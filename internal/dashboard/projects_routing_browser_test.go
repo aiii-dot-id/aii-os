@@ -112,18 +112,33 @@ steps[1] = () => setTimeout(() => {
 }, 60);
 
 steps[2] = () => {
-  // BACK/FOREWORD — history re-performs navigation. Back returns to
+  // BACK/FORWARD — history re-performs navigation. Back returns to
   // the chat address (the stack: chat, projects/beta, chat, then the
   // pasted link); forward must re-select beta — one act per address.
+  // History traversal is asynchronous and the fixed 60ms wait this
+  // step once used was a timing assumption: the public runner's
+  // Chrome needed longer under load and the assertion fired before
+  // the traversal landed (reproduced 2026-08-27; dev8 never saw it).
+  // The poll waits for the STATE with a deadline — the assertion
+  // stays exact; only the assumption about WHEN leaves.
+  const when = (cond, then) => {
+    const deadline = Date.now() + 3000;
+    const tick = () => {
+      if (cond()) return then();
+      if (Date.now() > deadline) return then(); // deadline: assert with what is actually there
+      setTimeout(tick, 20);
+    };
+    tick();
+  };
   const selectsBefore = __sent.filter(m => m.project && m.project.action === 'select').length;
   history.back();
-  setTimeout(() => {
+  when(() => parseHash(location.hash).view === 'chat', () => {
     const r = parseHash(location.hash);
     try {
       assert(r.view === 'chat', 'history.back() did not return to the chat address: ' + location.hash);
       assert(S.view === 'chat', 'returning to the chat address did not route the view: ' + S.view);
       history.forward();
-      setTimeout(() => {
+      when(() => { const p = parseHash(location.hash); return p.project === 'beta'; }, () => {
         const r2 = parseHash(location.hash);
         const selectsAfter = __sent.filter(m => m.project && m.project.action === 'select').length;
         try {
@@ -133,9 +148,9 @@ steps[2] = () => {
             'forward re-fired the act ' + (selectsAfter - selectsBefore) + ' times, expected exactly 1');
         } catch (e) { return fail(e.message); }
         next();
-      }, 60);
+      });
     } catch (e) { return fail(e.message); }
-  }, 60);
+  });
 };
 
 window.addEventListener('error', ev => __tell('page error: ' + ((ev.error && ev.error.message) || ev.message)));
