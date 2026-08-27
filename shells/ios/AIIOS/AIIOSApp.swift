@@ -250,7 +250,11 @@ final class IOSForegroundHold: NSObject, MobileForegroundNeedListenerProtocol {
     private var task: UIBackgroundTaskIdentifier = .invalid
     private var stopWork: DispatchWorkItem?
 
-    func need(_ active: Bool, reason: String) {
+    // reason: String? — the gomobile ObjC bridge maps Go string
+    // parameters as nullable; a non-optional parameter here fails
+    // protocol conformance at compile time (found by the shells
+    // workflow's first real run, 2026-08-27).
+    func need(_ active: Bool, reason: String?) {
         DispatchQueue.main.async {
             self.stopWork?.cancel()
             self.stopWork = nil
