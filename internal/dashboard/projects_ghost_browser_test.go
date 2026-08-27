@@ -65,6 +65,9 @@ function next() {
     const text = banner.textContent || '';
     if (!text.toLowerCase().includes('names no project')) { fail('banner does not say what happened: ' + text); return; }
     if (!document.getElementById('proj-space').textContent.includes('No project focused')) { fail('empty state missing under the ghost'); return; }
+    // TITLE: a ghost must never title the tab — p is null, the base
+    // title from go() stands untouched.
+    if (document.title.indexOf('ghost') >= 0) { fail('ghost id reached the tab title: ' + document.title); return; }
     next();
   } else if (step === 2) {
     // URL FLOW: a real navigation to a ghost id — the router sets
@@ -84,6 +87,9 @@ function next() {
     setTimeout(() => {
       if (document.getElementById('ghost-banner')) { fail('banner survived a real navigation'); return; }
       if (!document.getElementById('proj-space').textContent.includes('Alpha')) { fail('real project does not render after a ghost'); return; }
+      // TITLE: the focused project's name is the refinement go()'s
+      // base title receives — the same fact that renders the page.
+      if (document.title.indexOf('Alpha') < 0) { fail('focused project did not title the tab: ' + document.title); return; }
       next();
     }, 80);
   } else {

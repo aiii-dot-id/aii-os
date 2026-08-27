@@ -1,6 +1,10 @@
-# Build artifacts
-aii-os
-aii
+# Build artifacts. Anchored: an unanchored `aii` also ignored cmd/aii/
+# — the daemon entrypoint — in any fresh checkout or export, while the
+# tracked dev index masked it (tracked files override ignore rules).
+# Found when the public source export shipped without cmd/aii and CI
+# could not say why (2026-08-27).
+/aii-os
+/aii
 *.exe
 
 # Runtime data (never commit identities)

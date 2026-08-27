@@ -69,4 +69,11 @@ jobs:
       - name: Race (${{ matrix.scope }})
         env:
           AII_TEST_SHARDS: "4"
+          # The runner image's Edge hangs sized headless windows (the
+          # phone-width and layout journeys time out at 60s while the
+          # same journeys pass in its Chrome and Firefox, 2026-08-27).
+          # Name the engines this pipeline vouches for; dev8's gate
+          # runs all three. Owed: the runner-Edge hazard root-caused,
+          # then this narrowing retired.
+          AII_BROWSER_ENGINES: "blink-chrome,gecko-firefox"
         run: ./test/run_race_scope.sh "${{ matrix.scope }}"

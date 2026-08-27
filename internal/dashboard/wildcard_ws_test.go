@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,19 @@ func TestWildcardBindAdmitsTheSameHostOnThePageAndTheSocket(t *testing.T) {
 			s := New(host, 0, nil)
 			addr, err := s.Start(t.TempDir())
 			if err != nil {
+				// The inet_aton SHORTHAND spellings ("0", "0.0", "0x0",
+				// "127.1") bind only where the cgo resolver answers —
+				// the pure-Go resolver (Go's default where nsswitch
+				// permits, e.g. GitHub runners) refuses them as lookup
+				// failures before any gate runs. A host that cannot
+				// perform the bind has no page-gate/socket-gate
+				// agreement to disagree about: the startup refusal IS
+				// the honest product answer there. The canonical
+				// spellings above stay mandatory on every host.
+				var dnsErr *net.DNSError
+				if host != "0.0.0.0" && host != "::" && host != "127.0.0.1" && errors.As(err, &dnsErr) {
+					t.Skipf("this host's resolver rejects the inet_aton shorthand %q (pure-Go resolver): %v", host, err)
+				}
 				t.Fatalf("start: %v", err)
 			}
 			defer s.Shutdown(context.Background())

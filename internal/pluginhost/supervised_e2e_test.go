@@ -377,6 +377,20 @@ func TestSupervisedRunawayDeadlineKill(t *testing.T) {
 // signing for T3 is packagefmt's proven ground; this pins the harness
 // wiring: extraction 0700, env, digest re-verify hook.
 func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
+	// hostcap doctrine, applied to the proof itself: this test asserts
+	// the lane RUNS contained, which requires a host that can establish
+	// the sandbox — bwrap present AND permitted to build its namespaces.
+	// Container hosts can carry bwrap yet deny the netns setup
+	// (GitHub's runner: "loopback: Failed RTM_NEWADDR: Operation not
+	// permitted", 2026-08-27): the capability is absent there, the
+	// typed refusal is the correct product answer, and the full
+	// containment proof runs where the host can actually provide one.
+	// The probe mirrors containArgv's own shape — unshare-all with a
+	// read-only root — so it cannot drift from what the lane requires.
+	if out, err := exec.Command("bwrap", "--unshare-all", "--die-with-parent",
+		"--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true").CombinedOutput(); err != nil {
+		t.Skipf("this host cannot establish the bwrap sandbox (capability absent, not product failure): %v — %s", err, bytes.TrimSpace(out))
+	}
 	raw, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)

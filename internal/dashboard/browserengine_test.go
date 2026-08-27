@@ -135,16 +135,33 @@ var browserEngines = []browserEngine{
 	},
 }
 
-// resolveEngines returns the engines actually installed on this host.
+// resolveEngines returns the engines actually installed on this host,
+// narrowed by AII_BROWSER_ENGINES when the operator set it (comma-
+// separated engine names). The variable exists for CI hosts whose
+// bundled engines misbehave in ways a real desktop does not — the
+// runner image's Edge hangs sized headless windows (2026-08-27) —
+// so the pipeline can name the engines it vouches for instead of
+// inheriting whatever the image carries. Default: every engine found.
 func resolveEngines() []struct {
 	engine browserEngine
 	path   string
 } {
+	allow := map[string]bool{}
+	if sel := os.Getenv("AII_BROWSER_ENGINES"); sel != "" {
+		for _, name := range strings.Split(sel, ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				allow[n] = true
+			}
+		}
+	}
 	var found []struct {
 		engine browserEngine
 		path   string
 	}
 	for _, candidate := range browserEngines {
+		if len(allow) > 0 && !allow[candidate.name] {
+			continue
+		}
 		for _, bin := range candidate.bins {
 			if path, err := exec.LookPath(bin); err == nil {
 				found = append(found, struct {

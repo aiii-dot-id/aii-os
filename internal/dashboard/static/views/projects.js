@@ -109,6 +109,12 @@ export function renderProjPill() {
 export function renderProjects() {
   const sp = $('proj-space');
   const p = viewedOf();
+  /* The tab title: go() sets the view's title on every navigation
+     (the crumb line); a focused project refines it, name first
+     because tabs truncate from the right. Ghosts resolve null, so an
+     address naming nothing never titles the tab. Same fact viewedOf
+     already resolved; no second source to fork. */
+  if (p) document.title = p.name + ' — AII OS';
   /* The operator is typing a focus note. Any incoming message used to
      rebuild the whole page and replace the textarea with the SAVED
      text — destroying the draft mid-word. The render is skipped while
