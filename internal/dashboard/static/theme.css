@@ -1,0 +1,33 @@
+/* ============================================================
+   theme.css — the design tokens, and ONLY the tokens.
+   This file is the seed of the R66 token surface (UI_FRAME.md §4):
+   the frame will push these custom properties to sections on theme
+   change, and the file is meant to be both-hands editable — restyle
+   the whole dashboard, chrome included, at file-edit cadence.
+   No selectors beyond :root belong here; layout.css consumes these.
+   ============================================================ */
+/* ============================================================
+   AII OS — the identity's home. Design system v2 (2026-08-18).
+   One person, many workrooms. Everything rendered is REAL state
+   (R48): the orb breathes because they are alive, not as decor.
+   ============================================================ */
+:root {
+  /* channel seeds — the raw r,g,b of every palette family, so any
+     alpha'd surface derives from ONE definition. Keep each *-rgb in
+     lockstep with its hex twin above/below; the R66 token file will
+     collapse the pair. */
+  --white:#fff; --acc-rgb:139,108,255; --acc2-rgb:63,164,255; --acc3-rgb:255,92,158; --good-rgb:61,219,162; --warn-rgb:255,180,84; --bad-rgb:255,95,122; --line-rgb:128,100,255; --white-rgb:255,255,255; --bg0-rgb:6,6,14; --ink-rgb:8,8,20; --ink2-rgb:10,10,24;
+  --bg0:#06060e; --bg1:#0a0a18;
+  --panel:rgba(20,20,40,.50); --panel2:rgba(26,26,52,.62); --panel-solid:#111126;
+  --line:rgba(var(--line-rgb),.16); --line2:rgba(var(--line-rgb),.30); --line-soft:rgba(var(--line-rgb),.08);
+  --txt:#eceaf8; --dim:#a2a0c4; --faint:#616087;
+  --acc:#8b6cff; --acc2:#3fa4ff; --acc3:#ff5c9e;
+  --good:#3ddba2; --warn:#ffb454; --bad:#ff5f7a;
+  --grad:linear-gradient(94deg,var(--acc) 0%,var(--acc2) 100%);
+  --grad-hot:linear-gradient(94deg,var(--acc3) 0%,var(--acc) 55%,var(--acc2) 100%);
+  --r-lg:18px; --r-md:13px; --r-sm:9px;
+  --shadow:0 10px 40px rgba(0,0,0,.45);
+  --glow:0 0 24px rgba(var(--acc-rgb),.35);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}

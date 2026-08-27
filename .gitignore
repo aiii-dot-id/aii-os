@@ -1,0 +1,35 @@
+# Build artifacts
+aii-os
+aii
+*.exe
+
+# Runtime data (never commit identities)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime configuration may contain credentials.
+/config.json
+/providers.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build artifacts
+bin/
+.gopath/
+log/
+
+# seeded at the identity root at boot by the running binary; the sources
+# are tracked at internal/app/{METHOD,SKILLS}.md - these root copies are
+# runtime artifacts stamped with the build that wrote them
+/METHOD.md
+/SKILLS.md

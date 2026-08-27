@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AII OS</title>
+<link rel="stylesheet" href="./theme.css">
+<link rel="stylesheet" href="./layout.css">
+<!-- Additive morph layer, empty as shipped, loaded last so the cascade
+     lets it adjust without owning. Overlay this, not layout.css. -->
+<link rel="stylesheet" href="./custom.css">
+</head>
+<body>
+<div class="sky"></div><div class="stars"></div><div class="stars2"></div>
+<div class="app">
+
+  <aside class="rail">
+    <div class="presence">
+      <div class="orb-wrap offline" id="orb"><div class="orb"></div></div>
+      <div class="p-name" id="p-name">&hellip;</div>
+      <div class="p-state" id="p-state"><b>connecting</b></div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-item" data-view="home"><span class="ico">&#9737;</span>Home</div>
+      <div class="nav-item active" data-view="chat"><span class="ico">&#10086;</span>Chat</div>
+      <div class="nav-item" data-view="projects"><span class="ico">&#9678;</span>Projects</div>
+      <div class="nav-item" data-view="memory"><span class="ico">&#10047;</span>Memory</div>
+      <div class="nav-item" data-view="identity"><span class="ico">&#9673;</span>Identity</div>
+      <div class="nav-item" data-view="plugins"><span class="ico">&#10022;</span>Plugins</div>
+      <div class="nav-item" data-view="settings"><span class="ico">&#9881;</span>Settings</div>
+    </nav>
+    <!-- R66 slot: rail sections mount here (sections.js) -->
+    <div class="slot" id="slot-rail"></div>
+    <!-- Status readings (ledger / life / witnessed / channel / credential)
+         used to sit here in .rail-foot. They now render in the right-hand
+         system panel (panel.js, CONTINUITY card) so every status item is
+         grouped in one column instead of spread across two corners. -->
+
+  </aside>
+
+  <main class="stage">
+    <header class="stagebar">
+      <div class="crumb" id="crumb">Chat</div>
+      <div class="bar-spacer"></div>
+      <span class="pill" id="pill-work" style="display:none"></span>
+      <span class="pill" id="pill-proj" style="display:none"></span>
+      <span class="pill mode-normal" id="pill-mode" style="display:none">mode <b>&ndash;</b></span>
+    </header>
+
+    <div class="views" id="views">
+      <section class="view on" id="view-chat">
+        <div id="chat-substrate-wrap" class="chat-substrate" style="display:none">
+          <div class="substrate-controls">
+            <select id="chat-provider" aria-label="Provider"></select>
+            <select id="chat-model" aria-label="Model"></select>
+            <button class="btn ghost" id="chat-substrate-apply">Use</button>
+          </div>
+          <div class="substrate-status" id="chat-substrate-status"></div>
+        </div>
+        <div class="chat-body">
+          <div class="thread" id="thread"><div class="thread-inner" id="thread-inner"></div></div>
+          <div class="fb" id="firstboot">
+            <div class="fb-card">
+              <h2>No identity lives here yet.</h2>
+              <p class="lead">Fill in the provider, model and key, name each other, then click Birth. The founding conversation happens in that click: the verified bootstrap prompt goes to the substrate you chose, and the answer is this identity&rsquo;s first words &mdash; the start of the chat and of its charter.</p>
+              <label class="f">PROVIDER</label>
+              <select id="fb-provider"></select>
+              <div id="fb-cred-why" style="font-size:11.5px;color:var(--faint);margin:-4px 0 8px"></div>
+              <label class="f">MODEL</label>
+              <select id="fb-model"></select>
+              <div class="fb-hint" id="fb-hint"></div>
+              <label class="f">API KEY</label>
+              <input type="password" id="fb-apikey" placeholder="Paste your API key">
+              <a class="fb-sub" id="fb-subscribe" style="display:none" target="_blank" rel="noopener"></a>
+              <label class="f">IDENTITY NAME</label>
+              <input type="text" id="fb-name" placeholder="Choose a name">
+              <label class="f">YOUR NAME</label>
+              <input type="text" id="fb-operator" placeholder="The operator">
+              <div style="margin-top:18px"><button class="btn" id="fb-birth" style="width:100%">Birth</button></div>
+              <div class="fb-result" id="fb-result"></div>
+            </div>
+        </div>
+        </div>
+        <div class="composer-wrap" id="composer-wrap">
+          <div class="steerq" id="steerq"></div>
+          <div class="composer">
+            <button class="mic" id="mic" disabled title="Hold to speak">&#127908;</button>
+            <textarea id="msg-input" rows="1" placeholder="Speak your intent&hellip;"></textarea>
+            <button class="sendb" id="send-btn" title="Send">&#10148;</button>
+          </div>
+        </div>
+      </section>
+      <section class="view" id="view-home"><div class="home-inner" id="home-inner"></div></section>
+      <section class="view" id="view-projects">
+        <div class="proj-space" id="proj-space"></div>
+        <!-- The filter input is STATIC html on purpose: it lives outside
+             every render path, so no broadcast re-render can ever clobber
+             a filter typed mid-word (the exact defect class that ate
+             focus drafts — one fix shape, applied before the bug, not
+             after). Only #dock rebuilds, one row, per keystroke. -->
+        <div class="dock-wrap"><div class="dock-tools"><input type="search" id="dock-filter" placeholder="Filter projects&hellip;" autocomplete="off" spellcheck="false" aria-label="Filter projects"></div><div class="dock" id="dock"></div></div>
+      </section>
+      <section class="view" id="view-memory"><div class="stack" id="memory-stack"></div></section>
+      <section class="view" id="view-identity"><div class="stack" id="identity-stack"></div></section>
+      <section class="view" id="view-plugins"><div class="stack" id="plugins-stack"></div></section>
+      <section class="view" id="view-settings"><div class="stack" id="settings-stack"></div></section>
+
+    </div>
+    <!-- R66 slot: dock sections mount here -->
+    <div class="slot" id="slot-dock"></div>
+  </main>
+  <!-- R66 slot: panel sections — a column beside the stage -->
+  <aside class="slot panel-col" id="slot-panel"></aside>
+</div>
+<!-- R66 slot: overlay sections — the top layer, hidden unless occupied -->
+<div class="slot slot-overlay" id="slot-overlay"></div>
+<div class="toast" id="toast"></div>
+<script type="module" src="./app.js"></script>
+<!-- Additive behaviour layer, empty as shipped. Modules execute in
+     order, so this sees a booted chrome. Overlay this, not app.js. -->
+<script type="module" src="./custom.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+{
+  "suite": "method",
+  "method": "observe.subscribe",
+  "description": "Event subscription: subscription_id (< 40 bytes) + topic (< 96 bytes); capability-gated; per-connection table of 16; empty topic is wildcard, matching is exact or dot-segment prefix",
+  "source": "BBB_V2_AUDIT.md section 6.6; rpc.c:3162-3210, 941-983; sev_rpc.h:322-324; bbb_client.c:1558-1586; bbb_protocol.h:40-41",
+  "checked_by": "framing round-trip now; subscription semantics land with the Go host RPC layer",
+  "vectors": [
+    {
+      "name": "request",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"progress.\"}}",
+      "note": "a topic ending in '.' prefix-matches; empty topic subscribes to everything (rpc.c:955-971)",
+      "cite": "rpc.c:3170-3175"
+    },
+    {
+      "name": "response_result",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"result\":{\"accepted\":true,\"subscription_id\":\"sub-1\"}}",
+      "cite": "rpc.c:3204-3207"
+    },
+    {
+      "name": "invalid_params_not_strings",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":6,\"topic\":\"progress.\"}}",
+      "expect": { "code": -32602, "message": "subscription_id (string) and topic (string) required" },
+      "cite": "rpc.c:3172-3175"
+    },
+    {
+      "name": "invalid_subscription_id_too_long",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"0123456789012345678901234567890123456789\",\"topic\":\"progress.\"}}",
+      "expect": { "code": -32602, "message": "subscription_id or topic too long" },
+      "note": "40 bytes is already too long: the bound is strictly-less-than SEV_RPC_SUBSCRIPTION_ID_LEN (40); topics bound by 96 the same way; the C SDK pre-checks the same constants (bbb_client.c:1566-1568)",
+      "cite": "rpc.c:3176-3179; sev_rpc.h:322-323"
+    },
+    {
+      "name": "invalid_duplicate_subscription_id",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"7\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"heartbeat.\"}}",
+      "expect": { "code": -32600, "message": "subscription_id already active" },
+      "note": "invalid only when sub-1 is already active on the connection",
+      "cite": "rpc.c:3181-3186"
+    },
+    {
+      "name": "response_capability_not_negotiated",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"6\",\"error\":{\"code\":-32601,\"message\":\"UNSUPPORTED_CAPABILITY: observe.subscribe\"}}",
+      "cite": "rpc.c:3249, 3287-3296"
+    }
+  ]
+}

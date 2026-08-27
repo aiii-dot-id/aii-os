@@ -1,0 +1,13 @@
+/* custom.css — the additive morph layer. Empty as shipped.
+ *
+ * Loaded LAST, after theme.css and layout.css, so ordinary cascade
+ * rules let it adjust the chrome without owning it. Drop your own
+ * copy at <data dir>/ui/custom.css and it is served instead of this
+ * empty one (R71's overlay; no rebuild, no restart).
+ *
+ * Prefer this over overlaying layout.css. Replacing layout.css means
+ * owning 32 KiB forever: the copy is a fork, it cannot receive the
+ * next release's fixes, and nothing will tell you it went stale.
+ * Adding here forks nothing — unknown selectors in a future build are
+ * simply ignored by the cascade, which is what the cascade is for.
+ */

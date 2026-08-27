@@ -1,0 +1,71 @@
+{
+  "suite": "method",
+  "method": "rpc.connect",
+  "description": "Session establishment: name + 64-hex launch token, optional legacy capabilities bitmask, optional BBB capability negotiation; result carries protocol_version 1 and negotiated names",
+  "source": "BBB_V2_AUDIT.md section 5; rpc.c:1210-1416; sev_rpc.h:277-303; launch.go:39-62",
+  "checked_by": "framing round-trip now; method semantics land with the Go host RPC layer",
+  "vectors": [
+    {
+      "name": "request_minimal",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"rpc.connect\",\"params\":{\"name\":\"com.example.echo\",\"token\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"}}",
+      "note": "capabilities defaults to SEV_CAP_ALL when omitted (rpc.c:1381-1383); token is the SDK test-fixture pattern (bbb_test.go:445), not key material",
+      "cite": "rpc.c:1363-1364"
+    },
+    {
+      "name": "request_with_negotiation",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"rpc.connect\",\"params\":{\"name\":\"com.example.echo\",\"token\":\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\",\"capabilities\":65535,\"client_capabilities\":[\"observe.subscribe\",\"rpc.cancel\",\"not.a.known.capability\"]}}",
+      "note": "unknown capability names are silently dropped (rpc.c:1305-1320, forward-compat)",
+      "cite": "rpc.c:1365-1367"
+    },
+    {
+      "name": "response_result",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"protocol_version\":1,\"accepted_protocol_version\":1,\"capabilities\":65535,\"server_capabilities\":[\"observe.subscribe\",\"rpc.cancel\"],\"session_id\":\"psn-0123\",\"trust_tier\":\"T1\"}}",
+      "note": "protocol_version is the RPC envelope version (1), NOT bbb_protocol_version (2, pinned in the manifest) - AUDIT section 1; session_id/trust_tier present only when a plugin session is bound",
+      "cite": "rpc.c:1322-1352, 1236-1247"
+    },
+    {
+      "name": "error_params_missing",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"rpc.connect\"}",
+      "expect": { "code": -32602, "message": "missing params" },
+      "cite": "rpc.c:1357-1358"
+    },
+    {
+      "name": "error_name_and_token_required",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"rpc.connect\",\"params\":{\"name\":\"com.example.echo\"}}",
+      "expect": { "code": -32602, "message": "name and token required" },
+      "cite": "rpc.c:1255-1256"
+    },
+    {
+      "name": "error_auth_failed",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"error\":{\"code\":-32002,\"message\":\"authentication failed\"}}",
+      "cite": "rpc.c:1265-1272"
+    },
+    {
+      "name": "error_not_authenticated_before_connect",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"2\",\"error\":{\"code\":-32000,\"message\":\"not authenticated (call rpc.connect first)\"}}",
+      "note": "the reply any non-connect builtin gets before a successful rpc.connect",
+      "cite": "rpc.c:3459-3465"
+    }
+  ]
+}

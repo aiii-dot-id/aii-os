@@ -1,0 +1,91 @@
+{
+  "suite": "method",
+  "method": "invoke.call",
+  "description": "Plugin invokes one bounded host operation; capability evaluated per invocation; the daemon result carries the superset vocabulary (success+ok+status+reason in three spellings) and a host-authored external_receipt",
+  "source": "BBB_V2_AUDIT.md section 6.3; rpc.c:2057-2375 (entry 2300, result assembly 2165-2215, receipt 1501-1547); sev_bbb_client.h:29-37; bbb.go:309-365",
+  "checked_by": "framing round-trip now; result-vocabulary decode is a host obligation (DELTA_D1 section 3)",
+  "vectors": [
+    {
+      "name": "request_minimal",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"invoke.call\",\"params\":{\"operation\":\"http.get\",\"target\":{\"url\":\"https://example.invalid\"},\"arguments\":{}}}",
+      "note": "both SDK clients require target and arguments to be JSON objects (bbb_client.c:1090-1100; bbb.go:314-315)",
+      "cite": "rpc.c:2312-2323; operation ids sev_operations.h:16-26"
+    },
+    {
+      "name": "request_cancellable",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"4\",\"method\":\"invoke.call\",\"params\":{\"operation\":\"http.get\",\"target\":{\"url\":\"https://example.invalid\"},\"arguments\":{},\"work_done_token\":\"wdt-1\"}}",
+      "note": "work_done_token requires the rpc.cancel capability negotiated at connect (rpc.c:2063-2068)",
+      "cite": "rpc.c:2317-2320"
+    },
+    {
+      "name": "response_success_superset",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"success\":true,\"ok\":true,\"status\":\"succeeded\",\"operation_result\":{\"http_status\":200,\"content_type\":\"application/json\",\"body\":{\"answer\":42}},\"body\":{\"answer\":42},\"external_receipt\":{\"success\":true,\"transport_outcome\":true,\"protocol_status\":200,\"operation_outcome\":true,\"audit_persisted\":true,\"id\":\"3\",\"timestamp\":\"2026-08-19T00:00:00Z\",\"plugin_id\":\"com.example.echo\"}}}",
+      "note": "success+ok satisfy the C client decoder, status satisfies the Go client decoder, top-level body is the legacy duplicate (F-3, F-6); receipt fields per rpc.c:1516-1547 (further audit fields elided)",
+      "cite": "rpc.c:2183-2192, 2092-2162"
+    },
+    {
+      "name": "response_denied_as_result",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"success\":false,\"ok\":false,\"status\":\"denied\",\"reason\":\"OPERATION_NOT_ALLOWED_FOR_CAPABILITY\",\"reasonCode\":\"OPERATION_NOT_ALLOWED_FOR_CAPABILITY\",\"reason_code\":\"OPERATION_NOT_ALLOWED_FOR_CAPABILITY\",\"external_receipt\":{\"success\":false,\"transport_outcome\":false,\"protocol_status\":null,\"operation_outcome\":false,\"audit_persisted\":true,\"id\":\"3\",\"timestamp\":\"2026-08-19T00:00:00Z\",\"plugin_id\":\"com.example.echo\"}}}",
+      "note": "same code string in all three spellings (rpc.c:2204-2206); one of the C client's five denial reason codes (sev_bbb_client.h:29-35)",
+      "cite": "rpc.c:2195-2214"
+    },
+    {
+      "name": "response_cancelled_as_result",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"4\",\"result\":{\"success\":false,\"ok\":false,\"reason\":\"cancelled\",\"reason_code\":\"INVOKE_CANCELLED\",\"external_receipt\":{\"success\":false,\"transport_outcome\":false,\"protocol_status\":null,\"operation_outcome\":false,\"audit_persisted\":true,\"id\":\"wdt-1\",\"timestamp\":\"2026-08-19T00:00:00Z\",\"plugin_id\":\"com.example.echo\"}}}",
+      "note": "the cancelled path emits NO status field and only the snake reason_code (audit finding F-5: the Go SDK client misreads this as succeeded); receipt id is the work_done_token when set (rpc.c:1501-1514)",
+      "cite": "rpc.c:2172-2181"
+    },
+    {
+      "name": "response_denied_as_error",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32000,\"message\":\"Capability scope does not admit the requested operation\",\"data\":{\"reasonCode\":\"OPERATION_SCOPE_MISMATCH\",\"denied_at\":\"capability\"}}}",
+      "note": "capability-preparation denials arrive as errors, execution denials as results; clients must handle both (AUDIT section 8)",
+      "cite": "rpc.c:2049-2052, 388-463"
+    },
+    {
+      "name": "invalid_operation_missing",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"invoke.call\",\"params\":{\"target\":{},\"arguments\":{}}}",
+      "expect": { "code": -32602, "message": "operation (string) required" },
+      "cite": "rpc.c:2322-2323"
+    },
+    {
+      "name": "invalid_retired_grant",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"invoke.call\",\"params\":{\"operation\":\"http.get\",\"target\":{},\"arguments\":{},\"grant\":\"g-1\"}}",
+      "expect": { "code": -32602, "message": "grant is retired; invoke.call evaluates capability per request" },
+      "cite": "rpc.c:2325-2328; retirement BBB_PROTOCOL_DESIGN.md section 6"
+    },
+    {
+      "name": "invalid_token_without_negotiated_cancel",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"invoke.call\",\"params\":{\"operation\":\"http.get\",\"target\":{},\"arguments\":{},\"work_done_token\":\"wdt-9\"}}",
+      "expect": { "code": -32602, "message": "work_done_token requires negotiated rpc.cancel capability" },
+      "note": "invalid only for a session that did not negotiate rpc.cancel (audit finding F-4: every Go-SDK-client plugin today)",
+      "cite": "rpc.c:2063-2068"
+    }
+  ]
+}

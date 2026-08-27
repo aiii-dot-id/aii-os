@@ -1,0 +1,38 @@
+# XcodeGen spec — the .xcodeproj is GENERATED from this file, never
+# committed: a generated project is a build product, and a hand-merged
+# pbxproj is a conflict machine.
+#
+#   brew install xcodegen && cd shells/ios && xcodegen generate
+#
+name: AIIOS
+options:
+  bundleIdPrefix: id.aiii
+settings:
+  # Signing is the BUILDERS, not the repos. AIII releases set
+  # AIIOS_DEVELOPMENT_TEAM in the release environment; a contributor
+  # leaves it unset and Xcode signs to run locally with their own
+  # account. Hardcoding a team id would make every clone try to sign
+  # with an account it does not belong to.
+  DEVELOPMENT_TEAM: ${AIIOS_DEVELOPMENT_TEAM}
+  CODE_SIGN_STYLE: Automatic
+targets:
+  AIIOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [AIIOS]
+    info:
+      path: AIIOS/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSAppTransportSecurity: { NSAllowsLocalNetworking: true }
+        BGTaskSchedulerPermittedIdentifiers: [id.aiii.shell.timewake, id.aiii.shell.grip]
+        # Without fetch, BGAppRefreshTask submission fails notPermitted
+        # (Sol P1-2); processing backs the grip task — minutes-scale
+        # opportunistic continuation while work is held.
+        UIBackgroundModes: [fetch, processing]
+    dependencies:
+      # The gomobile binding of ../../mobile — a BUILD PRODUCT, not
+      # source. Produce it per ../README.md and drop it here.
+      - framework: Mobile.xcframework
+        embed: true

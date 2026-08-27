@@ -1,0 +1,69 @@
+{
+  "identity": {
+    "name": "",
+    "ledger_path": "",
+    "db_path": "",
+    "key_path": ""
+  },
+  "llm": {
+    "provider": "",
+    "model": "",
+    "api_key_env": "OPENAI_API_KEY",
+    "timeout_seconds": 0,
+    "retries": 0,
+    "retry_backoff_ms": 0
+  },
+  "dashboard": {
+    "port": 8180,
+    "tls": false
+  },
+  "speech": {
+    "stt": {
+      "provider": "",
+      "model": "",
+      "language": "",
+      "api_key_env": "",
+      "timeout_seconds": 0
+    }
+  },
+  "tools": {
+    "cwd": ".",
+    "disabled": [],
+    "shell_timeout_seconds": 0,
+    "webfetch_timeout_seconds": 0
+  },
+  "plugins": {
+    "autoload": "T1"
+  },
+  "projects": {
+    "root": ""
+  },
+  "prompt": {
+    "max_tokens": 0
+  },
+  "timezone": "",
+  "witness_server": {
+    "url": "https://witness.aiii.id",
+    "interval_events": 50,
+    "platform_pubkey_path": "",
+    "tls_spki_sha256": ""
+  },
+  "genesis": {
+    "server_url": "https://genesis.aiii.id",
+    "firewall_url": "https://firewall.aiii.id",
+    "bootstrap_url": "https://bootstrap.aiii.id"
+  },
+  "updates": {
+    "automatic": false
+  },
+  "logs": {
+    "dir": "log",
+    "max_backups": 9,
+    "compress_days": 7
+  },
+  "maintenance": {
+    "enabled": true,
+    "backup_keep": 8
+  },
+  "contacts": []
+}

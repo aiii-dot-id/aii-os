@@ -1,0 +1,190 @@
+# Release — tag-triggered five-platform build and GitHub Release publish.
+#
+# The VERSION file at the repo root is the version source of truth; the
+# git tag is the trigger. The workflow reads VERSION, injects it via
+# ldflags, builds every platform, archives each, and uploads the
+# archives to a GitHub Release attached to the tag.
+#
+# Signing is OFFLINE (versioning ruling 2026-08-21): the platform_release
+# key is held by AIII. The release workflow publishes unsigned archives;
+# the platform.sig files are generated offline and attached to the
+# release as additional assets. The update checker verifies platform.sig
+# against the pinned platform_root before any binary swap — an archive
+# without a valid platform.sig is refused, never installed.
+#
+# Asset naming convention (the contract the update checker matches):
+#
+#	aii-os_<version>_<platform>_<arch>.tar.gz   (linux, macos)
+#	aii-os_<version>_<platform>_<arch>.zip      (windows)
+#	aii-os_<version>_android_arm64.aar          (gomobile binding)
+#	aii-os_<version>_ios_arm64.xcframework.zip  (gomobile binding)
+#
+# Desktop archives contain only the aii binary. aii-plugin-worker is
+# operator-owned (config: WorkerBinary) and updated separately, not part
+# of the platform self-update surface. Mobile archives contain the
+# gomobile binding for the shell app to embed. No manifest.json — the
+# GitHub Releases API is the manifest: asset names + download URLs +
+# tag_name are sufficient, and a second source of truth would only drift
+# (Occam's Razor, applied 2026-08-21).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed by softprops/action-gh-release to create the release
+
+jobs:
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, archive: tar.gz }
+          - { goos: linux,   goarch: arm64, archive: tar.gz }
+          - { goos: darwin,  goarch: arm64, archive: tar.gz }
+          - { goos: darwin,  goarch: amd64, archive: tar.gz }
+          - { goos: windows, goarch: amd64, archive: zip }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Verify tag matches VERSION
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          VER="$(cat VERSION)"
+          if [ "$TAG" != "$VER" ]; then
+            echo "ERROR: git tag '$TAG' does not match VERSION file '$VER'"
+            exit 1
+          fi
+      - name: Map platform name
+        id: platform
+        run: |
+          case "${{ matrix.goos }}" in
+            linux)   echo "name=linux"   >> "$GITHUB_OUTPUT" ;;
+            darwin)  echo "name=macos"   >> "$GITHUB_OUTPUT" ;;
+            windows) echo "name=windows" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Map arch name
+        id: arch
+        run: |
+          case "${{ matrix.goarch }}" in
+            amd64) echo "name=x86_64" >> "$GITHUB_OUTPUT" ;;
+            arm64) echo "name=arm64"  >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Set binary name
+        id: bins
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            echo "aii=aii.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "aii=aii" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -ldflags "-X github.com/aiii-dot-id/aii-os/internal/app.Version=${{ steps.version.outputs.version }}" \
+            -o ${{ steps.bins.outputs.aii }} ./cmd/aii
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          archive="aii-os_${{ steps.version.outputs.version }}_${{ steps.platform.outputs.name }}_${{ steps.arch.outputs.name }}.tar.gz"
+          tar czf "$archive" ${{ steps.bins.outputs.aii }}
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          archive="aii-os_${{ steps.version.outputs.version }}_${{ steps.platform.outputs.name }}_${{ steps.arch.outputs.name }}.zip"
+          zip "$archive" ${{ steps.bins.outputs.aii }}
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Compute SHA256
+        run: sha256sum "$archive" | tee "${{ env.archive }}.sha256"
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256
+
+  build-mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: android, goarch: arm64 }
+          - { platform: ios,     goarch: arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Verify tag matches VERSION
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          VER="$(cat VERSION)"
+          if [ "$TAG" != "$VER" ]; then
+            echo "ERROR: git tag '$TAG' does not match VERSION file '$VER'"
+            exit 1
+          fi
+      - name: Install gomobile
+        run: |
+          # PINNED to the module's own x/mobile (external review P1:
+          # @latest made releases non-reproducible and could drift from
+          # the gobind the tool directive pins).
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
+          gomobile init
+      - name: Build Android binding
+        if: matrix.platform == 'android'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          # gomobile cannot bind internal/ packages, so mobile/ is the
+          # surface. NDK is required for Android; gomobile checks for it.
+          # The archive is the .aar the Android shell embeds.
+          archive="aii-os_${{ steps.version.outputs.version }}_android_arm64.aar"
+          # -buildvcs=false: gomobile's internal gobind cgo build fails
+          # VCS stamping under the NDK toolchain (proven on dev8,
+          # 2026-08-26 — the fix that turned the failure into a 13.5MB
+          # .aar); the artifact carries its version via -ldflags, not a
+          # VCS stamp.
+          GOFLAGS=-buildvcs=false gomobile bind -target=android/arm64 \
+            -ldflags "-X github.com/aiii-dot-id/aii-os/internal/app.Version=${{ steps.version.outputs.version }}" \
+            -o "$archive" ./mobile/
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Build iOS binding
+        if: matrix.platform == 'ios'
+        continue-on-error: true
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          # iOS gomobile build requires macOS (Xcode). This step runs on
+          # ubuntu-latest and will fail — it is a placeholder until a
+          # macOS runner is wired. The .xcframework is produced offline
+          # on a Mac for now.
+          echo "iOS build requires macOS runner — not yet wired (placeholder)"
+      - name: Compute SHA256
+        if: env.archive != ''
+        run: sha256sum "$archive" | tee "${{ env.archive }}.sha256"
+      - name: Upload release asset
+        if: env.archive != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256

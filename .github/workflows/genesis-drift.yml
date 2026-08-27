@@ -1,0 +1,44 @@
+# Genesis drift — the check the hermetic suite cannot perform.
+#
+# CI's normal test job proves the client agrees with fixtures the client
+# itself defines. It cannot prove the client still agrees with
+# aiii.id. On 2026-08-23 those diverged: genesis.aiii.id served a Ring 0
+# payload the shipped client rejected, every hermetic test stayed green,
+# and a fresh install could not be born.
+#
+# So this job runs the shipped client and the shipped pinned root
+# against production, in birth order.
+#
+# NOT on pull_request. A third party being unreachable must never red a
+# contributor's PR — that trains people to ignore red. Scheduled,
+# manually dispatchable, and on release tags, where a failure means "the
+# world moved" and someone should look.
+
+name: Genesis drift
+
+on:
+  schedule:
+    # Daily, off the hour to avoid the cron stampede.
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  live-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Pinned for the same reason as ci.yml: one exact toolchain,
+          # matching the dev8 gate.
+          go-version: "1.27.0"
+
+      - name: Live chain against aiii.id
+        env:
+          LIVE_SMOKE: "1"
+          GOTOOLCHAIN: local
+        run: go test ./internal/genesis/ -run TestLiveChainSmoke -count=1 -v

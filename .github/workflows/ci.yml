@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # One exact toolchain, matching the dev8 gate (AGENTS.md §7).
+          go-version: "1.27.0"
+
+      - name: Format
+        # gofmt is a gate, not advice: vet does not check formatting, and
+        # a drifted file landed 2026-08-15 (export/export.go, fixed
+        # alongside this gate) and haunted the working tree for days.
+        # Fail fast, name the offenders.
+        run: |
+          drift=$(gofmt -l .)
+          if [ -n "$drift" ]; then
+            echo "gofmt drift in:" >&2
+            echo "$drift" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race scope runner falsification
+        # The runner is part of the gate. Prove that its partition accepts an
+        # exact plan and rejects both an omission and a duplicate before any
+        # matrix row relies on it.
+        run: ./test/run_race_scope.sh self-test
+
+  race:
+    needs: quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Go already parallelizes packages. Only the three packages whose
+        # serial top-level tests dominate wall time are partitioned further;
+        # rest contains every other package. The runner verifies exact-once
+        # assignment before executing a sharded package.
+        scope: [app, dashboard, packagefmt, rest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+
+      - name: Race (${{ matrix.scope }})
+        env:
+          AII_TEST_SHARDS: "4"
+        run: ./test/run_race_scope.sh "${{ matrix.scope }}"

@@ -1,0 +1,4 @@
+// AGP 8.10 is certified for compileSdk 36 (review: 8.5.0 warned it was
+// certified only through 34 — a warning today is a breakage on the next
+// AGP-side check). Wrapper pinned to Gradle 8.11.1, AGP 8.10's floor.
+plugins { id "com.android.application" version "8.10.1" apply false }

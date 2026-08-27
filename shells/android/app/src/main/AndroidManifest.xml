@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Exact next-due wakes (MOBILE_PORT §2). Special app access, NOT a
+         runtime prompt: the operator grants it in Settings > Apps >
+         Special app access > Alarms & reminders. Ungranted, AppRuntime
+         falls back to setAndAllowWhileIdle — Doze-batched, still wakes,
+         TIME's catch-up tolerates the lateness. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- The OS half of internal/foreground: a held grip (turn in
+         flight, claimed work) runs as a dataSync foreground service so
+         the OS does not suspend a promise mid-keeping. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <application android:label="AII OS" android:usesCleartextTraffic="true">
+        <activity android:name=".MainActivity" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Not exported: only our own AlarmManager PendingIntent fires it. -->
+        <receiver android:name=".WakeReceiver" android:exported="false" />
+        <service android:name=".ForegroundService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>

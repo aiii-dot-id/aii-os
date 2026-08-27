@@ -1,0 +1,17 @@
+{
+  "_comment": "Gold ledger-format interop vectors (2026-08-17 ruling: one format, Go reference, C conforms). Both test suites consume THESE values; regenerate only together with the Go constants in gold_vector_test.go. See docs/LEDGER_GOLD_FORMAT.md.",
+  "payload": "{\"n\":9007199254740993,\"id\":\"exp_vector_1\",\"content\":\"gold vector — café ✓\",\"nested\":{\"z\":1,\"a\":[true,null,1.5]}}",
+  "content_hash": "9697ffb8b1a7d6ddbac64c8b9a19023f837dabca0dd7df94f7f905c37c9c919e",
+  "entry": {
+    "seq": 3,
+    "prev_hash": "1f6a76673b2571ff380cbdbd267ed5da257290ba4c8f8be3aeaf7ba1a34cba55",
+    "timestamp": "2026-08-17T12:00:00.000000000Z",
+    "type": "experience.create",
+    "author": "vector_fingerprint_0000000000000000",
+    "ring": 3,
+    "model_id": "glm-5.2"
+  },
+  "canonical_entry": "{\"author\":\"vector_fingerprint_0000000000000000\",\"content_hash\":\"9697ffb8b1a7d6ddbac64c8b9a19023f837dabca0dd7df94f7f905c37c9c919e\",\"model_id\":\"glm-5.2\",\"payload\":{\"content\":\"gold vector — café ✓\",\"id\":\"exp_vector_1\",\"n\":9007199254740993,\"nested\":{\"a\":[true,null,1.5],\"z\":1}},\"prev_hash\":\"1f6a76673b2571ff380cbdbd267ed5da257290ba4c8f8be3aeaf7ba1a34cba55\",\"ring\":3,\"seq\":3,\"timestamp\":\"2026-08-17T12:00:00.000000000Z\",\"type\":\"experience.create\"}",
+  "entry_sha256": "sha256:f1222c068cba934cf8da3888413c36fa201bee0809e1c2598fb562a934b06153",
+  "signature_input": "AII-LEDGER-LINE-SIGNATURE-GOLD\nartifact_kind:aii.ledger.line\ncanonicalization:aii-canonical-json-v1\nsuite_id:aii-pq-mldsa87\nrole:identity\nalg:ML-DSA-87\nkey_id:vector_fingerprint_0000000000000000\nentry_sha256:sha256:f1222c068cba934cf8da3888413c36fa201bee0809e1c2598fb562a934b06153\n"
+}

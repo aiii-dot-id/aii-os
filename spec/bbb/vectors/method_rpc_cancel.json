@@ -1,0 +1,53 @@
+{
+  "suite": "method",
+  "method": "rpc.cancel",
+  "description": "Cooperative cancel of an in-flight invoke.call by its work_done_token; capability-gated; unknown token is an idempotent accepted:false RESULT, not an error",
+  "source": "BBB_V2_AUDIT.md section 6.5; rpc.c:3212-3232, 3250, 3287-3296; bbb_client.c:1537-1556; bbb.go:292-298",
+  "checked_by": "framing round-trip now; cancel semantics land with the Go host RPC layer",
+  "vectors": [
+    {
+      "name": "request",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "cite": "rpc.c:3220-3223"
+    },
+    {
+      "name": "response_accepted",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"result\":{\"accepted\":true}}",
+      "note": "sets cancel_requested; the invoke.call then completes with the cancelled result shape (method_invoke_call.json response_cancelled_as_result)",
+      "cite": "rpc.c:3230-3231"
+    },
+    {
+      "name": "response_unknown_token",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"result\":{\"accepted\":false,\"reasonCode\":\"TOKEN_UNKNOWN\"}}",
+      "note": "idempotent failure as a result per ADR-030 Decision 3 (comment rpc.c:3226-3228); camelCase reasonCode at result level",
+      "cite": "rpc.c:3224-3228"
+    },
+    {
+      "name": "response_capability_not_negotiated",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"error\":{\"code\":-32601,\"message\":\"UNSUPPORTED_CAPABILITY: rpc.cancel\"}}",
+      "note": "gated methods answer -32601 with this message form when the capability was not negotiated at connect",
+      "cite": "rpc.c:3287-3296"
+    },
+    {
+      "name": "invalid_token_missing",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"method\":\"rpc.cancel\",\"params\":{}}",
+      "expect": { "code": -32602, "message": "work_done_token (string) required" },
+      "cite": "rpc.c:3221-3223"
+    }
+  ]
+}

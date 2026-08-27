@@ -1,0 +1,133 @@
+{
+  "suite": "framing",
+  "description": "BBB frame codec: 4-byte big-endian length prefix + payload; plugin-side limit 1 MiB, daemon-inbound limit 16 MiB",
+  "source": "BBB_V2_AUDIT.md section 2; sdk/c/src/bbb_transport_posix.c:174-228; sdk/c/src/bbb_transport.h:26-30; sdk/go/aiii/bbb.go:446-495; identity_os: sev_rpc.h:129-130, rpc.c:3524-3549",
+  "checked_by": "internal/bbb/frame_test.go (fully executed by this suite)",
+  "vectors": [
+    {
+      "name": "roundtrip_empty_object",
+      "kind": "roundtrip",
+      "payload_utf8": "{}",
+      "frame_hex": "000000027b7d",
+      "cite": "posix.c:182-187 header layout"
+    },
+    {
+      "name": "roundtrip_rpc_cancel_request",
+      "kind": "roundtrip",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "frame_hex": "000000557b226a736f6e727063223a22322e30222c226964223a2231222c226d6574686f64223a227270632e63616e63656c222c22706172616d73223a7b22776f726b5f646f6e655f746f6b656e223a227764742d31227d7d",
+      "cite": "C-client-shaped request (string id), bbb_client.c:786-812"
+    },
+    {
+      "name": "roundtrip_length_counts_bytes_not_chars",
+      "kind": "roundtrip",
+      "payload_utf8": "{\"value\":\"é\"}",
+      "frame_hex": "0000000e7b2276616c7565223a22c3a9227d",
+      "cite": "payload is UTF-8 bytes; 13 chars, 14 bytes (AUDIT 2)"
+    },
+    {
+      "name": "roundtrip_observe_event_notification",
+      "kind": "roundtrip",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.step\",\"payload\":null}}",
+      "frame_hex": "0000005c7b226a736f6e727063223a22322e30222c226d6574686f64223a226f6273657276652e6576656e74222c22706172616d73223a7b22746f706963223a2270726f67726573732e73746570222c227061796c6f6164223a6e756c6c7d7d",
+      "cite": "rpc.c:921-939, 975-979"
+    },
+    {
+      "name": "roundtrip_invalid_utf8_is_a_valid_frame",
+      "kind": "roundtrip",
+      "payload_hex": "ff",
+      "frame_hex": "00000001ff",
+      "note": "framing performs no UTF-8 validation (AUDIT 2); the JSON layer rejects this payload (bbb_client.c:81-113,303-307; bbb.go:559)",
+      "cite": "posix.c send/recv move raw bytes"
+    },
+    {
+      "name": "decode_zero_length_frame_is_empty_payload",
+      "kind": "decode",
+      "frame_hex": "00000000",
+      "payload_utf8": "",
+      "note": "legal at the framing layer only; the JSON layer rejects empty input and the daemon answers -32700 (AUDIT 2.3)",
+      "cite": "posix.c:204-227 with len==0; rpc.c:3387-3390"
+    },
+    {
+      "name": "decode_sequence_frames_abut_without_separator",
+      "kind": "decode_sequence",
+      "frame_hex": "000000077b2261223a317d000000077b2262223a327d",
+      "payloads_utf8": ["{\"a\":1}", "{\"b\":2}"],
+      "cite": "rpc.c:3524-3549 process_recv_buf loop"
+    },
+    {
+      "name": "synthetic_roundtrip_exactly_at_1mib_limit",
+      "kind": "synthetic_roundtrip",
+      "payload_fill": "61",
+      "payload_len": 1048576,
+      "max_frame_bytes": 1048576,
+      "cite": "limit is inclusive: refused only when len > max (posix.c:179, bbb.go:450)"
+    },
+    {
+      "name": "encode_error_one_byte_over_1mib",
+      "kind": "encode_error",
+      "payload_fill": "61",
+      "payload_len": 1048577,
+      "max_frame_bytes": 1048576,
+      "error": "frame_too_large",
+      "cite": "refused before any byte is written (posix.c:179-180; bbb_test.go:428-434)"
+    },
+    {
+      "name": "encode_error_empty_payload",
+      "kind": "encode_error",
+      "payload_utf8": "",
+      "error": "empty_payload",
+      "cite": "C transport refuses zero-length sends (posix.c:177)"
+    },
+    {
+      "name": "decode_error_declared_over_1mib",
+      "kind": "decode_error",
+      "frame_hex": "00100001",
+      "max_frame_bytes": 1048576,
+      "error": "frame_too_large",
+      "note": "declares 1048577 bytes; receiver errors without reading the payload, stream is unrecoverable (AUDIT 2.2)",
+      "cite": "posix.c:215-217; bbb.go:487-488"
+    },
+    {
+      "name": "decode_error_declared_max_u32",
+      "kind": "decode_error",
+      "frame_hex": "ffffffff",
+      "max_frame_bytes": 1048576,
+      "error": "frame_too_large",
+      "cite": "posix.c:213-217"
+    },
+    {
+      "name": "decode_error_truncated_header",
+      "kind": "decode_error",
+      "frame_hex": "0000",
+      "error": "truncated",
+      "cite": "EOF mid-header is an I/O error, no resync exists (AUDIT 2.2)"
+    },
+    {
+      "name": "decode_error_truncated_payload",
+      "kind": "decode_error",
+      "frame_hex": "000000057b7d21",
+      "error": "truncated",
+      "note": "declares 5 bytes, stream ends after 3",
+      "cite": "posix.c:124-125 recv_all sees EOF; io.ReadFull -> ErrUnexpectedEOF"
+    },
+    {
+      "name": "synthetic_roundtrip_2mib_under_daemon_limit",
+      "kind": "synthetic_roundtrip",
+      "payload_fill": "62",
+      "payload_len": 2097152,
+      "max_frame_bytes": 16777216,
+      "note": "legal daemon-inbound, illegal plugin-side: the asymmetric bound of AUDIT 2.1 / finding F-11",
+      "cite": "sev_rpc.h:130; rpc.c:3529-3534"
+    },
+    {
+      "name": "decode_error_declared_over_16mib_daemon_bound",
+      "kind": "decode_error",
+      "frame_hex": "01000001",
+      "max_frame_bytes": 16777216,
+      "error": "frame_too_large",
+      "note": "the daemon disconnects the peer on this (rpc.c:3529-3534)",
+      "cite": "sev_rpc.h:130"
+    }
+  ]
+}
