@@ -1,12 +1,22 @@
 package speecheval
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // THE EXAMPLE IN THE DOCS IS MACHINE-CHECKED. A template that has
 // drifted from the loader teaches the wrong format to whoever copies
 // it, and the first they hear of it is a corpus that will not load.
 func TestTheDocumentedExampleManifestIsValid(t *testing.T) {
-	m, err := LoadManifest("../../docs/voice-corpus/manifest.example.json")
+	const example = "../../docs/voice-corpus/manifest.example.json"
+	if _, err := os.Stat(example); os.IsNotExist(err) {
+		// The public source export ships no internal docs; this pin
+		// guards the dev tree, where the example exists. Named, not
+		// silent.
+		t.Skip("docs/voice-corpus/manifest.example.json not present in this tree (docs-free export)")
+	}
+	m, err := LoadManifest(example)
 	if err != nil {
 		t.Fatalf("the manifest the docs tell people to copy does not load: %v", err)
 	}
