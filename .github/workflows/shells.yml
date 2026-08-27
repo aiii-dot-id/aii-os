@@ -25,13 +25,20 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Bind AAR (versions pinned by tools.go via go.mod)
         run: |
+          # app/libs/ is gitignored (the .aar is a build product) and
+          # gomobile will not create the output directory itself —
+          # found on the first public CI run, 2026-08-27.
+          mkdir -p shells/android/app/libs
           go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
           gomobile bind -target=android/arm64 -androidapi 26 -o shells/android/app/libs/aiios.aar ./mobile
       - name: Assemble (committed wrapper)
         run: cd shells/android && ./gradlew --no-daemon assembleDebug
 
   ios:
-    runs-on: macos-14
+    # macos-15: Xcode 16 by default. The macos-14 runner's Xcode 15.4
+    # cannot read the project format current xcodegen emits (77) —
+    # found on the first public CI run, 2026-08-27.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
