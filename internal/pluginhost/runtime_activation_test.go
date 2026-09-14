@@ -115,6 +115,12 @@ func TestRuntimeDeclarationRefusesTypedWhereItCannotBeMet(t *testing.T) {
 
 func TestRuntimeRootIsPublishedPinnedLaunchedFromAndReleased(t *testing.T) {
 	skipWhereNativeIsRefused(t)
+	// .
+	// .
+	// .
+	// .
+	// .
+	skipWhereTheSandboxCannotBeEstablished(t)
 	roots, role := platformRootsForTest(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
@@ -163,9 +169,11 @@ func TestRuntimeRootIsPublishedPinnedLaunchedFromAndReleased(t *testing.T) {
 		t.Fatalf("pinned once, fetched once: refs %d fetches %d", n, fx.fetches)
 	}
 	// .
-	pollUntil(t, "the child reports the runtime root", func() bool {
+	if !waitUntil(func() bool {
 		return strings.Contains(sink.String(), `runtime_root="`+root+`"`)
-	})
+	}) {
+		t.Fatalf("timed out waiting for the child to report runtime root %q; the child's own log:\n%s", root, sink.String())
+	}
 	if !strings.Contains(sink.String(), "runtime root "+root) {
 		t.Fatalf("the containment line names the root:\n%s", sink.String())
 	}

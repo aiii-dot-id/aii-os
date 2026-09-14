@@ -90,16 +90,27 @@ func supervisedOpts(extra Options) *Options {
 	return &opts
 }
 
-func pollUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
+// .
+// .
+// .
+// .
+// .
+func waitUntil(cond func() bool) bool {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
-			return
+			return true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
+	return false
+}
+
+func pollUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	if !waitUntil(cond) {
+		t.Fatalf("timed out waiting for %s", what)
+	}
 }
 
 // .

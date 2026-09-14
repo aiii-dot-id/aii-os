@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"os/exec"
-	"runtime"
 	"testing"
 	"time"
 
@@ -29,11 +27,7 @@ func pcmRamp(n int) []byte {
 func containedFakechild(t *testing.T) []string {
 	t.Helper()
 	bin := buildFakechild(t)
-	if runtime.GOOS == "linux" {
-		if out, err := exec.Command("bwrap", "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true").CombinedOutput(); err != nil {
-			t.Skipf("this host cannot establish the bwrap sandbox (capability absent, not product failure): %v — %s", err, bytes.TrimSpace(out))
-		}
-	}
+	skipWhereTheSandboxCannotBeEstablished(t)
 	argv, _, err := containArgv([]string{bin, "session-audio"})
 	if err != nil {
 		t.Skipf("this host cannot contain a native child: %v", err)
