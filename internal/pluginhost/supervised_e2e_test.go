@@ -434,20 +434,11 @@ func TestSupervisedRunawayDeadlineKill(t *testing.T) {
 // .
 // .
 func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
+	skipWhereNativeIsRefused(t)
 	// .
 	// .
 	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if out, err := exec.Command("bwrap", "--unshare-all", "--die-with-parent",
-		"--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true").CombinedOutput(); err != nil {
-		t.Skipf("this host cannot establish the bwrap sandbox (capability absent, not product failure): %v — %s", err, bytes.TrimSpace(out))
-	}
+	skipWhereTheSandboxCannotBeEstablished(t)
 	raw, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)
@@ -481,6 +472,8 @@ func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
 		return strings.Contains(sink.String(), "socket=stdio:")
 	})
 
+	// .
+	// .
 	// .
 	// .
 	// .

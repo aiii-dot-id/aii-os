@@ -82,18 +82,25 @@ Host and Origin checks constrain a *browser*; they do nothing about a
 client that simply sets the header, so an address the network can reach
 is one a credential has to cover.
 
-You do not have to handle the token yourself. Every start prints a link
-that carries it:
+You do not have to handle the token yourself. Every start prints a ready
+link for each address the dashboard answers at:
 
 ```
+Dashboard: http://127.0.0.1:8180  (this machine)
+           https://192.0.2.10:8180  (any device)
 Open it here: http://127.0.0.1:8180/?token=<token>
+          or: https://192.0.2.10:8180/?token=<token>
+              one click sets the cookie; the token then leaves the address bar
 ```
 
-Opening that link once sets a cookie for the dashboard and then drops
-the token out of the address bar, so it is not left behind in history,
-in a bookmark, or in a `Referer` header. To reach the identity from a
-phone or another machine, use the same link with the address the
-dashboard prints for that device.
+Opening a link once sets a cookie for the dashboard and then drops the
+token out of the address bar, so it is not left behind in history, in a
+bookmark, or in a `Referer` header. To reach the identity from a phone or
+another machine, open the second link there — loopback is the one address
+another device cannot reach.
+
+The address link is served over TLS with a certificate this machine
+issued itself, so the browser will warn the first time.
 
 The token is also written to `dashboard-token` in the identity's data
 directory, beside its private key and readable only by the account that
