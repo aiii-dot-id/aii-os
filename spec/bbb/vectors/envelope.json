@@ -1,0 +1,132 @@
+{
+  "suite": "envelope",
+  "description": "JSON-RPC 2.0 envelope as BBB uses it: jsonrpc exactly \"2.0\"; requester-chosen id echoed verbatim; exactly one of result/error; notifications have no id and exist daemon-to-plugin only",
+  "source": "BBB_V2_AUDIT.md section 4; rpc.c:315-386, 921-939, 3382-3471; bbb_client.c:786-812, 968-981; bbb.go:154-186, 253-266; bbb_dispatch.c:417-433",
+  "checked_by": "framing round-trip now; envelope semantics land with the RPC layer (build-order step 3+)",
+  "vectors": [
+    {
+      "name": "request_string_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"progress.\"}}",
+      "cite": "C SDK id form: bbb_client.c:798-801"
+    },
+    {
+      "name": "request_numeric_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"progress.\"}}",
+      "cite": "Go SDK id form: bbb.go:157,227-232; receivers accept both (bbb_dispatch.c:421-422)"
+    },
+    {
+      "name": "request_daemon_to_plugin_string_id",
+      "kind": "request",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"method\":\"plugin.invoke\",\"params\":{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"arguments\":{}}}",
+      "cite": "conversation_plugin_dispatch.c AddStringToObject id; bbb_test.go:272-277"
+    },
+    {
+      "name": "response_result_echoes_string_id",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"accepted\":true,\"subscription_id\":\"sub-1\"}}",
+      "cite": "rpc.c:321-325 verbatim id echo"
+    },
+    {
+      "name": "response_result_echoes_numeric_id",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"accepted\":true,\"subscription_id\":\"sub-1\"}}",
+      "cite": "rpc.c:321-325"
+    },
+    {
+      "name": "response_error_plain",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32601,\"message\":\"method not found\"}}",
+      "cite": "exact example frame in BBB_PROTOCOL_DESIGN.md section 4; rpc.c:363-386"
+    },
+    {
+      "name": "response_error_with_reason_data",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"3\",\"error\":{\"code\":-32000,\"message\":\"Capability scope does not admit the requested operation\",\"data\":{\"reasonCode\":\"OPERATION_SCOPE_MISMATCH\",\"denied_at\":\"capability\"}}}",
+      "cite": "rpc.c:388-463 (camelCase reasonCode, optional denied_at); denial code -32000 per sev_rpc.h:84"
+    },
+    {
+      "name": "response_parse_error_id_null",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"JSON parse error\"}}",
+      "cite": "rpc.c:3387-3390 with 368-372"
+    },
+    {
+      "name": "notification_no_id",
+      "kind": "notification",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.step\",\"payload\":{\"pct\":50}}}",
+      "cite": "rpc.c:921-939; id must be ABSENT (bbb_client.c:878-884)"
+    },
+    {
+      "name": "invalid_wrong_jsonrpc_version",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"1.0\",\"id\":\"1\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "expect": { "code": -32600, "message": "invalid JSON-RPC 2.0 request" },
+      "cite": "rpc.c:3418-3422"
+    },
+    {
+      "name": "invalid_missing_jsonrpc",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"id\":\"1\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "expect": { "code": -32600, "message": "invalid JSON-RPC 2.0 request" },
+      "cite": "rpc.c:3418-3422"
+    },
+    {
+      "name": "invalid_method_not_a_string",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":42,\"params\":{}}",
+      "expect": { "code": -32600, "message": "invalid JSON-RPC 2.0 request" },
+      "cite": "rpc.c:3443-3448"
+    },
+    {
+      "name": "invalid_response_with_both_result_and_error",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{},\"error\":{\"code\":-32603,\"message\":\"x\"}}",
+      "cite": "exactly one of result/error: bbb_client.c:975-981; rpc.c:1445-1446"
+    },
+    {
+      "name": "invalid_response_with_neither_result_nor_error",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\"}",
+      "cite": "bbb_client.c:975-981; rpc.c:1445-1446"
+    },
+    {
+      "name": "request_without_id_is_answered_with_null_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "note": "NOT a notification: the daemon runs the handler and replies with id null (audit finding F-8); plugin-side C dispatch rejects id-less requests without replying (bbb_dispatch.c:421-425)",
+      "cite": "rpc.c:368-372, 3382-3471"
+    }
+  ]
+}

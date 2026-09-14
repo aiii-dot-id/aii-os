@@ -1,0 +1,70 @@
+.TH AII 1 "2026-08-27" "AII OS" "User Commands"
+.SH NAME
+aii \- AII OS identity runtime
+.SH SYNOPSIS
+.B aii
+.RI [ init | slots ]
+.br
+.B aii
+.RB [ \-dir
+.IR directory ]
+.RB [ \-config
+.IR file ]
+.RB [ \-version ]
+.SH DESCRIPTION
+.B aii
+runs an AI identity whose truth is a post\-quantum signed, append\-only
+ledger.
+.PP
+An identity lives entirely inside one directory: its config, ledger,
+database and key are all there and nowhere else. The runtime resolves no
+home of its own and adopts no data found elsewhere, so the directory must
+be named explicitly with
+.BR \-dir ,
+or be the current working directory.
+.SH COMMANDS
+.TP
+.B init
+Create the next identity slot under
+.I ~/.aii
+and start its service. Slots are numbered
+.IR identity\-0 ,
+.IR identity\-1 ,
+and so on; slot
+.I N
+serves its dashboard on port 8180+\fIN\fR.
+.TP
+.B slots
+List the identity slots under
+.I ~/.aii
+with their ports and, once born, their names.
+.SH OPTIONS
+.TP
+.BI \-dir " directory"
+Identity directory to run in. Defaults to the current directory.
+.TP
+.BI \-config " file"
+Config file name within the identity directory. Defaults to
+.IR config.json .
+.TP
+.B \-version
+Print the version and build identity, then exit.
+.SH FILES
+.TP
+.I ~/.aii/identity-N/
+An identity slot: config.json, data/ (ledger, database, key), log/.
+.TP
+.I ~/.aii/by-name/<Name>
+Symlink to the slot carrying that name. Derived from the ledger and
+rebuilt from it; never consulted for truth.
+.SH NOTES
+Removing the
+.B aii-os
+package removes the program only.
+.I ~/.aii
+is not owned by the package and is never deleted by it: an identity's
+ledger and key have no second copy.
+.SH SEE ALSO
+.BR systemctl (1)
+.SH HOMEPAGE
+https://aiii.id

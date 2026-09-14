@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	The plugin worker runs WebAssembly through wazero's compiler, which
+	maps pages that are both writable and executable without MAP_JIT.
+	Under the hardened runtime the kernel kills a process that does so
+	unless this entitlement is granted: on the 0.1.2 build every plugin
+	worker died with SIGKILL the instant it loaded a module (found
+	2026-09-10 with the memory plugin). allow-jit alone does not cover
+	it; this entitlement is the one Apple names for that mapping, and
+	notarization accepts it.
+	-->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

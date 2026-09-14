@@ -1,0 +1,37 @@
+{
+  "_": "The closed JSON-Schema subset shared by the kit (pkg/aiiospkg/schema.go) and the host (aii-os internal/jsonschema). Both sides run this file; a keyword one side admits and the other refuses is a failing test on the side that is wrong.",
+  "accept": [
+    {"type": "object"},
+    {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1}}, "required": ["id"], "additionalProperties": false},
+    {"type": "object", "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9-]*$"}}},
+    {"type": "array", "items": {"type": "string"}, "minItems": 0, "maxItems": 16, "uniqueItems": true},
+    {"type": ["string", "null"], "enum": ["fast", "slow", null]},
+    {"const": "thing", "title": "a constant", "description": "annotations are read and ignored", "default": "thing", "examples": ["thing"], "deprecated": false},
+    {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "multipleOf": 0.25},
+    {"type": "object", "minProperties": 1, "maxProperties": 8, "format": "custom", "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://example.test/s"}
+  ],
+  "refuse": [
+    {"schema": {"$ref": "#/x"}, "keyword": "$ref", "path": "#"},
+    {"schema": {"allOf": []}, "keyword": "allOf", "path": "#"},
+    {"schema": {"anyOf": []}, "keyword": "anyOf", "path": "#"},
+    {"schema": {"type": "object", "properties": {"a": {"oneOf": []}}}, "keyword": "oneOf", "path": "#/properties/a"},
+    {"schema": {"not": {}}, "keyword": "not", "path": "#"},
+    {"schema": {"if": {}}, "keyword": "if", "path": "#"},
+    {"schema": {"patternProperties": {}}, "keyword": "patternProperties", "path": "#"},
+    {"schema": {"$defs": {}}, "keyword": "$defs", "path": "#"},
+    {"schema": {"dependencies": {}}, "keyword": "dependencies", "path": "#"},
+    {"schema": {"contains": {}}, "keyword": "contains", "path": "#"},
+    {"schema": {"propertyNames": {}}, "keyword": "propertyNames", "path": "#"},
+    {"schema": {"additionalProperties": {"type": "string"}}, "keyword": "additionalProperties", "path": "#"},
+    {"schema": {"items": [{"type": "string"}]}, "keyword": "items", "path": "#"},
+    {"schema": {"type": "thing"}, "keyword": "type", "path": "#"},
+    {"schema": {"type": []}, "keyword": "type", "path": "#"},
+    {"schema": {"pattern": "("}, "keyword": "pattern", "path": "#"},
+    {"schema": {"minLength": -1}, "keyword": "minLength", "path": "#"},
+    {"schema": {"maxItems": 1.5}, "keyword": "maxItems", "path": "#"},
+    {"schema": {"multipleOf": 0}, "keyword": "multipleOf", "path": "#"},
+    {"schema": {"required": [""]}, "keyword": "required", "path": "#"},
+    {"schema": {"enum": []}, "keyword": "enum", "path": "#"},
+    {"schema": {"type": "array", "items": {"type": "object", "properties": {"deep": {"unevaluatedProperties": false}}}}, "keyword": "unevaluatedProperties", "path": "#/items/properties/deep"}
+  ]
+}

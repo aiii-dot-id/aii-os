@@ -1,0 +1,52 @@
+{
+  "suite": "notification",
+  "method": "observe.event",
+  "description": "Subscribed event delivery, daemon to plugin, fire-and-forget: params.topic string + params.payload (any JSON, may be null); no id; dropped silently without the observe capability or a matching subscription. Also records the only other implemented notification, rpc.disconnect",
+  "source": "BBB_V2_AUDIT.md sections 6.6-7; rpc.c:921-996; bbb_client.c:864-899, 1616-1667; BBB_PROTOCOL_DESIGN.md section 5",
+  "checked_by": "framing round-trip now; notification parsing lands with the Go host worker/supervisor",
+  "vectors": [
+    {
+      "name": "observe_event_object_payload",
+      "kind": "notification",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.step\",\"payload\":{\"pct\":50}}}",
+      "cite": "rpc.c:975-979"
+    },
+    {
+      "name": "observe_event_null_payload",
+      "kind": "notification",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.done\",\"payload\":null}}",
+      "note": "payload may be any JSON value including null; the C client only requires presence (bbb_client.c:886-889)",
+      "cite": "rpc.c:977-978"
+    },
+    {
+      "name": "invalid_observe_event_with_id",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"9\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.step\",\"payload\":null}}",
+      "note": "an observe.event carrying an id is a protocol error to the C client",
+      "cite": "bbb_client.c:878-884"
+    },
+    {
+      "name": "invalid_observe_event_topic_missing",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"payload\":{\"pct\":50}}}",
+      "cite": "bbb_client.c:886-889"
+    },
+    {
+      "name": "rpc_disconnect_notification",
+      "kind": "notification",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"rpc.disconnect\",\"params\":{\"reason\":\"safe_mode_suspended\",\"reasonCode\":\"SESSION_SUSPENDED_SAFE_MODE\",\"policy_epoch\":3}}",
+      "note": "rpc.disconnect is implemented only as this daemon-to-plugin notification (audit finding F-9); the daemon closes the connection after sending it",
+      "cite": "rpc.c:985-996; sev_rpc.h:149-150"
+    }
+  ]
+}

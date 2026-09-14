@@ -1,0 +1,200 @@
+# Release — ON-DEMAND build of the artifacts CI can validly produce.
+#
+# THIS WORKFLOW PUBLISHES NOTHING. It is manual (workflow_dispatch) and
+# holds contents: read. See the MANUAL ONLY block below for why. Release
+# publication is packaging/release.sh's act, on the build hosts.
+#
+# INSTALLERS ARE NOT BUILT HERE. An
+# installer is only valid where its platform's signing can be performed:
+# macOS notarization needs Apple credentials and a Mac, and a runner
+# cross-compiling a bare darwin binary produces something that cannot be
+# notarized, cannot be stapled, and cannot be installed — while the
+# self-updater would happily take it and break the app bundle's seal.
+# The darwin rows are gone for exactly that reason: the wrong artifact
+# cannot be handed to anyone if it is never built.
+#
+# The packages people install are assembled by packaging/release.sh on
+# the build hosts, where the keys and Apple's tools already live, and
+# GitHub is the DISTRIBUTION surface rather than the factory. That
+# script also stages into a DRAFT release, so no unsigned asset is ever
+# publicly downloadable.
+#
+# The VERSION file at the repo root is the version source of truth. The
+# workflow reads VERSION, injects it via ldflags, builds every platform
+# and archives each — as a compile check. It publishes nothing to a
+# Release; each leg's archive goes to the Actions artifact store, for
+# inspection only.
+#
+# Signing is OFFLINE: the platform_release
+# key is held by AIII. packaging/release.sh assembles the archives and
+# the platform.sig files are generated offline and attached to the
+# DRAFT release as additional assets. The update checker verifies platform.sig
+# against the pinned platform_root before any binary swap — an archive
+# without a valid platform.sig is refused, never installed.
+#
+# Asset naming convention (the contract the update checker matches):
+#
+#	aii-os_<version>_<platform>_<arch>.tar.gz   (linux, macos)
+#	aii-os_<version>_<platform>_<arch>.zip      (windows)
+#	aii-os_<version>_android_arm64.aar          (gomobile binding)
+#	aii-os_<version>_ios_arm64.xcframework.zip  (gomobile binding)
+#
+# <platform> is linux / macos / windows; <arch> is Go's GOARCH word —
+# amd64, arm64 — exactly as internal/updates/contract.go (SupportedTargets,
+# AssetName) spells it, taken straight from matrix.goarch. An archive
+# named any other way is one the updater never finds: a mapping step
+# here once emitted x86_64 for amd64 (remediation, commit 7;
+# test/release_workflow_names_test.go pins the vocabulary). This file is
+# on-demand compile-and-archive EVIDENCE — its names conform to the
+# updater's release contract so a leg proves the real artifact builds —
+# and it is not publication authority; that stays with packaging/
+# release.sh, offline signing and the DRAFT release, unchanged.
+#
+# Desktop archives contain only the aii binary. aii-plugin-worker is
+# operator-owned (config: WorkerBinary) and updated separately, not part
+# of the platform self-update surface. Mobile archives contain the
+# gomobile binding for the shell app to embed. No manifest.json — the
+# GitHub Releases API is the manifest: asset names + download URLs +
+# tag_name are sufficient, and a second source of truth would only drift
+# .
+
+name: Release
+
+# MANUAL ONLY. This used to trigger on a pushed v* tag and publish
+# unsigned archives with contents: write, attaching signatures
+# afterwards — the exact unsigned public interval BETA1_CONTRACT
+# forbids, and a second release authority competing with
+# packaging/release.sh.
+#
+# A tag can no longer publish anything. The signed candidate is
+# assembled and verified by packaging/release.sh on the build hosts,
+# where the keys and Apple's tools live, and staged into a DRAFT. This
+# workflow remains only for on-demand CI builds of the bare archives —
+# useful for checking that every target still compiles, never a release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read  # BUILD ONLY. Publishing is packaging/release.sh's act.
+
+jobs:
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, archive: tar.gz }
+          - { goos: linux,   goarch: arm64, archive: tar.gz }
+          - { goos: windows, goarch: amd64, archive: zip }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Map platform name
+        id: platform
+        run: |
+          case "${{ matrix.goos }}" in
+            linux)   echo "name=linux"   >> "$GITHUB_OUTPUT" ;;
+            darwin)  echo "name=macos"   >> "$GITHUB_OUTPUT" ;;
+            windows) echo "name=windows" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Set binary name
+        id: bins
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            echo "aii=aii.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "aii=aii" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -ldflags "-X github.com/aiii-dot-id/aii-os/internal/app.Version=${{ steps.version.outputs.version }}" \
+            -o ${{ steps.bins.outputs.aii }} ./cmd/aii
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          archive="aii-os_${{ steps.version.outputs.version }}_${{ steps.platform.outputs.name }}_${{ matrix.goarch }}.tar.gz"
+          tar czf "$archive" ${{ steps.bins.outputs.aii }}
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          archive="aii-os_${{ steps.version.outputs.version }}_${{ steps.platform.outputs.name }}_${{ matrix.goarch }}.zip"
+          zip "$archive" ${{ steps.bins.outputs.aii }}
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Compute SHA256
+        run: sha256sum "$archive" | tee "${{ env.archive }}.sha256"
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # v4 requires a unique name per run; three legs defaulting to
+          # "artifact" collided on the second.
+          name: aii-os-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256
+
+  build-mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: android, goarch: arm64 }
+          # ios is deliberately absent: its binding needs a macOS runner
+          # (shells.yml has one) and a placeholder leg here reported
+          # success while producing nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Install gomobile
+        run: |
+          # PINNED to the module's own x/mobile (P1:
+          # @latest made releases non-reproducible and could drift from
+          # the gobind the tool directive pins).
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
+          gomobile init
+      - name: Build Android binding
+        if: matrix.platform == 'android'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          # gomobile cannot bind internal/ packages, so mobile/ is the
+          # surface. NDK is required for Android; gomobile checks for it.
+          # The archive is the .aar the Android shell embeds.
+          archive="aii-os_${{ steps.version.outputs.version }}_android_arm64.aar"
+          # -buildvcs=false: gomobile's internal gobind cgo build fails
+          # VCS stamping under the NDK toolchain (proven on the build host,
+          # — the fix that turned the failure into a 13.5MB
+          # .aar); the artifact carries its version via -ldflags, not a
+          # VCS stamp.
+          GOFLAGS=-buildvcs=false gomobile bind -target=android/arm64 \
+            -ldflags "-X github.com/aiii-dot-id/aii-os/internal/app.Version=${{ steps.version.outputs.version }}" \
+            -o "$archive" ./mobile/
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Compute SHA256
+        if: env.archive != ''
+        run: sha256sum "$archive" | tee "${{ env.archive }}.sha256"
+      - name: Upload build artifact
+        if: env.archive != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: aii-os-${{ matrix.platform }}-${{ matrix.goarch }}
+          path: |
+            ${{ env.archive }}
+            ${{ env.archive }}.sha256

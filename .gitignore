@@ -1,0 +1,46 @@
+# Build artifacts. Anchored: an unanchored `aii` also ignored cmd/aii/
+# — the daemon entrypoint — in any fresh checkout or export, while the
+# tracked dev index masked it (tracked files override ignore rules).
+# Found when the public source export shipped without cmd/aii and CI
+# could not say why (2026-08-27).
+/aii-os
+/aii
+/aii-app
+*.exe
+
+# Runtime data (never commit identities)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime configuration may contain credentials.
+/config.json
+/providers.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build artifacts
+bin/
+.gopath/
+log/
+
+# seeded at the identity root at boot by the running binary; the sources
+# are tracked at internal/app/{METHOD,SKILLS}.md - these root copies are
+# runtime artifacts stamped with the build that wrote them
+/METHOD.md
+/SKILLS.md
+
+# Build products from packaging/deb/build-deb.sh
+/dist/
+/aii-setup
+/aii-app
+cmd/aii-setup/payload/LICENSE

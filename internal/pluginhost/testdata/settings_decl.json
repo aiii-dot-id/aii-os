@@ -1,0 +1,1017 @@
+{
+ "_": "Settings declaration vectors (S6, 2026-09-05): what install-root/settings.json may say. The host (internal/pluginhost.ParseSettings) and the kit (pkg/aiiospkg, the packager) hold the same file to these cases; a case is {name, decl, ok, error_contains}.",
+ "cases": [
+  {
+   "name": "a number with bounds and a default",
+   "ok": true,
+   "decl": [
+    {
+     "key": "recall_limit",
+     "type": "number",
+     "title": "Recall limit",
+     "description": "How many texts a recall returns",
+     "default": 5,
+     "minimum": 1,
+     "maximum": 50
+    }
+   ]
+  },
+  {
+   "name": "every type once",
+   "ok": true,
+   "decl": [
+    {
+     "key": "name",
+     "type": "string",
+     "title": "Name",
+     "default": "x"
+    },
+    {
+     "key": "count",
+     "type": "number",
+     "title": "Count"
+    },
+    {
+     "key": "on",
+     "type": "boolean",
+     "title": "On",
+     "default": true
+    },
+    {
+     "key": "mode",
+     "type": "enum",
+     "title": "Mode",
+     "values": [
+      "fast",
+      "exact"
+     ],
+     "default": "fast"
+    },
+    {
+     "key": "api_key",
+     "type": "secret",
+     "title": "API key",
+     "required": true
+    }
+   ]
+  },
+  {
+   "name": "an empty list declares nothing",
+   "ok": true,
+   "decl": []
+  },
+  {
+   "name": "not a list",
+   "ok": false,
+   "error_contains": "not a list",
+   "decl": {
+    "key": "x"
+   }
+  },
+  {
+   "name": "an unknown member is refused",
+   "ok": false,
+   "error_contains": "unknown field",
+   "decl": [
+    {
+     "key": "x",
+     "type": "string",
+     "title": "X",
+     "placeholder": "y"
+    }
+   ]
+  },
+  {
+   "name": "a key with an uppercase letter",
+   "ok": false,
+   "error_contains": "lowercase",
+   "decl": [
+    {
+     "key": "recallLimit",
+     "type": "number",
+     "title": "R"
+    }
+   ]
+  },
+  {
+   "name": "a key declared twice",
+   "ok": false,
+   "error_contains": "twice",
+   "decl": [
+    {
+     "key": "a",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a",
+     "type": "string",
+     "title": "A again"
+    }
+   ]
+  },
+  {
+   "name": "a missing title",
+   "ok": false,
+   "error_contains": "title",
+   "decl": [
+    {
+     "key": "a",
+     "type": "string"
+    }
+   ]
+  },
+  {
+   "name": "an undeclared type",
+   "ok": false,
+   "error_contains": "not string, number, integer, boolean, enum or secret",
+   "decl": [
+    {
+     "key": "a",
+     "type": "list",
+     "title": "A"
+    }
+   ]
+  },
+  {
+   "name": "an enum without values",
+   "ok": false,
+   "error_contains": "enum declares",
+   "decl": [
+    {
+     "key": "a",
+     "type": "enum",
+     "title": "A"
+    }
+   ]
+  },
+  {
+   "name": "values on a string",
+   "ok": false,
+   "error_contains": "belong to an enum",
+   "decl": [
+    {
+     "key": "a",
+     "type": "string",
+     "title": "A",
+     "values": [
+      "x"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "bounds on a string",
+   "ok": false,
+   "error_contains": "belong to a number",
+   "decl": [
+    {
+     "key": "a",
+     "type": "string",
+     "title": "A",
+     "minimum": 1
+    }
+   ]
+  },
+  {
+   "name": "minimum above maximum",
+   "ok": false,
+   "error_contains": "minimum above maximum",
+   "decl": [
+    {
+     "key": "a",
+     "type": "number",
+     "title": "A",
+     "minimum": 5,
+     "maximum": 1
+    }
+   ]
+  },
+  {
+   "name": "a default outside its bounds",
+   "ok": false,
+   "error_contains": "above the maximum",
+   "decl": [
+    {
+     "key": "a",
+     "type": "number",
+     "title": "A",
+     "maximum": 10,
+     "default": 11
+    }
+   ]
+  },
+  {
+   "name": "a default of the wrong type",
+   "ok": false,
+   "error_contains": "must be a number",
+   "decl": [
+    {
+     "key": "a",
+     "type": "number",
+     "title": "A",
+     "default": "5"
+    }
+   ]
+  },
+  {
+   "name": "an enum default outside its values",
+   "ok": false,
+   "error_contains": "must be one of",
+   "decl": [
+    {
+     "key": "a",
+     "type": "enum",
+     "title": "A",
+     "values": [
+      "x",
+      "y"
+     ],
+     "default": "z"
+    }
+   ]
+  },
+  {
+   "name": "a secret with a default",
+   "ok": false,
+   "error_contains": "no default",
+   "decl": [
+    {
+     "key": "a",
+     "type": "secret",
+     "title": "A",
+     "default": "hunter2"
+    }
+   ]
+  },
+  {
+   "name": "seventeen settings",
+   "ok": false,
+   "error_contains": "at most 16",
+   "decl": [
+    {
+     "key": "a01",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a02",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a03",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a04",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a05",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a06",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a07",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a08",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a09",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a10",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a11",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a12",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a13",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a14",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a15",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a16",
+     "type": "string",
+     "title": "A"
+    },
+    {
+     "key": "a17",
+     "type": "string",
+     "title": "A"
+    }
+   ]
+  },
+  {
+   "name": "an enum with 256 values and a label for the last",
+   "ok": true,
+   "decl": [
+    {
+     "key": "locale",
+     "type": "enum",
+     "title": "Recognition language",
+     "values": [
+      "v000",
+      "v001",
+      "v002",
+      "v003",
+      "v004",
+      "v005",
+      "v006",
+      "v007",
+      "v008",
+      "v009",
+      "v010",
+      "v011",
+      "v012",
+      "v013",
+      "v014",
+      "v015",
+      "v016",
+      "v017",
+      "v018",
+      "v019",
+      "v020",
+      "v021",
+      "v022",
+      "v023",
+      "v024",
+      "v025",
+      "v026",
+      "v027",
+      "v028",
+      "v029",
+      "v030",
+      "v031",
+      "v032",
+      "v033",
+      "v034",
+      "v035",
+      "v036",
+      "v037",
+      "v038",
+      "v039",
+      "v040",
+      "v041",
+      "v042",
+      "v043",
+      "v044",
+      "v045",
+      "v046",
+      "v047",
+      "v048",
+      "v049",
+      "v050",
+      "v051",
+      "v052",
+      "v053",
+      "v054",
+      "v055",
+      "v056",
+      "v057",
+      "v058",
+      "v059",
+      "v060",
+      "v061",
+      "v062",
+      "v063",
+      "v064",
+      "v065",
+      "v066",
+      "v067",
+      "v068",
+      "v069",
+      "v070",
+      "v071",
+      "v072",
+      "v073",
+      "v074",
+      "v075",
+      "v076",
+      "v077",
+      "v078",
+      "v079",
+      "v080",
+      "v081",
+      "v082",
+      "v083",
+      "v084",
+      "v085",
+      "v086",
+      "v087",
+      "v088",
+      "v089",
+      "v090",
+      "v091",
+      "v092",
+      "v093",
+      "v094",
+      "v095",
+      "v096",
+      "v097",
+      "v098",
+      "v099",
+      "v100",
+      "v101",
+      "v102",
+      "v103",
+      "v104",
+      "v105",
+      "v106",
+      "v107",
+      "v108",
+      "v109",
+      "v110",
+      "v111",
+      "v112",
+      "v113",
+      "v114",
+      "v115",
+      "v116",
+      "v117",
+      "v118",
+      "v119",
+      "v120",
+      "v121",
+      "v122",
+      "v123",
+      "v124",
+      "v125",
+      "v126",
+      "v127",
+      "v128",
+      "v129",
+      "v130",
+      "v131",
+      "v132",
+      "v133",
+      "v134",
+      "v135",
+      "v136",
+      "v137",
+      "v138",
+      "v139",
+      "v140",
+      "v141",
+      "v142",
+      "v143",
+      "v144",
+      "v145",
+      "v146",
+      "v147",
+      "v148",
+      "v149",
+      "v150",
+      "v151",
+      "v152",
+      "v153",
+      "v154",
+      "v155",
+      "v156",
+      "v157",
+      "v158",
+      "v159",
+      "v160",
+      "v161",
+      "v162",
+      "v163",
+      "v164",
+      "v165",
+      "v166",
+      "v167",
+      "v168",
+      "v169",
+      "v170",
+      "v171",
+      "v172",
+      "v173",
+      "v174",
+      "v175",
+      "v176",
+      "v177",
+      "v178",
+      "v179",
+      "v180",
+      "v181",
+      "v182",
+      "v183",
+      "v184",
+      "v185",
+      "v186",
+      "v187",
+      "v188",
+      "v189",
+      "v190",
+      "v191",
+      "v192",
+      "v193",
+      "v194",
+      "v195",
+      "v196",
+      "v197",
+      "v198",
+      "v199",
+      "v200",
+      "v201",
+      "v202",
+      "v203",
+      "v204",
+      "v205",
+      "v206",
+      "v207",
+      "v208",
+      "v209",
+      "v210",
+      "v211",
+      "v212",
+      "v213",
+      "v214",
+      "v215",
+      "v216",
+      "v217",
+      "v218",
+      "v219",
+      "v220",
+      "v221",
+      "v222",
+      "v223",
+      "v224",
+      "v225",
+      "v226",
+      "v227",
+      "v228",
+      "v229",
+      "v230",
+      "v231",
+      "v232",
+      "v233",
+      "v234",
+      "v235",
+      "v236",
+      "v237",
+      "v238",
+      "v239",
+      "v240",
+      "v241",
+      "v242",
+      "v243",
+      "v244",
+      "v245",
+      "v246",
+      "v247",
+      "v248",
+      "v249",
+      "v250",
+      "v251",
+      "v252",
+      "v253",
+      "v254",
+      "v255"
+     ],
+     "labels": {
+      "v255": "the last choice"
+     },
+     "default": "v255"
+    }
+   ]
+  },
+  {
+   "name": "an enum with 257 values",
+   "ok": false,
+   "error_contains": "1..256 values",
+   "decl": [
+    {
+     "key": "locale",
+     "type": "enum",
+     "title": "Recognition language",
+     "values": [
+      "v000",
+      "v001",
+      "v002",
+      "v003",
+      "v004",
+      "v005",
+      "v006",
+      "v007",
+      "v008",
+      "v009",
+      "v010",
+      "v011",
+      "v012",
+      "v013",
+      "v014",
+      "v015",
+      "v016",
+      "v017",
+      "v018",
+      "v019",
+      "v020",
+      "v021",
+      "v022",
+      "v023",
+      "v024",
+      "v025",
+      "v026",
+      "v027",
+      "v028",
+      "v029",
+      "v030",
+      "v031",
+      "v032",
+      "v033",
+      "v034",
+      "v035",
+      "v036",
+      "v037",
+      "v038",
+      "v039",
+      "v040",
+      "v041",
+      "v042",
+      "v043",
+      "v044",
+      "v045",
+      "v046",
+      "v047",
+      "v048",
+      "v049",
+      "v050",
+      "v051",
+      "v052",
+      "v053",
+      "v054",
+      "v055",
+      "v056",
+      "v057",
+      "v058",
+      "v059",
+      "v060",
+      "v061",
+      "v062",
+      "v063",
+      "v064",
+      "v065",
+      "v066",
+      "v067",
+      "v068",
+      "v069",
+      "v070",
+      "v071",
+      "v072",
+      "v073",
+      "v074",
+      "v075",
+      "v076",
+      "v077",
+      "v078",
+      "v079",
+      "v080",
+      "v081",
+      "v082",
+      "v083",
+      "v084",
+      "v085",
+      "v086",
+      "v087",
+      "v088",
+      "v089",
+      "v090",
+      "v091",
+      "v092",
+      "v093",
+      "v094",
+      "v095",
+      "v096",
+      "v097",
+      "v098",
+      "v099",
+      "v100",
+      "v101",
+      "v102",
+      "v103",
+      "v104",
+      "v105",
+      "v106",
+      "v107",
+      "v108",
+      "v109",
+      "v110",
+      "v111",
+      "v112",
+      "v113",
+      "v114",
+      "v115",
+      "v116",
+      "v117",
+      "v118",
+      "v119",
+      "v120",
+      "v121",
+      "v122",
+      "v123",
+      "v124",
+      "v125",
+      "v126",
+      "v127",
+      "v128",
+      "v129",
+      "v130",
+      "v131",
+      "v132",
+      "v133",
+      "v134",
+      "v135",
+      "v136",
+      "v137",
+      "v138",
+      "v139",
+      "v140",
+      "v141",
+      "v142",
+      "v143",
+      "v144",
+      "v145",
+      "v146",
+      "v147",
+      "v148",
+      "v149",
+      "v150",
+      "v151",
+      "v152",
+      "v153",
+      "v154",
+      "v155",
+      "v156",
+      "v157",
+      "v158",
+      "v159",
+      "v160",
+      "v161",
+      "v162",
+      "v163",
+      "v164",
+      "v165",
+      "v166",
+      "v167",
+      "v168",
+      "v169",
+      "v170",
+      "v171",
+      "v172",
+      "v173",
+      "v174",
+      "v175",
+      "v176",
+      "v177",
+      "v178",
+      "v179",
+      "v180",
+      "v181",
+      "v182",
+      "v183",
+      "v184",
+      "v185",
+      "v186",
+      "v187",
+      "v188",
+      "v189",
+      "v190",
+      "v191",
+      "v192",
+      "v193",
+      "v194",
+      "v195",
+      "v196",
+      "v197",
+      "v198",
+      "v199",
+      "v200",
+      "v201",
+      "v202",
+      "v203",
+      "v204",
+      "v205",
+      "v206",
+      "v207",
+      "v208",
+      "v209",
+      "v210",
+      "v211",
+      "v212",
+      "v213",
+      "v214",
+      "v215",
+      "v216",
+      "v217",
+      "v218",
+      "v219",
+      "v220",
+      "v221",
+      "v222",
+      "v223",
+      "v224",
+      "v225",
+      "v226",
+      "v227",
+      "v228",
+      "v229",
+      "v230",
+      "v231",
+      "v232",
+      "v233",
+      "v234",
+      "v235",
+      "v236",
+      "v237",
+      "v238",
+      "v239",
+      "v240",
+      "v241",
+      "v242",
+      "v243",
+      "v244",
+      "v245",
+      "v246",
+      "v247",
+      "v248",
+      "v249",
+      "v250",
+      "v251",
+      "v252",
+      "v253",
+      "v254",
+      "v255",
+      "v256"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "labels name the values",
+   "ok": true,
+   "decl": [
+    {
+     "key": "voice",
+     "type": "enum",
+     "title": "Speaking voice",
+     "values": [
+      "alba",
+      "ryan"
+     ],
+     "labels": {
+      "alba": "Alba (Scottish English)",
+      "ryan": "Ryan (British English)"
+     },
+     "default": "alba"
+    }
+   ]
+  },
+  {
+   "name": "a label for a value not declared",
+   "ok": false,
+   "error_contains": "not one of its values",
+   "decl": [
+    {
+     "key": "voice",
+     "type": "enum",
+     "title": "Speaking voice",
+     "values": [
+      "alba"
+     ],
+     "labels": {
+      "ryan": "Ryan"
+     }
+    }
+   ]
+  },
+  {
+   "name": "an empty label",
+   "ok": false,
+   "error_contains": "labels are 1..64 bytes",
+   "decl": [
+    {
+     "key": "voice",
+     "type": "enum",
+     "title": "Speaking voice",
+     "values": [
+      "alba"
+     ],
+     "labels": {
+      "alba": ""
+     }
+    }
+   ]
+  },
+  {
+   "name": "labels on a string",
+   "ok": false,
+   "error_contains": "labels belong to an enum",
+   "decl": [
+    {
+     "key": "name",
+     "type": "string",
+     "title": "Name",
+     "labels": {
+      "x": "X"
+     }
+    }
+   ]
+  },
+  {
+   "name": "an integer with bounds and a default",
+   "ok": true,
+   "decl": [
+    {
+     "key": "top_k",
+     "type": "integer",
+     "title": "Top-k",
+     "default": 40,
+     "minimum": 1,
+     "maximum": 200
+    },
+    {
+     "key": "seed",
+     "type": "integer",
+     "title": "Seed",
+     "default": 17
+    }
+   ]
+  },
+  {
+   "name": "an integer default with a fraction",
+   "ok": false,
+   "error_contains": "whole number",
+   "decl": [
+    {
+     "key": "top_k",
+     "type": "integer",
+     "title": "Top-k",
+     "default": 2.5,
+     "minimum": 1,
+     "maximum": 200
+    }
+   ]
+  },
+  {
+   "name": "an integer bound with a fraction",
+   "ok": false,
+   "error_contains": "bounds are whole numbers",
+   "decl": [
+    {
+     "key": "top_k",
+     "type": "integer",
+     "title": "Top-k",
+     "minimum": 0.5
+    }
+   ]
+  },
+  {
+   "name": "an integer default outside its bounds",
+   "ok": false,
+   "error_contains": "above the maximum",
+   "decl": [
+    {
+     "key": "top_k",
+     "type": "integer",
+     "title": "Top-k",
+     "default": 300,
+     "maximum": 200
+    }
+   ]
+  }
+ ]
+}

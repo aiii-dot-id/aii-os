@@ -1,0 +1,11 @@
+# Machine-specific SDK path — never committed.
+local.properties
+
+# Build output.
+build/
+.gradle/
+
+# The gomobile binding is a BUILD PRODUCT of ../../mobile, not source.
+# Produce it with the command in ../README.md; release.yml builds it in CI.
+app/libs/*.aar
+app/libs/*.jar

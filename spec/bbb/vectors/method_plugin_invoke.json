@@ -1,0 +1,88 @@
+{
+  "suite": "method",
+  "method": "plugin.invoke",
+  "description": "Daemon invokes one registered plugin operation. Params: operation_id + interface + method (strings resolving to an admitted descriptor) + arguments (object). external_receipt-contract responses are {ok:bool, result:object, child_receipts:array} with NO plugin-authored external_receipt; the daemon injects the receipt",
+  "source": "BBB_V2_AUDIT.md section 6.4; plugin_invoke_contract.c:408-644; conversation_plugin_dispatch.c (request build); bbb_dispatch.c:398-460; bbb.go:367-424",
+  "checked_by": "framing round-trip now; contract wrap/validation lands with the Go host worker (step 3)",
+  "vectors": [
+    {
+      "name": "request",
+      "kind": "request",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"method\":\"plugin.invoke\",\"params\":{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"arguments\":{\"message\":\"hello\"}}}",
+      "note": "daemon uses string ids for plugin.invoke and caps the rendered frame at 1 MiB before sending",
+      "cite": "conversation_plugin_dispatch.c request build; plugin_invoke_contract.c:492-498"
+    },
+    {
+      "name": "request_with_receipt_context",
+      "kind": "request",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-2\",\"method\":\"plugin.invoke\",\"params\":{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"arguments\":{\"message\":\"hello\"},\"receipt_context\":{\"request_id\":\"tc-42\"}}}",
+      "cite": "plugin_invoke_contract.c:89-107"
+    },
+    {
+      "name": "response_plugin_result_before_wrap",
+      "kind": "response",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"result\":{\"ok\":true,\"result\":{\"echo\":\"hello\"},\"child_receipts\":[]}}",
+      "note": "what the plugin sends: ok bool + result object + child_receipts array, and it MUST NOT include external_receipt (daemon rejects, plugin_invoke_contract.c:600-601); C dispatch helpers emit exactly this shape (bbb_dispatch.c:254-278)",
+      "cite": "plugin_invoke_contract.c:587-599"
+    },
+    {
+      "name": "response_after_daemon_wrap",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"result\":{\"ok\":true,\"result\":{\"echo\":\"hello\"},\"child_receipts\":[],\"external_receipt\":{\"success\":true,\"transport_outcome\":true,\"protocol_status\":200,\"operation_outcome\":true,\"audit_persisted\":false,\"id\":\"svc-1\",\"timestamp\":\"2026-08-19T00:00:00Z\",\"plugin_id\":\"com.example.echo\",\"host_authored\":true,\"write_landed\":false}}}",
+      "note": "the daemon injects the host-authored receipt into the plugin's result before crediting it upstream (further receipt fields per plugin_invoke_contract.c:127-150 elided)",
+      "cite": "plugin_invoke_contract.c:613-628"
+    },
+    {
+      "name": "response_plugin_failure",
+      "kind": "response",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"result\":{\"ok\":false,\"result\":{\"reason\":\"upstream unreachable\",\"data\":{\"reason_code\":\"OPERATION_ARGUMENT_INVALID\"}},\"child_receipts\":[]}}",
+      "note": "failure reason/reason_code are read from inside result.result (plugin_invoke_contract.c:161-199)",
+      "cite": "plugin_invoke_contract.c:161-199"
+    },
+    {
+      "name": "response_error_method_not_found",
+      "kind": "response",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"error\":{\"code\":-32601,\"message\":\"method not found\",\"data\":{\"reasonCode\":\"METHOD_NOT_FOUND\"}}}",
+      "note": "C dispatch shape for an unregistered method (the Go SDK serve loop diverges: -32601 for ANY handler error, no data - audit finding F-2)",
+      "cite": "bbb_dispatch.c:428-433; bbb_protocol.h:43-45"
+    },
+    {
+      "name": "response_error_handler_failed",
+      "kind": "response",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"error\":{\"code\":-32603,\"message\":\"plugin handler failed\",\"data\":{\"reasonCode\":\"PLUGIN_HANDLER_FAILED\"}}}",
+      "cite": "bbb_dispatch.c:444-450; bbb_protocol.h:42,46"
+    },
+    {
+      "name": "invalid_arguments_not_object",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"method\":\"plugin.invoke\",\"params\":{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"arguments\":[]}}",
+      "note": "the daemon-side contract module refuses to build a service request from this (SEV_ERR_BADARG); a conforming host never emits it",
+      "cite": "plugin_invoke_contract.c:495-498"
+    },
+    {
+      "name": "invalid_plugin_response_with_self_authored_receipt",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"result\":{\"ok\":true,\"result\":{},\"child_receipts\":[],\"external_receipt\":{\"success\":true}}}",
+      "note": "plugin text is data, a host-authored receipt is proof: a self-vouched receipt is rejected outright",
+      "cite": "plugin_invoke_contract.c:600-601"
+    }
+  ]
+}

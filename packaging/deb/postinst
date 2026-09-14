@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+. /usr/share/aii-os/aii-units.sh
+
+case "$1" in
+  configure|abort-upgrade|abort-deconfigure|abort-remove)
+    # Make the new template unit visible to every user manager without
+    # requiring a logout.
+    systemctl --global daemon-reload >/dev/null 2>&1 || true
+
+    # RESTART WHAT WAS RUNNING. The other half of the contract, from
+    # /usr/share/debhelper/autoscripts/postinst-systemd-user-restart:
+    # reload synchronously, then restart, so a running identity picks up
+    # the newly unpacked binary. Without this an upgrade left residents
+    # on the OLD inode until someone noticed.
+    #
+    # No guard on $2 (a fresh install vs an upgrade): the user template
+    # does not use one, because deb-systemd-invoke already declines to
+    # start a unit that is disabled and not running. A first install has
+    # no identities yet, so the list is empty and this does nothing.
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+      units=$(aii_units)
+      if [ -n "$units" ]; then
+        deb-systemd-invoke --user daemon-reload >/dev/null || true
+        # shellcheck disable=SC2086
+        deb-systemd-invoke --user restart $units >/dev/null || true
+      fi
+    fi
+
+    if [ -z "$2" ]; then
+      cat <<'MSG'
+
+AII OS is installed.
+
+  aii init      create an identity slot and start it
+  aii slots     list your slots
+
+Your identities live in ~/.aii/, which this package does not own and
+will never remove. Uninstalling AII OS removes the program only.
+
+MSG
+    fi
+    ;;
+esac
+
+exit 0

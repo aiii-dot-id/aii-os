@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+. /usr/share/aii-os/aii-units.sh
+
+# STOP ON REMOVAL ONLY — never on upgrade.
+#
+# This is the debhelper contract, taken verbatim from
+# /usr/share/debhelper/autoscripts/prerm-systemd-user-stop:
+#
+#     if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+#         deb-systemd-invoke --user stop #UNITFILES#
+#     fi
+#
+# It used to read `remove|upgrade|deconfigure`, which stopped every
+# identity during an ordinary `apt upgrade` while postinst never started
+# them again — so a successful upgrade left every resident down. Debian
+# does not solve that by recording which units were running; it solves it
+# by NOT STOPPING THEM. The process keeps its old inode across the
+# unpack, and the restart in postinst is what moves it onto the new
+# binary (external review).
+#
+# deb-systemd-invoke rather than `runuser -u ... systemctl --user`: it
+# asks policy-rc.d first, enumerates the user@ instances itself, and — in
+# its own words — "if the job is disabled and is not currently running,
+# the job is not started or restarted", which is precisely the
+# preserve-what-was-running behaviour a hand-rolled loop would have to
+# reinvent, and get wrong.
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+  units=$(aii_units)
+  if [ -n "$units" ]; then
+    # shellcheck disable=SC2086
+    deb-systemd-invoke --user stop $units >/dev/null || true
+  fi
+fi
+
+exit 0
