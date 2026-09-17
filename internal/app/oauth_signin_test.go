@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
+	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,7 @@ type signInFixture struct {
 func newSignInFixture(t *testing.T, credential string) *signInFixture {
 	t.Helper()
 	a := newProvidersApp(t)
+	fixtureSignInContext(t, a)
 	dir, _ := os.Getwd()
 	a.cfg.Identity.LedgerPath = filepath.Join(dir, "data", "ledger.jsonl")
 	// .
@@ -50,22 +52,24 @@ func newSignInFixture(t *testing.T, credential string) *signInFixture {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	var calls int32
-	authority := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	authority := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(30 * time.Millisecond)
 		atomicAdd(&calls)
 		json.NewEncoder(w).Encode(map[string]any{"access_token": testJWT(t, "acct-native"), "refresh_token": "rt", "id_token": "id", "expires_in": 3600})
 	}))
 	t.Cleanup(authority.Close)
+	a.oauthTransport = authority.Client().Transport
+	a.oauthGuard = func(context.Context, string) error { return nil }
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
-	redirect := "http://127.0.0.1:" + strconv.Itoa(port) + "/auth/callback"
+	redirect := "http://127.0.0.1:" + strconv.Itoa(port) + "/oauth/callback"
 	const name = "ChatGPT (Plus/Pro)"
-	reg := providerRegistry{Providers: []providerEntry{{
-		Name: name, APIType: "openai", URL: "https://chatgpt.com/backend-api/codex", Credential: credential,
+	reg := providerRegistry{OAuth: map[string]oauth.Provider{"fixture": {SignIn: "callback"}}, Providers: []providerEntry{{
+		OAuth: "fixture", Name: name, APIType: "openai", URL: "https://chatgpt.com/backend-api/codex", Credential: credential,
 		CredentialOptions: map[string]string{
 			"oauth_client_id": "app_test", "oauth_authorize_url": "https://auth.example/authorize", "oauth_token_url": authority.URL,
-			"oauth_redirect_uri": redirect, "oauth_scope": "openid", "query_client_version": "1.0.0",
+			"oauth_redirect_uri": redirect, "oauth_account_claim": `["https://api.openai.com/auth","chatgpt_account_id"]`, "oauth_scope": "openid", "query_client_version": "1.0.0",
 		},
 	}}}
 	if _, err := saveProvidersFile(a.providersPath(), &reg); err != nil {
@@ -156,14 +160,14 @@ func TestASupersededSignInCannotComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.a.signInMu.Lock()
-	loginA := f.a.signIns[f.name].login
+	loginA := f.a.signIns["provider:"+f.name].login
 	f.a.signInMu.Unlock()
 	urlB, err := f.a.SignInProvider(f.name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// .
-	if err := f.a.finishSignIn(f.name, loginA, "cA", loginA.State()); err == nil {
+	if err := f.a.finishSignIn("provider:"+f.name, loginA, "cA", loginA.State()); err == nil {
 		t.Fatal("the superseded attempt's callback completed")
 	}
 	// .

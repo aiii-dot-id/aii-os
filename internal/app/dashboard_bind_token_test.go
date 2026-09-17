@@ -62,13 +62,15 @@ func TestANonLoopbackBindEscalatesToRequiringAToken(t *testing.T) {
 		// .
 		a.cfg = &Config{SourcePath: filepath.Join(t.TempDir(), "config.json"),
 			Dashboard: DashboardConfig{Host: tc.host, Port: 8181}}
-		a.ensureDashboardToken()
+		if err := a.ensureDashboardToken(); err != nil {
+			t.Fatal(err)
+		}
 		got := a.configSnapshot().Dashboard
 		if got.RequireToken != tc.wantToken {
 			t.Fatalf("bind %q: require_token = %v, want %v", tc.host, got.RequireToken, tc.wantToken)
 		}
 		if tc.wantToken {
-			if got.AuthTokenSHA256 == "" {
+			if got.AccessToken == "" {
 				t.Fatalf("bind %q: a required token must exist, not merely be required", tc.host)
 			}
 			if raw := a.DashboardMintedToken(); raw == "" {
@@ -77,7 +79,7 @@ func TestANonLoopbackBindEscalatesToRequiringAToken(t *testing.T) {
 			if raw := a.DashboardMintedToken(); raw != "" {
 				t.Fatalf("bind %q: and only once", tc.host)
 			}
-		} else if got.AuthTokenSHA256 != "" {
+		} else if got.AccessToken != "" {
 			t.Fatalf("bind %q: a loopback bind is left exactly as the operator wrote it", tc.host)
 		}
 	}

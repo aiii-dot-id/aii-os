@@ -95,7 +95,11 @@ func (a *App) startFirstboot() error {
 	a.promptGate = prompt.NewGate(firstbootRings{a}, 0)
 
 	handler := a.buildFirstbootHandler()
-	a.dashboard = a.newDashboard(handler)
+	d, derr := a.newDashboard(handler)
+	if derr != nil {
+		return fmt.Errorf("dashboard credentials: %w", derr)
+	}
+	a.dashboard = d
 	a.dashboard.SetQuiesceGate(a.gate)
 	_, err := a.dashboard.Start(tlsDirFor(cfg))
 	if err != nil {
@@ -136,10 +140,13 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 		// .
 		// .
 		// .
-		GetProviders:   a.providerDirectoryLive,
-		SignInProvider: a.SignInProvider,
-		CompleteSignIn: a.CompleteSignIn,
-		UpdateCheck:    a.checkForUpdateNow,
+		GetProviders:        a.providerDirectoryLive,
+		SignInProvider:      a.SignInProvider,
+		CompleteSignIn:      a.CompleteSignIn,
+		CancelSignIn:        a.CancelSignIn,
+		CancelProfileSignIn: a.CancelProfileSignIn,
+		OAuthCallback:       a.OAuthCallback,
+		UpdateCheck:         a.checkForUpdateNow,
 		DiscoverModels: func(provider, apiKey string) ([]string, error) {
 			reg, err := a.loadProviders()
 			if err != nil {
@@ -405,6 +412,11 @@ func (a *App) upsertBirthProvider(req *dashboard.GenesisRequest) (string, error)
 		return "", fmt.Errorf("providers.json: %w", err)
 	}
 	entry.Name, entry.Default = name, true
+	// .
+	// .
+	// .
+	yes := true
+	entry.Chat = &yes
 	if req.APIKey != "" {
 		entry.APIKey = req.APIKey
 	}

@@ -52,7 +52,7 @@ export function wireWork(root) {
     const input = box.querySelector('.grade-input');
     const fire = () => sendGrade(box, session, grade, input.value.trim());
     box.querySelector('[data-grade-send]').onclick = fire;
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fire(); } });
+    input.addEventListener('keydown', e => { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') { e.preventDefault(); fire(); } });
     input.focus();
   }; });
 }

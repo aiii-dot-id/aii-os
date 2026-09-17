@@ -2,6 +2,7 @@
 import { S } from './state.js';
 import { $ } from './util.js';
 import { toast } from './app.js';
+import { spokenAudio, hushSpoken, whenSpeaking } from './say.js';
 
 const FRAME_VERSION = 1;
 const HEADER_BYTES = 8;
@@ -16,6 +17,11 @@ let capturing = false;
 let sendFrame = null;
 
 let held = false;
+// latched is a tap: recording stays on after a press shorter than
+// LATCH_MS, until the next press or Space/Enter sends it.
+let latched = false;
+let downAt = 0;
+const LATCH_MS = 400;
 let stopping = false; // a push-to-talk release flushing its held tail before the cutoff
 
 // The resident conversation. The microphone is acquired ONCE
@@ -31,7 +37,7 @@ let sendJSON = null;
 
 export function bindTransport(fn, jsonFn) {
   sendFrame = fn; sendJSON = jsonFn || null;
-  return { receiveFrame, sessionState, voiceEvent };
+  return { receiveFrame, sessionState, voiceEvent, hushFromHost };
 }
 
 export const STREAM_VERSION = 2;
@@ -534,7 +540,7 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 function captureLane() { return lanes.length ? lanes[lanes.length - 1] : null; }
 
 function newLane(rate, mode) {
-  const l = new StreamLane({ sendFrame, sendJSON, rate, channels: 1, mode: mode || (answerMode ? 'conversation' : 'meeting') });
+  const l = new StreamLane({ sendFrame, sendJSON, rate, channels: 1, mode: mode || 'conversation' });
   l.onClosed = closedLane => {
     lanes = lanes.filter(x => x !== closedLane);
     const next = lanes[0];
@@ -592,6 +598,15 @@ export function voiceEvent(ev) {
     el.classList.toggle('provisional', t === 'transcript_partial');
     el.classList.remove('failed');
     el.hidden = !text;
+    return;
+  }
+  // Words the speaker policy withheld: the operator sees that a voice
+  // was withheld and why, never what it said.
+  if (t === 'transcript_withheld') {
+    el.textContent = 'A voice was withheld' + (ev.reason ? ' — ' + ev.reason : '') + '.';
+    el.classList.add('provisional'); el.classList.remove('failed');
+    el.hidden = false;
+    renderConverse();
     return;
   }
   // 'failure' is the ENGINE's own event, 'failed' the host's word that the
@@ -669,7 +684,7 @@ async function startCapture() {
     if (limit && (captured + buf.length) * 2 + HEADER_BYTES > limit) {
       overflow = true;
 
-      setTimeout(() => { held = false; stopCapture(true); }, 0);
+      setTimeout(() => { held = false; latched = false; stopCapture(true); render(); }, 0);
       return;
     }
     captured += buf.length;
@@ -723,7 +738,10 @@ async function stopCapture(send) {
   const view = new DataView(frame);
   view.setUint8(0, FRAME_VERSION);
   view.setUint8(1, 1);
-  view.setUint8(2, answerMode ? 1 : 0);
+  // 1 = CONVERSATION: the operator pressing the microphone is opening one,
+  // and spoken words that waited silently for the next turn would be a
+  // microphone that does nothing. Meeting stays the host's zero.
+  view.setUint8(2, 1);
   view.setUint8(3, 0);
   view.setUint32(4, rate, true);
   let off = HEADER_BYTES;
@@ -988,15 +1006,70 @@ export function speak(text, ref) {
   // expired plugin reply cannot fall back to browser speech, and an
   // unrelated response is not silenced just because a lane is live: a
   // response with no plugin provenance keeps the configured fallback.
+  // Plugin provenance includes text-only refusals with no synthesis id:
+  // losing that provenance must not revive them through another route.
   if (ref && ref.route === 'plugin') return;
+  if (!text) return;
+  // A CONFIGURED VOICE SPEAKS EVERY REPLY, whether or not the operator
+  // used the microphone. Speaking was coupled to the microphone because
+  // the browser's own voice was all there was, and reading every typed
+  // answer aloud in it would be a nuisance; a service the operator chose
+  // in Settings → Speech is not a nuisance, it is the answer they asked
+  // to hear. The microphone belongs to the other half of speech.
+  // A reply the host is ALREADY speaking arrives with the id to play it
+  // by: it has been in the making since the words existed.
+  if (ref && ref.route === 'cloud' && ref.synthesis_id) { sayWithService(text, { id: ref.synthesis_id }); return; }
+  // A reply the host handed to the browser's own voice after the engine
+  // refused it: read when the operator wants replies read, and stopped
+  // by the host's hush like any other.
+  if (ref && ref.route === 'browser') { if (S.voiceSpeak) browserSpeak(text); return; }
+  if (S.stats && S.stats.reply_voice) { sayWithService(text, { text: text }); return; }
+  // The browser's own voice keeps the older rule: it reads a reply back
+  // to an operator who spoke, and stays out of a typed conversation.
   if (!S.voiceSpeak) return;
-  if (!window.speechSynthesis || !text) return;
+  browserSpeak(text);
+}
 
+function browserSpeak(text) {
+  if (!window.speechSynthesis || !text) return;
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  const u = new SpeechSynthesisUtterance(text);
+  // The browser's own voice can be stopped the same way a service's can.
+  const stop = $('hush-speaking');
+  if (stop) stop.hidden = false;
+  u.onend = u.onerror = () => { if (stop) stop.hidden = true; };
+  window.speechSynthesis.speak(u);
+}
+
+// hushedReplies names the replies the host hushed: a refusal that lands
+// for one of them afterwards is the hush arriving as an error, not a
+// service refusing — nothing reads it back.
+const hushedReplies = new Set();
+
+function sayWithService(text, ask) {
+  spokenAudio(ask).catch(err => {
+    if (ask && ask.id && hushedReplies.has(ask.id)) return;
+    // THE REPLY IS STILL SPOKEN. The operator hears the answer and reads
+    // why it was not the voice they chose.
+    toast('The speaking service refused this reply: ' + ((err && err.message) || err));
+    browserSpeak(text);
+  });
+}
+
+// hushFromHost is the host's word that a reply another voice took over for
+// a session is over — the session's fence moved. The service's audio and
+// the browser's own voice both stop, and a refusal that arrives for the
+// stopped reply afterwards reads nothing back.
+export function hushFromHost(h) {
+  if (h && h.synthesis_id) hushedReplies.add(h.synthesis_id);
+  hushSpoken();
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  const stop = $('hush-speaking');
+  if (stop) stop.hidden = true;
 }
 
 export function hush() {
+  hushSpoken();
   if (window.speechSynthesis) window.speechSynthesis.cancel();
 
   // THE ENGINE'S FENCE IS ASKED FOR FIRST (the voice platform's review):
@@ -1011,45 +1084,106 @@ export function hush() {
 
 export function connectionLost() {
   held = false;
+  latched = false;
   stopCapture(false);
   abortDuplex();
   lanes = [];
   playback.stop();
 }
 
-export function render() {
-  renderVoiceMode();
-  renderConverse();
-  const b = $('mic');
-  if (!b) return;
-  const available = !!(S.stats && (S.stats.voice || S.stats.voice_engine));
-  // A control that can never enable is noise: every voice control is
-  // present only where a speech endpoint or engine can use it.
-  // ONE MICROPHONE (the operator's ruling): the spoken conversation is the
-  // control; push-to-talk stays wired but leaves the bar.
-  b.hidden = true;
-  b.disabled = !available || !S.connected || residentActive();
-  b.classList.toggle('live', capturing);
-  if (!available) {
-    b.title = 'No speech endpoint is configured — set speech.stt in Settings';
-    return;
-  }
-  if (S.stats && S.stats.voice_engine) {
-    b.title = capturing ? 'Release to finish — the engine hears you as you speak' : 'Hold to speak to the engine';
-    return;
-  }
-  b.title = capturing ? 'Release to send what you said' : 'Hold to speak';
+// A REPLY BEING SPOKEN CAN BE STOPPED. The control exists only while
+// there is something to stop, so the composer is otherwise as it was.
+whenSpeaking(on => {
+  const b = $('hush-speaking');
+  if (b) b.hidden = !on;
+});
+
+// micState is the microphone the host says this page offers — in order,
+// SAFE pauses every one; a voice plugin's conversation; the configured
+// speech-to-text service; and otherwise the way to set one up.
+// The microphone and the stop square, drawn: an emoji microphone is a
+// slanted handset that reads as a pencil at this size (found live).
+const MIC_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8.4" rx="2.5"/><path d="M3.2 7.6a4.8 4.8 0 0 0 9.6 0M8 12.4v2"/></svg>';
+const STOP_ICON = '<svg class="stop" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1.5"/></svg>';
+
+export function micState() {
+  return (S.stats && S.stats.voice_state) || 'setup';
 }
 
-let answerMode = false;
+const MIC_TITLES = {
+  cloud: 'Talk — tap, or hold',
+  setup: 'Voice isn\'t set up — opens Speech settings',
+  unreachable: 'Voice can\'t reach its service — opens Speech settings',
+  safe: 'Voice is paused while this identity is in SAFE',
+};
 
-// renderConverse reflects the resident conversation on its two
-// controls: Start/Abort toggles on #converse, Finish input on
-// #finishturn (live only while a turn is streaming).
+// ONE MICROPHONE, THE BEST ONE PRESENT. A voice plugin's conversation is
+// #converse; every other state is this button: push-to-talk through the
+// cloud service, a way into Speech settings when there is nothing to
+// speak into or its service cannot be reached, or paused under SAFE.
+export function render() {
+  renderConverse();
+  renderMicMenu();
+  const b = $('mic');
+  if (!b) return;
+  const state = micState(), recording = capturing || latched;
+  b.hidden = state === 'plugin';
+  b.disabled = state === 'safe' || (state === 'cloud' && (!S.connected || residentActive()));
+  b.classList.toggle('faint', state === 'setup' || state === 'unreachable');
+  b.classList.toggle('live', recording);
+  b.setAttribute('aria-pressed', recording ? 'true' : 'false');
+  // With a voice that speaks replies, "voice" is not what is missing.
+  const speaks = !!(S.stats && S.stats.reply_voice);
+  b.title = recording && state === 'cloud' ? 'Tap to send what you said'
+    : state === 'setup' && speaks ? 'Voice input isn\'t set up — opens Speech settings'
+    : MIC_TITLES[state] || MIC_TITLES.setup;
+  b.setAttribute('aria-label', b.title);
+}
+
+// The chevron beside a working microphone keeps Speech settings one click
+// away, and names what is listening.
+function renderMicMenu() {
+  const more = $('mic-more'), source = $('mic-source'), voice = $('mic-voice');
+  if (!more) return;
+  const state = micState();
+  // THE MENU IS VOICE, BOTH HALVES OF IT. An identity that speaks its
+  // replies but has no microphone set up still has a voice to name and a
+  // way into its settings.
+  const speaks = (S.stats && S.stats.reply_voice) || '';
+  const hears = state === 'plugin' || state === 'cloud';
+  more.hidden = !hears && !speaks;
+  if (more.hidden) closeMicMenu();
+  if (voice) {
+    voice.hidden = !speaks;
+    voice.textContent = speaks ? 'Replies spoken by ' + speaks : '';
+  }
+  if (source) {
+    source.hidden = !hears;
+    source.textContent = hears
+      ? (state === 'plugin' ? 'Voice plugin' : 'Cloud speech') + (S.stats && S.stats.voice_source ? ' — ' + S.stats.voice_source : '')
+      : '';
+  }
+}
+
+function closeMicMenu() {
+  const menu = $('mic-menu'), more = $('mic-more');
+  if (menu) menu.hidden = true;
+  if (more) more.setAttribute('aria-expanded', 'false');
+}
+
+// Settings registers the way in; a page without it — a bare voice
+// harness — has nowhere to send the operator, and does nothing.
+function openSpeechSettings() {
+  closeMicMenu();
+  if (S.openSettings) S.openSettings('speech', 'sp-provider-stt');
+}
+
+// renderConverse reflects the resident conversation on #converse: a tap
+// starts it, a tap while words stream finishes, and one after ends it.
 function renderConverse() {
   const c = $('converse');
   if (c) {
-    const available = !!(S.stats && S.stats.voice_engine);
+    const available = micState() === 'plugin';
     c.hidden = !available;
     c.disabled = !available || !S.connected;
     const live = residentActive(), waiting = !live && residentWanted;
@@ -1057,7 +1191,8 @@ function renderConverse() {
     c.classList.toggle('waiting', waiting);
     // The glyph is the state: a microphone to start, a stop square while
     // the identity is listening — the next tap finishes.
-    c.textContent = live ? '\u23F9' : '\uD83C\uDFA4';
+    const glyph = live ? 'stop' : 'mic';
+    if (c.dataset.glyph !== glyph) { c.innerHTML = live ? STOP_ICON : MIC_ICON; c.dataset.glyph = glyph; }
     c.setAttribute('aria-pressed', live ? 'true' : 'false');
     c.title = residentActive()
       ? 'Stop listening — the identity gives its final reply'
@@ -1069,54 +1204,94 @@ function renderConverse() {
   const tr = $('voice-transcript');
   if (tr && residentActive() && !(tr.textContent || '').trim()) { tr.textContent = 'Listening…'; tr.classList.add('provisional'); tr.hidden = false; }
   if (tr && !residentActive() && (tr.textContent || '') === 'Listening…') { tr.textContent = ''; tr.hidden = true; }
-  const f = $('finishturn');
-  if (f) {
-    f.hidden = true; // folded into the microphone: a second click finishes
-    f.disabled = !(resident && resident.streaming());
-    f.title = 'Finish input — stop speaking; the engine gives its final reply';
+  // Who is heard, said while the identity listens: the restriction in
+  // force and what it withheld — never the words.
+  const fl = $('voice-filter');
+  if (fl) {
+    const p = S.stats && S.stats.speakers;
+    const on = !!(p && p.mode && p.mode !== 'all' && residentActive());
+    fl.hidden = !on;
+    if (on) fl.textContent = speakerFilterLine(p);
   }
 }
 
-function wireVoiceMode() {
-  const b = $('voicemode');
-  if (!b) return;
-  b.removeAttribute('data-inert');
-  b.addEventListener('click', () => {
-    answerMode = !answerMode;
-    renderVoiceMode();
-  });
-  renderVoiceMode();
-}
-
-function renderVoiceMode() {
-  const b = $('voicemode');
-  if (!b) return;
-  const available = !!(S.stats && (S.stats.voice || S.stats.voice_engine));
-  b.hidden = true; // meeting mode leaves the bar (one microphone)
-  b.disabled = !available || !S.connected;
-  b.classList.toggle('live', answerMode);
-  b.setAttribute('aria-pressed', answerMode ? 'true' : 'false');
-  b.title = answerMode
-    ? 'Conversation: the identity answers what you say'
-    : 'Meeting: what you say is recorded and read on the next turn';
+export function speakerFilterLine(p) {
+  const n = (p.uids || []).length, s = n === 1 ? '' : 's';
+  const who = p.mode === 'only' ? 'Hearing only ' + n + ' listed speaker' + s : 'Ignoring ' + n + ' listed speaker' + s;
+  return who + ' · ' + (p.withheld_finals || 0) + ' withheld';
 }
 
 export function wireMic() {
-  wireVoiceMode();
+  // The control hides because the speaking stopped, not because it was
+  // the thing that stopped it: a reply that ends on its own, or one a
+  // newer reply supersedes, must leave the composer the same way.
+  const stop = $('hush-speaking');
+  if (stop) stop.onclick = () => hush();
   wireConverse();
+  wireMicMenu();
   const b = $('mic');
   if (!b) return;
   b.removeAttribute('data-inert');
 
-  // Push-to-talk is unchanged, but stands down while a resident
+  // TAP OR HOLD. A hold records until release; a press shorter than
+  // LATCH_MS latches recording on until the next press — on a phone a tap
+  // is the gesture, and it released under the 0.2 s floor and was thrown
+  // away, so the button looked dead. The first press can also meet the
+  // permission prompt mid-hold. Push-to-talk stands down while a resident
   // conversation holds the microphone (or is being acquired).
-  b.addEventListener('pointerdown', e => { if (resident || residentWanted) return; e.preventDefault(); held = true; hush(); startCapture(); });
-  b.addEventListener('pointerup', e => { if (resident || residentWanted) return; e.preventDefault(); held = false; stopCapture(true); });
-  b.addEventListener('pointerleave', () => { if (resident || residentWanted) return; held = false; stopCapture(false); });
-  b.addEventListener('pointercancel', () => { if (resident || residentWanted) return; held = false; stopCapture(false); });
+  b.addEventListener('pointerdown', e => {
+    if (resident || residentWanted) return;
+    e.preventDefault();
+    const state = micState();
+    if (state === 'setup' || state === 'unreachable') { openSpeechSettings(); return; }
+    if (state !== 'cloud') return;
+    if (latched) { sendLatched(); return; }
+    downAt = Date.now(); held = true; hush(); startCapture();
+  });
+  b.addEventListener('pointerup', e => {
+    if (resident || residentWanted || latched || !held) return;
+    e.preventDefault();
+    if (Date.now() - downAt < LATCH_MS) { latched = true; render(); return; }
+    held = false; stopCapture(true);
+  });
+  const abandon = () => { if (resident || residentWanted || latched || !held) return; held = false; stopCapture(false); };
+  b.addEventListener('pointerleave', abandon);
+  b.addEventListener('pointercancel', abandon);
+  b.addEventListener('keydown', e => {
+    if (e.key !== ' ' && e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.repeat || resident || residentWanted) return;
+    const state = micState();
+    if (state === 'setup' || state === 'unreachable') { openSpeechSettings(); return; }
+    if (state !== 'cloud') return;
+    if (latched || held) { sendLatched(); return; }
+    latched = true; held = true; hush(); startCapture(); render();
+  });
 
-  window.addEventListener('pagehide', () => { held = false; stopCapture(false); abortDuplex(); });
+  window.addEventListener('pagehide', () => { held = false; latched = false; stopCapture(false); abortDuplex(); });
   render();
+}
+
+function sendLatched() {
+  latched = false; held = false;
+  stopCapture(true);
+  render();
+}
+
+function wireMicMenu() {
+  const more = $('mic-more'), menu = $('mic-menu'), settings = $('mic-settings');
+  if (!more || !menu) return;
+  more.removeAttribute('data-inert');
+  more.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    more.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && settings) settings.focus();
+  });
+  if (settings) settings.addEventListener('click', openSpeechSettings);
+  document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('#mic-menu')) closeMicMenu(); });
+  menu.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMicMenu(); more.focus(); } });
 }
 
 function wireConverse() {
@@ -1133,11 +1308,6 @@ function wireConverse() {
       }
       residentWanted = true; render(); startDuplex();
     });
-  }
-  const f = $('finishturn');
-  if (f) {
-    f.removeAttribute('data-inert');
-    f.addEventListener('click', () => finishInput());
   }
   renderConverse();
 }

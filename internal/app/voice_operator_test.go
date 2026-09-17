@@ -23,11 +23,12 @@ func TestTheOperatorsSpokenWordsAreTheOperatorsAndAreAnsweredAloud(t *testing.T)
 	var mu sync.Mutex
 	var spoken []string
 	prev := voiceSynthesize
-	voiceSynthesize = func(app *App, _ context.Context, session string, gen uint64, reply string) {
+	voiceSynthesize = func(app *App, _ context.Context, session string, gen uint64, reply string) replyVerdict {
 		mu.Lock()
 		spoken = append(spoken, session+"/"+reply)
 		mu.Unlock()
 		h.replyOutcome.Store("reply admitted")
+		return replyAdmitted
 	}
 	defer func() { voiceSynthesize = prev }()
 
@@ -98,7 +99,7 @@ func TestASpokenUtteranceIsReleasedWhenTheTurnAnswersWithSilenceOrIsLost(t *test
 	a.voiceModes.Store("vs-8", true)
 	calls := 0
 	prev := voiceSynthesize
-	voiceSynthesize = func(*App, context.Context, string, uint64, string) { calls++ }
+	voiceSynthesize = func(*App, context.Context, string, uint64, string) replyVerdict { calls++; return replySuperseded }
 	defer func() { voiceSynthesize = prev }()
 	if !a.TryBeginTurn() {
 		t.Fatal("gate")
@@ -154,7 +155,7 @@ func TestSpokenWordsWaitForAnInternalPass(t *testing.T) {
 	}
 	t.Cleanup(func() { voiceWake = prev })
 	prevSynth := voiceSynthesize
-	voiceSynthesize = func(*App, context.Context, string, uint64, string) { h.replyOutcome.Store("reply admitted") }
+	voiceSynthesize = func(*App, context.Context, string, uint64, string) replyVerdict { return replyAdmitted }
 	t.Cleanup(func() { voiceSynthesize = prevSynth })
 
 	// .

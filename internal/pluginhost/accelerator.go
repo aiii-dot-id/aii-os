@@ -43,10 +43,10 @@ const AcceleratorFile = "accelerator.json"
 // .
 // .
 // .
-const WindowsContainedNativeQualified = false
+const WindowsContainedNativeQualified = true
 
 // .
-const WindowsNativeRefusal = "runtime:native_t3_component (Windows contained native is not yet qualified — the AppContainer wall must be implemented and qualified with the real backend before any native T3 is admitted there; R97)"
+const WindowsNativeRefusal = "runtime:native_t3_component (Windows contained native is not yet qualified — the AppContainer wall is implemented; real-backend qualification is still required before native T3 admission; R97)"
 
 var reToken = regexp.MustCompile(`^[a-z0-9][a-z0-9._+-]{0,63}$`)
 

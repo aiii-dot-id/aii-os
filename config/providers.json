@@ -1,7 +1,9 @@
 {
+  "model_catalogue_url": "https://openrouter.ai/api/v1/models",
   "providers": [
     {
       "name": "Claude (Max/Pro)",
+      "catalogue_author": "anthropic",
       "api_type": "anthropic",
       "effort_levels": [
         "low",
@@ -13,10 +15,15 @@
       "url": "https://api.anthropic.com",
       "subscribe_url": "https://claude.com/pricing",
       "credential": "claude-code",
+      "oauth": "anthropic-claude",
       "credential_options": {
         "client_version": "2.1.257",
+        "keychain_service": "Claude Code-credentials",
         "header_anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,claude-code-20250219,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
-        "header_x-app": "cli"
+        "header_x-app": "cli",
+        "default_file": "~/.claude/.credentials.json",
+        "required_scope": "user:inference",
+        "dialect": "anthropic"
       },
       "default_model": "claude-opus-5",
       "context_length": 1000000,
@@ -26,10 +33,15 @@
         "claude-sonnet-5",
         "claude-haiku-4-5",
         "claude-fable-5"
-      ]
+      ],
+      "credential_option_formats": {
+        "billing_text": "x-anthropic-billing-header: cc_version={client_version}; cc_entrypoint=cli; cch=00000;",
+        "header_user-agent": "claude-cli/{client_version} (external, cli)"
+      }
     },
     {
       "name": "ChatGPT (Plus/Pro)",
+      "catalogue_author": "openai",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -44,13 +56,10 @@
       "credential": "codex",
       "credential_options": {
         "query_client_version": "1.0.0",
-        "oauth_client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
-        "oauth_authorize_url": "https://auth.openai.com/oauth/authorize",
-        "oauth_token_url": "https://auth.openai.com/oauth/token",
-        "oauth_redirect_uri": "http://localhost:1455/auth/callback",
-        "oauth_scope": "openid profile email offline_access",
-        "oauth_originator": "aii-os",
-        "oauth_id_token_add_organizations": "true"
+        "default_file": "~/.codex/auth.json",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+        "dialect": "chatgpt",
+        "account_header": "ChatGPT-Account-ID"
       },
       "default_model": "gpt-5.6-sol",
       "context_length": 1000000,
@@ -65,10 +74,12 @@
         "gpt-5.4-codex",
         "gpt-5.4-codex-spark",
         "gpt-5.4-pro"
-      ]
+      ],
+      "oauth": "openai-chatgpt"
     },
     {
       "name": "zAI",
+      "catalogue_author": "z-ai",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -90,6 +101,7 @@
     },
     {
       "name": "Moonshot (Kimi)",
+      "catalogue_author": "moonshotai",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -108,6 +120,7 @@
     },
     {
       "name": "Qwen (Alibaba Cloud)",
+      "catalogue_author": "qwen",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -126,6 +139,7 @@
     },
     {
       "name": "Anthropic",
+      "catalogue_author": "anthropic",
       "api_type": "anthropic",
       "effort_levels": [
         "low",
@@ -148,6 +162,7 @@
     },
     {
       "name": "OpenAI",
+      "catalogue_author": "openai",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -166,10 +181,46 @@
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna"
-      ]
+      ],
+      "speech": {
+        "stt": {
+          "list_models": {
+            "path": "/models",
+            "items": "$.data",
+            "id": "$.id",
+            "match": [
+              "transcribe",
+              "whisper"
+            ],
+            "skip": [
+              "realtime"
+            ]
+          }
+        },
+        "tts": {
+          "max_chars": 4096,
+          "list_models": {
+            "path": "/models",
+            "items": "$.data",
+            "id": "$.id",
+            "match": [
+              "tts"
+            ],
+            "skip": [
+              "realtime"
+            ]
+          },
+          "list_voices": {
+            "spec": "https://raw.githubusercontent.com/openai/openai-openapi/manual_spec/openapi.yaml",
+            "items": "$.components.schemas.VoiceIdsShared.anyOf[1].enum",
+            "id": "$"
+          }
+        }
+      }
     },
     {
       "name": "Google Gemini",
+      "catalogue_author": "google",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -185,10 +236,69 @@
       "models": [
         "gemini-3.1-pro-preview",
         "gemini-3.7-flash"
-      ]
+      ],
+      "speech": {
+        "stt": {
+          "base": "https://generativelanguage.googleapis.com/v1beta",
+          "path": "/models/{model}:generateContent",
+          "encoding": "json",
+          "auth": {
+            "in": "header",
+            "name": "x-goog-api-key"
+          },
+          "body": {
+            "contents": [
+              {
+                "parts": [
+                  {
+                    "inlineData": {
+                      "mimeType": "audio/wav",
+                      "data": "{audio_base64}"
+                    }
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "audioTranscriptionConfig": {
+                "languageCodes": [
+                  "{language}"
+                ]
+              }
+            }
+          },
+          "response": {
+            "text": "$.candidates[0].content.parts[0].text"
+          },
+          "list_models": {
+            "path": "/models",
+            "query": {
+              "pageSize": "1000"
+            },
+            "items": "$.models",
+            "id": "$.name",
+            "name": "$.displayName",
+            "match": [
+              "gemini"
+            ],
+            "skip": [
+              "embedding",
+              "imagen",
+              "veo",
+              "aqa",
+              "tts",
+              "live",
+              "realtime",
+              "native-audio"
+            ],
+            "trim": "models/"
+          }
+        }
+      }
     },
     {
       "name": "DeepSeek",
+      "catalogue_author": "deepseek",
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -224,7 +334,19 @@
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
         "qwen/qwen3.6-27b"
-      ]
+      ],
+      "speech": {
+        "stt": {
+          "list_models": {
+            "path": "/models",
+            "items": "$.data",
+            "id": "$.id",
+            "match": [
+              "whisper"
+            ]
+          }
+        }
+      }
     },
     {
       "name": "OpenRouter",
@@ -250,6 +372,330 @@
         "deepseek/deepseek-v4-pro",
         "x-ai/grok-4.6"
       ]
+    },
+    {
+      "name": "ElevenLabs",
+      "chat": false,
+      "url": "https://api.elevenlabs.io",
+      "api_key_env": "ELEVENLABS_API_KEY",
+      "speech": {
+        "tts": {
+          "max_chars": 5000,
+          "path": "/v1/text-to-speech/{voice}",
+          "auth": {
+            "in": "header",
+            "name": "xi-api-key"
+          },
+          "query": {
+            "output_format": "pcm_{rate}"
+          },
+          "body": {
+            "text": "{text}",
+            "model_id": "{model}"
+          },
+          "response": {
+            "kind": "audio",
+            "format": "pcm_s16le",
+            "rate": 24000
+          },
+          "list_models": {
+            "path": "/v1/models",
+            "items": "$",
+            "id": "$.model_id",
+            "name": "$.name",
+            "languages": "$.languages",
+            "language_id": "$.language_id",
+            "language_name": "$.name",
+            "keep": "$.can_do_text_to_speech"
+          },
+          "list_voices": {
+            "path": "/v2/voices",
+            "query": {
+              "page_size": "100"
+            },
+            "items": "$.voices",
+            "id": "$.voice_id",
+            "name": "$.name",
+            "accent": "$.labels.accent",
+            "gender": "$.labels.gender",
+            "age": "$.labels.age",
+            "languages": "$.verified_languages",
+            "language_id": "$.language",
+            "search": "search",
+            "next": {
+              "kind": "cursor",
+              "param": "next_page_token",
+              "at": "$.next_page_token",
+              "more": "$.has_more"
+            }
+          }
+        },
+        "stt": {
+          "path": "/v1/speech-to-text",
+          "auth": {
+            "in": "header",
+            "name": "xi-api-key"
+          },
+          "fields": {
+            "model_id": "{model}",
+            "language_code": "{language}"
+          },
+          "list_models": {
+            "spec": "https://api.elevenlabs.io/openapi.json",
+            "items": "$.components.schemas.Body_Speech_to_Text_v1_speech_to_text_post.properties.model_id.examples",
+            "id": "$"
+          }
+        }
+      }
+    },
+    {
+      "name": "Deepgram",
+      "chat": false,
+      "url": "https://api.deepgram.com",
+      "api_key_env": "DEEPGRAM_API_KEY",
+      "speech": {
+        "stt": {
+          "path": "/v1/listen",
+          "encoding": "raw",
+          "auth": {
+            "in": "header",
+            "name": "Authorization",
+            "scheme": "Token"
+          },
+          "query": {
+            "model": "{model}",
+            "language": "{language}"
+          },
+          "response": {
+            "text": "$.results.channels[0].alternatives[0].transcript"
+          },
+          "list_models": {
+            "path": "/v1/models",
+            "items": "$.stt",
+            "id": "$.canonical_name",
+            "name": "$.name",
+            "languages": "$.languages",
+            "keep": "$.batch"
+          }
+        },
+        "tts": {
+          "max_chars": 2000,
+          "path": "/v1/speak",
+          "auth": {
+            "in": "header",
+            "name": "Authorization",
+            "scheme": "Token"
+          },
+          "query": {
+            "model": "{model}",
+            "encoding": "linear16",
+            "container": "none",
+            "sample_rate": "{rate}"
+          },
+          "body": {
+            "text": "{text}"
+          },
+          "response": {
+            "kind": "audio",
+            "format": "pcm_s16le",
+            "rate": 24000
+          },
+          "list_models": {
+            "path": "/v1/models",
+            "items": "$.tts",
+            "id": "$.canonical_name",
+            "name": "$.metadata.display_name",
+            "accent": "$.metadata.accent",
+            "age": "$.metadata.age",
+            "languages": "$.languages"
+          }
+        }
+      }
+    },
+    {
+      "name": "Cartesia",
+      "chat": false,
+      "url": "https://api.cartesia.ai",
+      "api_key_env": "CARTESIA_API_KEY",
+      "speech": {
+        "stt": {
+          "path": "/stt",
+          "headers": {
+            "Cartesia-Version": "2026-08-14"
+          },
+          "fields": {
+            "language": "{language}"
+          }
+        },
+        "tts": {
+          "path": "/tts/bytes",
+          "headers": {
+            "Cartesia-Version": "2026-08-14"
+          },
+          "body": {
+            "transcript": "{text}",
+            "voice": {
+              "id": "{voice}"
+            },
+            "output_format": {
+              "container": "raw",
+              "encoding": "pcm_s16le",
+              "sample_rate": 24000
+            }
+          },
+          "response": {
+            "kind": "audio",
+            "format": "pcm_s16le",
+            "rate": 24000
+          },
+          "list_voices": {
+            "path": "/voices",
+            "query": {
+              "limit": "100"
+            },
+            "items": "$.data",
+            "id": "$.id",
+            "name": "$.name",
+            "gender": "$.gender",
+            "languages": "$.language",
+            "search": "q",
+            "language": "language",
+            "next": {
+              "kind": "cursor",
+              "param": "starting_after",
+              "at": "$.next_page",
+              "more": "$.has_more"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "AssemblyAI",
+      "chat": false,
+      "url": "https://sync.assemblyai.com",
+      "api_key_env": "ASSEMBLYAI_API_KEY",
+      "speech": {
+        "stt": {
+          "path": "/transcribe",
+          "auth": {
+            "in": "header",
+            "name": "Authorization"
+          },
+          "audio_field": "audio",
+          "fields": {},
+          "parts": {
+            "config": {
+              "language_code": "{language}"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Mistral",
+      "chat": false,
+      "url": "https://api.mistral.ai/v1",
+      "api_key_env": "MISTRAL_API_KEY",
+      "speech": {
+        "stt": {
+          "list_models": {
+            "path": "/models",
+            "items": "$.data",
+            "id": "$.id",
+            "name": "$.name",
+            "keep": "$.capabilities.audio_transcription"
+          }
+        },
+        "tts": {
+          "body": {
+            "model": "{model}",
+            "input": "{text}",
+            "voice_id": "{voice}",
+            "response_format": "wav"
+          },
+          "response": {
+            "kind": "json_base64",
+            "audio": "$.audio_data",
+            "format": "wav"
+          },
+          "list_models": {
+            "path": "/models",
+            "items": "$.data",
+            "id": "$.id",
+            "name": "$.name",
+            "keep": "$.capabilities.audio_speech"
+          },
+          "list_voices": {
+            "path": "/audio/voices",
+            "query": {
+              "limit": "100"
+            },
+            "items": "$.items",
+            "id": "$.id",
+            "name": "$.name",
+            "gender": "$.gender",
+            "age": "$.age",
+            "languages": "$.languages",
+            "next": {
+              "kind": "offset",
+              "param": "offset",
+              "size": 100,
+              "total": "$.total"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Hume",
+      "chat": false,
+      "url": "https://api.hume.ai",
+      "api_key_env": "HUME_API_KEY",
+      "speech": {
+        "tts": {
+          "max_chars": 5000,
+          "path": "/v0/tts/file",
+          "auth": {
+            "in": "header",
+            "name": "X-Hume-Api-Key"
+          },
+          "body": {
+            "utterances": [
+              {
+                "text": "{text}",
+                "voice": {
+                  "id": "{voice}",
+                  "provider": "HUME_AI"
+                }
+              }
+            ],
+            "format": {
+              "type": "wav"
+            }
+          },
+          "response": {
+            "kind": "audio",
+            "format": "wav"
+          },
+          "list_voices": {
+            "path": "/v0/tts/voices",
+            "query": {
+              "provider": "HUME_AI",
+              "page_size": "100"
+            },
+            "items": "$.voices_page",
+            "id": "$.id",
+            "name": "$.name",
+            "next": {
+              "kind": "number",
+              "param": "page_number",
+              "from": 0,
+              "total": "$.total_pages"
+            }
+          }
+        }
+      }
     }
   ],
   "model_capabilities": {
@@ -438,5 +884,229 @@
       "medium",
       "high"
     ]
+  },
+  "oauth": {
+    "anthropic-claude": {
+      "name": "Claude",
+      "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+      "authorize_url": "https://claude.com/cai/oauth/authorize",
+      "token_url": "https://platform.claude.com/v1/oauth/token",
+      "redirect_uri": "https://platform.claude.com/oauth/code/callback",
+      "scopes": [
+        "user:profile",
+        "user:inference"
+      ],
+      "authorize_params": {
+        "code": "true"
+      },
+      "token_encoding": "json",
+      "token_params": {
+        "state": "{state}"
+      },
+      "refresh_params": {
+        "scope": "{scope}"
+      },
+      "sign_in": "manual",
+      "credential_file": "claude-code.json",
+      "hosts": [
+        "api.anthropic.com:443"
+      ]
+    },
+    "github": {
+      "name": "github",
+      "authorize_url": "https://github.com/login/oauth/authorize",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "device_url": "https://github.com/login/device/code",
+      "hosts": [
+        "api.github.com:443"
+      ],
+      "services": {
+        "issues": {
+          "read": [
+            "read:user"
+          ],
+          "modify": [
+            "public_repo"
+          ]
+        },
+        "repo": {
+          "read": [
+            "repo"
+          ],
+          "modify": [
+            "repo"
+          ]
+        }
+      }
+    },
+    "google": {
+      "name": "google",
+      "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "device_url": "https://oauth2.googleapis.com/device/code",
+      "revoke_url": "https://oauth2.googleapis.com/revoke",
+      "authorize_params": {
+        "access_type": "offline",
+        "prompt": "consent"
+      },
+      "hosts": [
+        "www.googleapis.com:443",
+        "gmail.googleapis.com:443",
+        "people.googleapis.com:443",
+        "imap.gmail.com:993",
+        "smtp.gmail.com:465"
+      ],
+      "services": {
+        "calendar": {
+          "read": [
+            "https://www.googleapis.com/auth/calendar.readonly"
+          ],
+          "modify": [
+            "https://www.googleapis.com/auth/calendar.events"
+          ]
+        },
+        "contacts": {
+          "read": [
+            "https://www.googleapis.com/auth/contacts.readonly"
+          ],
+          "modify": [
+            "https://www.googleapis.com/auth/contacts"
+          ]
+        },
+        "drive": {
+          "read": [
+            "https://www.googleapis.com/auth/drive.readonly"
+          ],
+          "modify": [
+            "https://www.googleapis.com/auth/drive.file"
+          ]
+        },
+        "gmail": {
+          "read": [
+            "https://www.googleapis.com/auth/gmail.readonly"
+          ],
+          "modify": [
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send"
+          ]
+        },
+        "mail": {
+          "read": [
+            "https://mail.google.com/"
+          ],
+          "modify": [
+            "https://mail.google.com/"
+          ]
+        }
+      },
+      "device_scopes_unsupported": [
+        "gmail",
+        "calendar",
+        "contacts",
+        "mail"
+      ]
+    },
+    "microsoft": {
+      "name": "microsoft",
+      "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "device_url": "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
+      "scopes": [
+        "offline_access",
+        "openid"
+      ],
+      "hosts": [
+        "graph.microsoft.com:443",
+        "outlook.office365.com:993",
+        "smtp.office365.com:587"
+      ],
+      "services": {
+        "calendar": {
+          "read": [
+            "Calendars.Read"
+          ],
+          "modify": [
+            "Calendars.ReadWrite"
+          ]
+        },
+        "contacts": {
+          "read": [
+            "Contacts.Read"
+          ],
+          "modify": [
+            "Contacts.ReadWrite"
+          ]
+        },
+        "files": {
+          "read": [
+            "Files.Read"
+          ],
+          "modify": [
+            "Files.ReadWrite"
+          ]
+        },
+        "mail": {
+          "read": [
+            "Mail.Read"
+          ],
+          "modify": [
+            "Mail.ReadWrite",
+            "Mail.Send"
+          ]
+        }
+      }
+    },
+    "slack": {
+      "name": "slack",
+      "authorize_url": "https://slack.com/oauth/v2/authorize",
+      "token_url": "https://slack.com/api/oauth.v2.access",
+      "hosts": [
+        "slack.com:443"
+      ],
+      "services": {
+        "chat": {
+          "read": [
+            "channels:history",
+            "channels:read"
+          ],
+          "modify": [
+            "chat:write"
+          ]
+        }
+      }
+    },
+    "openai-chatgpt": {
+      "name": "ChatGPT",
+      "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+      "authorize_url": "https://auth.openai.com/oauth/authorize",
+      "token_url": "https://auth.openai.com/oauth/token",
+      "redirect_uri": "http://localhost:1455/auth/callback",
+      "scopes": [
+        "openid",
+        "profile",
+        "email",
+        "offline_access"
+      ],
+      "authorize_params": {
+        "originator": "aii-os",
+        "id_token_add_organizations": "true"
+      },
+      "claim_headers": {
+        "ChatGPT-Account-ID": [
+          "https://api.openai.com/auth",
+          "chatgpt_account_id"
+        ]
+      },
+      "hosts": [
+        "chatgpt.com:443"
+      ],
+      "sign_in": "openai_device",
+      "device_url": "https://auth.openai.com/api/accounts/deviceauth/usercode",
+      "device_poll_url": "https://auth.openai.com/api/accounts/deviceauth/token",
+      "verification_uri": "https://auth.openai.com/codex/device",
+      "device_redirect_uri": "https://auth.openai.com/deviceauth/callback",
+      "credential_file": "codex.json",
+      "device_expires_seconds": 900
+    }
   }
 }

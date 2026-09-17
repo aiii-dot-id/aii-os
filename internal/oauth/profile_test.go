@@ -129,7 +129,7 @@ func TestAProfileSourceOwnsAndRefreshesItsFile(t *testing.T) {
 	a := &authority{answer: map[string]any{"access_token": "at-new", "expires_in": 3600}, delay: 50 * time.Millisecond}
 	ts := a.serve(t)
 	defer ts.Close()
-	p := OAuthParams{ClientID: "cid", TokenURL: ts.URL}
+	p := OAuthParams{ClientID: "cid", TokenURL: ts.URL, Scope: "s configured-extra", RefreshParams: map[string]any{"scope": "{scope}"}}
 	src, err := NewProfileSource(path, p, ts.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -157,10 +157,16 @@ func TestAProfileSourceOwnsAndRefreshesItsFile(t *testing.T) {
 	if a.count() != 1 {
 		t.Fatalf("one refresh serves every waiter: %d round-trips", a.count())
 	}
+	if a.last().Get("scope") != "s" {
+		t.Fatal("refresh widened the granted scopes to the configured request scopes")
+	}
 	raw, _ = os.ReadFile(path)
 	st, _ = parseGeneric(raw)
 	if st.access != "at-new" || st.refresh != "rt-keep" || !st.owned {
 		t.Fatalf("the file carries the new access token and the kept refresh token: %+v", st)
+	}
+	if len(st.scopes) != 1 || st.scopes[0] != "s" {
+		t.Fatal("refresh response without scope discarded the existing grant scope")
 	}
 	// .
 	if c, err := src.Credential(context.Background()); err != nil || c.Token != "at-new" || a.count() != 1 {
@@ -197,20 +203,20 @@ func TestAProfileSourceOwnsAndRefreshesItsFile(t *testing.T) {
 // .
 // .
 func TestProviderTemplatesAreData(t *testing.T) {
-	g, ok := ProviderTemplate("google")
+	g, ok := ProviderTemplate("google", testCatalog())
 	if !ok || g.TokenURL == "" || g.AuthorizeParams["access_type"] != "offline" || len(g.Hosts) == 0 || len(g.Scopes["calendar"].Read) == 0 {
 		t.Fatalf("google: %+v", g)
 	}
 	g.Hosts[0] = "changed"
-	if again, _ := ProviderTemplate("google"); again.Hosts[0] == "changed" {
+	if again, _ := ProviderTemplate("google", testCatalog()); again.Hosts[0] == "changed" {
 		t.Fatal("a caller's narrowing must not reach the table")
 	}
-	for _, name := range ProviderNames() {
-		if p, ok := ProviderTemplate(name); !ok || p.TokenURL == "" || p.AuthorizeURL == "" || len(p.Hosts) == 0 {
+	for _, name := range ProviderNames(testCatalog()) {
+		if p, ok := ProviderTemplate(name, testCatalog()); !ok || p.TokenURL == "" || p.AuthorizeURL == "" || len(p.Hosts) == 0 {
 			t.Fatalf("%s: incomplete template %+v", name, p)
 		}
 	}
-	if _, ok := ProviderTemplate("acme"); ok {
+	if _, ok := ProviderTemplate("acme", testCatalog()); ok {
 		t.Fatal("an unknown authority has no template")
 	}
 }

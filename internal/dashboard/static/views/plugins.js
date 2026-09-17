@@ -1,8 +1,9 @@
 
+import { startSignIn, signInProgress, wireSignInCompletion } from '../signin.js';
 import { S } from '../state.js';
 import { $, esc } from '../util.js';
 import { send } from '../ws.js';
-import { saveConfigSection, sendConfigChanges, configFeedbackHTML } from './settings.js';
+import { saveConfigSection, sendConfigChanges, configFeedbackHTML, savebarHTML } from './settings.js';
 
 // The store's view state — what the operator typed, chose and opened —
 // survives the re-render every status frame causes. It is not
@@ -140,11 +141,11 @@ function settingsHTML(c) {
     '<div class="dim-note">Installing from the store downloads only the build for this host, verifies its hash, and stages it; the sweep activates a package only if its <b>verified</b> tier meets the auto-load level — evidence, never the package\'s claim. The sandbox never relaxes with the level, and a package whose signature fails verification is refused at every level. A directory dropped into plugins/ beside config.json is discovered the same way.</div>' +
     '<label class="f">AUTO-LOAD</label><select id="cfg-plevel">' +
     opts.map(o => '<option value="' + o[0] + '"' + (o[0] === lvl ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
-    '<div class="savebar"><button class="btn" data-save="plugins">Save</button><span class="savenote">saved — applies live</span></div>' +
+    savebarHTML('plugins', 'saved — applies live') +
     skipsHTML(c.plugins.skips) +
     '<label class="f">CATALOG URL' + (isDefault ? ' <span class="store-hint">— the platform\'s catalog, by default; leave empty to keep it</span>' : '') + '</label>' +
     '<input type="text" id="cfg-caturl" value="' + esc(url) + '" placeholder="https://…/aiios-plugins.md">' +
-    '<div class="savebar"><button class="btn" data-save="catalog">Save</button><span class="savenote">saved — the index is fetched from here</span></div>' +
+    savebarHTML('catalog', 'saved — the index is fetched from here') +
     runtimeLimitsHTML(c.plugins.runtime) +
     '</div>';
 }
@@ -162,7 +163,7 @@ function runtimeLimitsHTML(r) {
     '<label class="f sub">archive MiB<input type="number" id="cfg-rt-archive" min="1" value="' + mib(r.max_compressed_bytes) + '"></label>' +
     '<label class="f sub">path depth<input type="number" id="cfg-rt-depth" min="1" value="' + (r.max_depth || 0) + '"></label>' +
     '<label class="f sub">trees kept for rollback<input type="number" id="cfg-rt-kept" min="1" value="' + (r.roots_kept || 0) + '"></label>' +
-    '<div class="savebar"><button class="btn" data-save="plugin_runtime">Save</button><span class="savenote">saved — applies at the next activation</span></div>';
+    savebarHTML('plugin_runtime', 'saved — applies at the next activation');
 }
 
 function installedHTML(installed) {
@@ -186,7 +187,7 @@ function installedHTML(installed) {
       readinessHTML(p) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
     if (!p.settings || !p.settings.length) return '<div class="card">' + head + '<div class="empty">no settings declared</div></div>';
     return '<div class="card">' + head + p.settings.map(s => settingHTML(p.id, s)).join('') + sessionSettingsHTML(p) +
-      '<div class="savebar"><button class="btn" data-save="plugin:' + esc(p.id) + '">Save</button><span class="savenote">' + appliesNote(p) + '</span></div></div>';
+      savebarHTML('plugin:' + p.id, appliesNote(p)) + '</div>';
   }).join('');
 }
 // WHAT THE ENGINE CAME UP WITH. A native engine reports its own
@@ -263,7 +264,7 @@ function grantsHTML(p) {
   if (!rows.length && !lists.length) return '';
   return '<div class="grants"><label class="f">GRANTED BY YOU</label>' + rows.join('') +
     lists.map(l => '<div class="store-hint grant-list">' + l + '</div>').join('') +
-    (rows.length ? '<div class="savebar"><button class="btn" data-save="grants:' + esc(p.id) + '">Save grants</button><span class="savenote">saved — applies to the plugin\'s next call</span></div>' : '') +
+    (rows.length ? savebarHTML('grants:' + p.id, 'saved — applies to the plugin\'s next call', { label: 'Save grants' }) : '') +
     '</div>';
 }
 // detailHTML is what the verified manifest says about an installed
@@ -513,7 +514,6 @@ export function renderPlugins() {
 // reach this machine), or by a code entered on the authority's page
 // where the authority allows it. The form hands a client secret to the
 // host exactly once; it is written to a private file and never shown.
-let profileWin = null;
 let profileDraft = null; // the New-profile form's state while open
 function profilesHTML(pl) {
   const profiles = (pl && pl.auth_profiles) || [];
@@ -525,16 +525,13 @@ function profilesHTML(pl) {
       return '<div class="profile" data-profile="' + esc(p.name) + '"><div><b>' + esc(p.name) + '</b> <span class="store-hint">' + esc(p.scheme) + ' · ' + esc(p.host) + ':' + esc(p.port) + ' · secret from ' + esc(p.secret_source || 'nowhere') + ' · edited in the config file</span></div><div class="store-hint">' + used + '</div></div>';
     }
     const scopes = (p.scopes || []).map(sc => sc.replace(/^https?:\/\/[^/]+\/auth\//, '')).join(', ');
-    let bar = '';
-    if (p.device) {
-      bar = '<div class="device-code">Enter <b>' + esc(p.device.user_code) + '</b> at <a href="' + esc(p.device.verification_uri_complete || p.device.verification_uri) + '" target="_blank" rel="noopener">' + esc(p.device.verification_uri) + '</a> — this page updates when the authority answers (until ' + esc(p.device.expires) + ')</div>';
-    }
+    let bar = signInProgress(p.signin, 'profile', p.name);
     bar += '<div class="savebar">' +
+      (p.signin && p.signin.status === 'pending' ? '<button class="btn ghost" data-profile-cancel-signin="' + esc(p.name) + '">Cancel sign-in</button>' : '') +
       '<button class="btn" data-profile-connect="' + esc(p.name) + '">' + (p.state === 'connected' ? 'Reconnect' : 'Connect') + '</button>' +
       (p.can_device ? '<button class="btn ghost" data-profile-device="' + esc(p.name) + '">Connect with a code</button>' : '') +
       (p.state !== 'disconnected' ? '<button class="btn ghost" data-profile-disconnect="' + esc(p.name) + '">Disconnect</button>' : '') +
-      '<button class="btn ghost" data-profile-delete="' + esc(p.name) + '">Delete</button></div>' +
-      '<div class="profile-paste"><input type="text" class="profile-paste-input" placeholder="If the tab could not reach this machine, paste the redirect URL here" data-profile-paste-input="' + esc(p.name) + '"><button class="btn ghost" data-profile-complete="' + esc(p.name) + '">Complete</button></div>';
+      '<button class="btn ghost" data-profile-delete="' + esc(p.name) + '">Delete</button></div>';
     return '<div class="profile" data-profile="' + esc(p.name) + '"><div><b>' + esc(p.name) + '</b> ' + chip + ' <span class="store-hint">' + esc(p.provider || 'custom') + ' · client ' + esc(p.client_id) + (p.has_client_secret ? ' · secret: set' : ' · no client secret') + (p.expires_at ? ' · token until ' + esc(p.expires_at) : '') + '</span></div>' +
       '<div class="store-hint">scopes: ' + esc(scopes || 'none') + '</div><div class="store-hint">rides to: ' + esc((p.hosts || []).join(', ')) + '</div><div class="store-hint">' + used + '</div>' + bar + '</div>';
   });
@@ -547,6 +544,8 @@ function newProfileHTML(providers) {
   const d = profileDraft;
   if (!d) return '<div class="savebar"><button class="btn" data-profile-new>New profile</button></div>';
   const prov = providers.find(x => x.name === d.provider);
+  const manual = prov && prov.sign_in === 'manual';
+  const returnURL = manual ? prov.redirect_uri : location.origin + '/oauth/callback';
   const services = prov ? prov.services : [];
   const provOpts = providers.map(x => '<option value="' + esc(x.name) + '"' + (x.name === d.provider ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '<option value="custom"' + (d.provider === 'custom' ? ' selected' : '') + '>custom</option>';
   const svcRows = services.map(sv => '<div class="svc-row"><span>' + esc(sv.name) + '</span>' +
@@ -557,7 +556,8 @@ function newProfileHTML(providers) {
   return '<div class="profile-form"><h4>NEW PROFILE</h4>' + why +
     '<label class="f">NAME</label><input id="pf-name" value="' + esc(d.name || '') + '" placeholder="google-james">' +
     '<label class="f">PROVIDER</label><select id="pf-provider">' + provOpts + '</select>' +
-    '<label class="f">CLIENT ID</label><input id="pf-client" value="' + esc(d.client_id || '') + '" placeholder="the client the authority knows you by">' +
+    '<label class="f">REGISTERED RETURN URL</label><input id="pf-redirect" value="' + esc(d.redirect_uri || returnURL || '') + '"><div class="store-hint">' + (manual ? 'The provider shows a code at this address. Paste that code here to finish sign-in.' : 'Register this dashboard address with the provider for browser sign-in.') + '</div>' +
+    '<label class="f">CLIENT ID (OPTIONAL WHEN CONFIGURED)</label><input id="pf-client" value="' + esc(d.client_id || '') + '" placeholder="the client the authority knows you by">' +
     '<label class="f">CLIENT SECRET (ENTER ONCE; WRITTEN TO A PRIVATE FILE, NEVER SHOWN)</label><input id="pf-secret" type="password" autocomplete="off" value="">' +
     (services.length ? '<label class="f">SERVICES</label>' + svcRows : '') +
     (d.provider === 'custom' || !services.length ? '<label class="f">SCOPES (SPACE-SEPARATED)</label><input id="pf-scopes" value="' + esc((d.scopes || []).join(' ')) + '">' : '') +
@@ -567,7 +567,7 @@ function newProfileHTML(providers) {
 function readDraft() {
   const d = profileDraft || { services: {} };
   const val = id => { const el = $(id); return el ? el.value : ''; };
-  d.name = val('pf-name').trim(); d.client_id = val('pf-client').trim();
+  d.redirect_uri = val('pf-redirect').trim(); d.name = val('pf-name').trim(); d.client_id = val('pf-client').trim();
   const sel = $('pf-provider'); if (sel) d.provider = sel.value;
   d.services = {};
   document.querySelectorAll('.profile-form input[type=radio]:checked').forEach(r => { if (r.value) d.services[r.name.replace(/^svc-/, '')] = r.value; });
@@ -576,30 +576,24 @@ function readDraft() {
   d.authorize_url = val('pf-auth').trim(); d.token_url = val('pf-token').trim(); d.device_url = val('pf-device').trim(); d.revoke_url = val('pf-revoke').trim();
   return d;
 }
-S.profileSignInNavigate = url => { if (profileWin && !profileWin.closed) { profileWin.location = url; } else { window.open(url, '_blank', 'noopener'); } profileWin = null; };
-S.profileSignInAbandon = () => { if (profileWin && !profileWin.closed) profileWin.close(); profileWin = null; };
-S.onProfileDevice = () => { /* the host broadcasts the configuration with the code on the profile; nothing to keep here */ };
 function wireProfiles(st) {
-  st.querySelectorAll('[data-profile-connect]').forEach(b => { b.onclick = () => { profileWin = window.open('', '_blank'); send({ type: 'profile_signin', profile: b.dataset.profileConnect }); }; });
+  wireSignInCompletion(st);
+  st.querySelectorAll('[data-profile-cancel-signin]').forEach(b => { b.onclick = () => send({type:'profile_signin_cancel',profile:b.dataset.profileCancelSignin}); });
+  st.querySelectorAll('[data-profile-connect]').forEach(b => { b.onclick = () => { startSignIn({ type: 'profile_signin', profile: b.dataset.profileConnect }); }; });
   st.querySelectorAll('[data-profile-device]').forEach(b => { b.onclick = () => { b.disabled = true; b.textContent = 'Asking for a code…'; send({ type: 'profile_device', profile: b.dataset.profileDevice }); }; });
   st.querySelectorAll('[data-profile-disconnect]').forEach(b => { b.onclick = () => { b.disabled = true; send({ type: 'profile_disconnect', profile: b.dataset.profileDisconnect }); }; });
   st.querySelectorAll('[data-profile-delete]').forEach(b => { b.onclick = () => { if (!window.confirm || window.confirm('Delete profile ' + b.dataset.profileDelete + '? Its tokens and client secret are removed.')) { b.disabled = true; send({ type: 'auth_profile_delete', profile: b.dataset.profileDelete }); } }; });
-  st.querySelectorAll('[data-profile-complete]').forEach(b => { b.onclick = () => {
-    const inp = st.querySelector('[data-profile-paste-input="' + b.dataset.profileComplete.replace(/"/g, '\\"') + '"]');
-    const v = (inp && inp.value || '').trim(); if (!v) { if (inp) inp.focus(); return; }
-    b.disabled = true; send({ type: 'profile_signin_complete', profile: b.dataset.profileComplete, input: v });
-  }; });
   const nb = st.querySelector('[data-profile-new]');
   if (nb) nb.onclick = () => { profileDraft = { provider: 'google', services: {} }; renderPlugins(); };
   const sel = st.querySelector('#pf-provider');
-  if (sel) sel.onchange = () => { const d = readDraft(); d.hosts = null; d.services = {}; profileDraft = d; renderPlugins(); };
+  if (sel) sel.onchange = () => { const d = readDraft(); d.hosts = null; d.redirect_uri = ''; d.services = {}; profileDraft = d; renderPlugins(); };
   const cancel = st.querySelector('[data-profile-cancel]');
   if (cancel) cancel.onclick = () => { profileDraft = null; renderPlugins(); };
   const save = st.querySelector('[data-profile-save]');
   if (save) save.onclick = () => {
     const d = readDraft();
     const secret = ($('pf-secret') && $('pf-secret').value) || '';
-    const edit = { name: d.name, provider: d.provider, client_id: d.client_id, client_secret: secret, services: d.services,
+    const edit = { redirect_uri: d.redirect_uri, name: d.name, provider: d.provider, client_id: d.client_id, client_secret: secret, services: d.services,
       scopes: d.scopes, hosts: (d.hosts || '').split(/[,\s]+/).filter(Boolean),
       authorize_url: d.authorize_url, token_url: d.token_url, device_url: d.device_url, revoke_url: d.revoke_url };
     if ($('pf-secret')) $('pf-secret').value = '';
@@ -608,4 +602,3 @@ function wireProfiles(st) {
     send({ type: 'auth_profile_set', profile_edit: edit });
   };
 }
-

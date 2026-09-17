@@ -46,7 +46,7 @@ func TestEveryTableDeclaresItsProvenance(t *testing.T) {
 		t.Fatalf("catalog has %d tables, schema.sql declares %d", len(Catalog), len(declared))
 	}
 	d, e := DerivedTables(), EphemeralTables()
-	if len(d) != 11 || len(e) != 23 {
+	if len(d) != 11 || len(e) != 24 {
 		t.Fatalf("derived=%d ephemeral=%d; the counts changed — say so in the docs", len(d), len(e))
 	}
 	if d[len(d)-1] != "ledger" {

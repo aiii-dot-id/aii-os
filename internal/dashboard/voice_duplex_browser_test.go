@@ -14,7 +14,7 @@ import "testing"
 // .
 // .
 const voiceDuplexPage = `<!doctype html>
-<button id="mic"></button><button id="voicemode"></button>
+<button id="mic"></button>
 <script type="module">
 import { assert, run } from './__harness.js';
 import { decodeStreamFrame, StreamLane, PreRoll, Conversation } from './voice.js';

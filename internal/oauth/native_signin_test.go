@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +21,10 @@ func codexParams() OAuthParams {
 		ClientID: "app_test", AuthorizeURL: "https://auth.example/oauth/authorize",
 		TokenURL: "https://auth.example/oauth/token", RedirectURI: "http://localhost:1455/auth/callback",
 		Scope: "openid profile email offline_access", Originator: "aii-os", IDTokenAddOrganizations: true,
+		// .
+		// .
+		// .
+		AccountClaim: []string{"https://api.openai.com/auth", "chatgpt_account_id"},
 	}
 }
 
@@ -29,9 +32,25 @@ func codexParams() OAuthParams {
 // .
 func fakeJWT(t *testing.T, accountID string, exp int64) string {
 	t.Helper()
+	return fakeJWTClaims(t, map[string]any{
+		"exp": exp,
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": accountID, "chatgpt_plan_type": "pro",
+		},
+		"scp": []string{"openid"},
+	})
+}
+
+// .
+// .
+// .
+func fakeJWTClaims(t *testing.T, claims map[string]any) string {
+	t.Helper()
 	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
-	claims := map[string]any{"exp": exp, "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": accountID, "chatgpt_plan_type": "pro"}, "scp": []string{"openid"}}
-	b, _ := json.Marshal(claims)
+	b, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return hdr + "." + base64.RawURLEncoding.EncodeToString(b) + ".sig"
 }
 
@@ -50,7 +69,7 @@ func TestTheSignInContractIsConfiguredNotConstant(t *testing.T) {
 		"oauth_token_url": "https://auth.openai.com/oauth/token", "oauth_redirect_uri": "http://localhost:1455/auth/callback",
 		"oauth_scope": "openid profile email offline_access", "oauth_originator": "aii-os", "oauth_id_token_add_organizations": "true",
 	}
-	src, err := New(KindCodex, opts)
+	src, err := testSource(KindCodex, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +78,7 @@ func TestTheSignInContractIsConfiguredNotConstant(t *testing.T) {
 		t.Fatalf("the sign-in contract did not come from the options: %+v", got)
 	}
 	// .
-	src2, err := New(KindCodex, opts, map[string]string{"oauth_client_id": "app_operator"})
+	src2, err := testSource(KindCodex, opts, map[string]string{"oauth_client_id": "app_operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,16 +153,16 @@ func TestCompleteExchangesTheCodeAndRefreshRotates(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	p := codexParams()
 	p.TokenURL = srv.URL
 	l, _ := NewLogin(p)
-	if _, err := l.Complete(context.Background(), "code-1", "wrong-state"); err == nil || len(seen) != 0 {
+	if _, err := l.Exchange(context.Background(), nil, "code-1", "wrong-state"); err == nil || len(seen) != 0 {
 		t.Fatalf("a state mismatch must be refused before any request (err=%v, requests=%d)", err, len(seen))
 	}
-	tok, err := l.Complete(context.Background(), "code-1", l.State())
+	tok, err := l.Exchange(context.Background(), nil, "code-1", l.State())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,10 +170,10 @@ func TestCompleteExchangesTheCodeAndRefreshRotates(t *testing.T) {
 	if f.Get("grant_type") != "authorization_code" || f.Get("code") != "code-1" || f.Get("code_verifier") != l.verifier || f.Get("client_id") != "app_test" || f.Get("redirect_uri") != p.RedirectURI {
 		t.Fatalf("exchange form wrong: %v", f)
 	}
-	if tok.AccountID != "acct-1" || tok.Refresh != "refresh-1" || tok.Expires.Before(time.Now().Add(50*time.Minute)) {
+	if claimString(tok.Access, p.AccountClaim) != "acct-1" || tok.Refresh != "refresh-1" || tok.Expires.Before(time.Now().Add(50*time.Minute)) {
 		t.Fatalf("tokens wrong: %+v", tok)
 	}
-	rot, err := Refresh(context.Background(), p, tok.Refresh)
+	rot, err := RefreshTokens(context.Background(), nil, p, tok.Refresh)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,43 +185,10 @@ func TestCompleteExchangesTheCodeAndRefreshRotates(t *testing.T) {
 	}
 }
 
-// .
-// .
-func TestServeCallbackDeliversTheCodeOnce(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-	p := codexParams()
-	p.RedirectURI = "http://127.0.0.1:" + itoa(port) + "/auth/callback"
-	l, _ := NewLogin(p)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan string, 1)
-	go func() { c, _ := l.ServeCallback(ctx); done <- c }()
-	time.Sleep(150 * time.Millisecond)
-	if r, err := http.Get(p.RedirectURI + "?code=bad&state=not-mine"); err != nil || r.StatusCode != http.StatusBadRequest {
-		t.Fatalf("a wrong state was not refused: %v %v", r, err)
-	}
-	if r, err := http.Get(p.RedirectURI + "?code=good&state=" + l.State()); err != nil || r.StatusCode != http.StatusOK {
-		t.Fatalf("the matching redirect was not accepted: %v %v", r, err)
-	}
-	select {
-	case c := <-done:
-		if c != "good" {
-			t.Fatalf("delivered %q, want good", c)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("the code was not delivered")
-	}
-}
-
 func TestWriteAuthFileIsPrivateAndParseable(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "creds", "codex.json")
-	tok := &CodexTokens{Access: fakeJWT(t, "acct-9", time.Now().Add(time.Hour).Unix()), Refresh: "r", IDToken: "i", AccountID: "acct-9", Expires: time.Now().Add(time.Hour)}
-	if err := WriteAuthFile(p, tok); err != nil {
+	tok := &Tokens{Access: fakeJWT(t, "acct-9", time.Now().Add(time.Hour).Unix()), Refresh: "r", IDToken: "i", Expires: time.Now().Add(time.Hour)}
+	if err := WriteTokenFile(p, tok); err != nil {
 		t.Fatal(err)
 	}
 	// .
@@ -211,23 +197,11 @@ func TestWriteAuthFileIsPrivateAndParseable(t *testing.T) {
 		t.Fatalf("not private: ok=%v err=%v", ok, err)
 	}
 	raw, _ := os.ReadFile(p)
-	parsed, err := parseCodex(raw)
-	if err != nil || parsed.access != tok.Access || parsed.headers["ChatGPT-Account-ID"] != "acct-9" {
+	parsed, err := parseGeneric(raw)
+	if err != nil || parsed.access != tok.Access || claimString(parsed.access, codexParams().AccountClaim) != "acct-9" {
 		t.Fatalf("the file AII OS writes must be what parseCodex reads: %+v %v", parsed, err)
 	}
 	if !strings.Contains(string(raw), `"owned_by": "aii-os"`) {
 		t.Fatal("the owned marker is missing")
 	}
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b []byte
-	for i > 0 {
-		b = append([]byte{byte('0' + i%10)}, b...)
-		i /= 10
-	}
-	return string(b)
 }

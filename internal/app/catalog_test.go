@@ -346,10 +346,16 @@ func TestCatalogRefreshesFromItsURLAndKeepsTheLastGoodIndex(t *testing.T) {
 		Agency:     defaultConfig().Agency,
 	}
 	app := New(cfg)
+	// .
+	// .
+	// .
+	app.catalogFetch = func(context.Context, string, int64) ([]byte, error) {
+		return nil, fmt.Errorf("catalog fixture is not enabled")
+	}
 	if err := startLiveForTest(app); err != nil {
 		t.Fatal(err)
 	}
-	defer app.Stop()
+	app.Stop()
 	if app.Catalog() != nil {
 		t.Fatal("nothing is loaded before a fetch verifies")
 	}

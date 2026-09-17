@@ -1,31 +1,37 @@
 
+import { startSignIn, signInProgress, signInWanted, wireSignInCompletion } from './signin.js';
 import { S } from './state.js';
 import { $, esc } from './util.js';
 import { send, query } from './ws.js';
 
 let discoverRequestID = '';
-
-function credentialNote(p) {
-  if (p.status === 'credential_expired') return ' — signed in, but the saved token expired';
-  if (p.status === 'no_credential') return ' — not signed in on this machine';
-  return '';
-}
+let selectedProvider = '';
+let userSelected = false;
+let connectedSignIn = '';
 
 export function renderProviderOptions() {
   const sel = $('fb-provider');
   if (!sel || S.identityExists) return;
   sel.innerHTML = '<option value="">choose a provider…</option>' +
-    S.providers.map((p, i) =>
-      '<option value="' + i + '"' + (p.preselect ? ' selected' : '') + '>' + esc(p.name) +
-      credentialNote(p) +
+    // Indexed by position, so a speech-only entry is skipped in place.
+    S.providers.map((p, i) => p.chat === false ? '' :
+      '<option value="' + i + '"' + ((selectedProvider ? p.name === selectedProvider : p.preselect) ? ' selected' : '') + '>' + esc(p.name) +
       '</option>').join('');
 
   const pre = S.providers.find(p => p.preselect);
   const why = $('fb-cred-why');
   if (why) why.innerHTML = pre && pre.preselect_why ? esc(pre.preselect_why) : '';
-  if (pre) onProviderChange();
+  const current = S.providers[parseInt(sel.value, 10)];
+  renderSignIn(current);
+  if (!selectedProvider && pre) { selectedProvider = pre.name; onProviderChange(); }
+  if (current && userSelected && current.signin && current.signin.status === 'connected' && connectedSignIn !== current.name) {
+    connectedSignIn = current.name; onProviderChange();
+  }
   sel.onchange = () => {
     $('fb-apikey').value = '';
+    const p = S.providers[parseInt(sel.value, 10)];
+    selectedProvider = p ? p.name : ''; userSelected = true; connectedSignIn = '';
+    renderSignIn(p);
     onProviderChange();
   };
 }
@@ -45,9 +51,25 @@ function onProviderChange() {
     sub.href = p.subscribe_url;
     sub.textContent = 'get a key at ' + p.subscribe_url.replace(/^https?:\/\//, '');
   } else sub.style.display = 'none';
+  renderSignIn(p);
   const key = $('fb-apikey').value.trim();
   discoverRequestID = query('discover', { provider: p.name, api_key: key });
   if (!discoverRequestID) fbHint('Not connected — reselect the provider after reconnect.');
+}
+
+function renderSignIn(p) {
+  let row = $('fb-signin');
+  if (!row) { row = document.createElement('div'); row.id = 'fb-signin'; $('fb-hint').after(row); }
+  row.innerHTML = '';
+  if (!p || !userSelected || !p.can_sign_in) return;
+  // The rule Settings applies (signInWanted): progress whenever there is a
+  // sign-in to report, the button only when a valid token is not in hand.
+  row.innerHTML = signInProgress(p.signin, 'provider', p.name) +
+    (signInWanted(p) ? '<button class="btn" id="fb-signin-start">Sign in with ' + esc(p.name) + '</button>' : '') +
+    (p.signin && p.signin.status === 'pending' ? '<button class="btn ghost" id="fb-signin-cancel">Cancel sign-in</button>' : '');
+  wireSignInCompletion(row);
+  const cancel = $('fb-signin-cancel'); if (cancel) cancel.onclick = () => send({type:'provider_signin_cancel',provider:p.name});
+  const start = $('fb-signin-start'); if (start) start.onclick = () => { connectedSignIn = ''; startSignIn({ type: 'provider_signin', provider: p.name }); };
 }
 
 export function acceptDiscoveryResponse(requestID, provider) {

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/quiesce"
@@ -33,6 +35,12 @@ import (
 
 //go:embed static/*
 var staticFS embed.FS
+
+// .
+// .
+const AccessTokenMaxBytes = 4096
+
+const legacyDashboardCookieName = "aii_token"
 
 // .
 type Server struct {
@@ -67,9 +75,12 @@ type Server struct {
 	// .
 	// .
 	// .
-	authRequired  bool
-	authTokenHash string
-	sweepEvery    time.Duration
+	// .
+	auth atomic.Pointer[accessPolicy]
+	// .
+	// .
+	wsAdmitHook func()
+	sweepEvery  time.Duration
 
 	// .
 	// .
@@ -283,11 +294,15 @@ type LLMConfigState struct {
 	ResolvedProvider string `json:"resolved_provider"`
 	ResolvedModel    string `json:"resolved_model"`
 	TimeoutSeconds   int    `json:"timeout_seconds"`
-	Endpoint         string `json:"endpoint"`
-	APIKeyMasked     string `json:"api_key_masked"`
-	ThinkingBudget   int    `json:"thinking_budget"`
-	ContextLength    int    `json:"context_length"`
-	ReasoningEffort  string `json:"reasoning_effort"`
+	// .
+	// .
+	// .
+	ProbeTimeoutSeconds int    `json:"probe_timeout_seconds"`
+	Endpoint            string `json:"endpoint"`
+	APIKeyMasked        string `json:"api_key_masked"`
+	ThinkingBudget      int    `json:"thinking_budget"`
+	ContextLength       int    `json:"context_length"`
+	ReasoningEffort     string `json:"reasoning_effort"`
 	// .
 	// .
 	// .
@@ -300,9 +315,28 @@ type LLMConfigState struct {
 	// .
 	// .
 	// .
-	ThinkingApplies bool   `json:"thinking_applies"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	Error           string `json:"error,omitempty"`
+	ThinkingApplies bool `json:"thinking_applies"`
+	MaxOutputTokens int  `json:"max_output_tokens"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	EffortChoice *EffortChoice `json:"effort_choice,omitempty"`
+	Error        string        `json:"error,omitempty"`
+}
+
+// .
+// .
+// .
+// .
+// .
+type EffortChoice struct {
+	Levels  []string `json:"levels"`
+	Checked []string `json:"checked,omitempty"`
+	InForce string   `json:"in_force"`
 }
 
 // .
@@ -337,8 +371,13 @@ type ProviderInfo struct {
 	// .
 	// .
 	// .
-	APIKey          string          `json:"api_key,omitempty"`
-	HasKey          bool            `json:"has_key,omitempty"`
+	APIKey string `json:"api_key,omitempty"`
+	HasKey bool   `json:"has_key,omitempty"`
+	// .
+	// .
+	Chat bool `json:"chat"`
+	// .
+	Speech          *ProviderSpeech `json:"speech,omitempty"`
 	Credential      string          `json:"credential,omitempty"`
 	CredentialInfo  *CredentialInfo `json:"credential_info,omitempty"`
 	StatusReason    string          `json:"status_reason,omitempty"`
@@ -388,7 +427,8 @@ type ProviderInfo struct {
 	ConfiguredModels  []string         `json:"configured_models,omitempty"`
 	// .
 	// .
-	CanSignIn bool `json:"can_sign_in,omitempty"`
+	CanSignIn bool        `json:"can_sign_in,omitempty"`
+	SignIn    *SignInView `json:"signin,omitempty"`
 }
 
 // .
@@ -454,9 +494,20 @@ type AuthProfileView struct {
 	Handles   []string `json:"handles,omitempty"`
 	// .
 	// .
-	CanDevice bool            `json:"can_device,omitempty"`
-	Device    *DeviceCodeView `json:"device,omitempty"`
-	Custom    bool            `json:"custom,omitempty"`
+	CanDevice   bool            `json:"can_device,omitempty"`
+	Device      *DeviceCodeView `json:"device,omitempty"`
+	Custom      bool            `json:"custom,omitempty"`
+	SignIn      *SignInView     `json:"signin,omitempty"`
+	RedirectURI string          `json:"redirect_uri,omitempty"`
+}
+
+// .
+// .
+type SignInView struct {
+	Status string          `json:"status"`
+	URL    string          `json:"url,omitempty"`
+	Device *DeviceCodeView `json:"device,omitempty"`
+	Manual bool            `json:"manual,omitempty"`
 }
 
 // .
@@ -469,10 +520,12 @@ type DeviceCodeView struct {
 
 // .
 type ProviderView struct {
-	Name     string        `json:"name"`
-	Services []ServiceView `json:"services"`
-	Hosts    []string      `json:"hosts"`
-	Device   bool          `json:"device"`
+	Name        string        `json:"name"`
+	SignIn      string        `json:"sign_in,omitempty"`
+	RedirectURI string        `json:"redirect_uri,omitempty"`
+	Services    []ServiceView `json:"services"`
+	Hosts       []string      `json:"hosts"`
+	Device      bool          `json:"device"`
 	// .
 	DeviceExcludes []string `json:"device_excludes,omitempty"`
 }
@@ -488,6 +541,7 @@ type ServiceView struct {
 // .
 // .
 type AuthProfileEdit struct {
+	RedirectURI  string            `json:"redirect_uri,omitempty"`
 	Name         string            `json:"name"`
 	Provider     string            `json:"provider"`
 	ClientID     string            `json:"client_id"`
@@ -717,10 +771,11 @@ type PluginSkipView struct {
 }
 
 type DashboardState struct {
-	Host   string `json:"host"`
-	Port   int    `json:"port"`
-	TLS    bool   `json:"tls"`
-	Origin string `json:"origin,omitempty"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	TLS          bool   `json:"tls"`
+	Origin       string `json:"origin,omitempty"`
+	RequireToken bool   `json:"require_token"`
 }
 
 // .
@@ -798,9 +853,11 @@ type UpdateState struct {
 }
 
 type ConfigState struct {
-	LLM       LLMConfigState `json:"llm"`
-	Dashboard DashboardState `json:"dashboard"`
-	Plugins   PluginsState   `json:"plugins"`
+	LLM LLMConfigState `json:"llm"`
+	// .
+	Speech    SpeechConfigState `json:"speech"`
+	Dashboard DashboardState    `json:"dashboard"`
+	Plugins   PluginsState      `json:"plugins"`
 	// .
 	// .
 	// .
@@ -920,6 +977,9 @@ type WSHandler struct {
 	VoiceConfigured func() bool
 	// .
 	// .
+	VoiceStatus func() (state, reason, source string)
+	// .
+	// .
 	// .
 	// .
 	// .
@@ -945,12 +1005,46 @@ type WSHandler struct {
 	// .
 	// .
 	SetProvider    func(ProviderInfo) error
+	SetEffort      func(level string) error
 	DeleteProvider func(name string) error
 	// .
 	// .
 	// .
-	SignInProvider func(name string) (string, error)
-	CompleteSignIn func(name, input string) error
+	// .
+	SetSpeechService func(name, apiKey, baseURL string) error
+	// .
+	// .
+	// .
+	SpeechLists func(provider, direction, search, language, apiKey string) (SpeechLists, error)
+
+	// .
+	// .
+	// .
+	SpeakMint func(say SpeakText) (string, error)
+	// .
+	// .
+	SpeakPlay func(ctx context.Context, id string, w io.Writer) error
+	// .
+	// .
+	// .
+	// .
+	SpeakAhead func(text string) string
+	// .
+	ReplyVoice func() string
+	// .
+	SpeakerPolicy func() *SpeakerPolicyState
+	// .
+	// .
+	// .
+	DashboardToken func() string
+	// .
+	// .
+	// .
+	SignInProvider      func(name string) (string, error)
+	CompleteSignIn      func(name, input string) error
+	OAuthCallback       func(code, state, authorityError string) error
+	CancelSignIn        func(name string) error
+	CancelProfileSignIn func(name string) error
 	// .
 	// .
 	SignInProfile         func(name string) (string, error)
@@ -1080,6 +1174,21 @@ type StatsResponse struct {
 	// .
 	// .
 	VoiceEngine bool `json:"voice_engine"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	VoiceState  string `json:"voice_state"`
+	VoiceReason string `json:"voice_reason,omitempty"`
+	// .
+	VoiceSource string `json:"voice_source,omitempty"`
+	// .
+	// .
+	ReplyVoice string `json:"reply_voice,omitempty"`
+	// .
+	// .
+	Speakers *SpeakerPolicyState `json:"speakers,omitempty"`
 }
 
 // .
@@ -1282,10 +1391,15 @@ type ClientMessage struct {
 	Roots       []string               `json:"roots,omitempty"`
 	Provider    string                 `json:"provider,omitempty"`
 	APIKey      string                 `json:"api_key,omitempty"`
+	BaseURL     string                 `json:"base_url,omitempty"`
+	Direction   string                 `json:"direction,omitempty"`
+	Search      string                 `json:"search,omitempty"`
+	Language    string                 `json:"language,omitempty"`
 	Name        string                 `json:"name,omitempty"`
 	Q           string                 `json:"q,omitempty"`
 	Entry       *ProviderInfo          `json:"entry,omitempty"`
 	Input       string                 `json:"input,omitempty"`
+	Effort      string                 `json:"effort,omitempty"`
 	Voice       *VoiceRequest          `json:"voice,omitempty"`
 }
 
@@ -1319,29 +1433,33 @@ type SectionState struct {
 
 // .
 type ServerMessage struct {
-	PublicName *PublicNameState `json:"public_name,omitempty"`
-	RequestID  string           `json:"request_id,omitempty"`
-	Type       string           `json:"type"`
-	Message    string           `json:"message,omitempty"`
-	Stats      *StatsResponse   `json:"stats,omitempty"`
-	Outbox     []OutboxItem     `json:"outbox,omitempty"`
-	Asks       []AskView        `json:"asks,omitempty"`
-	Device     *DeviceCodeView  `json:"device,omitempty"`
-	Projects   []ProjectState   `json:"projects,omitempty"`
-	Sandbox    *SandboxState    `json:"sandbox,omitempty"`
-	Work       *WorkState       `json:"work,omitempty"`
-	Workspace  *WorkspaceState  `json:"workspace,omitempty"`
-	History    []HistoryTurn    `json:"history,omitempty"`
-	Tools      []ToolState      `json:"tools,omitempty"`
-	Identity   *IdentityState   `json:"identity,omitempty"`
-	Query      string           `json:"query,omitempty"`
-	Continuity *ContinuityState `json:"continuity,omitempty"`
-	Config     *ConfigState     `json:"config,omitempty"`
-	Providers  []ProviderInfo   `json:"providers,omitempty"`
-	SignInURL  string           `json:"signin_url,omitempty"`
-	Update     *UpdateState     `json:"update,omitempty"`
-	Provider   string           `json:"provider,omitempty"`
-	ModelList  []string         `json:"model_list,omitempty"`
+	PublicName  *PublicNameState `json:"public_name,omitempty"`
+	RequestID   string           `json:"request_id,omitempty"`
+	Type        string           `json:"type"`
+	Message     string           `json:"message,omitempty"`
+	Stats       *StatsResponse   `json:"stats,omitempty"`
+	Outbox      []OutboxItem     `json:"outbox,omitempty"`
+	Asks        []AskView        `json:"asks,omitempty"`
+	Device      *DeviceCodeView  `json:"device,omitempty"`
+	Projects    []ProjectState   `json:"projects,omitempty"`
+	Sandbox     *SandboxState    `json:"sandbox,omitempty"`
+	Work        *WorkState       `json:"work,omitempty"`
+	Workspace   *WorkspaceState  `json:"workspace,omitempty"`
+	History     []HistoryTurn    `json:"history,omitempty"`
+	Tools       []ToolState      `json:"tools,omitempty"`
+	Identity    *IdentityState   `json:"identity,omitempty"`
+	Query       string           `json:"query,omitempty"`
+	Continuity  *ContinuityState `json:"continuity,omitempty"`
+	Config      *ConfigState     `json:"config,omitempty"`
+	Providers   []ProviderInfo   `json:"providers,omitempty"`
+	SignInURL   string           `json:"signin_url,omitempty"`
+	Update      *UpdateState     `json:"update,omitempty"`
+	Provider    string           `json:"provider,omitempty"`
+	ModelList   []string         `json:"model_list,omitempty"`
+	SpeechLists *SpeechLists     `json:"speech_lists,omitempty"`
+	// .
+	// .
+	DashboardToken string `json:"dashboard_token,omitempty"`
 	// .
 	// .
 	// .
@@ -1397,6 +1515,7 @@ type ServerMessage struct {
 	VoiceSession *VoiceSessionState `json:"voice_session,omitempty"`
 	VoiceEvent   *VoiceEvent        `json:"voice_event,omitempty"`
 	VoiceReply   *VoiceReplyRef     `json:"voice_reply,omitempty"`
+	VoiceHush    *VoiceHush         `json:"voice_hush,omitempty"`
 }
 
 // .
@@ -1614,7 +1733,7 @@ func New(host string, port int, handler *WSHandler) *Server {
 		// .
 		// .
 		w.Header().Set("Cache-Control", "no-cache")
-		if p == "/index.html" && s.authRequired {
+		if p == "/index.html" && s.accessRequired() {
 			// .
 			// .
 			// .
@@ -1645,7 +1764,19 @@ func New(host string, port int, handler *WSHandler) *Server {
 	mux.HandleFunc("GET /p/{id}/{path...}", s.handleProjectFile)
 
 	// .
+	// .
+	// .
+	// .
+	// .
+	mux.HandleFunc("POST /speech/say", s.handleSpeechSay)
+	mux.HandleFunc("GET /speech/say/{id}", s.handleSpeechPlay)
+
+	mux.HandleFunc("GET /auth/token", s.handleAccessToken)
+	mux.HandleFunc("POST /auth/token", s.handleAccessToken)
+
+	// .
 	mux.HandleFunc("GET /ws", s.handleWS)
+	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
 	// .
 	// .
 	// .
@@ -1782,7 +1913,7 @@ func (s *Server) hostGate(next http.Handler) http.Handler {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
-		if s.redeemTokenQuery(w, r) {
+		if scrubTokenQuery(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1792,57 +1923,18 @@ func (s *Server) hostGate(next http.Handler) http.Handler {
 // .
 // .
 // .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-func (s *Server) redeemTokenQuery(w http.ResponseWriter, r *http.Request) bool {
-	if !s.authRequired || s.authTokenHash == "" {
-		return false
-	}
+func scrubTokenQuery(w http.ResponseWriter, r *http.Request) bool {
 	// .
 	// .
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
 	q := r.URL.Query()
-	offered := q.Get("token")
-	if offered == "" {
+	if _, present := q["token"]; !present {
 		return false
 	}
-	want, derr := hex.DecodeString(s.authTokenHash)
-	if derr != nil || len(want) != sha256.Size {
-		return false
-	}
-	sum := sha256.Sum256([]byte(offered))
-	if subtle.ConstantTimeCompare(sum[:], want) != 1 {
-		// .
-		// .
-		return false
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "aii_token",
-		Value:    offered,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		// .
-		// .
-		// .
-		Secure: r.TLS != nil,
-		MaxAge: 365 * 24 * 60 * 60,
-	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	q.Del("token")
 	clean := *r.URL
 	clean.RawQuery = q.Encode()
@@ -1853,11 +1945,166 @@ func (s *Server) redeemTokenQuery(w http.ResponseWriter, r *http.Request) bool {
 // .
 // .
 // .
+func (s *Server) handleAccessToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if !s.accessRequired() {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if s.tokenAuthorized(r) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if s.upgradeAccessCookie(w, r) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Error(w, "dashboard access token required", http.StatusUnauthorized)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, AccessTokenMaxBytes+1))
+	if err != nil || len(body) > AccessTokenMaxBytes || !s.validAccessToken(strings.TrimSpace(string(body))) {
+		// .
+		// .
+		// .
+		// .
+		log.Printf("dashboard: access token refused from %s", clientHost(r))
+		time.Sleep(refusedLoginDelay)
+		http.Error(w, "dashboard access token refused", http.StatusUnauthorized)
+		return
+	}
+	s.setAccessCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// .
+// .
+const refusedLoginDelay = 400 * time.Millisecond
+
+// .
+func clientHost(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// .
+// .
+// .
+// .
+func (s *Server) upgradeAccessCookie(w http.ResponseWriter, r *http.Request) bool {
+	if s.accessHash() == "" {
+		return false
+	}
+	if current, err := r.Cookie(dashboardCookieName(r)); err == nil && s.validAccessToken(current.Value) {
+		s.setAccessCookie(w, r)
+		return true
+	}
+	legacy, err := r.Cookie(legacyDashboardCookieName)
+	if err != nil || !s.validAccessToken(legacy.Value) {
+		return false
+	}
+	s.setAccessCookie(w, r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     legacyDashboardCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
+	})
+	return true
+}
+
+func (s *Server) setAccessCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     dashboardCookieName(r),
+		Value:    s.accessHash(),
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		// .
+		// .
+		// .
+		Secure: r.TLS != nil,
+		MaxAge: 365 * 24 * 60 * 60,
+	})
+}
+
+// .
+// .
+func dashboardCookieName(r *http.Request) string {
+	_, port, err := net.SplitHostPort(r.Host)
+	if err != nil || port == "" {
+		if r.TLS != nil {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return "aii_token_" + port
+}
+
+func (s *Server) validAccessToken(offered string) bool {
+	want, err := hex.DecodeString(s.accessHash())
+	if err != nil || len(want) != sha256.Size {
+		return false
+	}
+	sum := sha256.Sum256([]byte(offered))
+	return subtle.ConstantTimeCompare(sum[:], want) == 1
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func listenDashboard(addr string, configuredPort int, listen func(string, string) (net.Listener, error)) (net.Listener, net.Listener, error) {
+	const attempts = 16
+	var collision error
+	for attempt := 0; attempt < attempts; attempt++ {
+		ln, err := listen("tcp", addr)
+		if err != nil {
+			return nil, nil, err
+		}
+		actualHost, actualPort, err := net.SplitHostPort(ln.Addr().String())
+		if err != nil {
+			ln.Close()
+			return nil, nil, err
+		}
+		if IsLoopback(actualHost) || isWildcard(actualHost) {
+			return ln, nil, nil
+		}
+		loopback, err := listen("tcp", "127.0.0.1:"+actualPort)
+		if err == nil {
+			return ln, loopback, nil
+		}
+		ln.Close()
+		if configuredPort != 0 {
+			return nil, nil, fmt.Errorf("the loopback companion 127.0.0.1:%s of the %s bind could not be bound: %w", actualPort, addr, err)
+		}
+		collision = err
+	}
+	return nil, nil, fmt.Errorf("could not reserve one ephemeral port for both network and loopback listeners: %w", collision)
+}
+
+// .
+// .
+// .
 // .
 // .
 func (s *Server) Start(tlsDir string) (string, error) {
 	s.tlsDir = tlsDir
-	ln, err := net.Listen("tcp", s.addr)
+	ln, pairedLoopback, err := listenDashboard(s.addr, s.port, net.Listen)
 	if err != nil {
 		return "", fmt.Errorf("listen failed: %w", err)
 	}
@@ -1880,6 +2127,9 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	actualHost, actualPort, err := net.SplitHostPort(actualAddr)
 	if err != nil {
 		ln.Close()
+		if pairedLoopback != nil {
+			pairedLoopback.Close()
+		}
 		return "", fmt.Errorf("split listen addr %q: %w", actualAddr, err)
 	}
 	// .
@@ -1912,7 +2162,11 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	var loopbacks []net.Listener
 	if !IsLoopback(actualHost) && !isWildcard(actualHost) {
 		for _, la := range []string{"127.0.0.1:" + actualPort, "[::1]:" + actualPort} {
-			lln, lerr := net.Listen("tcp", la)
+			lln := pairedLoopback
+			var lerr error
+			if lln == nil || lln.Addr().String() != la {
+				lln, lerr = net.Listen("tcp", la)
+			}
 			if lerr != nil {
 				log.Printf("dashboard: loopback %s not served (%v)", la, lerr)
 				continue
@@ -1984,6 +2238,9 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	mat, terr := EnsureTLS(s.tlsDir, s.host)
 	if terr != nil {
 		ln.Close()
+		for _, lln := range loopbacks {
+			lln.Close()
+		}
 		return "", fmt.Errorf("dashboard TLS: %w", terr)
 	}
 	// .
@@ -2005,6 +2262,9 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	pair, perr := tls.LoadX509KeyPair(mat.LeafCert, mat.LeafKey)
 	if perr != nil {
 		ln.Close()
+		for _, lln := range loopbacks {
+			lln.Close()
+		}
 		return "", fmt.Errorf("dashboard TLS: certificate and key are not usable together (%s, %s): %w", mat.LeafCert, mat.LeafKey, perr)
 	}
 	// .
@@ -2297,6 +2557,12 @@ func (s *Server) SessionLive() bool {
 // .
 // .
 func (s *Server) wsAuthorized(r *http.Request) bool {
+	return s.wsAuthorizedUnder(s.auth.Load(), r)
+}
+
+// .
+// .
+func (s *Server) wsAuthorizedUnder(p *accessPolicy, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return false
@@ -2305,7 +2571,7 @@ func (s *Server) wsAuthorized(r *http.Request) bool {
 	if err != nil || u.Scheme != requestScheme(r) || !s.hostAllowed(u.Host) {
 		return false
 	}
-	return s.tokenAuthorized(r)
+	return tokenAuthorizedUnder(p, r)
 }
 
 // .
@@ -2318,29 +2584,99 @@ func (s *Server) wsAuthorized(r *http.Request) bool {
 // .
 // .
 func (s *Server) tokenAuthorized(r *http.Request) bool {
-	if !s.authRequired {
+	return tokenAuthorizedUnder(s.auth.Load(), r)
+}
+
+// .
+// .
+func tokenAuthorizedUnder(p *accessPolicy, r *http.Request) bool {
+	required, hash := false, ""
+	if p != nil {
+		required, hash = p.required, p.hash
+	}
+	if !required {
 		return true
 	}
-	c, cerr := r.Cookie("aii_token")
+	if hash == "" {
+		return false
+	}
+	c, cerr := r.Cookie(dashboardCookieName(r))
 	if cerr != nil {
 		return false
 	}
-	want, derr := hex.DecodeString(s.authTokenHash)
-	if derr != nil || len(want) != sha256.Size {
-		// .
-		// .
-		return false
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(hash)) == 1
+}
+
+// .
+type accessPolicy struct {
+	required bool
+	hash     string
+}
+
+func (s *Server) accessPolicy() (required bool, hash string) {
+	p := s.auth.Load()
+	if p == nil {
+		return false, ""
 	}
-	sum := sha256.Sum256([]byte(c.Value))
-	return subtle.ConstantTimeCompare(sum[:], want) == 1
+	return p.required, p.hash
+}
+
+func (s *Server) accessRequired() bool { required, _ := s.accessPolicy(); return required }
+func (s *Server) accessHash() string   { _, hash := s.accessPolicy(); return hash }
+
+// .
+// .
+// .
+// .
+func (s *Server) SetAccessToken(required bool, token string) {
+	p := &accessPolicy{required: required}
+	if token != "" {
+		sum := sha256.Sum256([]byte(token))
+		p.hash = hex.EncodeToString(sum[:])
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	old := s.auth.Swap(p)
+	if old != nil && cutsOff(old, p) {
+		if n := s.closeAdmitted(); n > 0 {
+			log.Printf("dashboard: access policy changed — %d open session(s) closed; each signs in again", n)
+		}
+	}
 }
 
 // .
 // .
 // .
-func (s *Server) SetAccessToken(required bool, sha256Hex string) {
-	s.authRequired = required
-	s.authTokenHash = sha256Hex
+func cutsOff(before, after *accessPolicy) bool {
+	if before == nil {
+		before = &accessPolicy{}
+	}
+	if after == nil {
+		after = &accessPolicy{}
+	}
+	return (before.required && before.hash != after.hash) || (!before.required && after.required)
+}
+
+// .
+// .
+// .
+// .
+func (s *Server) closeAdmitted() int {
+	s.wsMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(s.wsConns))
+	for c := range s.wsConns {
+		conns = append(conns, c)
+	}
+	s.wsMu.Unlock()
+	for _, c := range conns {
+		c.CloseNow()
+	}
+	return len(conns)
 }
 
 // .
@@ -2356,11 +2692,18 @@ func (s *Server) SetAccessToken(required bool, sha256Hex string) {
 // .
 // .
 func (s *Server) AccessTokenRequired() bool {
-	return s.authRequired && s.authTokenHash != ""
+	required, hash := s.accessPolicy()
+	return required && hash != ""
 }
 
+// .
+// .
+// .
+func (s *Server) BindHost() string { return s.host }
+
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !s.wsAuthorized(r) {
+	admitted := s.auth.Load()
+	if !s.wsAuthorizedUnder(admitted, r) {
 		log.Printf("WS refused: origin %q host %q failed auth", r.Header.Get("Origin"), r.Host)
 		http.Error(w, "unauthorized", http.StatusForbidden)
 		return
@@ -2388,7 +2731,22 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	if s.wsAdmitHook != nil {
+		s.wsAdmitHook()
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	s.wsMu.Lock()
+	if cutsOff(admitted, s.auth.Load()) {
+		s.wsMu.Unlock()
+		log.Printf("WS refused: the access policy changed while the session was being admitted")
+		conn.CloseNow()
+		return
+	}
 	s.wsConns[conn] = &wsClient{addr: r.RemoteAddr, agent: r.UserAgent()}
 	s.wsMu.Unlock()
 	defer func() {
@@ -2671,6 +3029,31 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 					}
 					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "models", Provider: provider, ModelList: models})
 				}(msg.RequestID, msg.Provider, msg.APIKey)
+			case "speech_lists":
+				if h.SpeechLists == nil {
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "error", Message: "not available", Provider: msg.Provider})
+					continue
+				}
+				// .
+				// .
+				go func(reqID, provider, direction, search, language, apiKey string) {
+					lists, err := h.SpeechLists(provider, direction, search, language, apiKey)
+					if err != nil {
+						s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "error", Message: err.Error(), Provider: provider})
+						return
+					}
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "speech_lists", SpeechLists: &lists})
+				}(msg.RequestID, msg.Provider, msg.Direction, msg.Search, msg.Language, msg.APIKey)
+			case "dashboard_token":
+				// .
+				// .
+				// .
+				// .
+				if h.DashboardToken == nil || !s.AccessTokenRequired() {
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "error", Message: "not available"})
+					continue
+				}
+				s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "dashboard_token", DashboardToken: h.DashboardToken()})
 			case "continuity":
 				if h.GetContinuity == nil {
 					s.sendError(ctx, conn, "not available")
@@ -2823,7 +3206,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// .
 			// .
 			// .
-			if changesSubstrate(msg.Config) {
+			if changesSubstrate(msg.Config) || changesSpeech(msg.Config) {
 				reqID, want := msg.RequestID, msg.Config
 				go func() {
 					state, err := h.SetConfig(want)
@@ -2832,6 +3215,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "config", Config: state})
+					s.BroadcastStatus()
 				}()
 				continue
 			}
@@ -2841,6 +3225,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "config", Config: state})
+			// .
+			// .
+			// .
+			// .
+			// .
+			s.BroadcastStatus()
 
 		case "tool_toggle":
 			h := s.currentHandler()
@@ -2880,7 +3270,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// .
 			// .
 			s.sendStatus(ctx, conn, s.currentHandler())
-			s.sendMsg(ctx, conn, ServerMessage{Type: "response", Message: response, Role: "identity", Done: true})
+			s.sendMsg(ctx, conn, s.spokenAloud(ServerMessage{Type: "response", Message: response, Role: "identity", Done: true}))
 
 		case "public_name_claim", "public_name_retry", "public_name_move", "public_name_state":
 			h := s.currentHandler()
@@ -2921,18 +3311,34 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "update_check", Update: st})
+		case "provider_signin_cancel", "profile_signin_cancel":
+			h := s.currentHandler()
+			if h == nil {
+				continue
+			}
+			cancel, name := h.CancelSignIn, msg.Provider
+			if msg.Type == "profile_signin_cancel" {
+				cancel, name = h.CancelProfileSignIn, msg.Profile
+			}
+			if cancel != nil {
+				if err := cancel(name); err != nil {
+					s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+				}
+			}
 		case "provider_signin":
 			h := s.currentHandler()
 			if h.SignInProvider == nil {
 				s.sendErrorFor(ctx, conn, msg.RequestID, "sign-in not available")
 				continue
 			}
-			u, err := h.SignInProvider(msg.Provider)
-			if err != nil {
-				s.sendErrorFor(ctx, conn, msg.RequestID, fmt.Sprintf("sign-in: %v", err))
-				continue
-			}
-			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "provider_signin", SignInURL: u})
+			go func(reqID, name string) {
+				u, err := h.SignInProvider(name)
+				if err != nil {
+					s.sendErrorFor(ctx, conn, reqID, fmt.Sprintf("sign-in: %v", err))
+					return
+				}
+				s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "provider_signin", SignInURL: u})
+			}(msg.RequestID, msg.Provider)
 		case "provider_signin_complete":
 			h := s.currentHandler()
 			if h.CompleteSignIn == nil {
@@ -2975,12 +3381,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.sendErrorFor(ctx, conn, msg.RequestID, "profile sign-in not available")
 				continue
 			}
-			u, err := h.SignInProfile(msg.Profile)
-			if err != nil {
-				s.sendErrorFor(ctx, conn, msg.RequestID, fmt.Sprintf("connect: %v", err))
-				continue
-			}
-			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "profile_signin", SignInURL: u})
+			go func(reqID, name string) {
+				u, err := h.SignInProfile(name)
+				if err != nil {
+					s.sendErrorFor(ctx, conn, reqID, fmt.Sprintf("connect: %v", err))
+					return
+				}
+				s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "profile_signin", SignInURL: u})
+			}(msg.RequestID, msg.Profile)
 		case "profile_signin_complete", "profile_device", "profile_disconnect", "auth_profile_set", "auth_profile_delete":
 			// .
 			// .
@@ -3019,7 +3427,40 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "config", Config: state})
 			}()
 			continue
-		case "provider_set", "provider_delete":
+		case "effort_set":
+			// .
+			// .
+			// .
+			// .
+			// .
+			h := s.currentHandler()
+			if h.SetEffort == nil {
+				s.sendErrorFor(ctx, conn, msg.RequestID, "effort: not available")
+				continue
+			}
+			go func(reqID, level string) {
+				if err := h.SetEffort(level); err != nil {
+					s.sendErrorFor(ctx, conn, reqID, fmt.Sprintf("effort: %v", err))
+					return
+				}
+				if h.GetProviders != nil {
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "providers", Providers: h.GetProviders()})
+				}
+				if h.GetConfig != nil {
+					state, err := h.GetConfig()
+					if err != nil {
+						s.sendErrorFor(ctx, conn, reqID, fmt.Sprintf("config after effort change: %v", err))
+						return
+					}
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "config", Config: state})
+				}
+				// .
+				// .
+				// .
+				s.BroadcastConfig()
+			}(msg.RequestID, msg.Effort)
+
+		case "provider_set", "provider_delete", "speech_service":
 			h := s.currentHandler()
 			var err error
 			switch {
@@ -3027,6 +3468,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				err = h.SetProvider(*msg.Entry)
 			case msg.Type == "provider_delete" && h.DeleteProvider != nil:
 				err = h.DeleteProvider(msg.Provider)
+			case msg.Type == "speech_service" && h.SetSpeechService != nil:
+				err = h.SetSpeechService(msg.Provider, msg.APIKey, msg.BaseURL)
 			default:
 				err = fmt.Errorf("provider editing not available")
 			}
@@ -3045,6 +3488,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				}
 				s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "config", Config: state})
 			}
+			// .
+			// .
+			// .
+			s.BroadcastStatus()
+			s.BroadcastConfig()
 
 		default:
 			s.sendError(ctx, conn, "unknown message type: "+msg.Type)
@@ -3183,7 +3631,7 @@ func (s *Server) handleChat(ctx context.Context, conn *websocket.Conn, message s
 		return
 	}
 
-	s.broadcast(ServerMessage{Type: "response", Message: response, Role: speaker, Done: true})
+	s.broadcast(s.spokenAloud(ServerMessage{Type: "response", Message: response, Role: speaker, Done: true}))
 }
 
 func (s *Server) sendStatus(ctx context.Context, conn *websocket.Conn, h *WSHandler) {
@@ -3212,6 +3660,24 @@ func (s *Server) statusMessage(h *WSHandler) (ServerMessage, bool) {
 		stats.VoiceMaxFrameBytes = maxVoiceFrameBytes
 	}
 	stats.VoiceEngine = h.VoiceEngine != nil && h.VoiceSessionOpen != nil && h.AudioPlane != nil && h.VoiceEngine()
+	if h.SpeakerPolicy != nil {
+		stats.Speakers = h.SpeakerPolicy()
+	}
+	stats.VoiceState = "setup"
+	if h.VoiceStatus != nil {
+		stats.VoiceState, stats.VoiceReason, stats.VoiceSource = h.VoiceStatus()
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	if h.ReplyVoice != nil && h.SpeakMint != nil {
+		stats.ReplyVoice = h.ReplyVoice()
+	}
+	if (stats.VoiceState == "plugin" && !stats.VoiceEngine) || (stats.VoiceState == "cloud" && h.HearUtterance == nil) {
+		stats.VoiceState, stats.VoiceReason, stats.VoiceSource = "setup", "", ""
+	}
 	return ServerMessage{Type: "status", Stats: stats}, true
 }
 
@@ -3235,7 +3701,7 @@ func (s *Server) steeringMessage(h *WSHandler) ServerMessage {
 // .
 // .
 func (s *Server) BroadcastResponse(role, message string) {
-	s.broadcast(ServerMessage{Type: "response", Message: message, Role: role, Done: true})
+	s.broadcast(s.spokenAloud(ServerMessage{Type: "response", Message: message, Role: role, Done: true}))
 }
 
 // .
@@ -3581,6 +4047,20 @@ func (s *Server) dropConn(conn *websocket.Conn) {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+func changesSpeech(cfg map[string]interface{}) bool {
+	for key := range cfg {
+		if strings.HasPrefix(key, "speech.stt.") || strings.HasPrefix(key, "speech.tts.") {
+			return true
+		}
+	}
+	return false
+}
+
 func changesSubstrate(cfg map[string]interface{}) bool {
 	if cfg == nil {
 		return false
@@ -3620,4 +4100,24 @@ func (s *Server) bounceTarget(local net.Addr) string {
 		return "https://" + local.String()
 	}
 	return "https://" + s.boundAddr
+}
+
+// .
+// .
+func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	h := s.currentHandler()
+	q := r.URL.Query()
+	if h == nil || h.OAuthCallback == nil || len(q["state"]) != 1 || len(q["code"]) > 1 || len(q["error"]) > 1 || (q.Get("code") == "" && q.Get("error") == "") {
+		http.Error(w, "No matching sign-in. Return to AII OS and try again.", http.StatusBadRequest)
+		return
+	}
+	if err := h.OAuthCallback(q.Get("code"), q.Get("state"), q.Get("error")); err != nil {
+		http.Error(w, "Sign-in did not complete. Return to AII OS and try again.", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, "<!doctype html><title>AII OS</title><p>Signed in. Return to your AII OS tab.</p>")
 }

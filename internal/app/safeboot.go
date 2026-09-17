@@ -205,7 +205,11 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	// .
 	if a.dashboard == nil {
-		a.dashboard = a.newDashboard(a.buildLiveHandler())
+		d, err := a.newDashboard(a.buildLiveHandler())
+		if err != nil {
+			return fmt.Errorf("boot-SAFE dashboard credentials: %w", err)
+		}
+		a.dashboard = d
 		a.dashboard.SetQuiesceGate(a.gate)
 		_, derr := a.dashboard.Start(tlsDirFor(cfg))
 		if derr != nil {

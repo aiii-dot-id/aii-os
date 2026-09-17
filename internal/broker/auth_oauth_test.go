@@ -3,6 +3,7 @@ package broker
 import (
 	"encoding/json"
 	"fmt"
+	configdir "github.com/aiii-dot-id/aii-os/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -212,12 +213,12 @@ func TestAnOAuth2ProfileRefreshesAtTheWire(t *testing.T) {
 // .
 func TestOAuth2ProfileContractsAndTheirLimits(t *testing.T) {
 	p := AuthProfile{Scheme: SchemeOAuth2, Provider: "google", ClientID: "cid", TokenFile: "/tmp/t.json", Scopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}}
-	params, tpl, err := p.Contract()
+	params, tpl, err := p.Contract(oauthTestCatalog())
 	if err != nil || params.TokenURL != "https://oauth2.googleapis.com/token" || params.AuthorizeParams["access_type"] != "offline" || len(tpl.Hosts) < 3 || !strings.Contains(params.Scope, "calendar.readonly") {
 		t.Fatalf("the template fills the contract: %+v %+v %v", params, tpl, err)
 	}
 	p.Hosts = []string{"www.googleapis.com:443"}
-	if _, tpl, _ := p.Contract(); len(tpl.Hosts) != 1 {
+	if _, tpl, _ := p.Contract(oauthTestCatalog()); len(tpl.Hosts) != 1 {
 		t.Fatalf("a profile narrows the hosts: %v", tpl.Hosts)
 	}
 	custom := AuthProfile{Scheme: SchemeOAuth2, Provider: "custom", ClientID: "cid", TokenFile: "/tmp/t.json", TokenURL: "https://auth.example/token", Hosts: []string{"api.example:443"}}
@@ -256,5 +257,50 @@ func TestOAuth2ProfileContractsAndTheirLimits(t *testing.T) {
 	wantResult(t, m, statusDenied, reasonAuthUnavailable)
 	if f.apiCalls.Load() != 0 || f.issued != 0 {
 		t.Fatal("a refresh the guard refuses reaches neither the authority nor the API")
+	}
+}
+
+func oauthTestCatalog() map[string]oauth.Provider {
+	var reg struct {
+		OAuth map[string]oauth.Provider `json:"oauth"`
+	}
+	if err := json.Unmarshal(configdir.Providers, &reg); err != nil {
+		panic(err)
+	}
+	return reg.OAuth
+}
+
+func TestOAuthContractHeadersReachRequestsAndPolicyReplacement(t *testing.T) {
+	var expected atomic.Value
+	expected.Store("first")
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("X-Configured") != expected.Load().(string) || r.Header.Get("Authorization") != "Bearer access" {
+			t.Error("resolved contract headers did not reach request")
+			w.WriteHeader(400)
+			return
+		}
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	defer server.Close()
+	host, port := tsHostPort(t, server)
+	hp := fmt.Sprintf("%s:%d", host, port)
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	writeTokens(t, path, "access", "refresh", time.Now().Add(time.Hour))
+	profile := AuthProfile{Scheme: SchemeOAuth2, Provider: "fixture", TokenFile: path}
+	contracts := map[string]oauth.Provider{"fixture": {ClientID: "client", TokenURL: server.URL + "/token", Hosts: []string{hp}, ResourceHeaders: map[string]string{"X-Configured": "first"}}}
+	grants := map[string]Grant{"p": {Hosts: []string{hp}, CredentialHandles: []string{"account"}}}
+	profiles := map[string]AuthProfile{"account": profile}
+	h := newHost(t, newStore(t), Config{Grants: grants, AuthProfiles: profiles, OAuthProviders: contracts, Guard: guardFor(server), Transport: server.Client().Transport})
+	b := h.Bind("p", packagefmt.TierT2, []string{"net.outbound:" + hp})
+	wantResult(t, dispatch(t, b, netParams(server.URL+"/api", `{"auth_profile":"account"}`)), statusSucceeded, "")
+	next := contracts["fixture"]
+	next.ResourceHeaders = map[string]string{"X-Configured": "second"}
+	expected.Store("second")
+	h.ReplacePolicy(grants, profiles, map[string]oauth.Provider{"fixture": next})
+	wantResult(t, dispatch(t, b, netParams(server.URL+"/api", `{"auth_profile":"account"}`)), statusSucceeded, "")
+	if calls.Load() != 2 {
+		t.Fatalf("API calls: %d", calls.Load())
 	}
 }

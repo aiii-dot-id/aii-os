@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -39,13 +41,22 @@ func (a *App) configState() *dashboard.ConfigState {
 	// .
 	// .
 	// .
+	requireToken := a.dashboard != nil && a.dashboard.AccessTokenRequired()
+	// .
+	// .
+	// .
 	// .
 	// .
 	llmSt := dashboard.LLMConfigState{
 		Provider: c.LLM.Provider, Model: c.LLM.Model,
-		TimeoutSeconds: c.LLM.TimeoutSeconds,
+		TimeoutSeconds:      c.LLM.TimeoutSeconds,
+		ProbeTimeoutSeconds: c.LLM.ProbeTimeoutSeconds,
 	}
 	reg, err := a.loadProviders()
+	speechSt := speechState(c, reg, err)
+	speechSt.Spent = a.speechSpend()
+	speechSt.Resets = a.speechResets(time.Now()).Format("2 January")
+	speechSt.Speakers = a.speakerPolicyState()
 	if err != nil {
 		llmSt.Error = err.Error()
 	} else if cc, entry, err := a.resolveLLMConfig(c.LLM, reg); err != nil {
@@ -71,11 +82,29 @@ func (a *App) configState() *dashboard.ConfigState {
 		// .
 		llmSt.EffortPlan = llm.PlanEffort(dialect, entry.ReasoningEffort, effortLevelsFor(reg.effective(), entry, cc.Model)).Summary()
 		llmSt.EffortModel = cc.Model
+		// .
+		// .
+		// .
+		if levels := effortLevelsFor(reg.effective(), entry, cc.Model); len(levels) > 0 {
+			plan := llm.PlanEffort(dialect, entry.ReasoningEffort, levels)
+			choice := &dashboard.EffortChoice{Levels: levels}
+			if plan.Sent {
+				choice.InForce = plan.Wire
+			}
+			declared := declaredEffortLevels(reg.effective(), cc.Model)
+			for _, l := range levels {
+				if !slices.Contains(declared, l) {
+					choice.Checked = append(choice.Checked, l)
+				}
+			}
+			llmSt.EffortChoice = choice
+		}
 		llmSt.ThinkingApplies = dialect == llm.DialectAnthropic
 	}
 	return &dashboard.ConfigState{
 		LLM:             llmSt,
-		Dashboard:       dashboard.DashboardState{Host: c.Dashboard.Host, Port: c.Dashboard.Port, TLS: c.Dashboard.TLS, Origin: a.advertisedOrigin()},
+		Speech:          speechSt,
+		Dashboard:       dashboard.DashboardState{Host: c.Dashboard.Host, Port: c.Dashboard.Port, TLS: c.Dashboard.TLS, Origin: a.advertisedOrigin(), RequireToken: requireToken},
 		PublicName:      a.publicNameState(),
 		Plugins:         a.pluginsState(&c),
 		CredentialKinds: oauth.Kinds(),
@@ -106,6 +135,11 @@ func (a *App) configState() *dashboard.ConfigState {
 // .
 // .
 // .
+// .
+// .
+// .
+const ceilingBound = 1_000_000_000
+
 func (a *App) applyConfigChange(changes map[string]interface{}) (*dashboard.ConfigState, error) {
 	return a.applyConfigChangeWith(changes, saveConfig)
 }
@@ -117,6 +151,10 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 	pluginsChanged := false
 	grantsChanged := false
 	catalogChanged := false
+	// .
+	// .
+	sttChanged := false
+	ttsChanged := false
 
 	// .
 	// .
@@ -205,6 +243,15 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 				substrateChanged = true
 				llmChanged = true
 			}
+		case "llm.probe_timeout_seconds":
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n <= 0 {
+				return nil, fmt.Errorf("llm.probe_timeout_seconds: must be positive")
+			}
+			cfg.LLM.ProbeTimeoutSeconds = n
 		case "llm.timeout_seconds":
 			n, err := integer(key, v)
 			if err != nil {
@@ -359,6 +406,68 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 				r.RootsKept = n
 			}
 			pluginsChanged = true
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		case "speech.stt.monthly_minutes", "speech.tts.monthly_characters":
+			n := 0
+			if v != nil {
+				got, err := integer(key, v)
+				if err != nil {
+					return nil, err
+				}
+				n = got
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s: a ceiling cannot be negative", key)
+			}
+			if n > ceilingBound {
+				return nil, fmt.Errorf("%s: a ceiling of %d is past any bill; %d is the most it can be", key, n, ceilingBound)
+			}
+			if key == "speech.stt.monthly_minutes" {
+				cfg.Speech.STT.MonthlyMinutes = n
+			} else {
+				cfg.Speech.TTS.MonthlyCharacters = n
+			}
+		// .
+		// .
+		// .
+		case "speech.speakers":
+			pol, err := speakerPolicyFromChange(v)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			pol.Revision = cfg.Speech.Speakers.Revision + 1
+			cfg.Speech.Speakers = pol
+		case "speech.stt.provider", "speech.stt.model", "speech.stt.language",
+			"speech.tts.provider", "speech.tts.model", "speech.tts.voice":
+			s, err := str(key, v)
+			if err != nil {
+				return nil, err
+			}
+			s = strings.TrimSpace(s)
+			switch key {
+			case "speech.stt.provider":
+				cfg.Speech.STT.Provider = s
+			case "speech.stt.model":
+				cfg.Speech.STT.Model = s
+			case "speech.stt.language":
+				cfg.Speech.STT.Language = s
+			case "speech.tts.provider":
+				cfg.Speech.TTS.Provider = s
+			case "speech.tts.model":
+				cfg.Speech.TTS.Model = s
+			case "speech.tts.voice":
+				cfg.Speech.TTS.Voice = s
+			}
+			if strings.HasPrefix(key, "speech.stt.") {
+				sttChanged = true
+			} else {
+				ttsChanged = true
+			}
 		case "witness.url":
 			s, err := str(key, v)
 			if err != nil {
@@ -506,11 +615,29 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 		resolvedRegistry = reg
 		validatedClient = a.newLLMClient(cc, promptBudgetFor(entry, cfg.Prompt.MaxTokens))
 		if substrateChanged {
-			if err := a.probeSubstrate(validatedClient, cc, entry); err != nil {
+			if err := a.probeSubstrate(validatedClient, cc, entry, reg, cfg.LLM.ProbeTimeoutSeconds); err != nil {
 				return nil, err
 			}
 		}
 		resolvedEntry = entry
+	}
+
+	// .
+	// .
+	// .
+	if (sttChanged && strings.TrimSpace(cfg.Speech.STT.Provider) != "") ||
+		(ttsChanged && strings.TrimSpace(cfg.Speech.TTS.Provider) != "") {
+		if resolvedRegistry == nil {
+			providerPath = a.providersPath()
+			reg, rerr := loadProvidersFile(providerPath)
+			if rerr != nil {
+				return nil, fmt.Errorf("speech refused: %w", rerr)
+			}
+			resolvedRegistry = reg
+		}
+		if err := a.checkSpeech(cfg, resolvedRegistry, sttChanged, ttsChanged); err != nil {
+			return nil, err
+		}
 	}
 
 	// .
@@ -580,16 +707,84 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 	return st, nil
 }
 
-func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry providerEntry) error {
-	probeSeconds := cc.TimeoutSeconds
-	if probeSeconds <= 0 {
-		probeSeconds = 120
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func probeTimeout(cc llm.ClientConfig, ceilingSeconds int) time.Duration {
+	return checkTimeout(cc.TimeoutSeconds, ceilingSeconds)
+}
+
+// .
+// .
+// .
+func checkTimeout(serviceSeconds, ceilingSeconds int) time.Duration {
+	if ceilingSeconds <= 0 {
+		ceilingSeconds = 45
 	}
+	ceiling := time.Duration(ceilingSeconds) * time.Second
+	if serviceSeconds > 0 {
+		if d := time.Duration(serviceSeconds) * time.Second; d < ceiling {
+			return d
+		}
+	}
+	return ceiling
+}
+
+func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry providerEntry, reg *providerRegistry, timeoutSeconds int) error {
 	if a.bgCtx == nil {
 		return fmt.Errorf("substrate refused: application lifecycle is unavailable")
 	}
-	vctx, cancel := context.WithTimeout(a.bgCtx, time.Duration(probeSeconds)*time.Second)
+	bound := probeTimeout(cc, timeoutSeconds)
+	vctx, cancel := context.WithTimeout(a.bgCtx, bound)
 	defer cancel()
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	type toolAnswer struct {
+		state capState
+		note  string
+	}
+	toolCh := make(chan toolAnswer, 1)
+	go func() {
+		state, note := a.probeToolSelection(vctx, client, entry, cc.Model)
+		toolCh <- toolAnswer{state, note}
+	}()
+
+	// .
+	// .
+	// .
+	modalityURL := modelModalitiesURL(entry, cc.Model, reg.modelCatalogueURL())
+	mctx, mcancel := context.WithTimeout(a.bgCtx, min(bound, modalityTimeout))
+	accepted := false
+	defer func() {
+		if !accepted {
+			mcancel()
+		}
+	}()
+	guard := modalityGuard
+	go func() {
+		defer mcancel()
+		a.fetchModelModalities(mctx, modalityURL, guard)
+	}()
+
+	// .
+	// .
+	// .
+	// .
 	resp, err := client.Chat(vctx, []llm.Message{{
 		Role: "user", Content: "Reply with the single word OK.",
 	}}, llm.ChatOptions{ThinkingBudget: cc.ThinkingBudget})
@@ -597,13 +792,36 @@ func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry prov
 		if cc.APIKey == "" && cc.Credential == nil {
 			return fmt.Errorf("substrate refused: provider %q has no configured credential; if it requires one, store it in Settings → Providers → %s; current substrate kept: %w", entry.Name, entry.Name, err)
 		}
+		// .
+		// .
+		// .
+		// .
+		// .
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("substrate refused: provider %q model %q did not answer a minimal inference request within %s; current substrate kept: %w", entry.Name, cc.Model, bound, err)
+		}
 		return fmt.Errorf("substrate refused: provider %q model %q cannot complete a minimal inference request; current substrate kept: %w", entry.Name, cc.Model, err)
 	}
 	if len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
 		return fmt.Errorf("substrate refused: provider %q model %q returned no visible answer to a minimal inference request; current substrate kept", entry.Name, cc.Model)
 	}
-	if note := a.probeToolSelection(vctx, client, entry, cc.Model); note != "" {
-		log.Printf("SUBSTRATE: %s", note)
+	// .
+	// .
+	// .
+	// .
+	// .
+	tool := <-toolCh
+	a.setSubstrateCapability(substrateCapability{
+		provider:    entry.Name,
+		model:       cc.Model,
+		toolCalls:   tool.state,
+		note:        tool.note,
+		modalityURL: modalityURL,
+		checkedAt:   time.Now(),
+	})
+	accepted = true
+	if tool.note != "" {
+		log.Printf("SUBSTRATE: %s", tool.note)
 	}
 	return nil
 }
@@ -628,7 +846,7 @@ func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry prov
 // .
 // .
 // .
-func (a *App) probeToolSelection(ctx context.Context, client *llm.Client, entry providerEntry, model string) string {
+func (a *App) probeToolSelection(ctx context.Context, client *llm.Client, entry providerEntry, model string) (capState, string) {
 	tool := llm.ToolDefinition{Type: "function"}
 	tool.Function.Name = "report_ready"
 	tool.Function.Description = "Report that you are ready. Call this to answer."
@@ -641,12 +859,18 @@ func (a *App) probeToolSelection(ctx context.Context, client *llm.Client, entry 
 		Role: "user", Content: "Call report_ready with ready=true. Do not answer in words.",
 	}}, llm.ChatOptions{Tools: []llm.ToolDefinition{tool}})
 	if err != nil {
-		return fmt.Sprintf("provider %q model %q rejected a tool-bearing request (%v) — this identity acts through tools; expect it to be unable to work", entry.Name, model, err)
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		return capUnknown, fmt.Sprintf("provider %q model %q rejected a tool-bearing request (%v) — this identity acts through tools; expect it to be unable to work", entry.Name, model, err)
 	}
 	if len(resp.Choices) == 0 || len(resp.Choices[0].Message.ToolCalls) == 0 {
-		return fmt.Sprintf("provider %q model %q answered a tool-bearing request WITHOUT calling the tool — it may be unable to act, and this identity does most of its work through tools", entry.Name, model)
+		return capNo, fmt.Sprintf("provider %q model %q answered a tool-bearing request WITHOUT calling the tool — it may be unable to act, and this identity does most of its work through tools", entry.Name, model)
 	}
-	return ""
+	return capYes, ""
 }
 
 // .

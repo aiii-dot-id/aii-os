@@ -192,6 +192,9 @@ type Spec struct {
 	Argv []string
 	// .
 	// .
+	ArgvContainment Containment
+	// .
+	// .
 	Env []string
 	// .
 	// .
@@ -216,6 +219,11 @@ type Spec struct {
 	// .
 	// .
 	ExtraFiles []*os.File
+	// .
+	// .
+	// .
+	Artifact io.Closer
+
 	// .
 	// .
 	// .
@@ -305,6 +313,9 @@ type Supervisor struct {
 	// .
 	restartTimes []time.Time
 	gen          int
+	spawning     chan struct{}
+	artifactOnce sync.Once
+	artifactErr  error
 }
 
 // .
@@ -317,9 +328,11 @@ type child struct {
 	// .
 	// .
 	// .
-	contained func()
-	frames    chan []byte
-	pumps     sync.WaitGroup
+	contained  func() error
+	isolation  Containment
+	cleanupErr error
+	frames     chan []byte
+	pumps      sync.WaitGroup
 
 	abandonOnce sync.Once
 	abandon     chan struct{}
@@ -511,6 +524,11 @@ func (s *Supervisor) Pid() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.child != nil && s.child.cmd.Process != nil {
+		select {
+		case <-s.child.exited:
+			return 0
+		default:
+		}
 		return s.child.cmd.Process.Pid
 	}
 	return 0
@@ -525,7 +543,27 @@ func (s *Supervisor) Pid() int {
 // .
 var applyLimit = applyAddressSpaceLimit
 
-func (s *Supervisor) spawnAndAwaitReady() error {
+func (s *Supervisor) spawnAndAwaitReady() (spawnErr error) {
+	s.mu.Lock()
+	if s.state == StateStopped {
+		s.mu.Unlock()
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errClosed}
+	}
+	done := make(chan struct{})
+	s.spawning = done
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		var cleanup *ContainmentCleanupError
+		if errors.As(spawnErr, &cleanup) {
+			s.state, s.stopReason = StateStopped, spawnErr
+		}
+		if s.spawning == done {
+			close(done)
+			s.spawning = nil
+		}
+		s.mu.Unlock()
+	}()
 	// .
 	// .
 	// .
@@ -631,10 +669,16 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 	// .
 	// .
 	// .
-	contained, cmsg, cerr := containProcess(cmd.Process.Pid, s.spec.RLimitASBytes)
+	var contained func() error
+	var cmsg string
+	var cerr error
+	c.isolation = s.spec.ArgvContainment
 	if walled != nil {
 		// .
-		contained, cmsg, cerr = walled.contained, walled.containment, nil
+		contained, cmsg = walled.contained, walled.containment.Description
+		c.isolation = walled.containment
+	} else {
+		contained, cmsg, cerr = containProcess(cmd.Process.Pid, s.spec.RLimitASBytes)
 	}
 	if cerr != nil {
 		// .
@@ -663,7 +707,7 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			if c.contained != nil {
-				c.contained()
+				err = errors.Join(err, c.contained())
 			}
 			return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
 		}
@@ -679,17 +723,24 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 		// .
 		// .
 		// .
+		// .
 		s.mu.Unlock()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		var cleanupErr error
 		if c.contained != nil {
-			c.contained()
+			cleanupErr = c.contained()
 		}
-		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errClosed}
+		if cleanupErr != nil {
+			return &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: cleanupErr}
+		}
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errors.Join(errClosed, cleanupErr)}
 	}
 	s.gen++
 	gen := s.gen
 	s.child = c
+	close(done)
+	s.spawning = nil
 	s.mu.Unlock()
 
 	c.pumps.Add(2)
@@ -714,6 +765,9 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 	select {
 	case <-c.ready:
 	case <-c.exited:
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
 		code := exitCode(c.exitErr)
 		return &ChildExitError{
 			PluginID: s.spec.PluginID, Code: code,
@@ -722,6 +776,16 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 		}
 	case <-time.After(s.spec.readyTimeout()):
 		s.kill(c, false)
+		select {
+		case <-c.exited:
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+		default:
+			if pending := s.retirementPending(c, fmt.Errorf("startup deadline exceeded; child retirement still pending")); pending != nil {
+				return pending
+			}
+		}
 		return &ChildExitError{
 			PluginID: s.spec.PluginID, Code: -1,
 			Meaning: fmt.Sprintf("no readiness mark within %s; killed", s.spec.readyTimeout()),
@@ -743,6 +807,9 @@ func (s *Supervisor) spawnAndAwaitReady() error {
 	select {
 	case <-c.exited:
 		s.mu.Unlock()
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
 		code := exitCode(c.exitErr)
 		return &ChildExitError{PluginID: s.spec.PluginID, Code: code,
 			Meaning: s.exitMeaning(code), Phase: "start", StderrTail: c.tailLines()}
@@ -833,6 +900,15 @@ func (s *Supervisor) reap(c *child, gen int) {
 			err = &exec.ExitError{ProcessState: state}
 		}
 	}
+	if c.contained != nil {
+		// .
+		// .
+		// .
+		// .
+		if err := c.contained(); err != nil {
+			c.cleanupErr = &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
+		}
+	}
 	drained := make(chan struct{})
 	go func() {
 		c.pumps.Wait()
@@ -858,16 +934,20 @@ func (s *Supervisor) reap(c *child, gen int) {
 	_ = c.stdin.Close()
 	c.exitErr = err
 	close(c.exited)
-	if c.contained != nil {
-		// .
-		// .
-		// .
-		// .
-		c.contained()
-	}
 
 	s.mu.Lock()
-	if s.gen != gen || s.state == StateStopped {
+	if s.gen != gen {
+		s.mu.Unlock()
+		return
+	}
+	if c.cleanupErr != nil {
+		s.state = StateStopped
+		s.stopReason = c.cleanupErr
+		s.spec.logger().Printf("plugin %s: %v", s.spec.PluginID, s.stopReason)
+		s.mu.Unlock()
+		return
+	}
+	if s.state == StateStopped {
 		// .
 		s.mu.Unlock()
 		return
@@ -1259,32 +1339,52 @@ func (s *Supervisor) Close() error { return s.CloseContext(context.Background())
 func (s *Supervisor) CloseContext(ctx context.Context) error {
 	s.mu.Lock()
 	if s.state == StateStopped {
+		c, err := s.child, s.stopReason
 		s.mu.Unlock()
-		return nil
+		// .
+		if c != nil {
+			if !s.awaitReaped(c) {
+				return fmt.Errorf("supervisor: %s: containment retirement still pending", s.spec.PluginID)
+			}
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+			return s.releaseArtifact()
+		}
+		var cleanup *ContainmentCleanupError
+		if errors.As(err, &cleanup) {
+			return err
+		}
+		return s.releaseArtifact()
 	}
 	s.state = StateStopped
 	if s.stopReason == nil {
 		s.stopReason = errClosed
 	}
 	c := s.child
-	s.child = nil
 	s.mu.Unlock()
 
 	if c == nil {
-		return nil
+		return s.releaseArtifact()
 	}
 	c.abandonNow()
 	_ = c.stdin.Close()
 	select {
 	case <-c.exited:
-		return nil
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+		return s.releaseArtifact()
 	case <-time.After(closeGraceEOF):
 	case <-ctx.Done():
 	}
 	signalTerm(c.cmd)
 	select {
 	case <-c.exited:
-		return nil
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+		return s.releaseArtifact()
 	case <-time.After(closeGraceTerm):
 	case <-ctx.Done():
 	}
@@ -1294,7 +1394,10 @@ func (s *Supervisor) CloseContext(ctx context.Context) error {
 	if !s.awaitReaped(c) {
 		return fmt.Errorf("supervisor: %s: child survived SIGKILL and is orphaned", s.spec.PluginID)
 	}
-	return nil
+	if c.cleanupErr != nil {
+		return c.cleanupErr
+	}
+	return s.releaseArtifact()
 }
 
 // .
@@ -1380,4 +1483,46 @@ func excerpt(b []byte) string {
 		return string(b[:max]) + fmt.Sprintf("… (%d bytes)", len(b))
 	}
 	return string(b)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (s *Supervisor) retirementPending(c *child, err error) error {
+	if c != nil && c.contained != nil {
+		return &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
+	}
+	return nil
+}
+
+func (s *Supervisor) releaseArtifact() error {
+	// .
+	// .
+	s.mu.Lock()
+	done := s.spawning
+	s.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(closeGraceKill):
+			return &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: fmt.Errorf("in-flight spawn retirement still pending")}
+		}
+	}
+	s.mu.Lock()
+	reason := s.stopReason
+	s.mu.Unlock()
+	var cleanup *ContainmentCleanupError
+	if errors.As(reason, &cleanup) {
+		return reason
+	}
+	s.artifactOnce.Do(func() {
+		if s.spec.Artifact != nil {
+			s.artifactErr = s.spec.Artifact.Close()
+		}
+	})
+	return s.artifactErr
 }

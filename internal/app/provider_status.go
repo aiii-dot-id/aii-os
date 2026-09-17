@@ -24,8 +24,18 @@ import (
 // .
 // .
 func (a *App) setProviderInfo(in dashboard.ProviderInfo) error {
+	// .
+	// .
+	// .
+	// .
+	// .
+	var chat *bool
+	if in.Chat {
+		yes := true
+		chat = &yes
+	}
 	return a.setProvider(providerEntry{
-		Name: in.Name, APIType: in.APIType, URL: in.Endpoint,
+		Name: in.Name, APIType: in.APIType, URL: in.Endpoint, Chat: chat,
 		APIKey: in.APIKey, APIKeyEnv: in.APIKeyEnv, Credential: in.Credential,
 		DefaultModel: in.DefaultModel, SubscribeURL: in.SubscribeURL,
 		ContextLength: in.ContextLength, MaxOutputTokens: in.MaxOutputTokens,
@@ -67,6 +77,10 @@ func probeKey(e providerEntry) string {
 	// .
 	// .
 	e.EffortLevels = nil
+	e.CatalogueAuthor = ""
+	// .
+	// .
+	e.Speech = nil
 	data, _ := json.Marshal(e)
 	hash := sha256.Sum256(data)
 	return string(hash[:])
@@ -84,6 +98,9 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 	var stale []providerEntry
 	out := make(map[string]providerProbe, len(reg.Providers))
 	for _, e := range reg.Providers {
+		if !chatProvider(e) {
+			continue
+		}
 		st, ok := a.provStatus[e.Name]
 		if ok && st.key == probeKey(e) && now.Sub(st.checkedAt) < providerStatusTTL {
 			out[e.Name] = st
@@ -175,7 +192,10 @@ func (a *App) probeOne(e providerEntry) providerProbe {
 // .
 func classifyCredentialErr(err error) string {
 	switch {
-	case errors.Is(err, oauth.ErrOwnerRefreshRequired):
+	case errors.Is(err, oauth.ErrOwnerRefreshRequired), errors.Is(err, oauth.ErrGrantInvalid):
+		// .
+		// .
+		// .
 		return "credential_expired"
 	case errors.Is(err, errCredentialUnavailable):
 		return "no_credential"
@@ -241,11 +261,13 @@ func (a *App) providerDirectoryLive() []dashboard.ProviderInfo {
 			}
 		}
 		out = append(out, dashboard.ProviderInfo{
+			Chat: chatProvider(e), Speech: speechInfo(e),
 			Name: e.Name, APIType: e.APIType, Endpoint: e.URL,
 			CacheModes: llm.CacheModes(dialect, explicit), CacheTTLs: llm.CacheTTLs(dialect, explicit, retentions), CacheDiagnostics: dialect == llm.DialectAnthropic, CacheKeySupported: dialect != llm.DialectAnthropic,
 			HasKey: e.APIKey != "", APIKeyEnv: e.APIKeyEnv, Credential: e.Credential,
 			CredentialInfo: a.credentialInfo(e),
 			CanSignIn:      canSignIn(e),
+			SignIn:         a.signInView("provider:" + e.Name),
 			DefaultModel:   e.DefaultModel, SubscribeURL: e.SubscribeURL,
 			ContextLength: e.ContextLength, MaxOutputTokens: e.MaxOutputTokens,
 			// .
@@ -289,7 +311,7 @@ func (a *App) entryTransport(e providerEntry, apiKey string) (llm.ClientConfig, 
 	if e.Credential == "" {
 		return cc, nil
 	}
-	src, cerr := a.credentialSource(e.Credential, e.CredentialOptions)
+	src, cerr := a.credentialSource(e.Credential, e.CredentialOptions, e.signIn)
 	if cerr != nil {
 		return llm.ClientConfig{}, fmt.Errorf("provider %q credential: %w", e.Name, cerr)
 	}
@@ -448,13 +470,13 @@ func (a *App) credentialInfo(e providerEntry) *dashboard.CredentialInfo {
 	if e.Credential == "" {
 		return nil
 	}
-	src, err := a.credentialSource(e.Credential, e.CredentialOptions)
+	src, err := a.credentialSource(e.Credential, e.CredentialOptions, e.signIn)
 	if err != nil {
 		return &dashboard.CredentialInfo{Kind: e.Credential, Error: err.Error()}
 	}
 	i := src.Info()
 	out := &dashboard.CredentialInfo{
-		Kind: i.Kind, Plan: i.Plan, Tier: i.Tier, IsAPIKey: i.IsAPIKey, Path: i.Path,
+		Kind: i.Kind, Plan: i.Plan, Tier: i.Tier, IsAPIKey: i.IsAPIKey, Path: i.Path, Error: i.Error,
 	}
 	if !i.ExpiresAt.IsZero() {
 		// .
@@ -521,7 +543,7 @@ func credentialWarningFor(kind string, usable, now time.Time) string {
 // .
 func entryDialect(e providerEntry) llm.Dialect {
 	if e.Credential != "" {
-		if d := oauth.Dialect(e.Credential); d != "" {
+		if d := oauth.Dialect(e.Credential, e.CredentialOptions); d != "" {
 			return llm.DialectFor(d)
 		}
 	}

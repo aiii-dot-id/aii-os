@@ -142,6 +142,29 @@ func TestAStaleClaudeClientVersionHealsOnLoadAndIsNotPersisted(t *testing.T) {
 	}
 }
 
+// .
+// .
+func TestClaudeClientVersionAndFormatsAreJSONOverrides(t *testing.T) {
+	a := newProvidersApp(t)
+	raw := `{"providers":[{"name":"Configured Claude","api_type":"anthropic","url":"https://example.test","credential":"claude-code","credential_options":{"client_version":"99.8.7"},"credential_option_formats":{"billing_text":"revision={client_version}","header_user-agent":"configured/{client_version}"}}]}`
+	if err := os.WriteFile(a.providersPath(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		reg, err := a.loadProviders()
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := reg.Providers[0].CredentialOptions
+		if opts["client_version"] != "99.8.7" || opts["billing_text"] != "revision=99.8.7" || opts["header_user-agent"] != "configured/99.8.7" {
+			t.Fatal("configured revision/formats were replaced")
+		}
+		if _, err := saveProvidersFile(a.providersPath(), reg); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestEmbeddedAnthropicUsesNativeMessagesAPI(t *testing.T) {
 	var reg providerRegistry
 	if err := json.Unmarshal(embeddedProviders, &reg); err != nil {
@@ -620,11 +643,17 @@ func TestPublishedCredentialBoundaryMatchesTheRuntime(t *testing.T) {
 	}
 
 	opts := map[string]string{"file": credPath}
-	for _, o := range requiredCredentialOptions("claude-code") {
-		if _, ok := opts[o]; !ok {
-			opts[o] = "x"
+	for _, entry := range embeddedRegistry().Providers {
+		if entry.Credential == "claude-code" {
+			for k, v := range entry.CredentialOptions {
+				opts[k] = v
+			}
 		}
 	}
+	// .
+	reg := providerRegistry{Providers: []providerEntry{{Credential: "claude-code", CredentialOptions: opts}}}
+	fillEmbeddedCredentialOptions(&reg)
+	opts = reg.Providers[0].CredentialOptions
 	app := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
 	info := app.credentialInfo(providerEntry{Credential: "claude-code", CredentialOptions: opts})
 	if info == nil {
@@ -636,6 +665,98 @@ func TestPublishedCredentialBoundaryMatchesTheRuntime(t *testing.T) {
 	if !info.Expired {
 		t.Fatalf("a credential 7 minutes from expiry is inside the %v skew and the runtime WILL refuse it, "+
 			"but the dashboard was told it is usable until %s", oauth.ExpirySkew, info.ExpiresAt)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+func TestCredentialInfoNoticesAFileRemovedAfterItWasRead(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "creds.json")
+	body, err := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{
+		"accessToken": "acc", "refreshToken": "ref",
+		"expiresAt": time.Now().Add(2 * time.Hour).UnixMilli(),
+		"scopes":    []string{"user:profile", "user:inference"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := map[string]string{"file": credPath}
+	for _, entry := range embeddedRegistry().Providers {
+		if entry.Credential == "claude-code" {
+			for k, v := range entry.CredentialOptions {
+				opts[k] = v
+			}
+		}
+	}
+	reg := providerRegistry{Providers: []providerEntry{{Credential: "claude-code", CredentialOptions: opts}}}
+	fillEmbeddedCredentialOptions(&reg)
+	opts = reg.Providers[0].CredentialOptions
+	app := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
+	entry := providerEntry{Credential: "claude-code", CredentialOptions: opts}
+	if info := app.credentialInfo(entry); info == nil || info.Error != "" || info.Expired {
+		t.Fatalf("a readable, unexpired credential is not described as one: %+v", info)
+	}
+	if err := os.Remove(credPath); err != nil {
+		t.Fatal(err)
+	}
+	info := app.credentialInfo(entry)
+	if info == nil || !strings.Contains(info.Error, credPath) {
+		t.Fatalf("the credential's file is gone and its description does not say so: %+v", info)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestARejectedCredentialIsNotReportedAsAnOutage(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "creds.json")
+	body, err := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{
+		"accessToken": "acc", "refreshToken": "ref",
+		"expiresAt": time.Now().Add(2 * time.Hour).UnixMilli(),
+		"scopes":    []string{"user:profile", "user:inference"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"type":"error","error":{"type":"authentication_error"}}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(refused.Close)
+	opts := map[string]string{"file": credPath, "base_url": refused.URL}
+	for _, entry := range embeddedRegistry().Providers {
+		if entry.Credential == "claude-code" {
+			for k, v := range entry.CredentialOptions {
+				if _, mine := opts[k]; !mine {
+					opts[k] = v
+				}
+			}
+		}
+	}
+	reg := providerRegistry{Providers: []providerEntry{{Credential: "claude-code", CredentialOptions: opts}}}
+	fillEmbeddedCredentialOptions(&reg)
+	opts = reg.Providers[0].CredentialOptions
+	app := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
+	probe := app.probeOne(providerEntry{Name: "Claude", URL: refused.URL, APIType: "anthropic", Credential: "claude-code", CredentialOptions: opts})
+	if probe.state != "credential_expired" || !strings.Contains(probe.reason, "rejected") {
+		t.Fatalf("a rejected credential probed as %q (%s), want credential_expired naming the rejection", probe.state, probe.reason)
+	}
+	if got := classifyCredentialErr(wrapUnavailable(oauth.ErrGrantInvalid)); got != "credential_expired" {
+		t.Fatalf("an owned credential the authority no longer honours classified as %q, want credential_expired", got)
 	}
 }
 
@@ -711,27 +832,33 @@ func TestOutputAllocationIsMaterialized(t *testing.T) {
 // .
 func TestToolSelectionProbe(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		status   int
-		body     string
-		wantWarn string
+		name      string
+		status    int
+		body      string
+		wantWarn  string
+		wantState capState
 	}{
 		{
-			name:   "substrate calls the tool",
-			status: 200,
-			body:   `{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`,
+			name:      "substrate calls the tool",
+			status:    200,
+			body:      `{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`,
+			wantState: capYes,
 		},
 		{
-			name:     "substrate answers in words instead",
-			status:   200,
-			body:     `{"content":[{"type":"text","text":"I am ready."}],"stop_reason":"end_turn"}`,
-			wantWarn: "WITHOUT calling the tool",
+			name:      "substrate answers in words instead",
+			status:    200,
+			body:      `{"content":[{"type":"text","text":"I am ready."}],"stop_reason":"end_turn"}`,
+			wantWarn:  "WITHOUT calling the tool",
+			wantState: capNo,
 		},
 		{
-			name:     "substrate rejects a tool-bearing request",
-			status:   400,
-			body:     `{"error":{"message":"tools not supported"}}`,
-			wantWarn: "rejected a tool-bearing request",
+			// .
+			// .
+			name:      "substrate rejects a tool-bearing request",
+			status:    400,
+			body:      `{"error":{"message":"tools not supported"}}`,
+			wantWarn:  "rejected a tool-bearing request",
+			wantState: capUnknown,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -745,8 +872,11 @@ func TestToolSelectionProbe(t *testing.T) {
 			client := llm.New(&llm.ClientConfig{
 				Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
 			})
-			got := app.probeToolSelection(context.Background(), client,
+			state, got := app.probeToolSelection(context.Background(), client,
 				providerEntry{Name: "p"}, "m")
+			if state != tc.wantState {
+				t.Fatalf("state = %v, want %v", state, tc.wantState)
+			}
 			if tc.wantWarn == "" {
 				if got != "" {
 					t.Fatalf("a working substrate was warned about: %q", got)

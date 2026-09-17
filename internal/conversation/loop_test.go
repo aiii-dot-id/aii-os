@@ -321,6 +321,13 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 	if last := request[len(request)-1]; last.Role != current.Role || last.Content != current.Content {
 		t.Fatalf("current operator message is not last: %+v", request)
 	}
+	// .
+	// .
+	// .
+	// .
+	if !messagesContain(request, "individually searchable") || !messagesContain(request, "source=conversation") {
+		t.Fatalf("omission receipt must state the mechanism and name the working source: %+v", request)
+	}
 	if !messagesContain(request, "older conversation turns are not shown") || !messagesContain(request, "recall(query=") {
 		t.Fatal("history omission must be visible and name recall")
 	}

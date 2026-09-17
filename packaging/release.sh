@@ -86,6 +86,13 @@ prepare)
       -ldflags "-s -w -X github.com/aiii-dot-id/aii-os/internal/app.Version=$VERSION" \
       -o "$stage/$bin" ./cmd/aii
     cp LICENSE "$stage/LICENSE" # the updater finds the binary by name and ignores the rest
+    # The updater archive's own executable is signed too, before it is
+    # archived, so its Authenticode signature is inside the bytes the
+    # payload envelope then binds — the installer track already signs its
+    # embedded binaries this way. A no-op unless a signer is configured.
+    if [ "$goos" = windows ] && [ -n "${SIGN_CMD:-}" ]; then
+      $SIGN_CMD "$stage/$bin" || die "signing $asset failed"
+    fi
     case "$asset" in
       *.zip)    (cd "$stage" && zip -q "$root/$CAND/$asset" "$bin" LICENSE) ;;
       *.tar.gz) tar -czf "$CAND/$asset" -C "$stage" "$bin" LICENSE ;;

@@ -16,7 +16,7 @@ func TestAbsoluteOverridePathIsNotRelocated(t *testing.T) {
 	if err := os.WriteFile(real, []byte(`{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","scopes":["user:inference"]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(KindClaudeCode, claudeTestOptions(map[string]string{"file": real}))
+	s, err := testSource(KindClaudeCode, claudeTestOptions(map[string]string{"file": real}))
 	if err != nil {
 		t.Fatalf("an absolute override must be honoured: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestRelativeAndTildeOverrides(t *testing.T) {
 		if err := os.WriteFile(p, []byte(`{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","scopes":["user:inference"]}}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		s, err := New(KindClaudeCode, claudeTestOptions(map[string]string{"file": v}))
+		s, err := testSource(KindClaudeCode, claudeTestOptions(map[string]string{"file": v}))
 		if err != nil {
 			t.Fatalf("%s: %v", v, err)
 		}
@@ -62,7 +62,7 @@ func TestOverridesReachTheSpec(t *testing.T) {
 		[]byte(`{"tokens":{"access_token":"a","refresh_token":"r","account_id":"x"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(KindCodex, map[string]string{
+	s, err := testSource(KindCodex, map[string]string{
 		"base_url":             "https://elsewhere.example",
 		"header_X-Client-Name": "aii-os",
 		"query_client_version": "9.9.9",
@@ -95,7 +95,7 @@ func TestInvalidOverrideFailsClosed(t *testing.T) {
 		{"query_": "value"},
 		{"billing_text": ""},
 	} {
-		if _, err := New(KindClaudeCode, claudeTestOptions(options)); err == nil {
+		if _, err := testSource(KindClaudeCode, claudeTestOptions(options)); err == nil {
 			t.Fatalf("invalid credential options were accepted: %#v", options)
 		}
 	}

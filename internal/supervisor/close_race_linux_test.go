@@ -66,14 +66,19 @@ func TestCloseDuringRestartDoesNotResurrect(t *testing.T) {
 	var calls atomic.Int32
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
+	image := &closeRaceImage{}
 	spec := Spec{
 		PluginID: "raceclose",
 		Argv:     []string{"/bin/sleep", "300"},
 		Backoff:  Backoff{Initial: 10 * time.Millisecond, Max: 10 * time.Millisecond, MaxRestarts: 5},
+		Artifact: image,
 		VerifyArtifact: func() error {
 			if calls.Add(1) >= 2 {
 				entered <- struct{}{}
 				<-release
+				if image.closed.Load() != 0 {
+					return errors.New("verified image released during spawn")
+				}
 			}
 			return nil
 		},
@@ -101,15 +106,26 @@ func TestCloseDuringRestartDoesNotResurrect(t *testing.T) {
 	go func() { closed <- s.Close() }()
 	select {
 	case cerr := <-closed:
-		if cerr != nil {
-			t.Fatalf("close: %v", cerr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Close blocked on the in-flight spawn")
+		t.Fatalf("Close acknowledged retirement while spawn was still in flight: %v", cerr)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if image.closed.Load() != 0 {
+		t.Fatal("image binding closed before the in-flight spawn retired")
 	}
 
 	// .
 	close(release)
+	select {
+	case cerr := <-closed:
+		if cerr != nil {
+			t.Fatalf("close: %v", cerr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not observe the in-flight spawn retiring")
+	}
+	if image.closed.Load() != 1 {
+		t.Fatal("image binding was not released once after retirement")
+	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -136,6 +152,10 @@ func TestCloseDuringRestartDoesNotResurrect(t *testing.T) {
 		t.Fatalf("resurrected late: %v", st)
 	}
 }
+
+type closeRaceImage struct{ closed atomic.Int32 }
+
+func (i *closeRaceImage) Close() error { i.closed.Add(1); return nil }
 
 // .
 // .

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
@@ -57,6 +58,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.SourcePath = loadedFrom
+	for id, resource := range cfg.Plugins.Resources {
+		if _, err := resource.startupTimeout(); err != nil {
+			return nil, fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
+		}
+	}
 	switch {
 	case cfg.Prompt.MaxTokens < 0:
 		return nil, fmt.Errorf("prompt.max_tokens must be zero (derive from the model window) or positive")
@@ -86,6 +92,17 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("agency.rhythm_seconds must be positive")
 	}
 	return &cfg, nil
+}
+
+func (r PluginResources) startupTimeout() (time.Duration, error) {
+	if r.StartupTimeoutMS == nil {
+		return 0, nil
+	}
+	ms := *r.StartupTimeoutMS
+	if ms <= 0 || ms > int64((1<<63-1)/time.Millisecond) {
+		return 0, fmt.Errorf("must be a positive, representable duration in milliseconds")
+	}
+	return time.Duration(ms) * time.Millisecond, nil
 }
 
 // .

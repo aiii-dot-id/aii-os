@@ -41,6 +41,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -458,17 +459,27 @@ const SchemeOAuth2 = "oauth2"
 // .
 // .
 // .
-func (p AuthProfile) Contract() (oauth.OAuthParams, oauth.Provider, error) {
+func (p AuthProfile) Contract(catalog ...map[string]oauth.Provider) (oauth.OAuthParams, oauth.Provider, error) {
+	var providers map[string]oauth.Provider
+	if len(catalog) > 0 {
+		providers = catalog[0]
+	}
 	var tpl oauth.Provider
 	if p.Provider != "" && p.Provider != "custom" {
-		t, ok := oauth.ProviderTemplate(p.Provider)
+		t, ok := oauth.ProviderTemplate(p.Provider, providers)
 		if !ok {
-			return oauth.OAuthParams{}, oauth.Provider{}, fmt.Errorf("auth profile names provider %q, which this host has no template for (%s, or custom with the endpoints inline)", p.Provider, strings.Join(oauth.ProviderNames(), ", "))
+			return oauth.OAuthParams{}, oauth.Provider{}, fmt.Errorf("auth profile names provider %q, which this host has no template for (%s, or custom with the endpoints inline)", p.Provider, strings.Join(oauth.ProviderNames(providers), ", "))
 		}
 		tpl = t
 	}
-	params := oauth.OAuthParams{ClientID: p.ClientID, AuthorizeURL: tpl.AuthorizeURL, TokenURL: tpl.TokenURL, RedirectURI: p.RedirectURI,
-		Scope: strings.Join(append(append([]string(nil), tpl.BaseScopes...), p.Scopes...), " "), AuthorizeParams: tpl.AuthorizeParams}
+	params := tpl.Params()
+	if p.ClientID != "" {
+		params.ClientID = p.ClientID
+	}
+	if p.RedirectURI != "" {
+		params.RedirectURI = p.RedirectURI
+	}
+	params.Scope = strings.Join(append(append([]string(nil), tpl.BaseScopes...), p.Scopes...), " ")
 	if p.AuthorizeURL != "" {
 		params.AuthorizeURL = p.AuthorizeURL
 	}
@@ -484,7 +495,7 @@ func (p AuthProfile) Contract() (oauth.OAuthParams, oauth.Provider, error) {
 	if len(p.Hosts) > 0 {
 		tpl.Hosts = append([]string(nil), p.Hosts...)
 	}
-	if params.TokenURL == "" || p.ClientID == "" || p.TokenFile == "" || len(tpl.Hosts) == 0 {
+	if params.TokenURL == "" || params.ClientID == "" || p.TokenFile == "" || len(tpl.Hosts) == 0 {
 		return oauth.OAuthParams{}, oauth.Provider{}, errors.New("an oauth2 auth profile needs a provider (or custom endpoints), a client_id, a token_file and at least one host")
 	}
 	return params, tpl, nil
@@ -523,7 +534,8 @@ type Config struct {
 	Grants map[string]Grant
 	// .
 	// .
-	AuthProfiles map[string]AuthProfile
+	AuthProfiles   map[string]AuthProfile
+	OAuthProviders map[string]oauth.Provider
 	// .
 	// .
 	// .
@@ -657,7 +669,7 @@ func New(cfg Config) (*Host, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("broker: refusing to build without a store — effects without host-authored receipts are the A3 hole")
 	}
-	return &Host{cfg: cfg, instruments: memory.New(cfg.Store), policy: policySnapshot{grants: cfg.Grants, profiles: cfg.AuthProfiles}}, nil
+	return &Host{cfg: cfg, instruments: memory.New(cfg.Store), policy: policySnapshot{grants: cfg.Grants, profiles: cfg.AuthProfiles, oauth: cfg.OAuthProviders}}, nil
 }
 
 // .
@@ -738,6 +750,7 @@ type Binding struct {
 
 // .
 type policySnapshot struct {
+	oauth    map[string]oauth.Provider
 	grants   map[string]Grant
 	profiles map[string]AuthProfile
 }
@@ -764,12 +777,16 @@ type policySnapshot struct {
 // .
 // .
 // .
-func (h *Host) ReplacePolicy(grants map[string]Grant, profiles map[string]AuthProfile) {
+func (h *Host) ReplacePolicy(grants map[string]Grant, profiles map[string]AuthProfile, catalog ...map[string]oauth.Provider) {
 	if h == nil {
 		return
 	}
 	h.policyMu.Lock()
-	h.policy = policySnapshot{grants: grants, profiles: profiles}
+	providers := h.policy.oauth
+	if len(catalog) > 0 {
+		providers = catalog[0]
+	}
+	h.policy = policySnapshot{grants: grants, profiles: profiles, oauth: providers}
 	h.oauthMu.Lock()
 	h.oauthSrc = nil
 	h.oauthMu.Unlock()
@@ -2292,7 +2309,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 	// .
 	var auth resolvedAuth
 	if authProfile != "" {
-		if o := b.resolveAuthProfile(pol, authProfile, u, target.URL, host, port, &auth, local, grant.PlaintextCredentials); o != nil {
+		if o := b.resolveAuthProfile(ctx, pol, authProfile, u, target.URL, host, port, &auth, local, grant.PlaintextCredentials); o != nil {
 			return b.resultReply(p.Operation, p.PluginOperation, target.URL, *o)
 		}
 	} else if strings.Contains(target.URL, CredentialPlaceholder) {
@@ -2352,6 +2369,18 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 			return fmt.Errorf("%w: unparseable redirect target", tools.ErrEgressBlocked)
 		}
 		hh, hp := urlHostPort(hu)
+		if auth.source != nil {
+			pinned := false
+			for _, allowed := range auth.hosts {
+				if strings.EqualFold(allowed, fmt.Sprintf("%s:%d", hh, hp)) {
+					pinned = true
+					break
+				}
+			}
+			if hu.Scheme != "https" || !pinned {
+				return fmt.Errorf("%w: redirect is outside the OAuth profile hosts", tools.ErrEgressBlocked)
+			}
+		}
 		if localCapable && localTarget(hh, hp, localScopes) {
 			return nil
 		}
@@ -2390,6 +2419,9 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 	}
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
+	}
+	for name, value := range auth.headers {
+		req.Header.Set(name, value)
 	}
 
 	client := tools.GuardedClient(timeout, hopGuard, b.host.cfg.Transport)
@@ -2454,7 +2486,16 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 		if rerr != nil {
 			return b.resultReply(p.Operation, p.PluginOperation, target.URL, *oauthDenial(auth.profile, rerr))
 		}
+		if len(cred.Token)+len(bearerPrefix) > 4096 || strings.ContainsAny(cred.Token, "\x00\r\n") {
+			return b.resultReply(p.Operation, p.PluginOperation, target.URL, outcome{status: statusDenied, reason: reasonNetHeaderInvalid, detail: "invalid refreshed credential"})
+		}
 		req.Header.Set("Authorization", bearerPrefix+cred.Token)
+		for name := range auth.headers {
+			req.Header.Del(name)
+		}
+		for name, value := range cred.Headers {
+			req.Header.Set(name, value)
+		}
 		send()
 	}
 	if err != nil {
@@ -2736,6 +2777,8 @@ func (b *Binding) dispatchHTTPClose(p invokeParams) ([]byte, error) {
 // .
 // .
 type resolvedAuth struct {
+	headers    map[string]string
+	hosts      []string
 	header     string
 	pathSecret string
 	source     *oauth.Source
@@ -2743,7 +2786,7 @@ type resolvedAuth struct {
 	profile    string
 }
 
-func (b *Binding) resolveAuthProfile(pol policySnapshot, name string, u *url.URL, rawURL, host string, port int, auth *resolvedAuth, local, plaintextOK bool) *outcome {
+func (b *Binding) resolveAuthProfile(ctx context.Context, pol policySnapshot, name string, u *url.URL, rawURL, host string, port int, auth *resolvedAuth, local, plaintextOK bool) *outcome {
 	authHeader, pathSecret := &auth.header, &auth.pathSecret
 	auth.profile = name
 	// .
@@ -2784,7 +2827,7 @@ func (b *Binding) resolveAuthProfile(pol policySnapshot, name string, u *url.URL
 			detail: "no such auth profile in plugins.auth_profiles"}
 	}
 	if profile.Scheme == SchemeOAuth2 {
-		return b.resolveOAuth2(name, profile, rawURL, host, port, auth)
+		return b.resolveOAuth2(ctx, pol, name, profile, rawURL, host, port, auth)
 	}
 	if profile.Host == "" || profile.Port == 0 {
 		return &outcome{status: statusDenied, reason: reasonAuthInvalid,
@@ -2864,12 +2907,12 @@ func (b *Binding) resolveAuthProfile(pol policySnapshot, name string, u *url.URL
 // .
 // .
 // .
-func (b *Binding) resolveOAuth2(name string, profile AuthProfile, rawURL, host string, port int, auth *resolvedAuth) *outcome {
+func (b *Binding) resolveOAuth2(ctx context.Context, pol policySnapshot, name string, profile AuthProfile, rawURL, host string, port int, auth *resolvedAuth) *outcome {
 	if strings.Contains(rawURL, CredentialPlaceholder) {
 		return &outcome{status: statusDenied, reason: reasonAuthInvalid,
 			detail: fmt.Sprintf("the URL names %s but auth profile %q rides as a bearer header (oauth2)", CredentialPlaceholder, name)}
 	}
-	params, tpl, err := profile.Contract()
+	params, tpl, err := profile.Contract(pol.oauth)
 	if err != nil {
 		return &outcome{status: statusDenied, reason: reasonAuthInvalid, detail: err.Error()}
 	}
@@ -2899,7 +2942,7 @@ func (b *Binding) resolveOAuth2(name string, profile AuthProfile, rawURL, host s
 	if o != nil {
 		return o
 	}
-	cred, cerr := src.Credential(context.Background())
+	cred, cerr := src.Credential(ctx)
 	if cerr != nil || cred.Refreshed {
 		b.receiptAuthRefresh(name, cerr)
 	}
@@ -2910,6 +2953,8 @@ func (b *Binding) resolveOAuth2(name string, profile AuthProfile, rawURL, host s
 		return &outcome{status: statusDenied, reason: reasonNetHeaderInvalid, detail: "the access token is not a valid credential"}
 	}
 	auth.header = bearerPrefix + cred.Token
+	auth.headers = cred.Headers
+	auth.hosts = tpl.Hosts
 	auth.source, auth.gen = src, cred.Gen
 	return nil
 }
@@ -2933,7 +2978,13 @@ func oauthDenial(name string, err error) *outcome {
 func (h *Host) profileSource(name string, profile AuthProfile, params oauth.OAuthParams) (*oauth.Source, *outcome) {
 	h.oauthMu.Lock()
 	defer h.oauthMu.Unlock()
-	if src, ok := h.oauthSrc[name]; ok {
+	rawKey, _ := json.Marshal(struct {
+		Profile AuthProfile
+		Params  oauth.OAuthParams
+	}{profile, params})
+	sum := sha256.Sum256(rawKey)
+	key := fmt.Sprintf("%s:%x", name, sum)
+	if src, ok := h.oauthSrc[key]; ok {
 		return src, nil
 	}
 	tu, err := url.Parse(params.TokenURL)
@@ -2967,7 +3018,7 @@ func (h *Host) profileSource(name string, profile AuthProfile, params oauth.OAut
 	if h.oauthSrc == nil {
 		h.oauthSrc = map[string]*oauth.Source{}
 	}
-	h.oauthSrc[name] = src
+	h.oauthSrc[key] = src
 	return src, nil
 }
 

@@ -9,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -61,7 +62,14 @@ func tryWrite(dir string) string {
 func tryConnect(addr string) string {
 	c, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
-		return "denied:" + strings.SplitN(err.Error(), ":", 2)[0]
+		if errors.Is(err, windows.WSAEACCES) || os.IsPermission(err) {
+			return "denied:access"
+		}
+		var timeout net.Error
+		if (errors.As(err, &timeout) && timeout.Timeout()) || errors.Is(err, windows.WSAETIMEDOUT) {
+			return "timeout"
+		}
+		return "error:" + err.Error()
 	}
 	c.Close()
 	return "ok"

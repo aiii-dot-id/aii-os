@@ -20,6 +20,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 )
 
 // .
@@ -90,6 +91,23 @@ type voiceHandle struct {
 	// .
 	drained     chan struct{}
 	drainedOnce sync.Once
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	fallbackMu sync.Mutex
+	fallback   string
+	hush       func(why string)
+
+	// .
+	// .
+	// .
+	// .
+	heldMu   sync.Mutex
+	held     map[int64]*heldFinal
+	withheld map[int64]bool
 }
 
 // .
@@ -99,6 +117,40 @@ const voiceAdmissionBound = 5 * time.Second
 // .
 // .
 func (h *voiceHandle) supersede() { h.gen.Add(1) }
+
+// .
+// .
+// .
+type replyVerdict int
+
+const (
+	// .
+	replyAdmitted replyVerdict = iota
+	// .
+	// .
+	// .
+	replyRefusedDefinite
+	// .
+	// .
+	replySuperseded
+)
+
+// .
+// .
+// .
+// .
+func refusedByEngine(err error) bool {
+	var refused *supervisor.SessionRefusedError
+	return errors.As(err, &refused)
+}
+
+// .
+// .
+func (h *voiceHandle) hushNow(why string) {
+	if h.hush != nil {
+		h.hush(why)
+	}
+}
 
 // .
 // .
@@ -136,6 +188,9 @@ func (h *voiceHandle) Close(ctx context.Context, mode string) error {
 	h.supersede()
 	h.closing.Store(true)
 	h.admit.Unlock()
+	if mode == "abort" {
+		h.hushNow("the session was aborted")
+	}
 	return h.v.CloseFor(ctx, h.id, mode, "operator")
 }
 
@@ -151,6 +206,7 @@ func (h *voiceHandle) Interrupt(ctx context.Context) error {
 	h.admit.Lock()
 	h.supersede()
 	h.admit.Unlock()
+	h.hushNow("the operator spoke")
 	return h.v.InterruptFor(ctx, h.id, "", "operator")
 }
 func (h *voiceHandle) Label() string             { return h.v.Label() }
@@ -175,9 +231,13 @@ func (h *voiceHandle) PlaybackReport(ctx context.Context, r dashboard.PlaybackRe
 // .
 // .
 // .
-func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64, reply string) {
+// .
+// .
+// .
+// .
+func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64, reply string) replyVerdict {
 	if sessionID == "" || reply == "" {
-		return
+		return replySuperseded
 	}
 	var h *voiceHandle
 	refuse := func(why string) {
@@ -191,7 +251,7 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	val, ok := a.voiceSessions.Load(sessionID)
 	if !ok {
 		refuse("the session ended before its reply")
-		return
+		return replySuperseded
 	}
 	h = val.(*voiceHandle)
 	// .
@@ -201,10 +261,10 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	// .
 	// .
 	h.admit.Lock()
-	if h.gen.Load() != gen {
+	if h.gen.Load() != gen || h.closing.Load() || ctx.Err() != nil {
 		h.admit.Unlock()
-		refuse("a barge-in, close or abort superseded this reply")
-		return
+		refuse("a barge-in, close, abort or cancellation superseded this reply")
+		return replySuperseded
 	}
 	synthID := fmt.Sprintf("%s-syn-%d", sessionID, a.voiceSeq.Add(1))
 	ectx, ecancel := context.WithTimeout(ctx, voiceAdmissionBound)
@@ -213,7 +273,7 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	h.admit.Unlock()
 	if err != nil {
 		refuse("not dispatched: " + err.Error())
-		return
+		return replySuperseded
 	}
 	actx, acancel := context.WithTimeout(ctx, voiceAdmissionBound)
 	err = await(actx)
@@ -230,7 +290,10 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 			}
 		}
 		refuse(why)
-		return
+		if refusedByEngine(err) {
+			return replyRefusedDefinite
+		}
+		return replySuperseded
 	}
 	// .
 	// .
@@ -239,17 +302,95 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	// .
 	// .
 	// .
-	if h.gen.Load() != gen {
+	if h.gen.Load() != gen || h.closing.Load() || ctx.Err() != nil {
 		if ferr := h.fenceBounded(synthID, "superseded at admission"); ferr != nil {
 			refuse(fmt.Sprintf("superseded while its admission was pending; the engine did NOT fence synthesis %s (%v) — the barge-in's own stop/cancel and the engine's speech fence are the remaining guards", synthID, ferr))
-			return
+			return replySuperseded
 		}
 		refuse("superseded while its admission was pending; its synthesis " + synthID + " was fenced")
-		return
+		return replySuperseded
 	}
 	h.replyOutcome.Store("reply admitted")
 	if a.voiceReplySink != nil {
 		a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: sessionID, SynthesisID: synthID, Route: "plugin"}, reply)
+	}
+	return replyAdmitted
+}
+
+// .
+// .
+// .
+var voiceFallbackMint = (*App).speakAhead
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) speakFallback(ctx context.Context, b *voiceBinding, reply string) bool {
+	val, ok := a.voiceSessions.Load(b.session)
+	if !ok {
+		return false
+	}
+	h := val.(*voiceHandle)
+	h.admit.Lock()
+	defer h.admit.Unlock()
+	if h.gen.Load() != b.gen || h.closing.Load() || ctx.Err() != nil {
+		a.noteReplyOutcome(b.session, "reply refused by the engine, then superseded before another voice could take it")
+		return false
+	}
+	route, id := "browser", voiceFallbackMint(a, reply)
+	if id != "" {
+		route = "cloud"
+	}
+	h.fallbackMu.Lock()
+	prior := h.fallback
+	h.fallback = route + ":" + id
+	h.fallbackMu.Unlock()
+	if prior != "" {
+		// .
+		// .
+		a.hushTakenOver(h.id, prior, "a newer reply took its place")
+	}
+	if a.voiceReplySink != nil {
+		a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: b.session, SynthesisID: id, Route: route, Fallback: true}, reply)
+	}
+	a.noteReplyOutcome(b.session, "reply refused by the engine; spoken by the "+route+" voice instead")
+	a.fanVoiceEvent(dashboard.VoiceEvent{SessionID: b.session, Type: "reply_fallback", Reason: route})
+	return true
+}
+
+// .
+// .
+// .
+// .
+func (a *App) hushFallback(h *voiceHandle, why string) {
+	h.fallbackMu.Lock()
+	which := h.fallback
+	h.fallback = ""
+	h.fallbackMu.Unlock()
+	if which == "" {
+		return
+	}
+	a.hushTakenOver(h.id, which, why)
+}
+
+// .
+func (a *App) hushTakenOver(session, which, why string) {
+	route, id, _ := strings.Cut(which, ":")
+	if id != "" {
+		a.hushSpoken(id)
+	}
+	log.Printf("VOICE: the %s voice's reply for session %s was hushed: %s", route, session, why)
+	if a.voiceHushSink != nil {
+		a.voiceHushSink(dashboard.VoiceHush{SessionID: session, SynthesisID: id, Route: route, Reason: why})
 	}
 }
 
@@ -375,7 +516,12 @@ func (a *App) voiceObserved(ev pluginhost.Event) {
 	switch ev.Type {
 	case "speech_start", "interruption_requested":
 		if val, ok := a.voiceSessions.Load(ev.SessionID); ok {
-			val.(*voiceHandle).supersede()
+			h := val.(*voiceHandle)
+			h.supersede()
+			// .
+			// .
+			// .
+			h.hushNow("the engine heard the operator speak")
 		}
 	case "input_finished":
 		a.voiceInputFinished(ev.SessionID)
@@ -412,21 +558,30 @@ func (a *App) OpenVoiceSession(ctx context.Context, inputID, outputID, mode stri
 		return nil, err
 	}
 	h := &voiceHandle{id: id, v: ap.Voice, b: b, done: ap.Voice.Done(), drained: make(chan struct{})}
+	h.hush = func(why string) { a.hushFallback(h, why) }
 	// .
 	// .
 	a.voiceSessions.Store(id, h)
 	a.adoptPendingSettings(h)
 	go func() {
 		<-h.done
-		h.supersede()
-		h.closing.Store(true)
-		h.markDrained()
-		a.voiceSessions.Delete(id)
-		a.voiceModes.Delete(id)
-		a.voicePending.Delete(id)
-		a.forgetPendingObservations(id)
+		a.voiceSessionEnded(h)
 	}()
 	return h, nil
+}
+
+// .
+// .
+// .
+func (a *App) voiceSessionEnded(h *voiceHandle) {
+	h.supersede()
+	h.closing.Store(true)
+	a.withholdHeld(h, "the session ended before the speaker was decided")
+	h.markDrained()
+	a.voiceSessions.Delete(h.id)
+	a.voiceModes.Delete(h.id)
+	a.voicePending.Delete(h.id)
+	a.forgetPendingObservations(h.id)
 }
 
 // .
@@ -550,7 +705,23 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	// .
 	// .
 	// .
-	if ve, ok := voiceEventFor(ev, safe); ok {
+	// .
+	// .
+	// .
+	pol := a.speakerPolicyNow()
+	ve, shown := voiceEventFor(ev, safe)
+	if shown && pol.restricted() && ev.Type == "transcript_partial" {
+		a.speakerWithheldPartials.Add(1)
+		shown = false
+	}
+	// .
+	// .
+	// .
+	skipNote := false
+	if ev.Type == "speaker_observation" && !safe {
+		skipNote = a.observationForHeld(ev)
+	}
+	if shown && !(pol.restricted() && ev.Type == "transcript_final") {
 		enqueue(ve)
 	}
 	// .
@@ -559,7 +730,7 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	if ev.Type == "session_ready" {
 		a.noteAppliedSettings(ev)
 	}
-	if ev.Type == "speaker_observation" {
+	if ev.Type == "speaker_observation" && !skipNote {
 		a.noteSpeakerObservation(ev, safe)
 	}
 	if ev.Type != "transcript_final" {
@@ -578,7 +749,9 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 		Speaker string `json:"speaker"`
 	}
 	_ = json.Unmarshal(ev.Raw, &body)
-	a.rememberFinal(ev.SessionID, ev.Sequence, body.Text)
+	if !pol.restricted() {
+		a.rememberFinal(ev.SessionID, ev.Sequence, body.Text)
+	}
 	answer := false
 	if m, ok := a.voiceModes.Load(ev.SessionID); ok {
 		answer, _ = m.(bool)
@@ -592,6 +765,24 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	// .
 	// .
 	heard := heardUtterance{Source: source, Text: body.Text, Speaker: body.Speaker, Answer: answer, SessionID: ev.SessionID, Sequence: ev.Sequence, Gen: a.voiceGen(ev.SessionID), Operator: true}
+	if pol.restricted() {
+		// .
+		// .
+		// .
+		// .
+		// .
+		if val, ok := a.voiceSessions.Load(ev.SessionID); ok {
+			h := val.(*voiceHandle)
+			if !h.inputDone.Load() {
+				a.holdFinal(h, &heldFinal{ve: ve, shown: shown, heard: heard, enqueue: enqueue})
+				return
+			}
+		}
+		a.speakerWithheldFinals.Add(1)
+		a.fanVoiceEvent(dashboard.VoiceEvent{SessionID: ev.SessionID, Sequence: ev.Sequence, Type: "transcript_withheld",
+			Reason: "no session to hold the words for a decision", Revision: pol.revision})
+		return
+	}
 	// .
 	// .
 	// .
@@ -759,25 +950,22 @@ func voiceEventFor(ev pluginhost.Event, safe bool) (dashboard.VoiceEvent, bool) 
 		return dashboard.VoiceEvent{}, false
 	}
 	var body struct {
-		Text     string `json:"text"`
-		Speaker  string `json:"speaker"`
-		Reason   string `json:"reason"`
-		RefersTo int64  `json:"refers_to"`
-		Decision string `json:"decision"`
-		// .
-		// .
-		Score *float64 `json:"score"`
-		Late  bool     `json:"late"`
+		speakerObservation
+		Text string `json:"text"`
 	}
-	_ = json.Unmarshal(ev.Raw, &body)
+	if json.Unmarshal(ev.Raw, &body) != nil {
+		// .
+		body.speakerObservation = speakerObservation{}
+	}
 	ve := dashboard.VoiceEvent{SessionID: ev.SessionID, Sequence: ev.Sequence, Type: ev.Type, Text: body.Text, Speaker: body.Speaker, Final: isFinal,
 		Operator: isFinal || ev.Type == "transcript_partial"}
 	if ev.Type == "speaker_observation" {
+		ve.SpeakerID = body.knownID()
 		ve.RefersTo, ve.Decision, ve.Score, ve.Late = body.RefersTo, body.Decision, body.Score, body.Late
 		// .
 		// .
 		ve.Reason = body.Reason
-		ve.Attribution = speakerAttribution(body.Speaker, body.Decision, body.Reason, body.Score)
+		ve.Attribution = body.attribution()
 	}
 	if ev.Type == "failure" {
 		// .

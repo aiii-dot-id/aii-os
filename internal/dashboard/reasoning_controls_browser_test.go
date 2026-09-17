@@ -94,7 +94,7 @@ func TestTheSubstratePanelReportsEffectNotIntent(t *testing.T) {
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
 	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, providersLoaded: false };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? ''); export const hueOf = () => 0;`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? ''); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = [];
 export function send(f) { frames.push(f); return 'req-1'; }
 export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`)

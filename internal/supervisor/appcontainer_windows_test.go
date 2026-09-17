@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,15 +53,33 @@ func TestAppContainerWallRefusesWhatItMustAndAdmitsWhatItGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	var accepted atomic.Int32
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			accepted.Add(1)
 			c.Close()
 		}
 	}()
+
+	control := func(want int32) {
+		c, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatalf("host loopback positive control: %v", err)
+		}
+		c.Close()
+		deadline := time.Now().Add(time.Second)
+		for accepted.Load() < want && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if accepted.Load() != want {
+			t.Fatalf("loopback accepted %d connections, expected only %d host controls", accepted.Load(), want)
+		}
+	}
+	control(1)
 
 	cmd := exec.Command(probe)
 	cmd.Env = []string{
@@ -73,7 +92,11 @@ func TestAppContainerWallRefusesWhatItMustAndAdmitsWhatItGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch under the wall: %v", err)
 	}
-	defer l.contained()
+	defer func() {
+		if err := l.contained(); err != nil {
+			t.Error(err)
+		}
+	}()
 	l.stdin.Close()
 	answers := map[string]string{}
 	sawDone := false
@@ -110,10 +133,16 @@ func TestAppContainerWallRefusesWhatItMustAndAdmitsWhatItGrants(t *testing.T) {
 			t.Errorf("%s = %q, want %q (all: %v)", k, got, v, answers)
 		}
 	}
-	for _, k := range []string{"net-loopback", "net-remote"} {
-		if !strings.HasPrefix(answers[k], "denied") {
-			t.Errorf("%s = %q, want denied (no network capability)", k, answers[k])
-		}
+	control(2)
+	// .
+	// .
+	// .
+	// .
+	if answers["net-loopback"] != "denied:access" && answers["net-loopback"] != "timeout" {
+		t.Errorf("loopback isolation: %q", answers["net-loopback"])
+	}
+	if answers["net-remote"] != "denied:access" {
+		t.Errorf("remote permission denial: %q", answers["net-remote"])
 	}
 	// .
 	var obs []string
@@ -125,7 +154,7 @@ func TestAppContainerWallRefusesWhatItMustAndAdmitsWhatItGrants(t *testing.T) {
 		_ = os.MkdirAll(dir, 0o755)
 		_ = os.WriteFile(filepath.Join(dir, "wall-observations.txt"), []byte(strings.Join(obs, "\n")+"\n"), 0o644)
 	}
-	if !strings.Contains(l.containment, "AppContainer S-1-15-2-") || !strings.Contains(l.containment, "before its first instruction") {
+	if !strings.Contains(l.containment.Description, "AppContainer S-1-15-2-") || !strings.Contains(l.containment.Description, "before its first instruction") {
 		t.Errorf("the containment line names the mechanism: %q", l.containment)
 	}
 }

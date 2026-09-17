@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // .
@@ -51,11 +52,28 @@ func (c columnShape) describe(other columnShape) string {
 	return strings.Join(parts, ", ")
 }
 
-// .
+var embeddedReferenceShape struct {
+	once  sync.Once
+	shape map[string]map[string]columnShape
+	err   error
+}
+
 // .
 // .
 // .
 func referenceShape(schemaText string) (map[string]map[string]columnShape, error) {
+	if raw, err := schemaFS.ReadFile("schema.sql"); err == nil && schemaText == string(raw) {
+		embeddedReferenceShape.once.Do(func() {
+			embeddedReferenceShape.shape, embeddedReferenceShape.err = buildReferenceShape(schemaText)
+		})
+		return embeddedReferenceShape.shape, embeddedReferenceShape.err
+	}
+	return buildReferenceShape(schemaText)
+}
+
+// .
+// .
+func buildReferenceShape(schemaText string) (map[string]map[string]columnShape, error) {
 	db, err := sql.Open("sqlite", "file::memory:")
 	if err != nil {
 		return nil, fmt.Errorf("open reference database: %w", err)

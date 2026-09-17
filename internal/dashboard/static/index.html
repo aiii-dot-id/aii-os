@@ -81,15 +81,34 @@
         </div>
         </div>
         <div class="composer-wrap" id="composer-wrap">
+          <button class="jump-latest" id="jump-latest" type="button" hidden title="Jump to latest" aria-label="Jump to latest"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></button>
           <div class="steerq" id="steerq"></div>
           <div class="voice-transcript" id="voice-transcript" hidden></div>
+          <div class="voice-filter muted" id="voice-filter" hidden></div>
           <div class="composer">
-            <button class="converse" id="converse" disabled hidden aria-pressed="false" title="Start a spoken conversation" aria-label="Start a spoken conversation">&#127908;</button>
-            <button class="finishturn" id="finishturn" disabled hidden title="Finish your turn">&#10004;</button>
-            <button class="voicemode" id="voicemode" disabled hidden aria-pressed="false" title="Meeting: what you say is recorded and read on the next turn">&#128172;</button>
-            <button class="mic" id="mic" disabled hidden title="Hold to speak">&#127908;</button>
-            <textarea id="msg-input" rows="1" placeholder="Speak your intent&hellip;"></textarea>
-            <button class="sendb" id="send-btn" title="Send">&#10148;</button>
+            <textarea id="msg-input" rows="1" placeholder="Message your identity"></textarea>
+          </div>
+          <div class="composer-row">
+            <div class="composer-tools">
+            </div>
+            <div class="composer-actions">
+              <div class="effort" id="effort" hidden>
+                <button class="effort-btn" id="effort-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Reasoning effort"><b id="effort-val"></b><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 3.5 5 7l3.5-3.5"/></svg></button>
+                <div class="effort-menu" id="effort-menu" role="menu" aria-label="Reasoning effort" hidden></div>
+              </div>
+              <button class="converse" id="converse" disabled hidden aria-pressed="false" title="Start a spoken conversation" aria-label="Start a spoken conversation" data-glyph="mic"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8.4" rx="2.5"/><path d="M3.2 7.6a4.8 4.8 0 0 0 9.6 0M8 12.4v2"/></svg></button>
+              <button class="hushb" id="hush-speaking" type="button" hidden title="Stop speaking" aria-label="Stop speaking"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.2h2.3L8.8 3.3v9.4L5.5 9.8H3.2z"/><path d="M11.3 6.3l3.4 3.4M14.7 6.3l-3.4 3.4"/></svg></button>
+              <button class="mic" id="mic" type="button" hidden aria-pressed="false" title="Talk — tap, or hold"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="8.4" rx="2.5"/><path d="M3.2 7.6a4.8 4.8 0 0 0 9.6 0M8 12.4v2"/></svg></button>
+              <div class="mic-more-wrap">
+                <button class="mic-more" id="mic-more" type="button" hidden aria-haspopup="menu" aria-expanded="false" title="Voice" aria-label="Voice"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 3.5 5 7l3.5-3.5"/></svg></button>
+                <div class="mic-menu" id="mic-menu" role="menu" aria-label="Voice" hidden>
+                  <div class="mic-voice" id="mic-voice" hidden></div>
+                <div class="mic-source" id="mic-source"></div>
+                  <button type="button" role="menuitem" id="mic-settings">Speech settings</button>
+                </div>
+              </div>
+              <button class="sendb" id="send-btn" title="Send" aria-label="Send"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button>
+            </div>
           </div>
         </div>
       </section>

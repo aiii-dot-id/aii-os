@@ -1,16 +1,17 @@
 
+import { acceptSignIn, abandonSignIn } from './signin.js';
 import { S } from './state.js';
 import { $ } from './util.js';
 import { renderPresence, setThinking } from './presence.js';
 import { go, renderFirstbootVisibility, toast } from './app.js';
-import { addMsg, attachSpeaker, sysLine, toolEventLive, thinkingEvent, renderHistory, renderChatSubstrate, acceptSubstrateConfig, rejectSubstrateConfig, substrateConnectionLost, renderSteering, renderAsks } from './views/chat.js';
+import { addMsg, attachSpeaker, sysLine, toolEventLive, thinkingEvent, renderHistory, renderChatSubstrate, renderComposer, acceptSubstrateConfig, rejectSubstrateConfig, substrateConnectionLost, renderSteering, renderAsks } from './views/chat.js';
 import { renderHome } from './views/home.js';
 import { renderWorkPill } from './views/work.js';
 import { renderProjPill, renderProjects, rejectCreate, rejectFocusSave, rejectContractSave, acceptCreate, acceptFocusSave, acceptContractSave, projectsConnectionLost } from './views/projects.js';
 import { renderMemory } from './views/memory.js';
 import { renderIdentity } from './views/identity.js';
 import { renderPlugins } from './views/plugins.js';
-import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, settingsConnectionLost } from './views/settings.js';
+import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptDashboardToken, settingsConnectionLost } from './views/settings.js';
 import { renderProviderOptions, setModelOptions, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
 import { publish as publishToSections, onSections, onLayout, onTokensChanged } from './sections.js';
 import { renderPanel } from './panel.js';
@@ -25,6 +26,7 @@ let requestSeq = 0;
 
 let reconnectDelay = 1000;
 const RECONNECT_MAX = 10000;
+let authCheck = false;
 function scheduleReconnect() {
   const jitter = 0.8 + Math.random() * 0.4;
   const delay = Math.min(reconnectDelay * jitter, RECONNECT_MAX);
@@ -46,8 +48,8 @@ export function connect() {
     if (S.reconnectTimer) { clearTimeout(S.reconnectTimer); S.reconnectTimer = null; }
     $('send-btn').disabled = false;
     renderVoice();
-    if (!S.identityExists) query('providers');
-    else query('steering');
+    query('providers');
+    if (S.identityExists) query('steering');
     query('sections'); query('ui_layout'); query('ui_theme');
     query('ui.overlay');
 
@@ -58,22 +60,13 @@ export function connect() {
   ws.onclose = () => {
     S.connected = false;
 
-    const hasTok = /(^|; )aii_token=/.test(document.cookie);
-    if (document.head.dataset.aiiTokenRequired === '1' && !S.tokenPrompted && (!hasTok || !S.wsEverOpened)) {
-      S.tokenPrompted = true;
-      const t = prompt((hasTok
-        ? 'The stored access token was refused. Re-enter the dashboard access token'
-        : 'This dashboard requires its access token')
-        + ' (printed once on the runtime console at boot).');
-      if (t && t.trim()) {
-        document.cookie = 'aii_token=' + t.trim() + '; path=/; max-age=31536000; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');
-      }
-    }
+    recoverAuthentication();
     $('send-btn').disabled = true;
     voiceConnectionLost();
     renderVoice();
     substrateConnectionLost();
     settingsConnectionLost();
+    abandonSignIn();
     firstbootConnectionLost();
     projectsConnectionLost();
     renderPresence();
@@ -82,6 +75,52 @@ export function connect() {
   };
   ws.binaryType = 'arraybuffer';
   ws.onmessage = onMessage;
+}
+
+// A closed socket says only that transport ended. Ask the HTTP server
+// whether the HttpOnly cookie was refused before asking the operator for
+// a credential; a Wi-Fi change or server restart must remain a reconnect.
+export async function recoverAuthentication() {
+  if (document.head.dataset.aiiTokenRequired !== '1' || S.tokenPrompted || authCheck) return;
+  authCheck = true;
+  let status;
+  try {
+    status = await fetch('/auth/token', { cache: 'no-store', credentials: 'same-origin' });
+  } catch (e) {
+    authCheck = false;
+    return;
+  }
+  if (status.status !== 401) {
+    authCheck = false;
+    return;
+  }
+
+  S.tokenPrompted = true;
+  let message = 'This dashboard requires its access token. Run aii dashboard-token on the AII OS machine, in its identity directory.';
+  for (;;) {
+    const entered = prompt(message);
+    // Cancel is "not now", not "never": the operator went to fetch the
+    // token, and the next reconnect must ask again.
+    if (!entered || !entered.trim()) { S.tokenPrompted = false; break; }
+    let reply;
+    try {
+      reply = await fetch('/auth/token', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: entered.trim(),
+      });
+    } catch (e) {
+      S.tokenPrompted = false;
+      break;
+    }
+    if (reply.ok) {
+      S.tokenPrompted = false;
+      authCheck = false;
+      wake();
+      return;
+    }
+    message = 'That access token was not accepted. Try again, or Cancel.';
+  }
+  authCheck = false;
 }
 
 export function wake() {
@@ -157,6 +196,7 @@ function onMessage(e) {
       if (voiceIn.voiceEvent) voiceIn.voiceEvent(ve);
       break;
     }
+    case 'voice_hush': if (voiceIn.hushFromHost) voiceIn.hushFromHost(msg.voice_hush || {}); break;
     case 'continuity': S.cont = msg.continuity || null; renderPresence(); renderPanel(); if (S.view === 'home') renderHome(); if (S.view === 'identity') renderIdentity(); break;
     case 'response':
       if (msg.stream) { setThinking(true); break; }
@@ -190,7 +230,7 @@ function onMessage(e) {
     case 'config':
       S.config = msg.config || null;
       acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id);
-      renderChatSubstrate(); if (S.view === 'settings') renderSettings(); if (S.view === 'plugins') renderPlugins(); break;
+      renderChatSubstrate(); renderComposer(); if (S.view === 'settings') renderSettings(); if (S.view === 'plugins') renderPlugins(); break;
     case 'logs':
 
       if (msg.logs_tail) { S.logTail = msg.logs_tail; }
@@ -231,12 +271,13 @@ function onMessage(e) {
       break;
     }
     case 'providers': S.providers = msg.providers || []; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
-    case 'provider_signin': if (msg.signin_url && S.signInNavigate) { S.signInNavigate(msg.signin_url); } else if (S.signInAbandon) { S.signInAbandon(); } break;
-    case 'profile_signin': if (msg.signin_url && S.profileSignInNavigate) { S.profileSignInNavigate(msg.signin_url); } else if (S.profileSignInAbandon) { S.profileSignInAbandon(); } break;
+    case 'provider_signin': case 'profile_signin': acceptSignIn(msg); break;
     case 'profile_device': if (S.onProfileDevice) { S.onProfileDevice(msg.device); } break;
     case 'update_check': S.update = msg.update || null; if (S.renderUpdate) S.renderUpdate(); if (S.renderUpdateChip) S.renderUpdateChip(); break;
     case 'restart': sysLine('restarting to run the update \u2014 this page reconnects when the identity is back'); break;
     case 'public_name': if (S.renderPublicName) S.renderPublicName(msg.public_name || null); break;
+    case 'speech_lists': acceptSpeechLists(msg.speech_lists); break;
+    case 'dashboard_token': acceptDashboardToken(msg.request_id, msg.dashboard_token); break;
     case 'models': {
       if (!acceptDiscoveryResponse(msg.request_id, msg.provider)) {
 
@@ -281,10 +322,11 @@ function onStats(stats) {
   const was = S.identityExists;
   S.identityExists = born;
   if (born && !was) { query('projects'); query('work'); query('providers'); query('config'); query('asks'); query('identity'); }
-  renderPresence(); renderFirstbootVisibility();
+  renderPresence(); renderFirstbootVisibility(); renderComposer();
   if (S.view === 'home') renderHome();
 }
 function onError(text, requestID, provider) {
+  abandonSignIn(requestID);
   setThinking(false);
   if (!S.identityExists) {
     if (provider && !acceptDiscoveryResponse(requestID, provider)) return;
@@ -298,6 +340,7 @@ function onError(text, requestID, provider) {
     $('fb-birth').disabled = false;
     return;
   }
+  if (rejectSpeechLists(requestID, text)) return; // said on the card, beside the field it was asked for
   if (rejectProviderSave(text, requestID) || rejectSubstrateConfig(text, requestID) || rejectSettingsConfig(text, requestID) || rejectCreate(requestID) || rejectFocusSave(requestID) || rejectContractSave(requestID)) { toast(text); return; }
   if (S.view === 'chat') sysLine('[error] ' + text); else toast(text);
 }

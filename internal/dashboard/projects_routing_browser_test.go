@@ -114,7 +114,9 @@ steps[1] = () => setTimeout(() => {
 steps[2] = () => {
   // BACK/FORWARD — history re-performs navigation. Back returns to
   // the chat address (the stack: chat, projects/beta, chat, then the
-  // pasted link); forward must re-select beta — one act per address.
+  // pasted link — a stack that holds only because the steps start after
+  // load; see the start below); forward must re-select beta — one act
+  // per address.
   // History traversal is asynchronous and the fixed 60ms wait this
   // step once used was a timing assumption: the public runner's
   // Chrome needed longer under load and the assertion fired before
@@ -163,7 +165,25 @@ steps[2] = () => {
 
 window.addEventListener('error', ev => __tell('page error: ' + ((ev.error && ev.error.message) || ev.message)));
 
-next();
+/* THE STACK STEP 2 WALKS EXISTS ONLY ONCE THE DOCUMENT HAS LOADED. A
+   script navigation made while the document is not yet completely
+   loaded, without user activation, REPLACES the current history entry
+   instead of pushing one (HTML, "Location-object navigate"). This module
+   runs before the load event, so starting at once raced it: when load
+   was still pending at step 1's pasted link, that write replaced the
+   chat entry and back() had nowhere to go, which is "history.back() did
+   not return to the chat address: #/projects/beta" after the whole
+   deadline, on the public runner's Firefox 155. No longer
+   wait could fix that; no traversal was coming. Measured on the build
+   host: Chrome 153 replaces before load, and holding its load event
+   behind a slow image fails this page with exactly that message; Firefox
+   140 ESR pushes regardless, which is why that host never saw it.
+   Starting after load gives every engine the same pushed stack — in a
+   task AFTER the load event, because a write inside its listener still
+   replaced in both engines. */
+const start = () => setTimeout(next, 0);
+if (document.readyState === 'complete') start();
+else window.addEventListener('load', start, { once: true });
 </script>`
 
 // .

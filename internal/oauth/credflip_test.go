@@ -27,7 +27,7 @@ func codexSource(t *testing.T, path string) *Source {
 
 func mustSource(t *testing.T, kind string, options map[string]string) *Source {
 	t.Helper()
-	s, err := New(kind, options)
+	s, err := testSource(kind, options)
 	if err != nil {
 		t.Fatalf("building the source: %v", err)
 	}

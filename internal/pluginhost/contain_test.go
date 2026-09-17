@@ -19,11 +19,11 @@ func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
 			t.Skip("bubblewrap is absent; containment refuses, which the fail-closed test covers")
 		}
 	}
-	argv, telemetry, err := containArgv([]string{"/tmp/artifact"})
+	argv, telemetry, err := containArgv([]string{"/tmp/artifact"}, nil)
 	if err != nil {
 		t.Fatalf("containment refused a plain argv: %v", err)
 	}
-	if telemetry == "" {
+	if telemetry.Description == "" {
 		t.Fatal("containment said nothing — the operator cannot tell whether it happened")
 	}
 
@@ -59,7 +59,7 @@ func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
 		return
 	}
 	if _, err := exec.LookPath("bwrap"); err != nil {
-		if !strings.Contains(telemetry, "not installed") {
+		if !strings.Contains(telemetry.Description, "not installed") {
 			t.Fatalf("bubblewrap is absent and the telemetry does not say so: %q", telemetry)
 		}
 		return
@@ -101,7 +101,7 @@ func TestContainingNothingIsAnError(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bubblewrap is not installed")
 	}
-	if _, _, err := containArgv(nil); err == nil {
+	if _, _, err := containArgv(nil, nil); err == nil {
 		t.Fatal("containing an empty argv reported success")
 	}
 }
@@ -130,7 +130,7 @@ func TestContainmentRefusesRatherThanRunningBare(t *testing.T) {
 		// .
 		// .
 		// .
-		argv, _, err := containArgv([]string{"/tmp/artifact"})
+		argv, _, err := containArgv([]string{"/tmp/artifact"}, nil)
 		if err != nil {
 			t.Fatalf("containment refused with the mechanism present: %v", err)
 		}
@@ -140,7 +140,7 @@ func TestContainmentRefusesRatherThanRunningBare(t *testing.T) {
 		return
 	}
 	// .
-	argv, _, err := containArgv([]string{"/tmp/artifact"})
+	argv, _, err := containArgv([]string{"/tmp/artifact"}, nil)
 	if err == nil {
 		t.Fatalf("%s is missing and containment returned %v instead of refusing — native code would run with no wall at all", tool, argv)
 	}

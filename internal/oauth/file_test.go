@@ -27,7 +27,7 @@ func TestOwnedTokenFile(t *testing.T) {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(KindFilePrefix + path)
+	s, err := testSource(KindFilePrefix + path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestExpiredSourceRequiresOwnerRefresh(t *testing.T) {
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	source, err := New(KindFilePrefix + path)
+	source, err := testSource(KindFilePrefix + path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestStaleAcceptsOnlyOwnerUpdate(t *testing.T) {
 		}
 	}
 	writeToken("token-one")
-	source, err := New(KindFilePrefix + path)
+	source, err := testSource(KindFilePrefix + path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestOwnerRewriteSupersedesMemoryEvenWithSameSizeAndMtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := New(KindFilePrefix + path)
+	source, err := testSource(KindFilePrefix + path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestOwnedFileAcceptsVendorShapes(t *testing.T) {
 		if err := os.WriteFile(p, b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		s, err := New(KindFilePrefix + p)
+		s, err := testSource(KindFilePrefix + p)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -171,7 +171,7 @@ func TestOwnedFileNamesRecoveryRoute(t *testing.T) {
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(KindFilePrefix + p)
+	s, err := testSource(KindFilePrefix + p)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -122,6 +122,7 @@ func (s *Server) serveProjectFile(w http.ResponseWriter, r *http.Request, id, re
 	// .
 	// .
 	// .
+	// .
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	http.ServeContent(w, r, path.Base(rel), time.Time{}, f)
 }

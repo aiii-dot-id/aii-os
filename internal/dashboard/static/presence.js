@@ -28,6 +28,10 @@ export function renderPresence() {
     pm.innerHTML = 'mode <b>' + esc(mode) + '</b>';
   }
 }
+// The send glyph is the arrow every current composer uses; a right-pointing
+// triangle read as play. Stop stays the square it has always been.
+const SEND_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>';
+
 export function setThinking(on) {
   S.thinking = on;
   renderPresence();
@@ -37,7 +41,8 @@ export function setThinking(on) {
   if (b) {
     b.classList.toggle('stopping', !!on);
     b.title = on ? 'Stop this turn' : 'Send';
-    b.innerHTML = on ? '&#9632;' : '&#10148;';
+    b.innerHTML = on ? '&#9632;' : SEND_ICON;
+    b.setAttribute('aria-label', b.title);
   }
 }
 export function toolPulse() {

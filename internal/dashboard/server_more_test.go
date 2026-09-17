@@ -63,6 +63,29 @@ func waitForConns(t *testing.T, s *Server, n int) {
 	}
 }
 
+// .
+// .
+// .
+// .
+// .
+// .
+func waitForConnsAtMost(t *testing.T, s *Server, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s.wsMu.Lock()
+		got := len(s.wsConns)
+		s.wsMu.Unlock()
+		if got <= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server still holds %d connection(s), want at most %d — a closed socket never left the broadcast set", got, n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func readMsg(t *testing.T, conn *websocket.Conn) ServerMessage {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -79,13 +79,14 @@ type Credential struct {
 
 // .
 type spec struct {
-	abs     string
-	file    []string
-	baseURL string
-	needs   string
-	parse   func([]byte) (*state, error)
-	dialect string
-	billing string
+	accountHeader string
+	abs           string
+	file          []string
+	baseURL       string
+	needs         string
+	parse         func([]byte) (*state, error)
+	dialect       string
+	billing       string
 
 	// .
 	// .
@@ -94,6 +95,12 @@ type spec struct {
 	// .
 	headers map[string]string
 	query   map[string]string
+
+	// .
+	// .
+	// .
+	// .
+	keychain string
 
 	// .
 	// .
@@ -112,12 +119,21 @@ type spec struct {
 
 // .
 type OAuthParams struct {
-	ClientID     string
-	AuthorizeURL string
-	TokenURL     string
-	RedirectURI  string
-	Scope        string
-	Originator   string
+	TokenEncoding   string
+	TokenHeaders    map[string]string
+	TokenParams     map[string]any
+	RefreshParams   map[string]any
+	ResourceHeaders map[string]string
+	ClaimHeaders    map[string][]string
+	ClientID        string
+	AuthorizeURL    string
+	TokenURL        string
+	RedirectURI     string
+	Scope           string
+	// .
+	// .
+	RequiredScope string
+	Originator    string
 	// .
 	// .
 	// .
@@ -132,24 +148,28 @@ type OAuthParams struct {
 	// .
 	// .
 	AuthorizeParams map[string]string
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	AccountClaim []string
 }
 
 // .
 // .
 // .
-func (sp spec) refreshable() bool {
-	if sp.generic {
-		return sp.oauth.TokenURL != "" && sp.oauth.ClientID != ""
-	}
-	return sp.oauth.Complete()
-}
+func (sp spec) refreshable() bool { return sp.oauth.TokenURL != "" && sp.oauth.ClientID != "" }
 
 // .
 func (o OAuthParams) Complete() bool {
-	return o.ClientID != "" && o.AuthorizeURL != "" && o.TokenURL != "" && o.RedirectURI != "" && o.Scope != ""
+	return o.ClientID != "" && o.AuthorizeURL != "" && o.TokenURL != "" && o.RedirectURI != ""
 }
 
 type state struct {
+	account  string
 	isAPIKey bool
 	plan     string
 	tier     string
@@ -179,28 +199,9 @@ func specFor(kind string) (spec, error) {
 	}
 	switch kind {
 	case KindClaudeCode:
-		return spec{
-			file:    []string{".claude", ".credentials.json"},
-			needs:   "user:inference",
-			parse:   parseClaudeCode,
-			dialect: "anthropic",
-		}, nil
+		return spec{parse: parseClaudeCode}, nil
 	case KindCodex:
-		return spec{
-			file: []string{".codex", "auth.json"},
-			// .
-			// .
-			// .
-			// .
-			baseURL: "https://chatgpt.com/backend-api/codex",
-			parse:   parseCodex,
-			dialect: "chatgpt",
-			// .
-			// .
-			// .
-			// .
-			query: map[string]string{"client_version": "1.0.0"},
-		}, nil
+		return spec{parse: parseCodex}, nil
 	}
 	return spec{}, fmt.Errorf("unknown credential source %q (known: %s)", kind, strings.Join(Kinds(), ", "))
 }
@@ -233,7 +234,10 @@ func applyOverrides(sp spec, ov map[string]string) (spec, error) {
 			return spec{}, fmt.Errorf("credential option %q is empty", k)
 		}
 		switch {
-		case k == "file":
+		case k == "default_file" || k == "file":
+			if k == "default_file" && ov["file"] != "" {
+				continue
+			}
 			// .
 			// .
 			if filepath.IsAbs(v) || strings.HasPrefix(v, "~/") {
@@ -241,8 +245,16 @@ func applyOverrides(sp spec, ov map[string]string) (spec, error) {
 			} else {
 				sp.file = strings.Split(v, "/")
 			}
+		case k == "dialect":
+			sp.dialect = v
+		case k == "required_scope":
+			sp.needs = v
+		case k == "account_header":
+			sp.accountHeader = v
 		case k == "base_url":
 			sp.baseURL = v
+		case k == "keychain_service":
+			sp.keychain = v
 		case k == "client_version":
 			// .
 			// .
@@ -271,6 +283,12 @@ func applyOverrides(sp spec, ov map[string]string) (spec, error) {
 			default:
 				return spec{}, fmt.Errorf("credential option %q must be \"true\" or \"false\", got %q", k, v)
 			}
+		case k == "oauth_account_claim":
+			var path []string
+			if err := json.Unmarshal([]byte(v), &path); err != nil || len(path) == 0 {
+				return spec{}, fmt.Errorf("credential option %q must be a JSON array of claim names, got %q", k, v)
+			}
+			sp.oauth.AccountClaim = path
 		case k == "oauth_authorize_params":
 			var m map[string]string
 			if err := json.Unmarshal([]byte(v), &m); err != nil {
@@ -330,10 +348,20 @@ type Source struct {
 // .
 // .
 func New(kind string, overrides ...map[string]string) (*Source, error) {
+	return newBorrowed(kind, OAuthParams{}, overrides...)
+}
+
+func NewConfigured(kind string, params OAuthParams, overrides ...map[string]string) (*Source, error) {
+	return newBorrowed(kind, params, overrides...)
+}
+
+func newBorrowed(kind string, params OAuthParams, overrides ...map[string]string) (*Source, error) {
 	sp, err := specFor(kind)
 	if err != nil {
 		return nil, err
 	}
+	sp.oauth = params
+	sp.headers = copyMap(params.ResourceHeaders)
 	for _, ov := range overrides {
 		sp, err = applyOverrides(sp, ov)
 		if err != nil {
@@ -347,6 +375,9 @@ func New(kind string, overrides ...map[string]string) (*Source, error) {
 	// .
 	// .
 	path := sp.abs
+	if path == "" && len(sp.file) == 0 {
+		return nil, fmt.Errorf("credential %q needs a configured file or default_file", kind)
+	}
 	if path == "" {
 		home, herr := homeDir()
 		if herr != nil {
@@ -373,23 +404,27 @@ func New(kind string, overrides ...map[string]string) (*Source, error) {
 // .
 // .
 func NewOwned(kind, path string, overrides ...map[string]string) (*Source, error) {
+	return NewOwnedConfigured(kind, path, OAuthParams{}, overrides...)
+}
+
+// .
+// .
+func NewOwnedConfigured(kind, path string, params OAuthParams, overrides ...map[string]string) (*Source, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("owned credential path must be absolute, got %q", path)
 	}
-	sp, err := specFor(kind)
-	if err != nil {
-		return nil, err
-	}
+	sp := spec{parse: parseGeneric, generic: true, oauth: params, headers: copyMap(params.ResourceHeaders)}
+	var err error
 	for _, ov := range overrides {
 		sp, err = applyOverrides(sp, ov)
 		if err != nil {
-			return nil, fmt.Errorf("credential %q: %w", kind, err)
+			return nil, err
 		}
 	}
-	if !sp.oauth.Complete() {
-		return nil, fmt.Errorf("credential %q: an owned source needs its sign-in contract (oauth_* options) to refresh", kind)
+	if !sp.refreshable() {
+		return nil, fmt.Errorf("credential %q: an owned source needs a token endpoint and client id", kind)
 	}
-	sp.abs, sp.file = path, nil
+	sp.abs, sp.file, sp.keychain = path, nil, ""
 	s := &Source{kind: kind, sp: sp, path: path, owned: true}
 	if _, err := s.load(); err != nil {
 		return nil, err
@@ -447,13 +482,25 @@ func (s *Source) DiscoveryQuery() map[string]string {
 // .
 // .
 func (s *Source) load() (*state, error) {
-	raw, err := os.ReadFile(s.path)
+	raw, err := adoptedBytes(s.sp.keychain, s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// .
 			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			if s.sp.oauth.Complete() {
+				return nil, fmt.Errorf("no %s credentials at %s%s — sign in to this provider from Settings, or sign in with that tool first: %w",
+					s.kind, s.path, keychainNote(s.sp.keychain), err)
+			}
 			return nil, fmt.Errorf("no %s credentials at %s — sign in with that tool first%s: %w",
-				s.kind, s.path, keychainNote(), err)
+				s.kind, s.path, keychainNote(s.sp.keychain), err)
 		}
 		return nil, fmt.Errorf("%s credentials at %s: %w", s.kind, s.path, err)
 	}
@@ -464,6 +511,45 @@ func (s *Source) load() (*state, error) {
 	st, err := s.sp.parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s credentials at %s: %w", s.kind, s.path, err)
+	}
+	if st.account != "" && s.sp.accountHeader != "" {
+		if st.headers == nil {
+			st.headers = map[string]string{}
+		}
+		st.headers[s.sp.accountHeader] = st.account
+	}
+	paths := copyPaths(s.sp.oauth.ClaimHeaders)
+	if s.sp.accountHeader != "" && len(s.sp.oauth.AccountClaim) > 0 {
+		if paths == nil {
+			paths = map[string][]string{}
+		}
+		paths[s.sp.accountHeader] = s.sp.oauth.AccountClaim
+	}
+	for header, path := range paths {
+		if st.isAPIKey {
+			continue
+		}
+		if st.headers[header] != "" {
+			continue
+		}
+		value := claimString(st.access, path)
+		if value == "" {
+			return nil, fmt.Errorf("credential lacks required claim %s", strings.Join(path, "."))
+		}
+		if st.headers == nil {
+			st.headers = map[string]string{}
+		}
+		st.headers[header] = value
+	}
+	for k, v := range s.sp.headers {
+		if !validHeader(k, v) {
+			return nil, fmt.Errorf("invalid credential header %q", k)
+		}
+	}
+	for k, v := range st.headers {
+		if !validHeader(k, v) {
+			return nil, fmt.Errorf("invalid credential header %q", k)
+		}
 	}
 	if st.access == "" {
 		return nil, fmt.Errorf("%s credentials at %s carry no access token", s.kind, s.path)
@@ -564,30 +650,46 @@ func (s *Source) refreshOwned(ctx context.Context, refreshTok string, seenGen ui
 			return c, nil
 		}
 	}
-	s.mu.Unlock()
-	if s.sp.generic {
-		// .
-		// .
-		// .
-		fresh, rerr := refreshWith(ctx, s.httpClient(), s.sp.oauth, refreshTok)
-		if rerr != nil {
-			return Credential{}, fmt.Errorf("credential at %s: refresh failed: %w", s.path, rerr)
-		}
-		if fresh.Refresh == "" {
-			fresh.Refresh = refreshTok
-		}
-		if werr := WriteTokenFile(s.path, fresh); werr != nil {
-			return Credential{}, fmt.Errorf("credential at %s: could not store the refreshed token: %w", s.path, werr)
-		}
-	} else {
-		fresh, rerr := Refresh(ctx, s.sp.oauth, refreshTok)
-		if rerr != nil {
-			return Credential{}, fmt.Errorf("%s credential at %s: refresh failed: %w — sign in again", s.kind, s.path, rerr)
-		}
-		if werr := WriteAuthFile(s.path, fresh); werr != nil {
-			return Credential{}, fmt.Errorf("%s credential at %s: could not store the refreshed token: %w", s.kind, s.path, werr)
-		}
+	before, err := os.ReadFile(s.path)
+	if err != nil {
+		s.mu.Unlock()
+		return Credential{}, err
 	}
+	if sha256.Sum256(before) != s.sourceHash {
+		st, err := s.load()
+		if err != nil {
+			s.mu.Unlock()
+			return Credential{}, err
+		}
+		if !nearExpiry(st) {
+			c := s.credLocked(st)
+			s.mu.Unlock()
+			return c, nil
+		}
+		refreshTok = st.refresh
+	}
+	params := s.sp.oauth
+	if len(s.st.scopes) > 0 {
+		params.Scope = strings.Join(s.st.scopes, " ")
+	}
+	s.mu.Unlock()
+	fresh, rerr := refreshWith(ctx, s.httpClient(), params, refreshTok)
+	if rerr != nil {
+		return Credential{}, fmt.Errorf("credential at %s: refresh failed: %w", s.path, rerr)
+	}
+	if fresh.Refresh == "" {
+		fresh.Refresh = refreshTok
+	}
+	if fresh.Scope == "" {
+		fresh.Scope = params.Scope
+	}
+	if ctx.Err() != nil {
+		return Credential{}, ctx.Err()
+	}
+	if werr := replaceTokenFile(s.path, before, fresh); werr != nil {
+		return Credential{}, fmt.Errorf("credential at %s: could not store refreshed token: %w", s.path, werr)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, err := s.load()
@@ -622,6 +724,9 @@ func (s *Source) Stale(ctx context.Context, gen uint64) error {
 	if gen != s.gen {
 		return nil
 	}
+	// .
+	// .
+	forgetAdopted(s.sp.keychain)
 	if _, err := s.load(); err != nil {
 		return err
 	}
@@ -690,7 +795,7 @@ func (s *Source) httpClient() *http.Client {
 	if s.client != nil {
 		return s.client
 	}
-	return codexHTTP
+	return signInHTTP
 }
 
 func (s *Source) credLocked(st *state) Credential {
@@ -705,6 +810,9 @@ func (s *Source) credLocked(st *state) Credential {
 }
 
 func (s *Source) ownerRefreshError(reason string) error {
+	if s.owned {
+		return fmt.Errorf("%w: credential %s — sign in again", ErrGrantInvalid, reason)
+	}
 	return fmt.Errorf("%w: %s credential at %s %s — refresh it with its own tool, then retry",
 		ErrOwnerRefreshRequired, s.kind, s.path, reason)
 }
@@ -752,7 +860,7 @@ func parseCodex(raw []byte) (*state, error) {
 	}
 	st := &state{access: f.Tokens.AccessToken, refresh: f.Tokens.RefreshToken, owned: f.OwnedBy == "aii-os"}
 	if f.Tokens.AccountID != "" {
-		st.headers = map[string]string{"ChatGPT-Account-ID": f.Tokens.AccountID}
+		st.account = f.Tokens.AccountID
 	}
 	// .
 	if c, err := jwtClaims(st.access); err == nil {
@@ -810,13 +918,25 @@ type Info struct {
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	IsAPIKey  bool      `json:"is_api_key,omitempty"`
 	Path      string    `json:"path,omitempty"`
+	// .
+	// .
+	// .
+	Error string `json:"error,omitempty"`
 }
 
+// .
+// .
+// .
+// .
+// .
 // .
 func (s *Source) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := Info{Kind: s.kind, Path: s.path}
+	if _, err := s.load(); err != nil {
+		i.Error = err.Error()
+	}
 	if s.st == nil {
 		return i
 	}
@@ -880,10 +1000,63 @@ func parseGeneric(raw []byte) (*state, error) {
 // .
 // .
 // .
-func Dialect(kind string) string {
+func Dialect(kind string, overrides ...map[string]string) string {
 	sp, err := specFor(kind)
 	if err != nil {
 		return ""
 	}
+	for _, ov := range overrides {
+		sp, err = applyOverrides(sp, ov)
+		if err != nil {
+			return ""
+		}
+	}
 	return sp.dialect
+}
+
+// .
+func OverrideParams(base OAuthParams, opts map[string]string) (OAuthParams, error) {
+	filtered := map[string]string{}
+	for k, v := range opts {
+		if strings.HasPrefix(k, "oauth_") {
+			filtered[k] = v
+		}
+	}
+	sp, err := applyOverrides(spec{oauth: base}, filtered)
+	if err != nil {
+		return OAuthParams{}, err
+	}
+	p := sp.oauth
+	p.AuthorizeParams = copyMap(p.AuthorizeParams)
+	if p.AuthorizeParams == nil {
+		p.AuthorizeParams = map[string]string{}
+	}
+	if p.Originator != "" {
+		p.AuthorizeParams["originator"] = p.Originator
+		p.Originator = ""
+	}
+	if _, set := filtered["oauth_id_token_add_organizations"]; set {
+		p.AuthorizeParams["id_token_add_organizations"] = filtered["oauth_id_token_add_organizations"]
+		p.IDTokenAddOrganizations = false
+	}
+	if len(p.AccountClaim) > 0 && opts["account_header"] != "" {
+		p.ClaimHeaders = copyPaths(p.ClaimHeaders)
+		if p.ClaimHeaders == nil {
+			p.ClaimHeaders = map[string][]string{}
+		}
+		p.ClaimHeaders[opts["account_header"]] = p.AccountClaim
+	}
+	return p, nil
+}
+
+func validHeader(name, value string) bool {
+	if name == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return false
+	}
+	for _, c := range name {
+		if c <= 32 || c >= 127 || strings.ContainsRune("()<>@,;:\"/[]?={}\t", c) {
+			return false
+		}
+	}
+	return !strings.EqualFold(name, "Authorization") && !strings.EqualFold(name, "Host") && !strings.EqualFold(name, "Proxy-Authorization")
 }

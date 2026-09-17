@@ -2,4 +2,12 @@
 
 package oauth
 
-func keychainNote() string { return "" }
+import "os"
+
+// .
+// .
+func adoptedBytes(_, path string) ([]byte, error) { return os.ReadFile(path) }
+
+func forgetAdopted(string) {}
+
+func keychainNote(string) string { return "" }

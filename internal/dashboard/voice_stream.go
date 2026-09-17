@@ -110,8 +110,14 @@ type VoiceEvent struct {
 	Type      string `json:"type"`
 	Text      string `json:"text,omitempty"`
 	Speaker   string `json:"speaker,omitempty"`
+	// .
+	// .
+	SpeakerID string `json:"speaker_id,omitempty"`
 	Final     bool   `json:"final,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// .
+	// .
+	Revision uint64 `json:"revision,omitempty"`
 	// .
 	// .
 	// .
@@ -484,13 +490,37 @@ func (s *Server) BroadcastVoiceEvent(ev VoiceEvent) {
 // .
 // .
 // .
+// .
+// .
+// .
 type VoiceReplyRef struct {
 	SessionID   string `json:"session_id"`
 	SynthesisID string `json:"synthesis_id,omitempty"`
 	Route       string `json:"route"`
+	TextOnly    bool   `json:"text_only,omitempty"`
+	// .
+	// .
+	// .
+	Fallback bool `json:"fallback,omitempty"`
 }
 
 // .
+// .
+// .
+// .
+// .
+type VoiceHush struct {
+	SessionID   string `json:"session_id"`
+	SynthesisID string `json:"synthesis_id,omitempty"`
+	Route       string `json:"route"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// .
+func (s *Server) BroadcastVoiceHush(h VoiceHush) {
+	s.broadcast(ServerMessage{Type: "voice_hush", VoiceHush: &h})
+}
+
 // .
 // .
 // .

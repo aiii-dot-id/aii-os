@@ -1,12 +1,14 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Run the uncached race suite without serializing the five packages whose
 # top-level tests dominate wall time. Each selected package is partitioned by
-# top-level test name; subtests remain with their parent. The plan is verified
-# before execution so a stale or malformed partition cannot silently omit a
-# test.
+# top-level test name; subtests remain with their parent. Every partition is
+# verified before execution so it cannot silently omit a test.
 
-set -eu
+# Bash job control gives each background job its own process group on both
+# Linux and macOS. Re-exec also supports callers that invoke this through sh.
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+set -eum
 
 LC_ALL=C
 export LC_ALL
@@ -17,13 +19,26 @@ repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 run_dir=$(mktemp -d)
 marker="$run_dir/.aii-race-scope"
 : > "$marker"
+active_pids=
 
 cleanup() {
+	rc=$?
+	trap - EXIT HUP INT TERM
+	for pid in $active_pids; do
+		kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+	done
+	for pid in $active_pids; do
+		wait "$pid" 2>/dev/null || true
+	done
 	if [ -f "$marker" ]; then
 		rm -rf -- "$run_dir"
 	fi
+	exit "$rc"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
 	echo "test scope: $*" >&2
@@ -77,7 +92,7 @@ plan_tests() {
 		echo "no top-level tests discovered" >&2
 		return 1
 	fi
-	if grep -v '^Test[[:alnum:]_]*$' "$pt_tests" > "$pt_plan/invalid"; then
+	if grep -Ev '^(Test|Example|Fuzz)[[:alnum:]_]*$' "$pt_tests" > "$pt_plan/invalid"; then
 		echo "test name cannot be represented safely in an exact run expression:" >&2
 		cat "$pt_plan/invalid" >&2
 		return 1
@@ -103,7 +118,7 @@ validate_execution() {
 	ve_log=$2
 	ve_dir=$3
 	mkdir -p "$ve_dir"
-	sed -n 's/^=== RUN   \(Test[[:alnum:]_]*\)$/\1/p' "$ve_log" | sort > "$ve_dir/executed"
+	sed -En 's/^=== RUN   ((Test|Example|Fuzz)[[:alnum:]_]*)$/\1/p' "$ve_log" | sort > "$ve_dir/executed"
 	sort "$ve_expected" > "$ve_dir/assigned"
 	if ! cmp -s "$ve_dir/assigned" "$ve_dir/executed"; then
 		echo "executed top-level tests differ from assigned tests" >&2
@@ -121,8 +136,8 @@ TestCharlie
 TestDelta
 TestEcho
 TestFoxtrot
-TestGolf
-TestHotel
+Example
+FuzzHotel
 EOF
 	plan_tests "$st_tests" "$st_plan" 4 || fail "valid exact-once plan was rejected"
 
@@ -176,19 +191,43 @@ fi
 
 cd "$repo_root"
 
+start_job() {
+	sj_log=$1
+	shift
+	"$@" > "$sj_log" 2>&1 &
+	started_pid=$!
+	active_pids="$active_pids $started_pid"
+}
+
+untrack_job() {
+	uj_pid=$1
+	uj_remaining=
+	for uj_active in $active_pids; do
+		if [ "$uj_active" != "$uj_pid" ]; then
+			uj_remaining="$uj_remaining $uj_active"
+		fi
+	done
+	active_pids=$uj_remaining
+}
+
+sharded_packages() {
+	printf '%s\n' ./internal/app ./internal/dashboard ./internal/identity ./internal/store ./internal/pluginhost
+}
+
 sharded_scopes() {
-	printf '%s\n' app dashboard identity store pluginhost
+	for package in $(sharded_packages); do
+		printf '%s\n' "${package##*/}"
+	done
 }
 
 package_for_scope() {
-	case "$1" in
-		app) echo ./internal/app ;;
-		dashboard) echo ./internal/dashboard ;;
-		identity) echo ./internal/identity ;;
-		store) echo ./internal/store ;;
-		pluginhost) echo ./internal/pluginhost ;;
-		*) return 1 ;;
-	esac
+	for package in $(sharded_packages); do
+		if [ "${package##*/}" = "$1" ]; then
+			printf '%s\n' "$package"
+			return
+		fi
+	done
+	return 1
 }
 
 run_sharded_package() {
@@ -201,10 +240,15 @@ run_sharded_package() {
 
 	# Discovery uses the same race build mode as execution. A non-race list can
 	# differ when a package contains race/!race build-tagged tests.
-	if ! "$go_bin" test -race -list '^Test' "$package" > "$raw"; then
+	start_job "$raw" "$go_bin" test -race -list '^(Test|Example|Fuzz)' "$package"
+	discovery_pid=$started_pid
+	if ! wait "$discovery_pid"; then
+		untrack_job "$discovery_pid"
+		cat "$raw" >&2
 		fail "could not discover tests for $package"
 	fi
-	grep '^Test' "$raw" > "$tests" || true
+	untrack_job "$discovery_pid"
+	grep -E '^(Test|Example|Fuzz)' "$raw" > "$tests" || true
 	plan_tests "$tests" "$plan" "$shards" || fail "invalid shard plan for $package"
 
 	jobs="$plan/jobs"
@@ -213,31 +257,38 @@ run_sharded_package() {
 	while [ "$i" -lt "$shards" ]; do
 		regex=$(awk 'BEGIN { printf "^(" } { printf "%s%s", separator, $0; separator="|" } END { print ")$" }' "$plan/$i.tests")
 		log="$plan/$i.log"
-		(
-			"$go_bin" test -v -race -count=1 -run "$regex" "$package" &&
-				validate_execution "$plan/$i.tests" "$log" "$plan/$i-execution"
-		) > "$log" 2>&1 &
-		echo "$! $log" >> "$jobs"
+		start_job "$log" "$go_bin" test -v -race -count=1 -run "$regex" "$package"
+		echo "$started_pid $log $plan/$i.tests $plan/$i-execution" >> "$jobs"
 		i=$((i + 1))
 	done
 
 	status=0
-	while read -r pid log; do
+	while read -r pid log expected execution; do
 		# Provenance headers (review 3, rec 5): a failure body with no
 		# origin made a live triage blind — a terse FAIL line could not
 		# be attributed to shard, validator, or another stage. Every
 		# cat now says exactly what it is printing and why.
 		if ! wait "$pid"; then
+			untrack_job "$pid"
 			status=1
-			echo "=== FAILING SHARD $log (scope $short_scope; go test or validate_execution exited nonzero) ==="
+			echo "=== FAILING SHARD $log (scope $short_scope; go test exited nonzero) ==="
+			cat "$log"
+			echo "=== END FAILING SHARD $log ==="
+		elif ! validate_execution "$expected" "$log" "$execution" >> "$log" 2>&1; then
+			untrack_job "$pid"
+			status=1
+			echo "=== FAILING SHARD $log (scope $short_scope; execution validation exited nonzero) ==="
 			cat "$log"
 			echo "=== END FAILING SHARD $log ==="
 		elif ! grep '^ok[[:space:]]' "$log"; then
+			untrack_job "$pid"
 			echo "test scope: passing shard produced no package result" >&2
 			echo "=== SUSPECT SHARD $log (scope $short_scope; exit 0 but no package result) ==="
 			cat "$log"
 			echo "=== END SUSPECT SHARD $log ==="
 			status=1
+		else
+			untrack_job "$pid"
 		fi
 	done < "$jobs"
 	if [ "$status" -ne 0 ]; then
@@ -252,8 +303,7 @@ run_rest() {
 	rest="$run_dir/rest-packages"
 	"$go_bin" list ./... > "$all" || fail "could not list repository packages"
 	: > "$slow"
-	for short_scope in $(sharded_scopes); do
-		package=$(package_for_scope "$short_scope")
+	for package in $(sharded_packages); do
 		"$go_bin" list "$package" >> "$slow" || fail "could not resolve $package"
 	done
 	awk 'NR == FNR { excluded[$0] = 1; next } !excluded[$0]' "$slow" "$all" > "$rest"
@@ -262,7 +312,16 @@ run_rest() {
 	# Package import paths cannot contain shell whitespace. Passing the list as
 	# positional arguments preserves go test's package-level parallel scheduler.
 	set -- $(cat "$rest")
-	"$go_bin" test -race -count=1 "$@"
+	log="$run_dir/rest.log"
+	start_job "$log" "$go_bin" test -race -count=1 "$@"
+	pid=$started_pid
+	if ! wait "$pid"; then
+		untrack_job "$pid"
+		cat "$log"
+		return 1
+	fi
+	untrack_job "$pid"
+	cat "$log"
 	echo "race scope rest: PASS"
 }
 
@@ -271,8 +330,8 @@ run_all() {
 	: > "$jobs"
 	for child_scope in $(sharded_scopes) rest; do
 		log="$run_dir/$child_scope.log"
-		AII_GO="$go_bin" AII_TEST_SHARDS="$shards" "$script_dir/run_race_scope.sh" "$child_scope" > "$log" 2>&1 &
-		echo "$! $child_scope $log" >> "$jobs"
+		start_job "$log" env AII_GO="$go_bin" AII_TEST_SHARDS="$shards" "$script_dir/run_race_scope.sh" "$child_scope"
+		echo "$started_pid $child_scope $log" >> "$jobs"
 	done
 
 	status=0
@@ -282,6 +341,7 @@ run_all() {
 			status=1
 			child_status=FAILED
 		fi
+		untrack_job "$pid"
 		echo "=== SCOPE $child_scope ($child_status) log $log ==="
 		cat "$log"
 		echo "=== END SCOPE $child_scope ==="
@@ -297,7 +357,7 @@ case "$scope" in
 	all) run_all ;;
 	*)
 		package_for_scope "$scope" >/dev/null 2>&1 ||
-			fail "usage: $0 [all|app|dashboard|identity|store|pluginhost|rest|self-test]"
+			fail "unknown scope: $scope (use all, a sharded package basename, rest, or self-test)"
 		run_sharded_package "$scope"
 		;;
 esac

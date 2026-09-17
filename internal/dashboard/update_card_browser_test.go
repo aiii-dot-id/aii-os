@@ -57,10 +57,10 @@ run(async (assert) => {
 </script></body></html>`
 	modules := map[string][]byte{
 		"/state.js":              []byte(`export const S = {};`),
-		"/util.js":               []byte(`export const $ = (id) => document.getElementById(id); export const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));`),
+		"/util.js":               []byte(`export const $ = (id) => document.getElementById(id); export const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); export const copyText = async () => true;`),
 		"/ws.js":                 []byte(`export const sent = []; export function send(m) { sent.push(m); } export function query() {}`),
 		"/sandbox.js":            stubModule("sandboxCardHTML", "wireSandboxCard"),
-		"/pending.js":            stubModule("pendingSlot"),
+		"/pending.js":            []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; }`),
 		"/views/model-picker.js": stubModule("providerModels"),
 	}
 	real, err := staticFS.ReadFile("static/views/settings.js")

@@ -563,13 +563,13 @@ export function wake() {}
 		"/theme.js":          stubModule("onTheme"),
 		"/overlay.js":        stubModule("restoreDraft", "onOverlayChanged"),
 		"/voice.js":          stubModule("wireMic", "bindTransport", "speak", "render", "connectionLost"),
-		"/views/chat.js":     stubModule("scrollThread", "addMsg", "attachSpeaker", "sysLine", "toolEventLive", "thinkingEvent", "renderHistory", "renderChatSubstrate", "acceptSubstrateConfig", "rejectSubstrateConfig", "substrateConnectionLost", "renderSteering", "renderAsks"),
+		"/views/chat.js":     stubModule("scrollThread", "addMsg", "attachSpeaker", "sysLine", "toolEventLive", "thinkingEvent", "renderHistory", "renderChatSubstrate", "renderComposer", "acceptSubstrateConfig", "rejectSubstrateConfig", "substrateConnectionLost", "renderSteering", "renderAsks"),
 		"/views/home.js":     stubModule("renderHome"),
 		"/views/work.js":     stubModule("renderWorkPill"),
 		"/views/memory.js":   stubModule("renderMemory"),
 		"/views/identity.js": stubModule("renderIdentity"),
 		"/views/plugins.js":  stubModule("renderPlugins"),
-		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "settingsConnectionLost"),
+		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptDashboardToken", "settingsConnectionLost"),
 	}
 }
 

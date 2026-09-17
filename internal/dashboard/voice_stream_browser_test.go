@@ -14,7 +14,7 @@ import "testing"
 // .
 // .
 const voiceStreamPage = `<!doctype html>
-<button id="mic"></button><button id="voicemode"></button>
+<button id="mic"></button>
 <script type="module">
 import { assert, run } from './__harness.js';
 import { encodeStreamFrame, decodeStreamFrame, StreamLane, Playback, STREAM_QUEUE } from './voice.js';

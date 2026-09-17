@@ -917,7 +917,7 @@ func TestTheRelayGuardAsksTheRunningDashboardNotTheFile(t *testing.T) {
 	// .
 	app.cfgMu.Lock()
 	app.cfg.Dashboard.RequireToken = true
-	app.cfg.Dashboard.AuthTokenSHA256 = strings.Repeat("a", 64)
+	app.cfg.Dashboard.AccessToken = strings.Repeat("a", 64)
 	app.cfgMu.Unlock()
 	if app.dashboard.AccessTokenRequired() {
 		t.Fatal("the running server has not been told to require anything")

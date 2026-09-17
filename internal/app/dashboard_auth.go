@@ -2,14 +2,15 @@ package app
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 )
 
 // .
@@ -17,10 +18,13 @@ import (
 // .
 // .
 // .
-func (a *App) ensureDashboardToken() {
-	a.cfgMu.Lock()
-	cfg := a.cfg
-	// .
+const shortAccessToken = 16
+
+func (a *App) ensureDashboardToken() error {
+	cfg := a.configSnapshot()
+	changed := false
+	minted := ""
+
 	// .
 	// .
 	// .
@@ -40,47 +44,76 @@ func (a *App) ensureDashboardToken() {
 	if !cfg.Dashboard.RequireToken && !loopbackBind(cfg.Dashboard.Host) {
 		log.Printf("dashboard: bind %q is not loopback and require_token was false — REQUIRING a token, because Host and Origin gates bind a browser and not a direct client", dashboardBindName(cfg.Dashboard.Host))
 		cfg.Dashboard.RequireToken = true
-		a.cfg = cfg
+		changed = true
 	}
-	if !cfg.Dashboard.RequireToken || cfg.Dashboard.AuthTokenSHA256 != "" {
-		a.cfgMu.Unlock()
-		return
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if cfg.Dashboard.LegacyAuthTokenSHA256 != "" {
+		if cfg.Dashboard.AccessToken == "" && cfg.Dashboard.RequireToken {
+			log.Printf("dashboard: the access token from the previous format is retired — it was printed on every boot — and a new one is minted; read it with `aii dashboard-token`")
+		}
+		cfg.Dashboard.LegacyAuthTokenSHA256 = ""
+		changed = true
 	}
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		a.cfgMu.Unlock()
+	if cfg.Dashboard.AccessToken != "" && cfg.Dashboard.LegacyAuthTokenSHA256 != "" {
+		cfg.Dashboard.LegacyAuthTokenSHA256 = ""
+		changed = true
+	}
+	if cfg.Dashboard.RequireToken && cfg.Dashboard.AccessToken == "" {
+		var raw [32]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return fmt.Errorf("dashboard access token mint: %w", err)
+		}
+		minted = hex.EncodeToString(raw[:])
+		cfg.Dashboard.AccessToken = minted
+		changed = true
+	}
+	if cfg.Dashboard.RequireToken {
 		// .
 		// .
-		log.Printf("dashboard: token mint failed (%v) — access stays refused until a token exists", err)
-		return
+		// .
+		if n := len(cfg.Dashboard.AccessToken); n < shortAccessToken && !loopbackBind(cfg.Dashboard.Host) {
+			log.Printf("dashboard: the access token in %s is %d bytes long on a network bind; clear dashboard.access_token to mint a strong one", cfg.SourcePath, n)
+		}
+		if len(cfg.Dashboard.AccessToken) > dashboard.AccessTokenMaxBytes {
+			return fmt.Errorf("dashboard access token in %s exceeds %d bytes; clear dashboard.access_token to mint a new one", cfg.SourcePath, dashboard.AccessTokenMaxBytes)
+		}
+		if strings.TrimSpace(cfg.Dashboard.AccessToken) != cfg.Dashboard.AccessToken {
+			return fmt.Errorf("dashboard access token in %s has leading or trailing whitespace; clear dashboard.access_token to mint a new one", cfg.SourcePath)
+		}
 	}
-	token := hex.EncodeToString(raw[:])
-	sum := sha256.Sum256([]byte(token))
-	cfg.Dashboard.AuthTokenSHA256 = hex.EncodeToString(sum[:])
-	_, perr := saveConfig(cfg)
-	a.cfgMu.Unlock()
-	a.mintedTokenMu.Lock()
-	a.mintedToken = token
-	a.mintedTokenMu.Unlock()
-	if perr != nil {
-		log.Printf("dashboard: minted token could not be persisted (%v) — it holds for THIS run and is re-minted next boot", perr)
+	if changed {
+		if _, err := saveConfig(&cfg); err != nil {
+			return fmt.Errorf("persist dashboard access token in %s: %w", cfg.SourcePath, err)
+		}
+		a.cfgMu.Lock()
+		*a.cfg = cfg
+		a.cfgMu.Unlock()
 	}
+
 	// .
 	// .
 	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if !writeDashboardToken(dashboardTokenPath(*cfg), token) {
-		log.Printf("dashboard: the access token could not be written to %s — the boot console is the only copy", dashboardTokenPath(*cfg))
+	if cfg.Dashboard.AccessToken != "" || !cfg.Dashboard.RequireToken {
+		path := dashboardTokenPath(cfg)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			// .
+			// .
+			log.Printf("dashboard: the retired token file %s could not be removed (%v); it grants nothing and can be deleted by hand", path, err)
+		}
 	}
-	log.Printf("dashboard: access token minted; the config keeps its SHA-256")
+	if minted != "" {
+		a.mintedTokenMu.Lock()
+		a.mintedToken = minted
+		a.mintedTokenMu.Unlock()
+		log.Printf("dashboard: access token minted and stored in config.json")
+	}
+	return nil
 }
 
 // .
@@ -94,35 +127,6 @@ func dashboardTokenPath(cfg Config) string {
 		return "dashboard-token"
 	}
 	return filepath.Join(dir, "dashboard-token")
-}
-
-// .
-func readDashboardToken(cfg Config) string {
-	body, err := os.ReadFile(dashboardTokenPath(cfg))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(body))
-}
-
-// .
-// .
-// .
-func writeDashboardToken(path, token string) bool {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return false
-	}
-	if _, err := f.WriteString(token + "\n"); err != nil {
-		f.Close()
-		return false
-	}
-	if err := f.Close(); err != nil {
-		return false
-	}
-	// .
-	_ = os.Chmod(path, 0600)
-	return true
 }
 
 // .
@@ -166,10 +170,84 @@ func (a *App) DashboardMintedToken() string {
 // .
 // .
 // .
-func (a *App) newDashboard(handler *dashboard.WSHandler) *dashboard.Server {
-	a.ensureDashboardToken()
+func (a *App) newDashboard(handler *dashboard.WSHandler) (*dashboard.Server, error) {
+	if err := a.ensureDashboardToken(); err != nil {
+		return nil, err
+	}
 	c := a.configSnapshot().Dashboard
 	d := dashboard.New(c.Host, c.Port, handler)
-	d.SetAccessToken(c.RequireToken, c.AuthTokenSHA256)
-	return d
+	d.SetAccessToken(c.RequireToken, c.AccessToken)
+	a.setDashboardToken("")
+	if d.AccessTokenRequired() {
+		a.setDashboardToken(c.AccessToken)
+	}
+	return d, nil
+}
+
+// .
+// .
+func (a *App) dashboardToken() string {
+	a.dashboardTokenMu.Lock()
+	defer a.dashboardTokenMu.Unlock()
+	return a.dashboardAccessToken
+}
+
+func (a *App) setDashboardToken(token string) {
+	a.dashboardTokenMu.Lock()
+	a.dashboardAccessToken = token
+	a.dashboardTokenMu.Unlock()
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) rearmDashboardToken(d DashboardConfig) {
+	if a.dashboard == nil {
+		return
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	bind := a.dashboard.BindHost()
+	required := d.RequireToken || !loopbackBind(bind)
+	if required && strings.TrimSpace(d.AccessToken) == "" {
+		log.Printf("dashboard: config reload found no access token where one is required — keeping the running one; clear it only by restarting")
+		return
+	}
+	a.dashboard.SetAccessToken(required, d.AccessToken)
+	if a.dashboard.AccessTokenRequired() {
+		a.setDashboardToken(d.AccessToken)
+		log.Printf("dashboard: access token rotated — every signed-in browser signs in again with the new one (aii dashboard-token)")
+		return
+	}
+	a.setDashboardToken("")
+	log.Printf("dashboard: access token no longer required on %s", dashboardBindName(bind))
+}
+
+// .
+// .
+// .
+func RotateDashboardToken(path string) (string, error) {
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return "", err
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("mint: %w", err)
+	}
+	token := hex.EncodeToString(raw[:])
+	cfg.Dashboard.AccessToken = token
+	cfg.Dashboard.RequireToken = true
+	if _, err := saveConfig(cfg); err != nil {
+		return "", err
+	}
+	return token, nil
 }

@@ -438,19 +438,40 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 		latest[b.session] = b
 	}
 	shown := false
+	quietSession := ""
+	var refused *voiceBinding
 	for _, b := range held {
 		if latest[b.session] == b && strings.TrimSpace(reply) != "" {
-			voiceSynthesize(a, ctx, b.session, b.gen, reply)
-			if val, ok := a.voiceSessions.Load(b.session); ok {
-				if out, _ := val.(*voiceHandle).replyOutcome.Load().(string); out == "reply admitted" {
-					b.spoken = true
-					shown = true
-				}
+			switch voiceSynthesize(a, ctx, b.session, b.gen, reply) {
+			case replyAdmitted:
+				b.spoken = true
+				shown = true
+			case replyRefusedDefinite:
+				refused = b
+			default:
+				quietSession = b.session
 			}
 		} else if strings.TrimSpace(reply) == "" {
 			a.noteReplyOutcome(b.session, "the turn answered with silence")
 		}
 		b.release("settled")
+	}
+	if !shown && refused != nil && a.speakFallback(ctx, refused, reply) {
+		// .
+		// .
+		shown = true
+	}
+	if !shown && (refused != nil || quietSession != "") && a.voiceReplySink != nil {
+		session := quietSession
+		if refused != nil {
+			session = refused.session
+		}
+		// .
+		// .
+		// .
+		// .
+		a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: session, Route: "plugin", TextOnly: true}, reply)
+		shown = true
 	}
 	if shown {
 		// .

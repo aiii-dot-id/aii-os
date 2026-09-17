@@ -64,6 +64,7 @@ func awaitDrained(t *testing.T, h *voiceHandle) {
 func newTrackedSession(a *App, id string, answer bool) (*voiceHandle, *fakeEngineSession) {
 	f := &fakeEngineSession{}
 	h := &voiceHandle{id: id, v: f, b: &audio.Binding{InputHandle: "in-" + id, Contained: true}, done: make(chan struct{}), drained: make(chan struct{})}
+	h.hush = func(why string) { a.hushFallback(h, why) }
 	a.voiceSessions.Store(id, h)
 	a.voiceModes.Store(id, answer)
 	return h, f

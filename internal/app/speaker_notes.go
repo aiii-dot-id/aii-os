@@ -27,6 +27,35 @@ const (
 )
 
 // .
+// .
+// .
+type speakerObservation struct {
+	RefersTo  int64    `json:"refers_to"`
+	Speaker   string   `json:"speaker"`
+	SpeakerID string   `json:"speaker_id"`
+	Decision  string   `json:"decision"`
+	Score     *float64 `json:"score"`
+	Late      bool     `json:"late"`
+	Reason    string   `json:"reason"`
+}
+
+func (o speakerObservation) knownID() string {
+	if o.Decision == "known" {
+		return o.SpeakerID
+	}
+	return ""
+}
+
+func (o speakerObservation) attribution() string {
+	label := speakerAttribution(o.Speaker, o.Decision, o.Reason, o.Score)
+	if id := o.knownID(); id != "" {
+		// .
+		return fmt.Sprintf("%s (speaker_id=%q)", label, id)
+	}
+	return label
+}
+
+// .
 func voiceRefKey(session string, seq int64) string { return fmt.Sprintf("%s/%d", session, seq) }
 
 // .
@@ -72,20 +101,7 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 		a.voiceSafeDropped.Add(1)
 		return
 	}
-	var body struct {
-		RefersTo int64    `json:"refers_to"`
-		Speaker  string   `json:"speaker"`
-		Decision string   `json:"decision"`
-		Score    *float64 `json:"score"`
-		Late     bool     `json:"late"`
-		// .
-		// .
-		// .
-		// .
-		// .
-		// .
-		Reason string `json:"reason"`
-	}
+	var body speakerObservation
 	if json.Unmarshal(ev.Raw, &body) != nil || body.RefersTo == 0 || a.store == nil {
 		return
 	}
@@ -93,6 +109,9 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 	// .
 	// .
 	record := map[string]interface{}{"speaker": body.Speaker, "decision": body.Decision, "late": body.Late, "sequence": body.RefersTo, "session": ev.SessionID}
+	if id := body.knownID(); id != "" {
+		record["speaker_id"] = id
+	}
 	if body.Score != nil {
 		record["score"] = *body.Score
 	}
@@ -224,16 +243,11 @@ const (
 
 // .
 func attributionOf(payload string) string {
-	var p struct {
-		Speaker  string   `json:"speaker"`
-		Decision string   `json:"decision"`
-		Score    *float64 `json:"score"`
-		Reason   string   `json:"reason"`
-	}
+	var p speakerObservation
 	if json.Unmarshal([]byte(payload), &p) != nil {
 		return ""
 	}
-	return speakerAttribution(p.Speaker, p.Decision, p.Reason, p.Score)
+	return p.attribution()
 }
 
 // .

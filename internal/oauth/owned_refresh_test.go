@@ -46,6 +46,7 @@ func oauthOpts(tokenURL string) map[string]string {
 	return map[string]string{
 		"oauth_client_id": "app_test", "oauth_authorize_url": "https://auth.example/authorize", "oauth_token_url": tokenURL,
 		"oauth_redirect_uri": "http://localhost:1455/auth/callback", "oauth_scope": "openid",
+		"oauth_account_claim": `["https://api.openai.com/auth","chatgpt_account_id"]`,
 	}
 }
 
@@ -54,12 +55,12 @@ func oauthOpts(tokenURL string) map[string]string {
 // .
 func TestAnOwnedFileRefreshesItselfNearExpiry(t *testing.T) {
 	srv, calls := fakeAuthority(t)
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	path := filepath.Join(t.TempDir(), "codex.json")
 	writeCodexFile(t, path, true, 5*time.Minute)
-	src, err := NewOwned(KindCodex, path, oauthOpts(srv.URL))
+	src, err := testOwned(KindCodex, path, oauthOpts(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,12 +84,12 @@ func TestAnOwnedFileRefreshesItselfNearExpiry(t *testing.T) {
 // .
 func TestABorrowedFileIsNeverRefreshed(t *testing.T) {
 	srv, calls := fakeAuthority(t)
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	path := filepath.Join(t.TempDir(), "auth.json")
 	writeCodexFile(t, path, false, 5*time.Minute)
-	src, err := New(KindCodex, map[string]string{"file": path}, oauthOpts(srv.URL))
+	src, err := testSource(KindCodex, map[string]string{"file": path}, oauthOpts(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

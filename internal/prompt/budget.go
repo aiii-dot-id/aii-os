@@ -2,6 +2,8 @@ package prompt
 
 import (
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 )
 
@@ -75,10 +77,145 @@ func routeFor(source string) string {
 // .
 // .
 func summarize(source, content string) string {
-	if source == "ring2" {
+	switch source {
+	case "ring2":
 		return summarizeRing2(content)
+	case "ring3":
+		return summarizeRing3(content)
 	}
 	return SummarizeUnits(content, routeFor(source))
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+var ring3YieldOrder = []string{"surfacing", "operator", "working_truth"}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func summarizeRing3(content string) string {
+	type span struct {
+		name, header string
+		start, end   int
+	}
+	var spans []span
+	for _, p := range ring3Parts {
+		// .
+		// .
+		// .
+		// .
+		// .
+		i, twice := headerAt(content, p.header)
+		if twice {
+			return SummarizeUnits(content, routeFor("ring3"))
+		}
+		if i >= 0 {
+			spans = append(spans, span{name: p.name, header: p.header, start: i, end: len(content)})
+		}
+	}
+	if len(spans) < 2 {
+		return SummarizeUnits(content, routeFor("ring3"))
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	for i := 0; i < len(spans)-1; i++ {
+		spans[i].end = spans[i+1].start
+	}
+
+	present := make(map[string]bool, len(spans))
+	for _, s := range spans {
+		present[s.name] = true
+	}
+	keep := (len(spans) + 1) / 2
+	drop := make(map[string]bool, len(spans))
+	for _, name := range ring3YieldOrder {
+		if len(spans)-len(drop) <= keep {
+			break
+		}
+		if present[name] {
+			drop[name] = true
+		}
+	}
+	if len(drop) == 0 {
+		return content
+	}
+
+	// .
+	// .
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(content[:spans[0].start], "\n"))
+	var dropped []string
+	for _, s := range spans {
+		if drop[s.name] {
+			dropped = append(dropped, strings.TrimSpace(strings.TrimPrefix(s.header, "## ")))
+			continue
+		}
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimSpace(content[s.start:s.end]))
+	}
+	route := routeFor("ring3")
+	if drop["operator"] {
+		// .
+		// .
+		// .
+		route += "; the operator model is not searchable and returns with the next consolidation"
+	}
+	return fmt.Sprintf("%s\n\n%s %d of %d parts kept; %s not in view; %s]",
+		b.String(), SummaryMarker, len(spans)-len(dropped), len(spans),
+		strings.Join(dropped, " and "), route)
+}
+
+// .
+// .
+func headerAt(content, header string) (int, bool) {
+	first := -1
+	for from := 0; from <= len(content); {
+		i := strings.Index(content[from:], header)
+		if i < 0 {
+			break
+		}
+		at := from + i
+		if at == 0 || content[at-1] == '\n' {
+			if first >= 0 {
+				return first, true
+			}
+			first = at
+		}
+		from = at + len(header)
+	}
+	return first, false
 }
 
 // .
@@ -189,7 +326,8 @@ func (b *budgetEnforcer) ForceFoldElastic(sections []Section) {
 type Omission struct{ Name, Source string }
 
 func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission) {
-	if budgetTokens(sections, nil) <= b.maxTokens {
+	before := budgetTokens(sections, nil)
+	if before <= b.maxTokens {
 		return sections, nil
 	}
 
@@ -233,7 +371,44 @@ func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission)
 			s.Content = ""
 		}
 	}
+	observeFold(b.maxTokens, before, budgetTokens(sections, omissions), sections, omissions)
 	return sections, omissions
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func observeFold(budget, before, after int, sections []Section, omissions []Omission) {
+	folded := make([]string, 0, len(sections))
+	for _, s := range sections {
+		if s.Folded {
+			folded = append(folded, s.Source)
+		}
+	}
+	dropped := make([]string, 0, len(omissions))
+	for _, o := range omissions {
+		dropped = append(dropped, o.Source)
+	}
+	log.Printf("accordion: budget=%d in=%d out=%d folded=[%s] omitted=[%s]",
+		budget, before, after,
+		strings.Join(folded, " "), strings.Join(dropped, " "))
 }
 
 func budgetTokens(sections []Section, omissions []Omission) int {

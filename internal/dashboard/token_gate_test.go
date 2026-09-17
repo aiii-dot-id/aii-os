@@ -2,9 +2,8 @@ package dashboard
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,17 +12,13 @@ import (
 	"github.com/coder/websocket"
 )
 
-func tokenHash(tok string) string {
-	sum := sha256.Sum256([]byte(tok))
-	return hex.EncodeToString(sum[:])
-}
-
 func dialWSToken(addr, cookie string) (*websocket.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	h := http.Header{"Origin": []string{"https://" + addr}}
 	if cookie != "" {
-		h.Set("Cookie", "aii_token="+cookie)
+		_, port, _ := net.SplitHostPort(addr)
+		h.Set("Cookie", "aii_token_"+port+"="+cookie)
 	}
 	conn, _, err := websocket.Dial(ctx, "wss://"+addr+"/ws", &websocket.DialOptions{
 		HTTPClient: testClient,
@@ -37,7 +32,7 @@ func dialWSToken(addr, cookie string) (*websocket.Conn, error) {
 // .
 func TestTokenGateRefusesAndAdmits(t *testing.T) {
 	s := New("127.0.0.1", 0, &WSHandler{})
-	s.SetAccessToken(true, tokenHash("the-token"))
+	s.SetAccessToken(true, "the-token")
 	addr, err := s.Start(t.TempDir())
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -52,7 +47,7 @@ func TestTokenGateRefusesAndAdmits(t *testing.T) {
 		conn.CloseNow()
 		t.Fatal("a wrong token was admitted")
 	}
-	conn, err := dialWSToken(addr, "the-token")
+	conn, err := dialWSToken(addr, s.accessHash())
 	if err != nil {
 		t.Fatalf("the right token was refused: %v", err)
 	}
@@ -94,7 +89,7 @@ func TestTokenRequirementInjectsThePageFlag(t *testing.T) {
 	}
 
 	gated := New("127.0.0.1", 0, &WSHandler{})
-	gated.SetAccessToken(true, tokenHash("x"))
+	gated.SetAccessToken(true, "x")
 	body := fetch(gated)
 	if !strings.Contains(body, `<head data-aii-token-required="1">`) {
 		t.Fatal("required token did not reach the page as the <head> data attribute")

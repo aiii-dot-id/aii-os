@@ -146,6 +146,7 @@ func TestPluginsViewShowsRealControlsInBrowser(t *testing.T) {
 		// .
 		"/views/settings.js": []byte(`export const saved = [];
 export function saveConfigSection(section) { saved.push(section); }
+export function savebarHTML(section, note) { return '<div class="savebar"><button class="btn" data-save="' + section + '">Save</button><span class="savenote">' + note + '</span></div>'; }
 export const sent = [];
 export function sendConfigChanges(section, ch) { saved.push(section); sent.push(ch); }
 export function configFeedbackHTML() { return ''; }`),
@@ -213,6 +214,7 @@ run(() => {
 		"/state.js":         read("state.js"),
 		"/util.js":          read("util.js"),
 		"/views/settings.js": []byte(`export const saved = []; export function saveConfigSection(s) { saved.push(s); }
+export function savebarHTML(section, note) { return '<div class="savebar"><button class="btn" data-save="' + section + '">Save</button><span class="savenote">' + note + '</span></div>'; }
 export const sent = []; export function sendConfigChanges(s, ch) { saved.push(s); sent.push(ch); }
 export function configFeedbackHTML() { return ''; }`),
 		"/ws.js": []byte(`export function send() {}`),

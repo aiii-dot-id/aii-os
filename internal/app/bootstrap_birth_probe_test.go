@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -195,9 +196,9 @@ func TestBirthCeremonyStillCompletes(t *testing.T) {
 // .
 // .
 func TestBootstrapNotFetchedWithoutVerifiedRing0(t *testing.T) {
-	var bootstrapHits int
+	var bootstrapHits atomic.Int64
 	bootstrapSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bootstrapHits++
+		bootstrapHits.Add(1)
 		w.WriteHeader(http.StatusPaymentRequired)
 		_, _ = w.Write([]byte(`{"error":"Genesis token required — download from genesis.aiii.id first"}`))
 	}))
@@ -219,9 +220,9 @@ func TestBootstrapNotFetchedWithoutVerifiedRing0(t *testing.T) {
 	if a.ring0Content != "" {
 		t.Fatal("precondition: RING0 must fail for this test to mean anything")
 	}
-	if bootstrapHits != 0 {
+	if hits := bootstrapHits.Load(); hits != 0 {
 		t.Fatalf("bootstrap was requested %d time(s) with no genesis token to present — "+
 			"the 402 it earns sends the operator to genesis.aiii.id, which is where the real "+
-			"failure already happened", bootstrapHits)
+			"failure already happened", hits)
 	}
 }

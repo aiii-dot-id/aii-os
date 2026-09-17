@@ -17,6 +17,7 @@ func sameProviderRuntime(a, b providerEntry, modelPinned bool) bool {
 	a.SubscribeURL, b.SubscribeURL = "", ""
 	a.Default, b.Default = false, false
 	a.Models, b.Models = nil, nil
+	a.Chat, b.Chat = nil, nil
 	if modelPinned {
 		a.DefaultModel, b.DefaultModel = "", ""
 	}
@@ -195,20 +196,40 @@ func providerAPIKey(entry providerEntry, supplied, fallbackEnv string) string {
 }
 
 func selectProvider(cfg LLMConfig, reg *providerRegistry) (*providerEntry, error) {
+	var entry *providerEntry
 	if name := cfg.Provider; name != "" {
 		for i := range reg.Providers {
 			if reg.Providers[i].Name == name {
-				return &reg.Providers[i], nil
+				entry = &reg.Providers[i]
+				break
 			}
 		}
-		return nil, fmt.Errorf("llm.provider %q is not in providers.json (%d providers)", name, len(reg.Providers))
-	}
-	for i := range reg.Providers {
-		if reg.Providers[i].Default {
-			return &reg.Providers[i], nil
+		if entry == nil {
+			return nil, fmt.Errorf("llm.provider %q is not in providers.json (%d providers)", name, len(reg.Providers))
+		}
+	} else {
+		for i := range reg.Providers {
+			if reg.Providers[i].Default {
+				entry = &reg.Providers[i]
+				break
+			}
+		}
+		if entry == nil {
+			return nil, fmt.Errorf("llm.provider is empty and providers.json flags no default provider")
 		}
 	}
-	return nil, fmt.Errorf("llm.provider is empty and providers.json flags no default provider")
+	// .
+	// .
+	// .
+	// .
+	// .
+	if !chatProvider(*entry) {
+		if cfg.Provider != "" {
+			return nil, fmt.Errorf("provider %q serves speech only — it names no chat model, or says chat: false; llm.provider must name a chat provider", entry.Name)
+		}
+		return nil, fmt.Errorf("the default provider %q serves speech only — it names no chat model, or says chat: false; flag a chat provider as default or set llm.provider", entry.Name)
+	}
+	return entry, nil
 }
 
 // .

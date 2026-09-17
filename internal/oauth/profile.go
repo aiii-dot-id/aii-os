@@ -3,13 +3,9 @@ package oauth
 // .
 // .
 // .
-// .
-// .
-// .
-// .
-// .
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -40,21 +37,41 @@ var ErrGrantInvalid = errors.New("the authority no longer accepts this credentia
 
 // .
 // .
-func exchange(ctx context.Context, client *http.Client, p OAuthParams, form url.Values) (*Tokens, error) {
+func exchange(ctx context.Context, client *http.Client, p OAuthParams, fields map[string]any) (*Tokens, error) {
 	if p.TokenURL == "" {
 		return nil, errors.New("no token endpoint configured")
 	}
-	if p.ClientSecret != "" {
-		form.Set("client_secret", p.ClientSecret)
+	for name, value := range p.ResourceHeaders {
+		if !validHeader(name, value) {
+			return nil, fmt.Errorf("invalid configured resource header %q", name)
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, strings.NewReader(form.Encode()))
+	for name, path := range p.ClaimHeaders {
+		if !validHeader(name, "") || len(path) == 0 {
+			return nil, fmt.Errorf("invalid configured claim header %q", name)
+		}
+	}
+	if p.ClientSecret != "" {
+		fields["client_secret"] = p.ClientSecret
+	}
+	raw, contentType, err := encodeGrant(p.TokenEncoding, fields)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
+	for name, value := range p.TokenHeaders {
+		if !validHeader(name, value) || strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Content-Length") {
+			return nil, fmt.Errorf("invalid configured token header %q (token_encoding controls Content-Type)", name)
+		}
+		req.Header.Set(name, value)
+	}
 	if client == nil {
-		client = codexHTTP
+		client = signInHTTP
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -98,6 +115,14 @@ func exchange(ctx context.Context, client *http.Client, p OAuthParams, form url.
 	if j.ExpiresIn > 0 {
 		t.Expires = time.Now().Add(time.Duration(j.ExpiresIn * float64(time.Second)))
 	}
+	if len(p.AccountClaim) > 0 && claimString(t.Access, p.AccountClaim) == "" {
+		return nil, fmt.Errorf("access token lacks required claim %s", strings.Join(p.AccountClaim, "."))
+	}
+	for _, path := range p.ClaimHeaders {
+		if claimString(t.Access, path) == "" {
+			return nil, fmt.Errorf("access token lacks required claim %s", strings.Join(path, "."))
+		}
+	}
 	return t, nil
 }
 
@@ -107,14 +132,30 @@ func (l *Login) Exchange(ctx context.Context, client *http.Client, code, state s
 	if state == "" || state != l.state {
 		return nil, errors.New("state missing or mismatched — this response is not for this sign-in")
 	}
-	form := url.Values{
-		"grant_type":    {"authorization_code"},
-		"client_id":     {l.params.ClientID},
-		"code":          {code},
-		"code_verifier": {l.verifier},
-		"redirect_uri":  {l.params.RedirectURI},
+	return exchangeCode(ctx, client, l.params, code, l.verifier, l.state)
+}
+
+// .
+// .
+// .
+func ExchangeCode(ctx context.Context, client *http.Client, p OAuthParams, code, verifier string) (*Tokens, error) {
+	return exchangeCode(ctx, client, p, code, verifier, "")
+}
+
+func exchangeCode(ctx context.Context, client *http.Client, p OAuthParams, code, verifier, state string) (*Tokens, error) {
+	if code == "" || verifier == "" || p.ClientID == "" || p.RedirectURI == "" {
+		return nil, errors.New("code exchange requires code, verifier, client id and redirect URI")
 	}
-	return exchange(ctx, client, l.params, form)
+	fields := map[string]any{"grant_type": "authorization_code", "client_id": p.ClientID, "code": code, "code_verifier": verifier, "redirect_uri": p.RedirectURI}
+	if err := addGrantParams(fields, p.TokenParams, map[string]string{"{state}": state, "{scope}": p.Scope}); err != nil {
+		return nil, fmt.Errorf("token_params: %w", err)
+	}
+	tokens, err := exchange(ctx, client, p, fields)
+	if err == nil && tokens.Scope == "" {
+		// .
+		tokens.Scope = p.Scope
+	}
+	return tokens, err
 }
 
 // .
@@ -122,12 +163,62 @@ func refreshWith(ctx context.Context, client *http.Client, p OAuthParams, refres
 	if p.ClientID == "" {
 		return nil, errors.New("no client id configured for refresh")
 	}
-	form := url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
-		"client_id":     {p.ClientID},
+	fields := map[string]any{
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+		"client_id":     p.ClientID,
 	}
-	return exchange(ctx, client, p, form)
+	if err := addGrantParams(fields, p.RefreshParams, map[string]string{"{scope}": p.Scope}); err != nil {
+		return nil, fmt.Errorf("refresh_params: %w", err)
+	}
+	return exchange(ctx, client, p, fields)
+}
+
+// .
+// .
+func addGrantParams(fields, extra map[string]any, bindings map[string]string) error {
+	for key, value := range extra {
+		switch key {
+		case "grant_type", "client_id", "client_secret", "code", "code_verifier", "redirect_uri", "refresh_token", "device_code":
+			return fmt.Errorf("may not replace protocol field %q", key)
+		}
+		if key == "" {
+			return errors.New("parameter names must not be empty")
+		}
+		if s, ok := value.(string); ok && (s == "{state}" || s == "{scope}") {
+			bound := bindings[s]
+			if bound == "" {
+				return fmt.Errorf("parameter %q requires unavailable %s", key, s)
+			}
+			value = bound
+		}
+		fields[key] = value
+	}
+	return nil
+}
+
+func encodeGrant(encoding string, fields map[string]any) ([]byte, string, error) {
+	switch encoding {
+	case "json":
+		raw, err := json.Marshal(fields)
+		return raw, "application/json", err
+	case "", "form":
+		form := url.Values{}
+		for key, value := range fields {
+			if s, ok := value.(string); ok {
+				form.Set(key, s)
+				continue
+			}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return nil, "", fmt.Errorf("encode token parameter %q: %w", key, err)
+			}
+			form.Set(key, string(raw))
+		}
+		return []byte(form.Encode()), "application/x-www-form-urlencoded", nil
+	default:
+		return nil, "", fmt.Errorf("unknown token_encoding %q (want form or json)", encoding)
+	}
 }
 
 // .
@@ -139,6 +230,12 @@ func RefreshTokens(ctx context.Context, client *http.Client, p OAuthParams, refr
 // .
 // .
 func WriteTokenFile(path string, t *Tokens) error {
+	tokenFileMu.Lock()
+	defer tokenFileMu.Unlock()
+	return writeTokenFile(path, t)
+}
+
+func writeTokenFile(path string, t *Tokens) error {
 	doc := map[string]any{
 		"access_token":  t.Access,
 		"refresh_token": t.Refresh,
@@ -174,9 +271,14 @@ func NewProfileSource(path string, p OAuthParams, client *http.Client) (*Source,
 	if p.TokenURL == "" || p.ClientID == "" {
 		return nil, errors.New("a profile source needs a token endpoint and a client id to refresh")
 	}
-	s := &Source{kind: KindFilePrefix + path, sp: spec{abs: path, parse: parseGeneric, oauth: p, generic: true}, path: path, owned: true, client: client}
-	if _, err := s.load(); err != nil {
+	abs, err := filepath.Abs(path)
+	if err != nil {
 		return nil, err
 	}
+	s, err := NewOwnedConfigured("file", abs, p)
+	if err != nil {
+		return nil, err
+	}
+	s.SetHTTPClient(client)
 	return s, nil
 }

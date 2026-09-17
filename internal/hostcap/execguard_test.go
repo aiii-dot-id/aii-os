@@ -32,6 +32,7 @@ var allowlist = map[string]string{
 	"internal/app/reexec_windows.go":        "windows build tag AND the startLive hostcap.SelfReplace gate",
 	"internal/install/service_linux.go":     "linux build tag AND every exec site behind the hostcap.Subprocess gate in run(); a host without subprocesses still gets its slot and the manual start command",
 	"internal/install/service_darwin.go":    "darwin build tag AND every exec site behind the hostcap.Subprocess gate in run(); launchctl is only reached after that gate",
+	"internal/oauth/note_darwin.go":         "darwin build tag AND keychainLookup refuses first when hostcap.Subprocess is unavailable; security is the platform Keychain client",
 	"internal/updates/bundle_darwin.go":     "darwin build tag AND the hostcap.Subprocess gate at the top of applyBundleUpdate; ditto, codesign and spctl are only reached after it. A macOS update replaces a SEALED .app, and the seal can only be checked by asking the platform's own tools — a host that cannot exec cannot verify a bundle and so must not install one",
 	"cmd/aii-app/main.go":                   "darwin build tag AND the hostcap.Subprocess gate at the top of run(); the .app entry point starts the identity and opens a browser, both subprocesses",
 	"internal/install/service_windows.go":   "windows build tag AND the hostcap.Subprocess gate at the top of Register; the autostart entry itself is a registry write, not an exec",

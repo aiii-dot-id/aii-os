@@ -3,12 +3,6 @@ package app
 // .
 // .
 // .
-// .
-// .
-// .
-// .
-// .
-// .
 
 import (
 	"context"
@@ -37,23 +31,9 @@ const (
 	// .
 	// .
 	profileSignInPrefix = "profile:"
-	// .
-	// .
-	// .
-	// .
-	defaultProfileRedirect = "http://127.0.0.1:8187/oauth/callback"
-	// .
-	// .
-	deviceSignInMax = 20 * time.Minute
 )
 
 var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-
-// .
-type pendingDevice struct {
-	view   dashboard.DeviceCodeView
-	cancel context.CancelFunc
-}
 
 // .
 // .
@@ -107,12 +87,13 @@ func (a *App) authorityClient(endpoint string) (*http.Client, error) {
 // .
 // .
 func (a *App) contractFor(name string, prof broker.AuthProfile) (oauth.OAuthParams, oauth.Provider, error) {
-	params, tpl, err := prof.Contract()
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return oauth.OAuthParams{}, oauth.Provider{}, err
+	}
+	params, tpl, err := prof.Contract(catalog)
 	if err != nil {
 		return params, tpl, err
-	}
-	if params.RedirectURI == "" {
-		params.RedirectURI = defaultProfileRedirect
 	}
 	if strings.TrimSpace(params.Scope) == "" {
 		return params, tpl, fmt.Errorf("auth profile %q names no scopes; choose what the consent is for", name)
@@ -132,102 +113,23 @@ func (a *App) contractFor(name string, prof broker.AuthProfile) (oauth.OAuthPara
 
 // .
 // .
-// .
-// .
 func (a *App) SignInProfile(name string) (string, error) {
 	prof, err := a.authProfile(name)
 	if err != nil {
 		return "", err
 	}
-	params, _, err := a.contractFor(name, prof)
+	params, tpl, err := a.contractFor(name, prof)
 	if err != nil {
 		return "", err
 	}
-	login, err := oauth.NewLogin(params)
-	if err != nil {
-		return "", err
-	}
-	key := profileSignInPrefix + name
-	ctx, cancel := context.WithTimeout(a.signInBase(), a.signInDeadline())
-	p := &pendingSignIn{login: login, kind: key, params: params, cancel: cancel}
-	a.signInMu.Lock()
-	if a.signIns == nil {
-		a.signIns = map[string]*pendingSignIn{}
-	}
-	if prev, ok := a.signIns[key]; ok && prev.cancel != nil {
-		prev.cancel()
-	}
-	a.signIns[key] = p
-	a.signInMu.Unlock()
-	go func() {
-		code, cerr := login.ServeCallback(ctx)
-		if cerr == nil {
-			if ferr := a.finishProfileSignIn(name, login, code, login.State()); ferr != nil {
-				log.Printf("auth profile %s: callback completion failed: %v", name, ferr)
-			}
-			return
-		}
-		<-ctx.Done()
-		a.dropSignIn(key, login)
-	}()
-	return login.URL, nil
-}
-
-// .
-// .
-func (a *App) CompleteProfileSignIn(name, input string) error {
-	code, state, err := oauth.ParseAuthorizationInput(input)
-	if err != nil {
-		return err
-	}
-	a.signInMu.Lock()
-	p, ok := a.signIns[profileSignInPrefix+name]
-	a.signInMu.Unlock()
-	if !ok {
-		return errNoSignIn
-	}
-	return a.finishProfileSignIn(name, p.login, code, state)
-}
-
-// .
-// .
-func (a *App) finishProfileSignIn(name string, login *oauth.Login, code, state string) error {
-	p, err := a.claimSignIn(profileSignInPrefix+name, login, state)
-	if err != nil {
-		return err
-	}
-	defer p.cancel()
-	prof, err := a.authProfile(name)
-	if err != nil {
-		return err
-	}
-	client, err := a.authorityClient(p.params.TokenURL)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(a.signInBase(), 60*time.Second)
-	defer cancel()
-	tokens, err := login.Exchange(ctx, client, code, state)
-	if err != nil {
-		return err
-	}
-	return a.storeProfileTokens(name, prof, tokens)
-}
-
-// .
-func (a *App) storeProfileTokens(name string, prof broker.AuthProfile, tokens *oauth.Tokens) error {
 	if prof.TokenFile == "" {
-		return fmt.Errorf("auth profile %q names no token file", name)
+		return "", errors.New("profile has no token file")
 	}
-	if tokens.Refresh == "" {
-		log.Printf("auth profile %s: the authority issued no refresh token; the connection lasts as long as the access token", name)
-	}
-	if err := oauth.WriteTokenFile(prof.TokenFile, tokens); err != nil {
-		return fmt.Errorf("store the profile's tokens: %w", err)
-	}
-	log.Printf("auth profile %s: connected", name)
-	a.profileChanged()
-	return nil
+	return a.startSignIn(profileSignInPrefix+name, profileSignInPrefix+name, prof.TokenFile, tpl, params, &prof)
+}
+
+func (a *App) CompleteProfileSignIn(name, input string) error {
+	return a.completeSignIn(profileSignInPrefix+name, input)
 }
 
 // .
@@ -235,14 +137,13 @@ func (a *App) storeProfileTokens(name string, prof broker.AuthProfile, tokens *o
 func (a *App) profileChanged() {
 	cfg := a.configSnapshot()
 	if a.pluginOpts != nil && a.pluginOpts.Broker != nil {
-		a.pluginOpts.Broker.ReplacePolicy(cfg.Plugins.Grants, cfg.Plugins.AuthProfiles)
+		a.replacePolicy(cfg)
 	}
 	if a.dashboard != nil {
 		a.dashboard.BroadcastConfig()
 	}
 }
 
-// .
 // .
 func (a *App) DeviceSignInProfile(name string) (*dashboard.DeviceCodeView, error) {
 	prof, err := a.authProfile(name)
@@ -254,59 +155,23 @@ func (a *App) DeviceSignInProfile(name string) (*dashboard.DeviceCodeView, error
 		return nil, err
 	}
 	if tpl.DeviceURL == "" {
-		return nil, fmt.Errorf("%s offers no device-code sign-in; connect from a browser instead", providerLabel(prof))
+		return nil, errors.New("this authority offers no device-code sign-in")
 	}
 	if svc := deviceExcluded(tpl, prof.Scopes); svc != "" {
-		return nil, fmt.Errorf("%s does not serve %s through its device-code sign-in; connect from a browser instead", providerLabel(prof), svc)
+		return nil, fmt.Errorf("%s does not serve %s through device sign-in", providerLabel(prof), svc)
 	}
-	client, err := a.authorityClient(tpl.DeviceURL)
-	if err != nil {
+	if tpl.SignIn != "openai_device" {
+		tpl.SignIn = "device"
+	}
+	key := profileSignInPrefix + name
+	if _, err := a.startSignIn(key, key, prof.TokenFile, tpl, params, &prof); err != nil {
 		return nil, err
 	}
-	sctx, scancel := context.WithTimeout(a.signInBase(), 30*time.Second)
-	defer scancel()
-	d, err := oauth.StartDevice(sctx, client, tpl.DeviceURL, params)
-	if err != nil {
-		return nil, err
+	v := a.signInView(key)
+	if v == nil {
+		return nil, errNoSignIn
 	}
-	tokenClient, err := a.authorityClient(params.TokenURL)
-	if err != nil {
-		return nil, err
-	}
-	view := dashboard.DeviceCodeView{UserCode: d.UserCode, VerificationURI: d.VerificationURI, VerificationURIComplete: d.VerificationURIComplete, Expires: d.Expires.UTC().Format(time.RFC3339)}
-	ctx, cancel := context.WithTimeout(a.signInBase(), deviceSignInMax)
-	a.deviceMu.Lock()
-	if a.deviceSignIns == nil {
-		a.deviceSignIns = map[string]*pendingDevice{}
-	}
-	if prev, ok := a.deviceSignIns[name]; ok && prev.cancel != nil {
-		prev.cancel()
-	}
-	a.deviceSignIns[name] = &pendingDevice{view: view, cancel: cancel}
-	a.deviceMu.Unlock()
-	if a.dashboard != nil {
-		a.dashboard.BroadcastConfig()
-	}
-	go func() {
-		defer cancel()
-		tokens, perr := oauth.PollDevice(ctx, tokenClient, params, d)
-		a.deviceMu.Lock()
-		if cur, ok := a.deviceSignIns[name]; ok && cur.cancel != nil && cur.view.UserCode == view.UserCode {
-			delete(a.deviceSignIns, name)
-		}
-		a.deviceMu.Unlock()
-		if perr != nil {
-			log.Printf("auth profile %s: device sign-in ended: %v", name, perr)
-			if a.dashboard != nil {
-				a.dashboard.BroadcastConfig()
-			}
-			return
-		}
-		if serr := a.storeProfileTokens(name, prof, tokens); serr != nil {
-			log.Printf("auth profile %s: device sign-in could not be stored: %v", name, serr)
-		}
-	}()
-	return &view, nil
+	return v.Device, nil
 }
 
 func providerLabel(prof broker.AuthProfile) string {
@@ -340,20 +205,32 @@ func (a *App) DisconnectProfile(name string) error {
 	if err != nil {
 		return err
 	}
+	dest := ""
+	if prof.TokenFile != "" {
+		dest, _ = filepath.Abs(prof.TokenFile)
+	}
 	a.signInMu.Lock()
-	if p, ok := a.signIns[profileSignInPrefix+name]; ok {
-		p.cancel()
-		delete(a.signIns, profileSignInPrefix+name)
+	for key, p := range a.signIns {
+		if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
+			p.cancel()
+			delete(a.signIns, key)
+		}
+	}
+	// .
+	var revokeRaw []byte
+	if prof.TokenFile != "" {
+		revokeRaw, _ = os.ReadFile(prof.TokenFile)
+	}
+	var removeErr error
+	if prof.TokenFile != "" {
+		removeErr = oauth.RemoveTokenFile(prof.TokenFile)
 	}
 	a.signInMu.Unlock()
-	a.deviceMu.Lock()
-	if d, ok := a.deviceSignIns[name]; ok {
-		d.cancel()
-		delete(a.deviceSignIns, name)
+	if removeErr != nil {
+		return removeErr
 	}
-	a.deviceMu.Unlock()
 	if params, tpl, cerr := a.contractFor(name, prof); cerr == nil && tpl.RevokeURL != "" && prof.TokenFile != "" {
-		if raw, rerr := os.ReadFile(prof.TokenFile); rerr == nil {
+		if raw := revokeRaw; len(raw) > 0 {
 			if tok := refreshTokenOf(raw); tok != "" {
 				if client, cerr := a.authorityClient(tpl.RevokeURL); cerr == nil {
 					ctx, cancel := context.WithTimeout(a.signInBase(), 20*time.Second)
@@ -363,11 +240,6 @@ func (a *App) DisconnectProfile(name string) error {
 					cancel()
 				}
 			}
-		}
-	}
-	if prof.TokenFile != "" {
-		if err := os.Remove(prof.TokenFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove the token file: %w", err)
 		}
 	}
 	log.Printf("auth profile %s: disconnected", name)
@@ -404,19 +276,23 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 	if err != nil {
 		return err
 	}
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return err
+	}
 	provider := strings.TrimSpace(edit.Provider)
 	var tpl oauth.Provider
 	if provider != "custom" {
-		t, ok := oauth.ProviderTemplate(provider)
+		t, ok := oauth.ProviderTemplate(provider, catalog)
 		if !ok {
-			return fmt.Errorf("provider %q is not one this host knows (%s) — choose custom and name the endpoints", provider, strings.Join(oauth.ProviderNames(), ", "))
+			return fmt.Errorf("provider %q is not one this host knows (%s) — choose custom and name the endpoints", provider, strings.Join(oauth.ProviderNames(catalog), ", "))
 		}
 		tpl = t
 	} else if edit.AuthorizeURL == "" || edit.TokenURL == "" {
 		return errors.New("a custom provider needs its authorize and token endpoints")
 	}
 	clientID := strings.TrimSpace(edit.ClientID)
-	if clientID == "" {
+	if clientID == "" && tpl.ClientID == "" {
 		return errors.New("the client id is the registration the authority knows you by; it is required")
 	}
 	var scopes []string
@@ -446,7 +322,7 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 		}
 	}
 	scopes = dedupe(scopes)
-	if len(scopes) == 0 {
+	if len(scopes) == 0 && len(tpl.BaseScopes) == 0 {
 		return errors.New("choose at least one service, or name a scope")
 	}
 	// .
@@ -470,7 +346,13 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 		return fmt.Errorf("auth profile %q is a %s profile, edited in the config file", name, existing.Scheme)
 	}
 	prof := broker.AuthProfile{Scheme: broker.SchemeOAuth2, Provider: provider, ClientID: clientID, Scopes: scopes, Hosts: hosts,
-		TokenFile: existing.TokenFile, ClientSecretFile: existing.ClientSecretFile, ClientSecretEnv: existing.ClientSecretEnv, RedirectURI: existing.RedirectURI}
+		TokenFile: existing.TokenFile, ClientSecretFile: existing.ClientSecretFile, ClientSecretEnv: existing.ClientSecretEnv, RedirectURI: strings.TrimSpace(edit.RedirectURI)}
+	if prof.RedirectURI == "" {
+		prof.RedirectURI = existing.RedirectURI
+	}
+	if prof.RedirectURI == tpl.RedirectURI {
+		prof.RedirectURI = ""
+	}
 	if prof.TokenFile == "" {
 		prof.TokenFile = filepath.Join(dir, name+".json")
 	}
@@ -492,10 +374,10 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 		}
 		prof.ClientSecretFile, prof.ClientSecretEnv = path, ""
 	}
-	if _, _, err := prof.Contract(); err != nil {
+	if _, _, err := prof.Contract(catalog); err != nil {
 		return err
 	}
-	if err := a.commitAuthProfiles(func(m map[string]broker.AuthProfile) { m[name] = prof }); err != nil {
+	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { m[name] = prof }); err != nil {
 		return err
 	}
 	log.Printf("auth profile %s: %s (%s, %d scope(s), %d host(s))", name, map[bool]string{true: "updated", false: "created"}[existing.Scheme != ""], provider, len(scopes), len(hosts))
@@ -505,19 +387,13 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 // .
 // .
 func (a *App) DeleteAuthProfile(name string) error {
-	prof, err := a.authProfile(name)
-	if err != nil {
-		return err
-	}
 	if err := a.DisconnectProfile(name); err != nil {
 		return err
 	}
-	if prof.ClientSecretFile != "" {
-		if err := os.Remove(prof.ClientSecretFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove the client secret file: %w", err)
-		}
-	}
-	if err := a.commitAuthProfiles(func(m map[string]broker.AuthProfile) { delete(m, name) }); err != nil {
+	// .
+	// .
+	// .
+	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { delete(m, name) }); err != nil {
 		return err
 	}
 	log.Printf("auth profile %s: deleted", name)
@@ -527,7 +403,8 @@ func (a *App) DeleteAuthProfile(name string) error {
 // .
 // .
 // .
-func (a *App) commitAuthProfiles(mutate func(map[string]broker.AuthProfile)) error {
+// .
+func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broker.AuthProfile)) error {
 	orig := a.configSnapshot()
 	candidate := orig
 	next := make(map[string]broker.AuthProfile, len(orig.Plugins.AuthProfiles)+1)
@@ -539,27 +416,65 @@ func (a *App) commitAuthProfiles(mutate func(map[string]broker.AuthProfile)) err
 		next = nil
 	}
 	candidate.Plugins.AuthProfiles = next
-	a.cfgMu.Lock()
-	if !reflectEqualConfig(*a.cfg, orig) {
-		a.cfgMu.Unlock()
-		return errors.New("config changed while the profile was checked; retry")
+	published := false
+	err := func() error {
+		// .
+		// .
+		a.signInMu.Lock()
+		defer a.signInMu.Unlock()
+		a.cfgMu.Lock()
+		defer a.cfgMu.Unlock()
+		if !reflectEqualConfig(*a.cfg, orig) {
+			return errors.New("config changed while the profile was checked; retry")
+		}
+		for name, prof := range orig.Plugins.AuthProfiles {
+			nextProf, exists := next[name]
+			if name != editedName && exists && reflect.DeepEqual(prof, nextProf) {
+				continue
+			}
+			dest := ""
+			if prof.TokenFile != "" {
+				dest, _ = filepath.Abs(prof.TokenFile)
+			}
+			for key, p := range a.signIns {
+				if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
+					p.cancel()
+					delete(a.signIns, key)
+				}
+			}
+			if !exists {
+				if prof.TokenFile != "" {
+					if err := oauth.RemoveTokenFile(prof.TokenFile); err != nil {
+						return err
+					}
+				}
+				if prof.ClientSecretFile != "" {
+					if err := os.Remove(prof.ClientSecretFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf("remove the client secret file: %w", err)
+					}
+				}
+			}
+		}
+		var perr error
+		published, perr = saveConfig(&candidate)
+		if perr != nil && !published {
+			return fmt.Errorf("persist config: %w", perr)
+		}
+		*a.cfg = candidate
+		if perr != nil {
+			return fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", perr)
+		}
+		return nil
+	}()
+	if published {
+		a.profileChanged()
 	}
-	published, perr := saveConfig(&candidate)
-	if perr != nil && !published {
-		a.cfgMu.Unlock()
-		return fmt.Errorf("persist config: %w", perr)
-	}
-	*a.cfg = candidate
-	a.cfgMu.Unlock()
-	a.profileChanged()
-	if perr != nil {
-		return fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", perr)
-	}
-	return nil
+	return err
 }
 
 // .
 func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
+	catalog, _ := a.oauthContracts()
 	if len(c.Plugins.AuthProfiles) == 0 {
 		return nil
 	}
@@ -574,12 +489,6 @@ func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	a.deviceMu.Lock()
-	devices := make(map[string]dashboard.DeviceCodeView, len(a.deviceSignIns))
-	for n, d := range a.deviceSignIns {
-		devices[n] = d.view
-	}
-	a.deviceMu.Unlock()
 	out := make([]dashboard.AuthProfileView, 0, len(names))
 	for _, n := range names {
 		p := c.Plugins.AuthProfiles[n]
@@ -602,8 +511,11 @@ func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
 		v.Provider, v.ClientID, v.Scopes = p.Provider, p.ClientID, append([]string(nil), p.Scopes...)
 		v.HasClientSecret = p.ClientSecretFile != "" || p.ClientSecretEnv != ""
 		v.Custom = p.Provider == "" || p.Provider == "custom"
-		_, tpl, cerr := p.Contract()
+		params, tpl, cerr := p.Contract(catalog)
 		if cerr == nil {
+			if v.ClientID == "" {
+				v.ClientID = params.ClientID
+			}
 			v.Hosts = tpl.Hosts
 			v.CanDevice = tpl.DeviceURL != "" && deviceExcluded(tpl, p.Scopes) == ""
 		} else {
@@ -623,21 +535,26 @@ func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
 		if !st.Expires.IsZero() {
 			v.ExpiresAt = st.Expires.UTC().Format(time.RFC3339)
 		}
-		if d, ok := devices[n]; ok {
-			dv := d
-			v.Device = &dv
+		v.SignIn = a.signInView(profileSignInPrefix + n)
+		if v.SignIn != nil {
+			v.Device = v.SignIn.Device
 		}
+		v.RedirectURI = p.RedirectURI
 		out = append(out, v)
 	}
 	return out
 }
 
 // .
-func providerViews() []dashboard.ProviderView {
+func (a *App) providerViews() []dashboard.ProviderView {
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return nil
+	}
 	var out []dashboard.ProviderView
-	for _, name := range oauth.ProviderNames() {
-		tpl, _ := oauth.ProviderTemplate(name)
-		pv := dashboard.ProviderView{Name: name, Hosts: tpl.Hosts, Device: tpl.DeviceURL != "", DeviceExcludes: tpl.DeviceScopesUnsupported}
+	for _, name := range oauth.ProviderNames(catalog) {
+		tpl, _ := oauth.ProviderTemplate(name, catalog)
+		pv := dashboard.ProviderView{Name: name, SignIn: tpl.SignIn, RedirectURI: tpl.RedirectURI, Hosts: tpl.Hosts, Device: tpl.DeviceURL != "", DeviceExcludes: tpl.DeviceScopesUnsupported}
 		svcs := make([]string, 0, len(tpl.Scopes))
 		for s := range tpl.Scopes {
 			svcs = append(svcs, s)

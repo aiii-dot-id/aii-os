@@ -4,9 +4,11 @@ package pluginhost
 
 import (
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // .
@@ -43,7 +45,7 @@ import (
 // .
 // .
 // .
-func containArgv(argv []string) ([]string, string, error) {
+func containArgv(argv []string, profile *AcceleratorProfile) ([]string, supervisor.Containment, error) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		// .
@@ -58,10 +60,17 @@ func containArgv(argv []string) ([]string, string, error) {
 		// .
 		// .
 		// .
-		return nil, "", fmt.Errorf("bubblewrap is not installed; native T3 plugins are not run uncontained (install bwrap)")
+		return nil, supervisor.Containment{}, fmt.Errorf("bubblewrap is not installed; native T3 plugins are not run uncontained (install bwrap)")
 	}
 	if len(argv) == 0 {
-		return nil, "", fmt.Errorf("nothing to contain")
+		return nil, supervisor.Containment{}, fmt.Errorf("nothing to contain")
+	}
+	// .
+	// .
+	// .
+	devices, err := linuxAcceleratorDevices(profile, os.DirFS("/dev"))
+	if err != nil {
+		return nil, supervisor.Containment{}, fmt.Errorf("accelerator device admission: %w", err)
 	}
 	wrapped := []string{
 		bwrap,
@@ -69,6 +78,9 @@ func containArgv(argv []string) ([]string, string, error) {
 		"--die-with-parent",
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
+	}
+	for _, device := range devices {
+		wrapped = append(wrapped, "--dev-bind", device, device)
 	}
 	wrapped = append(wrapped, credentialMasks()...)
 	wrapped = append(wrapped, "--")
@@ -81,10 +93,13 @@ func containArgv(argv []string) ([]string, string, error) {
 	// .
 	// .
 	// .
-	return append(wrapped, argv...), "contained (bubblewrap: no network, read-only filesystem, ssh and shadow files masked; other user-readable credentials are NOT)", nil
+	description := "contained (bubblewrap: no network, read-only filesystem, ssh and shadow files masked; other user-readable credentials are NOT)"
+	if len(devices) != 0 {
+		description += "; Vulkan compute devices: " + strings.Join(devices, ", ")
+	}
+	return append(wrapped, argv...), supervisor.Containment{Description: description, NetworkDenied: true, FilesystemRestricted: true}, nil
 }
 
-// .
 // .
 // .
 // .

@@ -31,7 +31,7 @@ run(() => {
   assert(/applies live/i.test(routing) && /role-tagged spawn/i.test(routing), 'role routing is stated as live: ' + routing);
   assert(/after restart/i.test(coaching), 'coaching is stated as restart-bound: ' + coaching);
   assert(!/applies live/i.test(coaching), 'no live claim covers the coaching field');
-  const note = st.querySelector('.savenote').textContent;
+  const note = st.querySelector('.savesay').textContent;
   assert(/live/.test(note) && /restart/.test(note), 'the savebar names both lifecycles: ' + note);
   assert(/after restart/.test(savedText('agency', ['agency.heuristic_nudges'])), 'a save that changed coaching says it waits for a restart');
   assert(/applies live/.test(savedText('agency', [])), 'a save that changed only routing says it applied live');
@@ -50,7 +50,7 @@ run(() => {
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
 	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, providersLoaded: false };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? ''); export const hueOf = () => 0;`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? ''); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = [];
 export function send(f) { frames.push(f); return 'req-1'; }
 export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`)

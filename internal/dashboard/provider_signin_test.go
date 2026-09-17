@@ -26,6 +26,12 @@ func TestProviderSignInOverWS(t *testing.T) {
 	defer s.Shutdown(context.Background())
 	conn := dialWS(t, addr)
 	other := dialWS(t, addr)
+	// .
+	// .
+	// .
+	// .
+	// .
+	waitForConns(t, s, 2)
 
 	sendMsg(t, conn, ClientMessage{Type: "provider_signin", Provider: "ChatGPT (Plus/Pro)", RequestID: "r1"})
 	msg := readMsg(t, conn)

@@ -264,7 +264,7 @@ func (a *App) startRelay(cfg Config, name string, endpoint certs.RelayEndpoint) 
 	// .
 	// .
 	if a.dashboard == nil || !a.dashboard.AccessTokenRequired() {
-		log.Printf("relay: REFUSED for %s — the running dashboard is not requiring an access token, and a relay would carry the public internet to it. Set dashboard.require_token true and RESTART (a saved setting does not take effect until then); the token is minted and shown once on the boot console.", name)
+		log.Printf("relay: REFUSED for %s — the running dashboard is not requiring an access token, and a relay would carry the public internet to it. Set dashboard.require_token true and RESTART (a saved setting does not take effect until then); read the token with `aii dashboard-token`.", name)
 		return
 	}
 	key := witness.AsIdentityKey(a.keyPair)

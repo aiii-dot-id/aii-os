@@ -17,6 +17,6 @@ package supervisor
 // .
 // .
 // .
-func containProcess(pid int, rlimitASBytes uint64) (func(), string, error) {
+func containProcess(pid int, rlimitASBytes uint64) (func() error, string, error) {
 	return nil, "", nil
 }

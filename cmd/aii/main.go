@@ -43,6 +43,10 @@ func main() {
 			// .
 			// .
 			os.Exit(runMemoryScore(os.Args[2:], os.Stdout, os.Stderr))
+		case "dashboard-token":
+			// .
+			// .
+			os.Exit(runDashboardToken(os.Args[2:], os.Stdout, os.Stderr))
 		case app.WorkerSubcommand:
 			// .
 			// .

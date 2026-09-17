@@ -56,7 +56,7 @@ func StartDevice(ctx context.Context, client *http.Client, deviceURL string, p O
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if client == nil {
-		client = codexHTTP
+		client = signInHTTP
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -105,7 +105,7 @@ func StartDevice(ctx context.Context, client *http.Client, deviceURL string, p O
 // .
 func PollDevice(ctx context.Context, client *http.Client, p OAuthParams, d *DeviceAuthorization) (*Tokens, error) {
 	if client == nil {
-		client = codexHTTP
+		client = signInHTTP
 	}
 	interval := d.Interval
 	if interval <= 0 {
@@ -120,10 +120,10 @@ func PollDevice(ctx context.Context, client *http.Client, p OAuthParams, d *Devi
 			return nil, ctx.Err()
 		case <-time.After(interval):
 		}
-		form := url.Values{
-			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-			"device_code": {d.DeviceCode},
-			"client_id":   {p.ClientID},
+		form := map[string]any{
+			"grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
+			"device_code": d.DeviceCode,
+			"client_id":   p.ClientID,
 		}
 		tok, err := exchange(ctx, client, p, form)
 		if err == nil {
@@ -173,7 +173,7 @@ func Revoke(ctx context.Context, client *http.Client, revokeURL, token string, p
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if client == nil {
-		client = codexHTTP
+		client = signInHTTP
 	}
 	resp, err := client.Do(req)
 	if err != nil {

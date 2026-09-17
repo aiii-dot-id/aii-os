@@ -23,7 +23,15 @@ run(() => {
   const el = addMsg('operator', '[voice] hello there', '', 'vs-1/7');
   assert(el && el.dataset.voiceRef === 'vs-1/7' && el.querySelector('.who').textContent === 'you', 'a spoken bubble carries its voice reference: ' + (el && el.outerHTML));
   assert(attachSpeaker('vs-1/7', 'Sam') && el.querySelector('.who').textContent === 'you · Sam', 'an observation attaches to the bubble it names: ' + el.querySelector('.who').textContent);
+  const other = addMsg('operator', '[voice] another person', '', 'vs-1/9');
+  attachSpeaker('vs-1/7', 'Sam (speaker_id="james-one")');
+  attachSpeaker('vs-1/9', 'Sam (speaker_id="james-two")');
+  assert(el.querySelector('.who').textContent === 'you · Sam (speaker_id="james-one")' &&
+    other.querySelector('.who').textContent === 'you · Sam (speaker_id="james-two")', 'same-name speakers retain distinct IDs on their own bubbles');
+  attachSpeaker('vs-1/7', 'Jim (speaker_id="james-one")');
+  assert(el.querySelector('.who').textContent === 'you · Jim (speaker_id="james-one")', 'changing the label retains the ID');
   assert(attachSpeaker('vs-1/7', 'uncertain: Sam 0.60') && el.querySelector('.who').textContent === 'you · uncertain: Sam 0.60', 'a late result amends the same bubble');
+  assert(!el.querySelector('.who').textContent.includes('speaker_id='), 'uncertain replacement removes the previous known ID');
   assert(el.querySelectorAll('.speaker').length === 1, 'one attribution per bubble');
   assert(!attachSpeaker('vs-1/99', 'Jim'), 'a bubble the page never had is passed over');
   const plain = addMsg('operator', 'typed words');
@@ -42,8 +50,8 @@ run(() => {
 		}
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/state.js"] = []byte(`export const S = { stats: { name: 'Ember' }, providers: [], config: null, providersLoaded: false };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0;`)
+	modules["/state.js"] = []byte(`export const S = { stats: { name: 'Willow' }, providers: [], config: null, providersLoaded: false };`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-1'; } export function wsReady() { return true; } export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`)
 	modules["/presence.js"] = []byte(`export function setThinking() {} export function toolPulse() {} export function renderPresence() {}`)
 	modules["/app.js"] = []byte(`export function toast() {}`)

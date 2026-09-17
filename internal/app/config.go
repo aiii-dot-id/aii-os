@@ -38,9 +38,16 @@ type LLMConfig struct {
 	// .
 	APIKeyEnv      string `json:"api_key_env"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
-	Stream         *bool  `json:"stream,omitempty"`
-	Retries        int    `json:"retries"`
-	RetryBackoffMS int    `json:"retry_backoff_ms"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ProbeTimeoutSeconds int   `json:"probe_timeout_seconds"`
+	Stream              *bool `json:"stream,omitempty"`
+	Retries             int   `json:"retries"`
+	RetryBackoffMS      int   `json:"retry_backoff_ms"`
 }
 
 // .
@@ -57,6 +64,28 @@ type LLMConfig struct {
 // .
 type SpeechConfig struct {
 	STT STTConfig `json:"stt"`
+	TTS TTSConfig `json:"tts"`
+	// .
+	// .
+	// .
+	Speakers SpeakerPolicyConfig `json:"speakers,omitempty"`
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+type SpeakerPolicyConfig struct {
+	Mode         string   `json:"mode,omitempty"`
+	UIDs         []string `json:"uids,omitempty"`
+	Unidentified string   `json:"unidentified,omitempty"`
+	Revision     uint64   `json:"revision,omitempty"`
 }
 
 // .
@@ -77,6 +106,29 @@ type STTConfig struct {
 	APIKeyEnv string `json:"api_key_env"`
 	// .
 	TimeoutSeconds int `json:"timeout_seconds"`
+	// .
+	// .
+	// .
+	MonthlyMinutes int `json:"monthly_minutes,omitempty"`
+}
+
+// .
+// .
+type TTSConfig struct {
+	// .
+	Provider string `json:"provider"`
+	// .
+	// .
+	Model string `json:"model"`
+	Voice string `json:"voice"`
+	// .
+	APIKeyEnv string `json:"api_key_env"`
+	// .
+	TimeoutSeconds int `json:"timeout_seconds"`
+	// .
+	// .
+	// .
+	MonthlyCharacters int `json:"monthly_characters,omitempty"`
 }
 
 type DashboardConfig struct {
@@ -102,14 +154,19 @@ type DashboardConfig struct {
 	// .
 	// .
 	// .
-	// .
 	RequireToken bool `json:"require_token"`
 	// .
 	// .
 	// .
 	// .
 	// .
-	AuthTokenSHA256 string `json:"auth_token_sha256,omitempty"`
+	// .
+	// .
+	AccessToken string `json:"access_token,omitempty"`
+	// .
+	// .
+	// .
+	LegacyAuthTokenSHA256 string `json:"auth_token_sha256,omitempty"`
 	// .
 	// .
 	// .
@@ -269,6 +326,9 @@ type DevSectionConfig struct {
 // .
 type PluginResources struct {
 	MemoryMaxBytes uint64 `json:"memory_max_bytes,omitempty"`
+	// .
+	// .
+	StartupTimeoutMS *int64 `json:"startup_timeout_ms,omitempty"`
 	// .
 	// .
 	StreamMaxBytes int `json:"stream_max_bytes,omitempty"`
@@ -760,6 +820,9 @@ func applyDefaults(cfg *Config) {
 	// .
 	if !cfg.Logs.present && cfg.Logs.Dir == "" {
 		cfg.Logs.Dir = "log"
+	}
+	if cfg.LLM.ProbeTimeoutSeconds == 0 {
+		cfg.LLM.ProbeTimeoutSeconds = 45
 	}
 	if cfg.LLM.TimeoutSeconds == 0 {
 		cfg.LLM.TimeoutSeconds = 120

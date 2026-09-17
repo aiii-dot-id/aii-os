@@ -501,3 +501,21 @@ func TestErrorObjectClassification(t *testing.T) {
 	var raw json.RawMessage = []byte(`"x"`)
 	_ = raw
 }
+
+// .
+// .
+// .
+// .
+// .
+func TestRetirementPendingNamesContainmentOnlyWhereThereIsAny(t *testing.T) {
+	s := &Supervisor{spec: Spec{PluginID: "id.test.plugin"}}
+	if got := s.retirementPending(&child{}, errors.New("stuck")); got != nil {
+		t.Fatalf("an uncontained child was reported as a containment failure: %v", got)
+	}
+	contained := &child{contained: func() error { return nil }}
+	got := s.retirementPending(contained, errors.New("stuck"))
+	var cce *ContainmentCleanupError
+	if !errors.As(got, &cce) {
+		t.Fatalf("a contained child's pending retirement was not named: %v", got)
+	}
+}

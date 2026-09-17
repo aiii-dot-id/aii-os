@@ -14,6 +14,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -61,6 +62,13 @@ import (
 
 // .
 type App struct {
+	// .
+	// .
+	// .
+	// .
+	dashboardAccessToken string
+	dashboardTokenMu     sync.Mutex
+
 	// .
 	// .
 	// .
@@ -155,20 +163,29 @@ type App struct {
 	voiceFanDropped   atomic.Uint64
 	voiceStaleReplies atomic.Uint64
 	voiceReplySink    func(dashboard.VoiceReplyRef, string)
-	voiceObs          map[*pluginhost.VoiceSession]bool
-	voiceObsMu        sync.Mutex
-	pluginSkips       []pluginSkip
-	pluginMu          sync.Mutex
-	activeMeta        map[string]activePkgMeta
-	pluginVerify      map[string]verifyMemo
-	pluginFinger      string
-	sweepPoke         chan struct{}
-	restartCh         chan struct{}
-	restartOnce       sync.Once
-	restarting        atomic.Bool
-	stageOnce         sync.Once
-	stageWhy          string
-	pluginToolReg     *tools.Registry
+	voiceHushSink     func(dashboard.VoiceHush)
+	// .
+	speakerWithheldFinals   atomic.Uint64
+	speakerWithheldPartials atomic.Uint64
+	spokenMu                sync.Mutex
+	spoken                  map[string]*spokenReply
+	speechReserveMu         sync.Mutex
+	speechReservedChars     int
+	speechReservedHeard     time.Duration
+	voiceObs                map[*pluginhost.VoiceSession]bool
+	voiceObsMu              sync.Mutex
+	pluginSkips             []pluginSkip
+	pluginMu                sync.Mutex
+	activeMeta              map[string]activePkgMeta
+	pluginVerify            map[string]verifyMemo
+	pluginFinger            string
+	sweepPoke               chan struct{}
+	restartCh               chan struct{}
+	restartOnce             sync.Once
+	restarting              atomic.Bool
+	stageOnce               sync.Once
+	stageWhy                string
+	pluginToolReg           *tools.Registry
 	// .
 	subMu        sync.RWMutex
 	subscribers  map[string]*pluginSubscriber
@@ -320,10 +337,6 @@ type App struct {
 	signIns       map[string]*pendingSignIn
 	signInTimeout time.Duration
 	// .
-	// .
-	// .
-	deviceMu       sync.Mutex
-	deviceSignIns  map[string]*pendingDevice
 	oauthTransport http.RoundTripper
 	oauthGuard     func(context.Context, string) error
 
@@ -411,6 +424,23 @@ type App struct {
 	// .
 	activeProviderMu sync.RWMutex
 	activeProvider   providerEntry
+	// .
+	// .
+	// .
+	capMu        sync.RWMutex
+	substrateCap substrateCapability
+	// .
+	// .
+	modalities modalityMemo
+	// .
+	// .
+	speechTrouble speechTrouble
+	// .
+	// .
+	// .
+	// .
+	specMu   sync.Mutex
+	specSaid map[string][]speechItem
 
 	// .
 	// .
@@ -575,13 +605,23 @@ func (a *App) releaseTurn() {
 	// .
 	// .
 	// .
+	// .
 	a.turnMu.Lock()
 	a.turnFacility = false
 	fgRel := a.turnFgRelease
 	a.turnFgRelease = nil
+	// .
+	// .
+	// .
+	// .
+	unanswered := a.turnVoice
+	a.turnVoice = nil
 	a.turnMu.Unlock()
 	if fgRel != nil {
 		fgRel()
+	}
+	for _, b := range unanswered {
+		b.release("the turn ended without answering")
 	}
 	a.turnGate <- struct{}{}
 	// .
@@ -595,16 +635,7 @@ func (a *App) releaseTurn() {
 	a.turnMu.Lock()
 	leftovers := a.steers
 	a.steers = nil
-	// .
-	// .
-	// .
-	// .
-	unanswered := a.turnVoice
-	a.turnVoice = nil
 	a.turnMu.Unlock()
-	for _, b := range unanswered {
-		b.release("the turn ended without answering")
-	}
 	if len(leftovers) == 0 {
 		return
 	}
@@ -1539,7 +1570,11 @@ func (a *App) startLive() (retErr error) {
 
 	// .
 	if a.dashboard == nil {
-		a.dashboard = a.newDashboard(a.buildLiveHandler())
+		d, derr := a.newDashboard(a.buildLiveHandler())
+		if derr != nil {
+			return fmt.Errorf("dashboard credentials: %w", derr)
+		}
+		a.dashboard = d
 		a.dashboard.SetQuiesceGate(a.gate)
 		a.dashboard.SetWebhookHandler(a.handleWebhook)
 		// .
@@ -1552,6 +1587,7 @@ func (a *App) startLive() (retErr error) {
 		a.projectsListPush = a.dashboard.BroadcastProjects
 		a.voiceEventSink = a.dashboard.BroadcastVoiceEvent
 		a.voiceReplySink = a.dashboard.BroadcastVoiceReply
+		a.voiceHushSink = a.dashboard.BroadcastVoiceHush
 		_, err := a.dashboard.Start(tlsDirFor(cfg))
 		if err != nil {
 			return fmt.Errorf("dashboard start: %w", err)
@@ -1944,6 +1980,7 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		// .
 		HearUtterance:    a.HearUtterance,
 		VoiceConfigured:  a.VoiceConfigured,
+		VoiceStatus:      a.VoiceStatus,
 		AudioPlane:       a.AudioPlane,
 		VoiceEngine:      a.VoiceEngine,
 		VoiceSessionOpen: a.OpenVoiceSession,
@@ -1973,6 +2010,9 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		GetProviders:          a.providerDirectoryLive,
 		SignInProvider:        a.SignInProvider,
 		CompleteSignIn:        a.CompleteSignIn,
+		CancelSignIn:          a.CancelSignIn,
+		CancelProfileSignIn:   a.CancelProfileSignIn,
+		OAuthCallback:         a.OAuthCallback,
 		SignInProfile:         a.SignInProfile,
 		CompleteProfileSignIn: a.CompleteProfileSignIn,
 		DeviceSignInProfile:   a.DeviceSignInProfile,
@@ -1985,7 +2025,16 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		PublicNameMove:        a.movePublicName,
 		PublicNameState:       a.publicNameState,
 		SetProvider:           a.setProviderInfo,
+		SetEffort:             a.setActiveEffort,
 		DeleteProvider:        a.deleteProvider,
+		SetSpeechService:      a.setSpeechService,
+		SpeechLists:           a.speechLists,
+		SpeakMint:             a.speakMint,
+		SpeakPlay:             a.speakPlay,
+		SpeakAhead:            a.speakAhead,
+		ReplyVoice:            a.replyVoice,
+		SpeakerPolicy:         a.speakerPolicyState,
+		DashboardToken:        a.dashboardToken,
 		// .
 		// .
 		DiscoverModels: func(provider, apiKey string) ([]string, error) {
@@ -2589,19 +2638,29 @@ func (a *App) updateStateView() *dashboard.UpdateState {
 // .
 // .
 // .
-func (a *App) credentialSource(kind string, opts map[string]string) (*oauth.Source, error) {
+func (a *App) credentialSource(kind string, opts map[string]string, contracts ...oauth.Provider) (*oauth.Source, error) {
+	var contract oauth.Provider
+	if len(contracts) > 0 {
+		contract = contracts[0]
+	}
+	params, perr := oauth.OverrideParams(contract.Params(), opts)
+	if perr != nil {
+		return nil, perr
+	}
 	// .
 	// .
 	// .
 	ownedPath, ownedSt := "", ownedAbsent
 	if _, named := opts["file"]; !named {
-		p, st, err := a.ownedCredential(kind)
+		p, st, err := a.ownedCredential(kind, contract.CredentialFile)
 		if err != nil {
 			return nil, err
 		}
 		ownedPath, ownedSt = p, st
 	}
 	key := kind
+	rawContract, _ := json.Marshal(params)
+	key += "\x00contract=" + string(rawContract)
 	if ownedSt == ownedPresent {
 		key += "\x00owned=" + ownedPath
 	}
@@ -2629,12 +2688,19 @@ func (a *App) credentialSource(kind string, opts map[string]string) (*oauth.Sour
 	var s *oauth.Source
 	var err error
 	if ownedSt == ownedPresent {
-		s, err = oauth.NewOwned(kind, ownedPath, opts)
+		s, err = oauth.NewOwnedConfigured(kind, ownedPath, params, opts)
 	} else {
-		s, err = oauth.New(kind, opts)
+		s, err = oauth.NewConfigured(kind, params, opts)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if ownedSt == ownedPresent {
+		client, err := a.authorityClient(params.TokenURL)
+		if err != nil {
+			return nil, err
+		}
+		s.SetHTTPClient(client)
 	}
 	if a.credSrc == nil {
 		a.credSrc = map[string]*oauth.Source{}

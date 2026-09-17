@@ -110,14 +110,32 @@ function continuityHTML() {
   return '<div class="home-strip">' + items.map(i => '<span class="' + (i.cls || '') + '">' + i.text + '</span>').join('') + '</div>';
 }
 
+const TALK_TITLES = {
+  plugin: 'Talk in Chat', cloud: 'Talk in Chat',
+  setup: 'Voice isn\'t set up — opens Speech settings',
+  unreachable: 'Voice can\'t reach its service — opens Speech settings',
+  safe: 'Voice is paused while this identity is in SAFE',
+};
+function talkState() {
+  const state = S.stats && S.stats.voice_state;
+  return Object.prototype.hasOwnProperty.call(TALK_TITLES, state) ? state : 'setup';
+}
+
 function heroHTML(name) {
   let sub, field = '';
   if (!S.connected) sub = 'Connecting to your identity…';
   else if (!S.identityExists) sub = 'No identity lives here yet — the first conversation, in Chat, is where one begins.';
   else sub = (name && name !== 'Unnamed' ? name : 'Your identity') + ' is here. What shall we work on together?';
   if (S.connected && S.identityExists) {
+    // The same microphone as Chat's, in the same states (voice.js): it
+    // lands on Chat's microphone, opens Speech settings when there is
+    // nothing to speak into or its service cannot be reached, and is
+    // paused under SAFE.
+    const state = talkState(), title = TALK_TITLES[state];
+    const talk = '<button class="home-talk' + (state === 'setup' || state === 'unreachable' ? ' faint' : '') + '" id="home-talk" type="button"' +
+      (state === 'safe' ? ' disabled' : '') + ' title="' + title + '" aria-label="' + title + '">' + ico('mic') + '</button>';
     field = '<div class="home-field"><input type="text" id="home-input" placeholder="Say what you need — it carries into Chat" autocomplete="off">' +
-      '<button class="home-talk" id="home-talk" type="button" title="Hold to talk, in Chat" aria-label="Talk in Chat">' + ico('mic') + '</button></div>';
+      talk + '</div>';
   }
   const intents = [['chat', 'chat', 'Talk'], ['memory', 'memory', 'Recall'], ['identity', 'brief', 'Read the brief'], ['projects', 'projects', 'Open the workroom']]
     .map(([view, icon, label]) => '<button class="home-intent" data-go="' + view + '" type="button"' + (S.identityExists ? '' : ' disabled') + '>' + ico(icon) + '<span>' + label + '</span></button>').join('');
@@ -166,10 +184,16 @@ export function renderHome() {
   }; });
   const input = $('home-input');
   if (input) {
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); handOff(input.value); } });
+    input.addEventListener('keydown', e => { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') { e.preventDefault(); handOff(input.value); } });
   }
   const talk = $('home-talk');
-  if (talk) talk.onclick = () => { navTo('chat'); const m = $('mic'); if (m) m.focus(); };
+  if (talk) talk.onclick = () => {
+    const state = talkState();
+    if (state === 'setup' || state === 'unreachable') { if (S.openSettings) S.openSettings('speech', 'sp-provider-stt'); return; }
+    navTo('chat');
+    const c = $(state === 'plugin' ? 'converse' : 'mic');
+    if (c && !c.hidden) c.focus();
+  };
 }
 
 export function handOff(text) {

@@ -1306,7 +1306,7 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 // .
 // .
 // .
-const historyRoute = `recall(query="...") reaches the full record`
+const historyRoute = `recall(query="<a distinctive word or phrase>", source=conversation) reaches the full turn`
 
 func setHistoryNote(system *llm.Message, base string, omitted, abridged int) {
 	system.Content = base + HistoryOmissionNote(omitted) + historyAbridgedNote(abridged)
@@ -1364,7 +1364,18 @@ func HistoryOmissionNote(omitted int) string {
 	if omitted <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n\n## Conversation context\n%d older conversation turns are not shown. recall(query=\"...\") reaches recorded memory.", omitted)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	return fmt.Sprintf("\n\n## Conversation context\n%d older conversation turns are not shown. Each is still individually searchable by its own words: recall(query=\"<a distinctive word or phrase>\", source=conversation).", omitted)
 }
 
 func foldToolResult(messages []llm.Message, current int, transcript Transcript) bool {

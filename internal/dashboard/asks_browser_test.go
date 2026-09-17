@@ -57,8 +57,8 @@ run(() => {
 		}
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/state.js"] = []byte(`export const S = { stats: { name: 'Ember' }, providers: [], config: null, providersLoaded: false, asks: [] };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0;`)
+	modules["/state.js"] = []byte(`export const S = { stats: { name: 'Willow' }, providers: [], config: null, providersLoaded: false, asks: [] };`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-1'; } export function wsReady() { return true; } export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`)
 	modules["/presence.js"] = []byte(`export function setThinking() {} export function toolPulse() {} export function renderPresence() {}`)
 	modules["/app.js"] = []byte(`export function toast() {}`)

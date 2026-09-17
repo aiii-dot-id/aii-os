@@ -253,7 +253,7 @@ func (a *App) pluginsState(c *Config) dashboard.PluginsState {
 			MaxFileBytes: c.Plugins.Runtime.MaxFileBytes, MaxCompressedBytes: c.Plugins.Runtime.MaxCompressedBytes,
 			MaxDepth: c.Plugins.Runtime.MaxDepth, RootsKept: c.Plugins.Runtime.RootsKept,
 		},
-		AuthProfiles: a.authProfileViews(c), Providers: providerViews(),
+		AuthProfiles: a.authProfileViews(c), Providers: a.providerViews(),
 	}
 }
 

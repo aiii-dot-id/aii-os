@@ -3,6 +3,9 @@
 package supervisor
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"io"
@@ -41,11 +44,11 @@ var (
 	modUserenv  = windows.NewLazySystemDLL("userenv.dll")
 	modAdvapi32 = windows.NewLazySystemDLL("advapi32.dll")
 
-	procCreateAppContainerProfile                 = modUserenv.NewProc("CreateAppContainerProfile")
-	procDeriveAppContainerSidFromAppContainerName = modUserenv.NewProc("DeriveAppContainerSidFromAppContainerName")
-	procGetAppContainerFolderPath                 = modUserenv.NewProc("GetAppContainerFolderPath")
-	procSetEntriesInAclW                          = modAdvapi32.NewProc("SetEntriesInAclW")
-	procGetAclInformation                         = modAdvapi32.NewProc("GetAclInformation")
+	procCreateAppContainerProfile = modUserenv.NewProc("CreateAppContainerProfile")
+	procDeleteAppContainerProfile = modUserenv.NewProc("DeleteAppContainerProfile")
+	procGetAppContainerFolderPath = modUserenv.NewProc("GetAppContainerFolderPath")
+	procSetEntriesInAclW          = modAdvapi32.NewProc("SetEntriesInAclW")
+	procGetAclInformation         = modAdvapi32.NewProc("GetAclInformation")
 )
 
 // .
@@ -85,29 +88,38 @@ type securityCapabilities struct {
 
 // .
 // .
-// .
-func ensureProfile(name string) (*windows.SID, error) {
-	name16, err := windows.UTF16PtrFromString(name)
-	if err != nil {
-		return nil, err
+func createChildProfile(scope string) (string, *windows.SID, error) {
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", nil, err
 	}
-	desc16, _ := windows.UTF16PtrFromString("AII OS plugin (contained native)")
+	digest := sha256.Sum256(append([]byte(scope+"\x00"), nonce[:]...))
+	name := "aiios." + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:]))
+	name16, _ := windows.UTF16PtrFromString(name)
+	desc16, _ := windows.UTF16PtrFromString("AII OS contained plugin child")
 	var sid *windows.SID
-	r, _, _ := procCreateAppContainerProfile.Call(
-		uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(desc16)),
-		0, 0, uintptr(unsafe.Pointer(&sid)))
-	switch uint32(r) {
-	case 0:
-	case hresultAlreadyExists:
-		r, _, _ = procDeriveAppContainerSidFromAppContainerName.Call(uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(&sid)))
-		if uint32(r) != 0 {
-			return nil, fmt.Errorf("derive AppContainer SID for %q: HRESULT 0x%08x", name, uint32(r))
-		}
-	default:
-		return nil, fmt.Errorf("create AppContainer profile %q: HRESULT 0x%08x", name, uint32(r))
+	r, _, _ := procCreateAppContainerProfile.Call(uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(desc16)), 0, 0, uintptr(unsafe.Pointer(&sid)))
+	if uint32(r) != 0 {
+		return "", nil, fmt.Errorf("create AppContainer: HRESULT 0x%08x", uint32(r))
 	}
 	defer windows.FreeSid(sid)
-	return sid.Copy()
+	copied, err := sid.Copy()
+	if err != nil {
+		return "", nil, errors.Join(err, deleteChildProfile(name))
+	}
+	return name, copied, nil
+}
+
+func deleteChildProfile(name string) error {
+	name16, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return err
+	}
+	r, _, _ := procDeleteAppContainerProfile.Call(uintptr(unsafe.Pointer(name16)))
+	if uint32(r) != 0 {
+		return fmt.Errorf("delete AppContainer %s: HRESULT 0x%08x", name, uint32(r))
+	}
+	return nil
 }
 
 // .
@@ -129,83 +141,45 @@ func containerFolder(sid *windows.SID) (string, error) {
 // .
 // .
 // .
-func grantReadExecute(path string, sid *windows.SID) error {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		return fmt.Errorf("read the ACL of %s: %w", path, err)
-	}
-	old, _, err := sd.DACL()
-	if err != nil {
-		return fmt.Errorf("read the DACL of %s: %w", path, err)
-	}
-	if old != nil && aclGrants(old, sid) {
-		return nil
-	}
-	entries := []windows.EXPLICIT_ACCESS{{
-		AccessPermissions: windows.GENERIC_READ | windows.GENERIC_EXECUTE,
-		AccessMode:        windows.GRANT_ACCESS,
-		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-		Trustee: windows.TRUSTEE{
-			TrusteeForm:  windows.TRUSTEE_IS_SID,
-			TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
-			TrusteeValue: windows.TrusteeValueFromSID(sid),
-		},
-	}}
-	dacl, err := setEntriesInAcl(entries, old)
-	if err != nil {
-		return fmt.Errorf("extend the DACL of %s: %w", path, err)
-	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(dacl)))
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
-		return fmt.Errorf("write the DACL of %s: %w", path, err)
-	}
-	return nil
-}
-
-// .
-// .
-func aclGrants(acl *windows.ACL, sid *windows.SID) bool {
-	var info aclSizeInfo
-	if r, _, _ := procGetAclInformation.Call(uintptr(unsafe.Pointer(acl)), uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), aclSizeInformation); r == 0 {
-		return false
-	}
-	for i := uint32(0); i < info.AceCount; i++ {
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(acl, i, &ace); err != nil {
-			return false
-		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			continue
-		}
-		if (*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(sid) {
-			return true
-		}
-	}
-	return false
-}
-
-// .
-// .
-// .
 type launched struct {
 	stdin          io.WriteCloser
 	stdout, stderr io.ReadCloser
-	contained      func()
-	containment    string
+	contained      func() error
+	containment    Containment
 }
 
 // .
 // .
-func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (*launched, error) {
+func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (result *launched, launchErr error) {
 	if ac == nil || ac.Profile == "" {
 		return nil, errors.New("AppContainer: no profile named")
 	}
-	sid, err := ensureProfile(ac.Profile)
+	name, sid, err := createChildProfile(ac.Profile)
 	if err != nil {
 		return nil, err
 	}
+	var granted []string
+	releaseGrants := func() error {
+		var errs []error
+		for _, dir := range granted {
+			if err := changeContainerGrant(dir, sid, false); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) == 0 {
+			errs = append(errs, deleteChildProfile(name))
+		}
+		return errors.Join(errs...)
+	}
+	defer func() {
+		if result == nil {
+			launchErr = errors.Join(launchErr, releaseGrants())
+		}
+	}()
 	for _, dir := range ac.GrantRead {
-		if err := grantReadExecute(dir, sid); err != nil {
+		// .
+		granted = append(granted, dir)
+		if err := changeContainerGrant(dir, sid, true); err != nil {
 			return nil, err
 		}
 	}
@@ -354,11 +328,19 @@ func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (*la
 		return nil, fmt.Errorf("adopt the contained process: %w", err)
 	}
 	cmd.Process = proc
-	cleanup := func() { _ = windows.CloseHandle(job) }
+	cleanup := func() error {
+		// .
+		err := terminateAndWaitJob(job)
+		err = errors.Join(err, windows.CloseHandle(job))
+		if err != nil {
+			return err
+		}
+		return releaseGrants()
+	}
 	return &launched{
-		stdin: stdinW, stdout: stdoutR, stderr: stderrR, contained: onceFunc(cleanup),
-		containment: "contained (AppContainer " + sid.String() + ", no capabilities: no network, no devices, reads only its runtime and models, writes only its container folder; " +
-			"one job object assigned before its first instruction: dies with the supervisor, no breakaway, UI-restricted" + envelope + ")",
+		stdin: stdinW, stdout: stdoutR, stderr: stderrR, contained: onceCleanup(cleanup),
+		containment: Containment{NetworkDenied: true, FilesystemRestricted: true, AppContainerSID: sid.String(), Description: "contained (AppContainer " + sid.String() + ", no requested capabilities: no network, reads granted runtime/models and Windows AppContainer system resources, writes its container folder; " +
+			"one job object assigned before its first instruction: dies with the supervisor, no breakaway, UI-restricted" + envelope + ")"},
 	}, nil
 }
 
@@ -415,7 +397,8 @@ func makeCommandLine(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-func onceFunc(f func()) func() {
+func onceCleanup(f func() error) func() error {
 	var once sync.Once
-	return func() { once.Do(f) }
+	var err error
+	return func() error { once.Do(func() { err = f() }); return err }
 }

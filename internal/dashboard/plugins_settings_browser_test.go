@@ -94,7 +94,11 @@ run(() => {
   memory.settings.find(s => s.key === 'api_key').value = 'acme';
   delete memory.settings.find(s => s.key === 'label').value;
   assert(acceptSettingsConfig(sent.request_id || 'req-1'), 'the acknowledgement is claimed against the save');
-  assert(configFeedbackHTML().includes('config-result good'), 'a save that came back on the card is saved, not doubted: ' + configFeedbackHTML());
+  renderPlugins();
+  const said = document.querySelector('[data-said="plugin:com.example.memory"]');
+  assert(said && said.className.includes('good'), 'a save that came back on the card is saved, not doubted, and says so beside its own button: ' + (said ? said.outerHTML : 'nothing said'));
+  assert(!document.querySelector('[data-said="catalog"]') && !document.querySelector('[data-said="plugins"]'), 'another card was told about a save it did not make');
+  assert(!configFeedbackHTML(), 'the answer was also put at the top of the page: ' + configFeedbackHTML());
   // A value that truly did not come back is still named — the card
   // re-rendered from the saved state first, so only the changed field
   // differs.
@@ -102,24 +106,37 @@ run(() => {
   st.querySelector('[data-pset-key="recall_limit"]').value = '15';
   st.querySelector('[data-save="plugin:com.example.memory"]').click();
   memory.settings.find(s => s.key === 'recall_limit').value = 12;
-  assert(acceptSettingsConfig('req-1') && configFeedbackHTML().includes('plugins.settings.com.example.memory.recall_limit did not come back as saved'), 'a value the state does not carry is named: ' + configFeedbackHTML());
-  assert(!configFeedbackHTML().includes('verbose'), 'values that came back are not named');
+  assert(acceptSettingsConfig('req-1'), 'the second acknowledgement is claimed');
+  renderPlugins();
+  const doubted = document.querySelector('[data-said="plugin:com.example.memory"]');
+  assert(doubted && doubted.textContent.includes('plugins.settings.com.example.memory.recall_limit did not come back as saved'), 'a value the state does not carry is named: ' + (doubted ? doubted.textContent : 'nothing said'));
+  assert(!doubted.textContent.includes('verbose'), 'values that came back are not named');
   // Ticked, the forget box clears it — the only write an orphan takes.
   renderPlugins();
   st.querySelector('[data-pset-key="legacy_top_k"]').checked = true;
   st.querySelector('[data-save="plugin:com.example.memory"]').click();
-  const forgot = frames.filter(f => f.type === 'config_set').pop().config;
+  const forgotFrame = frames.filter(f => f.type === 'config_set').pop(), forgot = forgotFrame.config;
   assert(forgot['plugins.settings.com.example.memory.legacy_top_k'] === null, 'ticked, it clears the value: ' + JSON.stringify(forgot));
+  // ONE SAVE AT A TIME: every bar waits while one is being checked — a
+  // second save would take the pending slot and orphan the first — so
+  // the next press comes after this one is answered.
+  renderPlugins();
+  assert(st.querySelector('[data-save="grants:com.example.memory"]').disabled, 'another bar was pressable while a save was being checked');
+  acceptSettingsConfig(forgotFrame.request_id || 'req-1');
   // Grants read back from the card the same way.
   renderPlugins();
   const kv = st.querySelector('[data-grant-plugin="com.example.memory"][data-grant-field="kv"]');
   assert(kv, 'the signed capability offers its grant');
+  assert(st.querySelector('[data-save="grants:com.example.memory"]').textContent === 'Save grants', 'a button keeps its own words');
   kv.checked = true;
   st.querySelector('[data-save="grants:com.example.memory"]').click();
   const gsent = frames.filter(f => f.type === 'config_set').pop().config;
   assert(gsent['plugins.grants.com.example.memory.kv'] === true, 'the grant is sent: ' + JSON.stringify(gsent));
   memory.grants = { kv: true, read_only: false }; // the server always answers read_only; the page sent it with the boxes
-  assert(acceptSettingsConfig('req-1') && configFeedbackHTML().includes('config-result good'), 'a grant that came back on the card is saved: ' + configFeedbackHTML());
+  assert(acceptSettingsConfig('req-1'), 'the grant acknowledgement is claimed');
+  renderPlugins();
+  const grantSaid = document.querySelector('[data-said="grants:com.example.memory"]');
+  assert(grantSaid && grantSaid.className.includes('good'), 'a grant that came back is saved, beside the button that saved it: ' + (grantSaid ? grantSaid.outerHTML : 'nothing said'));
 
   // CHOICES WITH NAMES, LONG LISTS, WHOLE NUMBERS, STALE VALUES, AND
   // WHEN A SAVE APPLIES, on the resident voice engine's card.
@@ -184,7 +201,7 @@ run(() => {
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
 	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, providersLoaded: false };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0;`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = [];
 export function send(f) { frames.push(f); return 'req-1'; }
 export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`)

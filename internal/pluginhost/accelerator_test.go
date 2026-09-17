@@ -38,8 +38,8 @@ func TestAcceleratorProfilesReadinessAndTheWindowsGate(t *testing.T) {
 	}
 
 	win := hostContext{platform: "windows", arch: "x86_64", topology: "full_identity_host", supervised: true}
-	if ok, why := win.runtimeLane("native_t3_component"); ok || why != WindowsNativeRefusal {
-		t.Fatalf("Windows refuses native T3 by name until the wall is qualified: %v %q", ok, why)
+	if ok, why := win.runtimeLane("native_t3_component"); !ok || why != "" {
+		t.Fatalf("qualified Windows native T3 must reach per-activation containment and readiness: %v %q", ok, why)
 	}
 	if ok, _ := win.runtimeLane("wasm_component"); !ok {
 		t.Fatal("wasm still runs on Windows")

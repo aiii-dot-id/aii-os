@@ -10,7 +10,9 @@ import (
 	"testing"
 )
 
-const substrateTransactionPage = `<!doctype html>
+// .
+// .
+const substratePageMarkup = `<!doctype html>
 <select id="fb-provider"></select><select id="fb-model"></select>
 <input id="fb-apikey"><p class="fb-meet" id="fb-meet">You are about to meet your AI identity. Your first conversation is important. You can decide on a name and introduce yourself. Your relationship begins here.</p>
 <a id="fb-subscribe"></a><div id="fb-cred-why"></div><div id="fb-hint"></div>
@@ -21,7 +23,9 @@ const substrateTransactionPage = `<!doctype html>
 <select id="chat-model"></select><button id="chat-substrate-apply"></button>
 <span id="chat-substrate-status"></span></div>
 <div id="settings-stack"></div>
-<script type="module">
+`
+
+const substrateTransactionPage = substratePageMarkup + `<script type="module">
 import { S } from './state.js';
 import { frames, setConnected } from './ws.js';
 import { renderProviderOptions, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
@@ -31,11 +35,13 @@ import { assert, run } from './__harness.js';
 
 run(() => {
   S.providers = [
-    { name: 'Claude', endpoint: 'https://example.test', models: ['c1'], default_model: 'c1', preselect: true },
+    { name: 'Claude', endpoint: 'https://example.test', models: ['c1'], default_model: 'c1', preselect: true, can_sign_in: true },
     { name: 'Other', endpoint: 'https://other.test', models: ['o1'], default_model: 'o1' },
   ];
   renderProviderOptions();
   const firstDiscovery = frames.at(-1).request_id;
+  assert(!document.getElementById('fb-signin-start'), 'automatic preselection must not show a sign-in prompt');
+  assert(!frames.some(f => f.type === 'provider_signin'), 'rendering must not start OAuth');
   document.getElementById('fb-apikey').value = 'key';
   document.getElementById('fb-apikey').dispatchEvent(new Event('change'));
   const latestDiscovery = frames.at(-1).request_id;
@@ -45,6 +51,16 @@ run(() => {
   document.getElementById('fb-provider').value = '1';
   document.getElementById('fb-provider').onchange();
   assert(document.getElementById('fb-apikey').value === '', 'provider switch retained another provider key');
+  assert(!document.getElementById('fb-signin-start'), 'unselected OAuth provider showed its sign-in control');
+  document.getElementById('fb-provider').value = '0';
+  document.getElementById('fb-provider').onchange();
+  assert(document.getElementById('fb-signin-start'), 'explicit OAuth selection offers sign-in');
+  S.providers[0].signin = {status:'pending',device:{user_code:'ABCD',verification_uri:'https://auth.example/device'}};
+  renderProviderOptions();
+  assert(document.getElementById('fb-provider').value === '0' && document.getElementById('fb-signin').textContent.includes('ABCD'), 'reconnect snapshot loses selection or device code');
+  assert(!frames.some(f => f.type === 'provider_signin'), 'reconnecting started another consent');
+  document.getElementById('fb-provider').value = '1';
+  document.getElementById('fb-provider').onchange();
 
   assert(document.getElementById('fb-name') === null, 'identity name field still present — naming moved to the first conversation');
   assert(document.getElementById('fb-operator') === null, 'operator name field still present — naming moved to the first conversation');
@@ -104,7 +120,41 @@ run(() => {
 });
 </script>`
 
+// .
+// .
+const settingsChooserPage = substratePageMarkup + `<script type="module">
+import { S } from './state.js';
+import { renderSettings } from './views/settings.js';
+import { assert, run } from './__harness.js';
+
+run(() => {
+  S.identityExists = true;
+  S.providersLoaded = true;
+  S.providers = [
+    { name: 'chatty', models: ['m1'], default_model: 'm1', chat: true },
+    { name: 'Voices', chat: false, speech: { tts: { voices: [{ id: 'v1' }], voice_required: true } } },
+  ];
+  S.config = { llm: { provider: 'chatty', model: 'm1', resolved_provider: 'chatty', resolved_model: 'm1', timeout_seconds: 120 } };
+  renderSettings();
+  const offered = [...document.getElementById('cfg-provider').options].map(o => o.value);
+  assert(offered.includes('chatty'), 'a chat entry is missing from the settings chooser');
+  assert(!offered.includes('Voices'), 'a speech-only entry is offered as the substrate');
+});
+</script>`
+
 func TestSubstrateTransactionsInBrowser(t *testing.T) {
+	runPageInEngines(t, substrateTransactionPage, substrateModules(t))
+}
+
+// .
+// .
+func TestSettingsOffersOnlyEntriesThatChat(t *testing.T) {
+	runPageInEngines(t, settingsChooserPage, substrateModules(t))
+}
+
+// .
+func substrateModules(t *testing.T) map[string][]byte {
+	t.Helper()
 	modules := map[string][]byte{}
 	for _, path := range []string{
 		"static/firstboot.js", "static/views/chat.js", "static/views/settings.js", "static/views/model-picker.js",
@@ -116,7 +166,7 @@ func TestSubstrateTransactionsInBrowser(t *testing.T) {
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
 	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, identityExists: false, providersLoaded: false };`)
-	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = value => String(value ?? '');`)
+	modules["/util.js"] = []byte(`export const $ = id => document.getElementById(id); export const esc = value => String(value ?? ''); export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`
 let connected = true, seq = 0;
 export const frames = [];
@@ -128,5 +178,5 @@ export const wsReady = () => connected;`)
 	modules["/app.js"] = []byte(`export function toast(message) { globalThis.lastToast = message; }`)
 	modules["/sandbox.js"] = []byte(`export function sandboxCardHTML() { return ''; } export function wireSandboxCard() {}`)
 
-	runPageInEngines(t, substrateTransactionPage, modules)
+	return modules
 }

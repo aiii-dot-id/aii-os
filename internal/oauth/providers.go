@@ -1,5 +1,10 @@
 package oauth
 
+import (
+	"sort"
+	"strings"
+)
+
 // .
 // .
 // .
@@ -11,100 +16,75 @@ package oauth
 // .
 // .
 type ScopeSet struct {
-	Read   []string
-	Modify []string
+	Read   []string `json:"read,omitempty"`
+	Modify []string `json:"modify,omitempty"`
 }
 
 // .
 type Provider struct {
-	Name         string
-	AuthorizeURL string
-	TokenURL     string
-	DeviceURL    string
-	RevokeURL    string
-	// .
-	// .
-	AuthorizeParams map[string]string
-	// .
-	BaseScopes []string
-	// .
-	// .
-	Hosts []string
-	// .
-	Scopes map[string]ScopeSet
-	// .
-	// .
-	DeviceScopesUnsupported []string
+	Name                    string              `json:"name,omitempty"`
+	ClientID                string              `json:"client_id,omitempty"`
+	AuthorizeURL            string              `json:"authorize_url,omitempty"`
+	TokenURL                string              `json:"token_url,omitempty"`
+	RedirectURI             string              `json:"redirect_uri,omitempty"`
+	SignIn                  string              `json:"sign_in,omitempty"`
+	DeviceExpiresSeconds    int                 `json:"device_expires_seconds,omitempty"`
+	DeviceURL               string              `json:"device_url,omitempty"`
+	DevicePollURL           string              `json:"device_poll_url,omitempty"`
+	VerificationURI         string              `json:"verification_uri,omitempty"`
+	DeviceRedirectURI       string              `json:"device_redirect_uri,omitempty"`
+	RevokeURL               string              `json:"revoke_url,omitempty"`
+	CredentialFile          string              `json:"credential_file,omitempty"`
+	AuthorizeParams         map[string]string   `json:"authorize_params,omitempty"`
+	TokenEncoding           string              `json:"token_encoding,omitempty"`
+	TokenHeaders            map[string]string   `json:"token_headers,omitempty"`
+	TokenParams             map[string]any      `json:"token_params,omitempty"`
+	RefreshParams           map[string]any      `json:"refresh_params,omitempty"`
+	ResourceHeaders         map[string]string   `json:"resource_headers,omitempty"`
+	ClaimHeaders            map[string][]string `json:"claim_headers,omitempty"`
+	BaseScopes              []string            `json:"scopes,omitempty"`
+	Hosts                   []string            `json:"hosts,omitempty"`
+	Scopes                  map[string]ScopeSet `json:"services,omitempty"`
+	DeviceScopesUnsupported []string            `json:"device_scopes_unsupported,omitempty"`
 }
 
-var providers = map[string]Provider{
-	"google": {
-		Name:            "google",
-		AuthorizeURL:    "https://accounts.google.com/o/oauth2/v2/auth",
-		TokenURL:        "https://oauth2.googleapis.com/token",
-		DeviceURL:       "https://oauth2.googleapis.com/device/code",
-		RevokeURL:       "https://oauth2.googleapis.com/revoke",
-		AuthorizeParams: map[string]string{"access_type": "offline", "prompt": "consent"},
-		Hosts:           []string{"www.googleapis.com:443", "gmail.googleapis.com:443", "people.googleapis.com:443", "imap.gmail.com:993", "smtp.gmail.com:465"},
-		Scopes: map[string]ScopeSet{
-			"calendar": {Read: []string{"https://www.googleapis.com/auth/calendar.readonly"}, Modify: []string{"https://www.googleapis.com/auth/calendar.events"}},
-			"gmail":    {Read: []string{"https://www.googleapis.com/auth/gmail.readonly"}, Modify: []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"}},
-			"drive":    {Read: []string{"https://www.googleapis.com/auth/drive.readonly"}, Modify: []string{"https://www.googleapis.com/auth/drive.file"}},
-			"contacts": {Read: []string{"https://www.googleapis.com/auth/contacts.readonly"}, Modify: []string{"https://www.googleapis.com/auth/contacts"}},
-			"mail":     {Read: []string{"https://mail.google.com/"}, Modify: []string{"https://mail.google.com/"}},
-		},
-		DeviceScopesUnsupported: []string{"gmail", "calendar", "contacts", "mail"},
-	},
-	"microsoft": {
-		Name:         "microsoft",
-		AuthorizeURL: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-		TokenURL:     "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-		DeviceURL:    "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
-		BaseScopes:   []string{"offline_access", "openid"},
-		Hosts:        []string{"graph.microsoft.com:443", "outlook.office365.com:993", "smtp.office365.com:587"},
-		Scopes: map[string]ScopeSet{
-			"mail":     {Read: []string{"Mail.Read"}, Modify: []string{"Mail.ReadWrite", "Mail.Send"}},
-			"calendar": {Read: []string{"Calendars.Read"}, Modify: []string{"Calendars.ReadWrite"}},
-			"files":    {Read: []string{"Files.Read"}, Modify: []string{"Files.ReadWrite"}},
-			"contacts": {Read: []string{"Contacts.Read"}, Modify: []string{"Contacts.ReadWrite"}},
-		},
-	},
-	"github": {
-		Name:         "github",
-		AuthorizeURL: "https://github.com/login/oauth/authorize",
-		TokenURL:     "https://github.com/login/oauth/access_token",
-		DeviceURL:    "https://github.com/login/device/code",
-		Hosts:        []string{"api.github.com:443"},
-		Scopes: map[string]ScopeSet{
-			// .
-			// .
-			// .
-			"issues": {Read: []string{"read:user"}, Modify: []string{"public_repo"}},
-			"repo":   {Read: []string{"repo"}, Modify: []string{"repo"}},
-		},
-	},
-	"slack": {
-		Name:         "slack",
-		AuthorizeURL: "https://slack.com/oauth/v2/authorize",
-		TokenURL:     "https://slack.com/api/oauth.v2.access",
-		Hosts:        []string{"slack.com:443"},
-		Scopes: map[string]ScopeSet{
-			"chat": {Read: []string{"channels:history", "channels:read"}, Modify: []string{"chat:write"}},
-		},
-	},
+// .
+// .
+func (p Provider) Params() OAuthParams {
+	return OAuthParams{ClientID: p.ClientID, AuthorizeURL: p.AuthorizeURL, TokenURL: p.TokenURL,
+		RedirectURI: p.RedirectURI, Scope: strings.Join(p.BaseScopes, " "), AuthorizeParams: copyMap(p.AuthorizeParams),
+		TokenEncoding: p.TokenEncoding, TokenHeaders: copyMap(p.TokenHeaders),
+		TokenParams: copyParams(p.TokenParams), RefreshParams: copyParams(p.RefreshParams),
+		ResourceHeaders: copyMap(p.ResourceHeaders), ClaimHeaders: copyPaths(p.ClaimHeaders)}
+}
+
+func copyPaths(in map[string][]string) map[string][]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
 }
 
 // .
 // .
 // .
-func ProviderTemplate(name string) (Provider, bool) {
-	p, ok := providers[name]
+func ProviderTemplate(name string, catalog map[string]Provider) (Provider, bool) {
+	p, ok := catalog[name]
 	if !ok {
 		return Provider{}, false
 	}
 	// .
 	out := p
 	out.AuthorizeParams = copyMap(p.AuthorizeParams)
+	out.TokenHeaders = copyMap(p.TokenHeaders)
+	out.TokenParams = copyParams(p.TokenParams)
+	out.RefreshParams = copyParams(p.RefreshParams)
+	out.ResourceHeaders = copyMap(p.ResourceHeaders)
+	out.ClaimHeaders = copyPaths(p.ClaimHeaders)
 	out.BaseScopes = append([]string(nil), p.BaseScopes...)
 	out.Hosts = append([]string(nil), p.Hosts...)
 	out.DeviceScopesUnsupported = append([]string(nil), p.DeviceScopesUnsupported...)
@@ -116,8 +96,13 @@ func ProviderTemplate(name string) (Provider, bool) {
 }
 
 // .
-func ProviderNames() []string {
-	return []string{"google", "microsoft", "github", "slack"}
+func ProviderNames(catalog map[string]Provider) []string {
+	names := make([]string, 0, len(catalog))
+	for n := range catalog {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func copyMap(m map[string]string) map[string]string {
@@ -129,4 +114,32 @@ func copyMap(m map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// .
+// .
+func copyParams(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = copyParam(v)
+	}
+	return out
+}
+
+func copyParam(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		return copyParams(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = copyParam(item)
+		}
+		return out
+	default:
+		return v
+	}
 }

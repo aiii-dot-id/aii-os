@@ -78,7 +78,7 @@ func TestAdoptsBothVendorShapes(t *testing.T) {
 		}})
 
 	claudeOptions := claudeTestOptions(nil)
-	claude, err := New(KindClaudeCode, claudeOptions)
+	claude, err := testSource(KindClaudeCode, claudeOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestAdoptsBothVendorShapes(t *testing.T) {
 			t.Fatalf("Claude Code OAuth lacks %s: %v", header, cr.Headers)
 		}
 	}
-	rotated, err := New(KindClaudeCode, claudeTestOptions(map[string]string{"billing_text": "updated-marker"}))
+	rotated, err := testSource(KindClaudeCode, claudeTestOptions(map[string]string{"billing_text": "updated-marker"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestAdoptsBothVendorShapes(t *testing.T) {
 		t.Fatalf("operator billing override ignored: %q", rotated.BillingText())
 	}
 
-	codex, err := New(KindCodex)
+	codex, err := testSource(KindCodex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestScopeGateRefusesNonInferenceCredential(t *testing.T) {
 			"expiresAt": time.Now().Add(time.Hour).UnixMilli(),
 			"scopes":    []string{"user:profile", "user:mcp_servers"},
 		}})
-	_, err := New(KindClaudeCode, claudeTestOptions(nil))
+	_, err := testSource(KindClaudeCode, claudeTestOptions(nil))
 	if err == nil {
 		t.Fatal("a credential without user:inference must be refused")
 	}
@@ -168,7 +168,7 @@ func TestNeverWritesTheOwnersFile(t *testing.T) {
 	}
 	fi, _ := os.Stat(path)
 
-	s, err := New(KindClaudeCode, claudeTestOptions(nil))
+	s, err := testSource(KindClaudeCode, claudeTestOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestExpiredCredentialSaysWhatToDo(t *testing.T) {
 			"expiresAt": time.Now().Add(-time.Hour).UnixMilli(),
 			"scopes":    []string{"user:inference"},
 		}})
-	s, err := New(KindClaudeCode, claudeTestOptions(nil))
+	s, err := testSource(KindClaudeCode, claudeTestOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestExpiredCredentialSaysWhatToDo(t *testing.T) {
 
 func TestUnknownKindNamesTheKnownOnes(t *testing.T) {
 	requireAdoption(t)
-	if _, err := New("nope"); err == nil || !contains(err.Error(), KindClaudeCode) {
+	if _, err := testSource("nope"); err == nil || !contains(err.Error(), KindClaudeCode) {
 		t.Fatalf("want the known kinds listed, got: %v", err)
 	}
 }
@@ -260,7 +260,7 @@ func TestUsableBoundaryIsTheSkewBoundary(t *testing.T) {
 					"expiresAt": time.Now().Add(tc.in).UnixMilli(),
 					"scopes":    []string{"user:profile", "user:inference"},
 				}})
-			src, err := New(KindClaudeCode, claudeTestOptions(nil))
+			src, err := testSource(KindClaudeCode, claudeTestOptions(nil))
 			if err != nil {
 				t.Fatal(err)
 			}

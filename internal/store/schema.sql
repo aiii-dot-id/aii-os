@@ -245,6 +245,17 @@ CREATE TABLE IF NOT EXISTS turn_metrics (
     rounds INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS speech_usage (
+    -- provenance: ephemeral
+    provider   TEXT NOT NULL,
+    direction  TEXT NOT NULL CHECK (direction IN ('stt','tts')),
+    period     TEXT NOT NULL,
+    requests   INTEGER NOT NULL DEFAULT 0,
+    characters INTEGER NOT NULL DEFAULT 0,
+    ms         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (provider, direction, period)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS skill_proposals (
     -- provenance: ephemeral
     id         TEXT PRIMARY KEY,

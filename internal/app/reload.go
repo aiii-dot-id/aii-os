@@ -70,6 +70,7 @@ func (a *App) watcherInterval() time.Duration {
 // .
 // .
 // .
+// .
 func (a *App) reloadConfig() {
 	current := a.configSnapshot()
 	if current.SourcePath == "" || !a.live {
@@ -90,6 +91,10 @@ func (a *App) reloadConfig() {
 	var entry providerEntry
 	var providers *providerRegistry
 	var providerPath string
+	// .
+	// .
+	var proved substrateCapability
+	probed := false
 	if a.llmSwap != nil {
 		providerPath = a.providersPath()
 		providers, err = loadProvidersFile(providerPath)
@@ -105,7 +110,9 @@ func (a *App) reloadConfig() {
 			if err == nil {
 				client = a.newLLMClient(cc, promptBudgetFor(entry, current.Prompt.MaxTokens))
 				if substrateChanged {
-					err = a.probeSubstrate(client, cc, entry)
+					proved = a.substrateCapabilityRecord()
+					err = a.probeSubstrate(client, cc, entry, providers, fresh.LLM.ProbeTimeoutSeconds)
+					probed = err == nil
 				}
 			}
 		}
@@ -139,6 +146,9 @@ func (a *App) reloadConfig() {
 		if holdTurn {
 			a.releaseTurn()
 		}
+		if probed {
+			a.setSubstrateCapability(proved)
+		}
 		if fileErr != nil {
 			log.Printf("Config reload: recheck failed, keeping current: %v", fileErr)
 		} else {
@@ -157,6 +167,9 @@ func (a *App) reloadConfig() {
 			a.loadRing5()
 			_, fresh.Tools.ExtraRoots = a.toolReg.Roots()
 		}
+	}
+	if fresh.Dashboard.AccessToken != current.Dashboard.AccessToken || fresh.Dashboard.RequireToken != current.Dashboard.RequireToken {
+		a.rearmDashboardToken(fresh.Dashboard)
 	}
 	agencyChanged := !reflect.DeepEqual(fresh.Agency, current.Agency)
 	policyChanged := !reflect.DeepEqual(fresh.Plugins.Grants, current.Plugins.Grants) ||
@@ -247,10 +260,13 @@ func (a *App) reloadConfig() {
 // .
 func blankLiveAppliable(c *Config) {
 	c.LLM = LLMConfig{}
+	c.Speech = SpeechConfig{}
 	c.Tools.ExtraRoots = nil
 	c.Tools.Disabled = nil
 	c.Plugins.Autoload = ""
 	c.Plugins.Grants = nil
 	c.Plugins.AuthProfiles = nil
 	c.Agency = AgencyConfig{}
+	c.Dashboard.AccessToken = ""
+	c.Dashboard.RequireToken = false
 }

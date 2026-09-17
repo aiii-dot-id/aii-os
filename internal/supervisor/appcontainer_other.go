@@ -15,8 +15,8 @@ import (
 type launched struct {
 	stdin          io.WriteCloser
 	stdout, stderr io.ReadCloser
-	contained      func()
-	containment    string
+	contained      func() error
+	containment    Containment
 }
 
 func launchContained(*exec.Cmd, *AppContainer, uint64) (*launched, error) {

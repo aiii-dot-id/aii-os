@@ -311,6 +311,8 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 	// .
 	// .
 	// .
+	// .
+	// .
 	defer a.releaseTurn()
 	if binding != nil {
 		a.holdVoice(binding)
@@ -342,13 +344,15 @@ func (a *App) voiceBindingFor(o heardUtterance) *voiceBinding {
 	if o.SessionID == "" {
 		return nil
 	}
+	b := &voiceBinding{session: o.SessionID, gen: o.Gen, seq: o.Sequence, text: o.Text}
 	val, ok := a.voiceSessions.Load(o.SessionID)
 	if !ok {
-		return nil
+		return b
 	}
 	h := val.(*voiceHandle)
 	h.work.Add(1)
-	return &voiceBinding{session: o.SessionID, gen: o.Gen, done: h.work.Done, seq: o.Sequence, text: o.Text}
+	b.done = h.work.Done
+	return b
 }
 
 // .

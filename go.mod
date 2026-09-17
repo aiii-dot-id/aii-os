@@ -22,6 +22,7 @@ require (
 	golang.org/x/mobile v0.0.0-20260818145002-f020ddb2de58
 	golang.org/x/mod v0.39.0
 	golang.org/x/sys v0.47.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.56.0
 )
 

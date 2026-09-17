@@ -99,7 +99,13 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 		opts.MemoryMax = make(map[string]uint64, len(cfg.Plugins.Resources))
 		opts.StreamMax = make(map[string]int, len(cfg.Plugins.Resources))
 		opts.FilesMax = make(map[string]int, len(cfg.Plugins.Resources))
+		opts.ReadyTimeout = make(map[string]time.Duration, len(cfg.Plugins.Resources))
 		for id, r := range cfg.Plugins.Resources {
+			deadline, err := r.startupTimeout()
+			if err != nil {
+				return nil, fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
+			}
+			opts.ReadyTimeout[id] = deadline
 			opts.MemoryMax[id] = r.MemoryMaxBytes
 			opts.StreamMax[id] = r.StreamMaxBytes
 			opts.FilesMax[id] = r.FilesMaxBytes
@@ -149,11 +155,16 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 		// .
 		// .
 		// .
+		catalog, cerr := a.oauthContracts()
+		if cerr != nil {
+			return nil, cerr
+		}
 		opts.Broker, err = broker.New(broker.Config{
-			Store:        st,
-			Grants:       cfg.Plugins.Grants,
-			AuthProfiles: cfg.Plugins.AuthProfiles,
-			ObserveFetch: toolReg.NotifyFetch,
+			OAuthProviders: catalog,
+			Store:          st,
+			Grants:         cfg.Plugins.Grants,
+			AuthProfiles:   cfg.Plugins.AuthProfiles,
+			ObserveFetch:   toolReg.NotifyFetch,
 			// .
 			// .
 			Voice: voiceObserver{a},
@@ -756,7 +767,11 @@ func (a *App) replacePolicy(cfg Config) {
 	// .
 	// .
 	// .
-	a.pluginOpts.Broker.ReplacePolicy(cfg.Plugins.Grants, cfg.Plugins.AuthProfiles)
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		log.Printf("OAuth configuration: %v", err)
+	}
+	a.pluginOpts.Broker.ReplacePolicy(cfg.Plugins.Grants, cfg.Plugins.AuthProfiles, catalog)
 }
 
 // .

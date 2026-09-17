@@ -46,7 +46,7 @@ func TestCredentialStoresAreMaskedInsideTheSandbox(t *testing.T) {
 		`printf "ROOTSSH<%s>\n" "$(ls /root/.ssh 2>/dev/null)"; ` +
 		`printf "OSREL<%s>\n" "$(head -c 40 /etc/os-release 2>/dev/null)"; ` +
 		`printf "LIBS<%s>\n" "$(ls /usr/lib 2>/dev/null | head -1)"`
-	argv, telemetry, err := containArgv([]string{"/bin/sh", "-c", script})
+	argv, telemetry, err := containArgv([]string{"/bin/sh", "-c", script}, nil)
 	if err != nil {
 		t.Fatalf("containment refused: %v", err)
 	}
@@ -57,10 +57,10 @@ func TestCredentialStoresAreMaskedInsideTheSandbox(t *testing.T) {
 	// .
 	// .
 	// .
-	if !strings.Contains(telemetry, "ssh and shadow files masked") {
+	if !strings.Contains(telemetry.Description, "ssh and shadow files masked") {
 		t.Fatalf("telemetry does not record what is actually masked: %q", telemetry)
 	}
-	if !strings.Contains(telemetry, "other user-readable credentials are NOT") {
+	if !strings.Contains(telemetry.Description, "other user-readable credentials are NOT") {
 		t.Fatalf("telemetry claims a mask without naming its limit — the sentence an operator plans around: %q", telemetry)
 	}
 	out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()

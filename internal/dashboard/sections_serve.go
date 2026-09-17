@@ -519,6 +519,16 @@ const uiCSP = "default-src 'none'; " +
 	"style-src-elem 'self'; " +
 	"style-src-attr 'unsafe-inline'; " +
 	"img-src 'self'; " +
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	"media-src 'self' blob:; " +
 	"connect-src 'self'; " +
 	"frame-src 'self'; " +
 	"frame-ancestors 'none'; " +

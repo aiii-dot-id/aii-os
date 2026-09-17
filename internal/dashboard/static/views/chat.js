@@ -1,6 +1,6 @@
 
 import { S } from '../state.js';
-import { $, esc } from '../util.js';
+import { $, copyText, esc } from '../util.js';
 import { send, wsReady } from '../ws.js';
 import { setThinking, toolPulse } from '../presence.js';
 import { toast } from '../app.js';
@@ -18,6 +18,23 @@ export function renderSteering(pending) {
     pending.map(t => '<div class="steerq-item">' + esc(t) + '</div>').join('');
 }
 
+// ── copy ──
+//
+// A message body is plain text, so copy takes exactly what is shown.
+const COPY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.5v-.3A1.7 1.7 0 0 0 8.8 1.5H4.2a1.7 1.7 0 0 0-1.7 1.7v4.6a1.7 1.7 0 0 0 1.7 1.7h.3"/></svg>';
+const COPIED_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>';
+function copyButton(text) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'copyb'; b.title = 'Copy'; b.setAttribute('aria-label', 'Copy message');
+  b.innerHTML = COPY_ICON;
+  b.onclick = async () => {
+    if (!(await copyText(text))) { toast('Could not copy \u2014 the browser refused the clipboard.'); return; }
+    b.innerHTML = COPIED_ICON;
+    setTimeout(() => { b.innerHTML = COPY_ICON; }, 1200);
+  };
+  return b;
+}
+
 export function addMsg(role, text, whoNote, voiceRef) {
   if (!text) return null;
   const d = document.createElement('div');
@@ -25,6 +42,12 @@ export function addMsg(role, text, whoNote, voiceRef) {
   const who = role === 'identity' ? (S.stats ? S.stats.name : 'identity') : role === 'operator' ? 'you' : '';
   d.innerHTML = (who ? '<div class="who">' + esc(who) + (whoNote ? ' · <span class="speaker">' + esc(whoNote) + '</span>' : '') + '</div>' : '') +
     '<div class="body">' + esc(text) + '</div>';
+  if (role === 'identity' || role === 'operator') {
+    const acts = document.createElement('div');
+    acts.className = 'msg-acts';
+    acts.appendChild(copyButton(text));
+    d.appendChild(acts);
+  }
   if (voiceRef) d.dataset.voiceRef = voiceRef;
   $('thread-inner').appendChild(d);
   scrollThread();
@@ -152,31 +175,131 @@ export function renderHistory(history) {
   (history || []).forEach(t => addHistoryTurn(t));
   scrollThread(true);
 }
+// Within 140px of the bottom the thread follows new messages; further up,
+// it holds still and a round arrow above the composer offers the way back.
+function nearBottom(t) { return t.scrollHeight - t.scrollTop - t.clientHeight < 140; }
 export function scrollThread(force) {
   const t = $('thread');
-  const nearBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 140;
-  if (force || nearBottom) t.scrollTop = t.scrollHeight;
+  if (force || nearBottom(t)) t.scrollTop = t.scrollHeight;
+  renderJump();
 }
+function renderJump() {
+  const t = $('thread'), j = $('jump-latest');
+  if (t && j) j.hidden = nearBottom(t);
+}
+{
+  const t = $('thread'), j = $('jump-latest');
+  if (t) t.addEventListener('scroll', renderJump, { passive: true });
+  if (j) j.onclick = () => {
+    const th = $('thread');
+    const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    th.scrollTo({ top: th.scrollHeight, behavior: still ? 'auto' : 'smooth' });
+  };
+}
+// sendChat answers whether the words LEFT. A caller clears the box only
+// on true: a message typed during a reconnect is the operator's, and a
+// toast is no place to keep it.
 export function sendChat(text) {
   text = (text || '').trim();
-  if (!text) return;
-  if (!wsReady()) { toast('not connected — reconnecting'); return; }
+  if (!text) return false;
+  if (!wsReady()) { toast('not connected — reconnecting'); return false; }
   S.voiceSpeak = false;
   addMsg('operator', text);
   send({ type: 'chat', message: text });
   setThinking(true);
+  return true;
 }
+// composing is an IME confirming a candidate with Enter — Japanese,
+// Chinese, Korean — which is not the operator sending.
+export function composing(e) { return !!(e.isComposing || e.keyCode === 229); }
 const input = $('msg-input');
 input.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(input.value); input.value = ''; autosize(); }
+  if (composing(e)) return;
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (sendChat(input.value)) { input.value = ''; autosize(); } }
 });
 input.addEventListener('input', autosize);
 function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
 $('send-btn').onclick = () => {
 
   if (S.thinking) { send({ type: 'cancel' }); return; }
-  sendChat(input.value); input.value = ''; autosize();
+  if (sendChat(input.value)) { input.value = ''; autosize(); }
 };
+
+// ── the composer follows the active model ──
+//
+// renderComposer runs on every config and status push. The placeholder
+// names the identity. The effort control is drawn only when the config
+// carries declared_effort — the active model's OWN levels, decided by the
+// server (dashboard.DeclaredEffort) — and its label is the level in force,
+// what the wire sends, never merely what was asked for.
+export function renderComposer() {
+  const name = S.identityExists && S.stats ? S.stats.name : '';
+  input.placeholder = name && name !== 'Unnamed' ? 'Message ' + name : 'Message your identity';
+  renderComposerEffort();
+}
+// Levels read the way people say them: "Extra High", not "xhigh". The
+// value sent is still the vendor's own token.
+const EFFORT_NAMES = { '': 'Default', none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' };
+function effortName(level) {
+  if (Object.prototype.hasOwnProperty.call(EFFORT_NAMES, level)) return EFFORT_NAMES[level];
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}
+function renderComposerEffort() {
+  const wrap = $('effort'), val = $('effort-val'), menu = $('effort-menu');
+  if (!wrap || !val || !menu) return;
+  const d = S.config && S.config.llm && S.config.llm.effort_choice;
+  wrap.hidden = !(S.identityExists && d && d.levels && d.levels.length);
+  if (wrap.hidden) { closeEffortMenu(); return; }
+  const cur = d.in_force || '';
+  val.textContent = effortName(cur);
+  // Rebuilt only when what it offers changed. renderComposer runs on every
+  // status push, and replacing the buttons of an open menu would take the
+  // item from under the operator's keyboard focus mid-choice.
+  const checked = d.checked || [];
+  const key = d.levels.join('\n') + '\n=' + cur + '\n?' + checked.join(',');
+  if (menu.dataset.key === key) return;
+  menu.dataset.key = key;
+  menu.innerHTML = [''].concat(d.levels).map(l =>
+    '<button type="button" role="menuitemradio" aria-checked="' + (l === cur) + '" data-level="' + esc(l) + '"' +
+    // A level the model does not name for itself is proven first.
+    (checked.includes(l) ? ' data-checked title="Checked with the provider before it applies"' : '') + '>' +
+    '<span>' + esc(effortName(l)) + '</span><span class="check" aria-hidden="true">\u2713</span></button>').join('');
+}
+function closeEffortMenu() {
+  const menu = $('effort-menu'), btn = $('effort-btn');
+  if (menu) menu.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+{
+  const btn = $('effort-btn'), menu = $('effort-menu');
+  if (btn && menu) {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) { const c = menu.querySelector('[aria-checked="true"]') || menu.querySelector('button'); if (c) c.focus(); }
+    };
+    menu.onclick = (e) => {
+      const b = e.target.closest('button[data-level]');
+      if (!b) return;
+      closeEffortMenu();
+      btn.focus();
+      if (!wsReady()) { toast('not connected \u2014 reconnecting'); return; }
+      if (b.hasAttribute('data-checked')) toast('Checking ' + effortName(b.dataset.level) + ' with the provider before it applies…');
+      send({ type: 'effort_set', effort: b.dataset.level });
+    };
+    menu.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const items = [...menu.querySelectorAll('button')];
+      const next = items[(items.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+      if (next) next.focus();
+    });
+    document.addEventListener('click', (e) => { if (!e.target.closest('#effort')) closeEffortMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { closeEffortMenu(); btn.focus(); } });
+  }
+}
 
 const substrate = pendingSlot();
 let substrateResult = null;
@@ -191,8 +314,8 @@ function resolvedSubstrate() {
 }
 
 function substrateCandidates() {
-
-  return S.providers || [];
+  // An entry that names no chat model serves speech only: never a substrate.
+  return (S.providers || []).filter(p => p.chat !== false);
 }
 
 function fillModelList(providerName, preferred) {
@@ -370,5 +493,5 @@ function wireAskCard(d, a) {
     settle('You said: ' + text); answer({ answer: 'said', text });
   }; });
   const inp = d.querySelector('.ask-input');
-  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const b = d.querySelector('[data-ask-say]'); if (b) b.onclick(); } });
+  if (inp) inp.addEventListener('keydown', e => { if (composing(e)) return; if (e.key === 'Enter') { e.preventDefault(); const b = d.querySelector('[data-ask-say]'); if (b) b.onclick(); } });
 }

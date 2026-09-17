@@ -25,6 +25,10 @@ var (
 	// .
 	// .
 	errCredentialUnavailable = errors.New("provider credential unavailable")
+	// .
+	// .
+	// .
+	errCredentialRejected = errors.New("the provider refused the credential it was shown")
 )
 
 const maxModelListBytes = 1 << 20
@@ -100,7 +104,7 @@ func discoverModelsWith(ctx context.Context, dialect, base, token string, bearer
 		if token == "" {
 			return nil, nil, errAuthRequired
 		}
-		return nil, nil, fmt.Errorf("key rejected (%d) — check the credential for this provider", resp.StatusCode)
+		return nil, nil, fmt.Errorf("%w: key rejected (%d) — check the credential for this provider", errCredentialRejected, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("provider returned %d listing models at %s", resp.StatusCode, path)
@@ -208,7 +212,7 @@ func (a *App) discoverMetaForEntry(ctx context.Context, e providerEntry, apiKey 
 	dialect, base, bearer := e.APIType, e.URL, false
 	var extra, query map[string]string
 	if e.Credential != "" {
-		src, err := a.credentialSource(e.Credential, e.CredentialOptions)
+		src, err := a.credentialSource(e.Credential, e.CredentialOptions, e.signIn)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, err)
 		}
@@ -223,6 +227,19 @@ func (a *App) discoverMetaForEntry(ctx context.Context, e providerEntry, apiKey 
 		if d := src.Dialect(); d != "" {
 			dialect = d
 		}
+		gen := src.Generation()
+		models, meta, err := discoverModelsWith(ctx, dialect, base, apiKey, bearer, extra, query)
+		if errors.Is(err, errCredentialRejected) {
+			// .
+			// .
+			// .
+			// .
+			// .
+			if serr := src.Stale(ctx, gen); serr != nil {
+				return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, serr)
+			}
+		}
+		return models, meta, err
 	}
 	return discoverModelsWith(ctx, dialect, base, apiKey, bearer, extra, query)
 }

@@ -35,11 +35,13 @@ func TestOverlayPushWithoutQuery(t *testing.T) {
 
 	// .
 	// .
+	// .
 	conn := dialWS(t, addr)
-
 	// .
 	// .
 	// .
+	// .
+	waitForConns(t, s, 1)
 
 	// .
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 5*time.Second)

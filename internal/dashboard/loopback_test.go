@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -23,6 +24,36 @@ func nonLoopbackIPv4(t *testing.T) string {
 	}
 	t.Skip("this host has no non-loopback IPv4 address for a network bind")
 	return ""
+}
+
+func TestEphemeralNetworkBindRetriesUntilLoopbackSharesItsPort(t *testing.T) {
+	ip := nonLoopbackIPv4(t)
+	networkBinds, loopbackBinds := 0, 0
+	listen := func(network, address string) (net.Listener, error) {
+		if strings.HasPrefix(address, "127.0.0.1:") {
+			loopbackBinds++
+			if loopbackBinds == 1 {
+				return nil, errors.New("occupied")
+			}
+		} else {
+			networkBinds++
+		}
+		return net.Listen(network, address)
+	}
+	ln, loopback, err := listenDashboard(net.JoinHostPort(ip, "0"), 0, listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ln.Close()
+		loopback.Close()
+	})
+	_, networkPort, _ := net.SplitHostPort(ln.Addr().String())
+	_, loopbackPort, _ := net.SplitHostPort(loopback.Addr().String())
+	if networkBinds != 2 || loopbackBinds != 2 || networkPort != loopbackPort {
+		t.Fatalf("did not discard the collided pair and reserve a shared port: network=%d loopback=%d ports=%s/%s",
+			networkBinds, loopbackBinds, networkPort, loopbackPort)
+	}
 }
 
 // .

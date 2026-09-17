@@ -37,6 +37,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/facility"
@@ -271,6 +272,9 @@ type Options struct {
 	// .
 	// .
 	MemoryMax map[string]uint64
+	// .
+	// .
+	ReadyTimeout map[string]time.Duration
 	// .
 	// .
 	// .
@@ -527,9 +531,12 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 			}
 			ap.RuntimeRoot = root
 		}
-		sup, dir, contained, serr := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, profile != nil, ap.ModelsDir, m.PluginFamily == "voice_interface", rt)
+		sup, dir, contained, serr := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, profile, ap.ModelsDir, m.PluginFamily == "voice_interface", rt)
 		if serr != nil {
-			ap.releaseRuntimeRoot()
+			var cleanup *supervisor.ContainmentCleanupError
+			if !errors.As(serr, &cleanup) {
+				ap.releaseRuntimeRoot()
+			}
 			_ = binding.Close()
 			return nil, serr
 		}
@@ -539,22 +546,18 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 			ready := ParseReadiness(sup.ReadyLine())
 			ap.Readiness = &ready
 			if !ready.Real() {
-				_ = sup.Close()
-				removeArtifactDir(dir)
-				ap.releaseRuntimeRoot()
+				cerr := ap.closeChannel(ctx)
 				_ = binding.Close()
-				return nil, &ReadinessError{PluginID: m.ID, Line: ready.Line}
+				return nil, errors.Join(&ReadinessError{PluginID: m.ID, Line: ready.Line}, cerr)
 			}
 		}
 		if m.PluginFamily == "voice_interface" {
 			// .
 			// .
 			if berr := ap.bindVoiceSession(sup); berr != nil {
-				_ = sup.Close()
-				removeArtifactDir(dir)
-				ap.releaseRuntimeRoot()
+				cerr := ap.closeChannel(ctx)
 				_ = binding.Close()
-				return nil, berr
+				return nil, errors.Join(berr, cerr)
 			}
 		}
 		inv = sup
@@ -580,9 +583,9 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 		for _, name := range ap.ToolNames {
 			reg.Deregister(name)
 		}
-		ap.closeChannel(ctx)
+		cerr := ap.closeChannel(ctx)
 		_ = binding.Close()
-		return nil, err
+		return nil, errors.Join(err, cerr)
 	}
 
 	// .
@@ -976,8 +979,9 @@ func (p *ActivePlugin) closeChannel(ctx context.Context) error {
 		// .
 		// .
 		// .
-		if serr := p.sup.CloseContext(ctx); err == nil {
-			err = serr
+		if serr := p.sup.CloseContext(ctx); serr != nil {
+			// .
+			return errors.Join(err, serr)
 		}
 	}
 	if p.artifactDir != "" {
@@ -1103,6 +1107,7 @@ func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, ar
 			// .
 			"-module-sha256="+res.FileDigests[variant.Entrypoint], path),
 		ReadyMark:      "event=ready",
+		ReadyTimeout:   opts.ReadyTimeout[res.Manifest.ID],
 		VerifyArtifact: verify,
 		ExitMeaning:    supervisor.WorkerExitMeaning,
 		Log:            opts.Log,
@@ -1122,19 +1127,14 @@ func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, ar
 // .
 // .
 func startSupervisedNative(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options) (*supervisor.Supervisor, string, error) {
-	sup, dir, _, err := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, false, "", false, nil)
+	sup, dir, _, err := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, nil, "", false, nil)
 	return sup, dir, err
 }
 
 // .
 // .
 // .
-func isWall(containment string) bool { return strings.Contains(containment, "no network") }
-
-// .
-// .
-// .
-func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options, requireReadiness bool, modelsDir string, sessionMode bool, rt *runtimeBinding) (*supervisor.Supervisor, string, bool, error) {
+func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options, profile *AcceleratorProfile, modelsDir string, sessionMode bool, rt *runtimeBinding) (*supervisor.Supervisor, string, bool, error) {
 	var dir, path string
 	var verify func() error
 	if rt != nil {
@@ -1145,7 +1145,11 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 		verify = rt.check
 	} else {
 		var err error
-		dir, path, verify, err = extractArtifact(res, variant, artifactBytes, "artifact", 0o700)
+		name := "artifact"
+		if packagefmt.HostPlatform() == "windows" {
+			name += ".exe"
+		}
+		dir, path, verify, err = extractArtifact(res, variant, artifactBytes, name, 0o700)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -1174,32 +1178,35 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 
 	// .
 	// .
-	argv, containment, cerr := containArgv(image.Argv())
+	argv, containment, cerr := containArgv(image.Argv(), profile)
 	if cerr != nil {
 		image.Close()
 		removeArtifactDir(dir)
 		return nil, "", false, fmt.Errorf("plugin %s: cannot contain the native child: %w", res.Manifest.ID, cerr)
 	}
 	if rt != nil {
-		containment += "; runtime root " + rt.root
+		containment.Description += "; runtime root " + rt.root
 	}
 	if opts.Log != nil {
 		opts.Log.Printf("plugin %s: native child %s; image %s", res.Manifest.ID, containment, image.Binding())
 	}
 	spec := supervisor.Spec{
-		PluginID:       res.Manifest.ID,
-		Argv:           argv,
-		Env:            []string{"SEV_PLUGIN_SOCKET=stdio:", "SEV_PLUGIN_ID=" + res.Manifest.ID},
-		RLimitASBytes:  opts.MemoryMax[res.Manifest.ID],
-		ExtraFiles:     image.ExtraFiles(),
-		VerifyArtifact: verify,
-		Log:            opts.Log,
+		PluginID:        res.Manifest.ID,
+		ArgvContainment: containment,
+		Artifact:        image,
+		ReadyTimeout:    opts.ReadyTimeout[res.Manifest.ID],
+		Argv:            argv,
+		Env:             []string{"SEV_PLUGIN_SOCKET=stdio:", "SEV_PLUGIN_ID=" + res.Manifest.ID},
+		RLimitASBytes:   opts.MemoryMax[res.Manifest.ID],
+		ExtraFiles:      image.ExtraFiles(),
+		VerifyArtifact:  verify,
+		Log:             opts.Log,
 	}
 	spec.SessionMode = sessionMode
 	// .
 	// .
 	spec.AudioPair = sessionMode
-	if requireReadiness {
+	if profile != nil {
 		// .
 		spec.ReadyMark = ReadyMark
 	}
@@ -1229,11 +1236,14 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 	spec.AppContainer = wallFor(res.Manifest.ID, grants)
 	sup, err := supervisor.Start(spec, supervisorDispatcher(binding))
 	if err != nil {
-		image.Close()
-		removeArtifactDir(dir)
+		var cleanup *supervisor.ContainmentCleanupError
+		if !errors.As(err, &cleanup) {
+			image.Close()
+			removeArtifactDir(dir)
+		}
 		return nil, "", false, err
 	}
-	return sup, dir, isWall(containment), nil
+	return sup, dir, sup.Containment().Isolated(), nil
 }
 
 // .

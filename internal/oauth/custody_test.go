@@ -20,13 +20,13 @@ import (
 // .
 func TestOnlyAnOwnedConstructorCanRefresh(t *testing.T) {
 	srv, calls := fakeAuthority(t)
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	path := filepath.Join(t.TempDir(), "codex.json")
 	writeCodexFile(t, path, true, 5*time.Minute)
 
-	borrowed, err := New(KindCodex, map[string]string{"file": path}, oauthOpts(srv.URL))
+	borrowed, err := testSource(KindCodex, map[string]string{"file": path}, oauthOpts(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,17 +36,17 @@ func TestOnlyAnOwnedConstructorCanRefresh(t *testing.T) {
 	if _, err := borrowed.Credential(context.Background()); !errors.Is(err, ErrOwnerRefreshRequired) || *calls != 0 {
 		t.Fatalf("a marker in the file must not grant refresh to a source built by New: err=%v calls=%d", err, *calls)
 	}
-	owned, err := NewOwned(KindCodex, path, oauthOpts(srv.URL))
+	owned, err := testOwned(KindCodex, path, oauthOpts(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := owned.Credential(context.Background()); err != nil || *calls != 1 {
 		t.Fatalf("an owned source must refresh: err=%v calls=%d", err, *calls)
 	}
-	if _, err := NewOwned(KindCodex, "relative/codex.json", oauthOpts(srv.URL)); err == nil {
+	if _, err := testOwned(KindCodex, "relative/codex.json", oauthOpts(srv.URL)); err == nil {
 		t.Fatal("an owned path must be absolute")
 	}
-	if _, err := NewOwned(KindCodex, path, map[string]string{"file": path}); err == nil {
+	if _, err := testOwned(KindCodex, path, map[string]string{"file": path}); err == nil {
 		t.Fatal("an owned source without a sign-in contract must be refused")
 	}
 }
@@ -59,12 +59,12 @@ func TestRefreshDoesNotHoldTheSourceMutex(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"access_token": fakeJWT(t, "acct-slow", time.Now().Add(time.Hour).Unix()), "refresh_token": "r2", "id_token": "i", "expires_in": 3600})
 	}))
 	defer srv.Close()
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	path := filepath.Join(t.TempDir(), "codex.json")
 	writeCodexFile(t, path, true, 5*time.Minute)
-	src, err := NewOwned(KindCodex, path, oauthOpts(srv.URL))
+	src, err := testOwned(KindCodex, path, oauthOpts(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +84,14 @@ func TestCompletionRequiresTheExactState(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++; w.WriteHeader(500) }))
 	defer srv.Close()
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	p := codexParams()
 	p.TokenURL = srv.URL
 	l, _ := NewLogin(p)
 	for _, st := range []string{"", "other"} {
-		if _, err := l.Complete(context.Background(), "code", st); err == nil {
+		if _, err := l.Exchange(context.Background(), nil, "code", st); err == nil {
 			t.Fatalf("state %q was accepted", st)
 		}
 	}
@@ -135,12 +135,12 @@ func TestAuthorityErrorsAreBoundedAndScrubbed(t *testing.T) {
 	big := strings.Repeat("x", 100000) + " token eyJabcdefghijklmnop.payload.sig and sk-abcdefghijklmnop"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400); w.Write([]byte(big)) }))
 	defer srv.Close()
-	old := codexHTTP
-	codexHTTP = srv.Client()
-	defer func() { codexHTTP = old }()
+	old := signInHTTP
+	signInHTTP = srv.Client()
+	defer func() { signInHTTP = old }()
 	p := codexParams()
 	p.TokenURL = srv.URL
-	_, err := Refresh(context.Background(), p, "r")
+	_, err := RefreshTokens(context.Background(), nil, p, "r")
 	if err == nil {
 		t.Fatal("a 400 must be an error")
 	}
@@ -161,8 +161,8 @@ func TestOwnedWriteIsExclusiveAndLeavesNoTemp(t *testing.T) {
 	victim := filepath.Join(dir, "victim")
 	os.WriteFile(victim, []byte("untouched"), 0o600)
 	os.Symlink(victim, path+".tmp")
-	tok := &CodexTokens{Access: fakeJWT(t, "a", time.Now().Add(time.Hour).Unix()), Refresh: "r", AccountID: "a", Expires: time.Now().Add(time.Hour)}
-	if err := WriteAuthFile(path, tok); err != nil {
+	tok := &Tokens{Access: fakeJWT(t, "a", time.Now().Add(time.Hour).Unix()), Refresh: "r", Expires: time.Now().Add(time.Hour)}
+	if err := WriteTokenFile(path, tok); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(victim); string(b) != "untouched" {

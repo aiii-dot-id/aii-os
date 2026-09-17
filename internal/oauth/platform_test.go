@@ -23,7 +23,7 @@ func TestPlatformContract(t *testing.T) {
 	if !Available() {
 		// .
 		// .
-		_, err := New(KindClaudeCode)
+		_, err := testSource(KindClaudeCode)
 		if err == nil {
 			t.Fatal("adoption must refuse where it cannot work")
 		}
@@ -38,8 +38,14 @@ func TestPlatformContract(t *testing.T) {
 	// .
 	for _, k := range Kinds() {
 		sp, err := specFor(k)
+		if err == nil {
+			sp, err = applyOverrides(sp, testOptions(k))
+		}
 		if err != nil {
 			t.Fatalf("%s: %v", k, err)
+		}
+		if strings.HasPrefix(sp.abs, "~/") {
+			sp.file = strings.Split(strings.TrimPrefix(sp.abs, "~/"), "/")
 		}
 		if len(sp.file) == 0 {
 			t.Fatalf("%s declares no file location", k)
@@ -62,6 +68,9 @@ func TestEverySpecIsComplete(t *testing.T) {
 	}
 	for _, k := range Kinds() {
 		sp, err := specFor(k)
+		if err == nil {
+			sp, err = applyOverrides(sp, testOptions(k))
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

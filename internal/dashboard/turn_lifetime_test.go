@@ -53,12 +53,19 @@ func TestTurnSurvivesOwnerConnectionClose(t *testing.T) {
 
 	// .
 	connA.CloseNow()
+	// .
+	// .
+	// .
+	waitForConnsAtMost(t, s, 0)
 
 	// .
 	connB := dialWS(t, addr)
 	defer connB.CloseNow()
+	// .
+	// .
+	// .
+	waitForConns(t, s, 1)
 
-	time.Sleep(50 * time.Millisecond)
 	close(release)
 
 	// .

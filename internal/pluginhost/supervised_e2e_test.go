@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +45,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tmp)
 	workerBin = filepath.Join(tmp, "aii-plugin-worker")
 	fakechildBin = filepath.Join(tmp, "fakechild")
 	aiiBin = filepath.Join(tmp, "aii")
@@ -53,6 +53,7 @@ func TestMain(m *testing.M) {
 		fakechildBin += ".exe"
 		aiiBin += ".exe"
 	}
+	code := 0
 	for _, build := range []struct{ out, pkg string }{
 		{workerBin, "../../cmd/aii-plugin-worker"},
 		{fakechildBin, "../supervisor/testdata/fakechild"},
@@ -61,10 +62,20 @@ func TestMain(m *testing.M) {
 		out, err := exec.Command("go", "build", "-o", build.out, build.pkg).CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", build.pkg, err, out)
-			os.Exit(1)
+			code = 1
+			break
 		}
 	}
-	os.Exit(m.Run())
+	if code == 0 {
+		code = m.Run()
+	}
+	if err := os.RemoveAll(tmp); err != nil {
+		fmt.Fprintf(os.Stderr, "remove pluginhost test binaries: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 // .
@@ -480,6 +491,15 @@ func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
 	// .
 	// .
 	artifact := filepath.Join(dir, "artifact")
+	if runtime.GOOS == "windows" {
+		// .
+		// .
+		// .
+		if err := os.Remove(artifact + ".exe"); !errors.Is(err, syscall.Errno(32)) {
+			t.Fatalf("live Windows image replacement must be denied by its binding: %v", err)
+		}
+		return
+	}
 	if err := os.Remove(artifact); err != nil {
 		t.Fatal(err)
 	}
@@ -506,4 +526,31 @@ func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
 func digestOf(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// .
+// .
+// .
+func TestNativeConfiguredReadyDeadlineIsEnforced(t *testing.T) {
+	skipWhereTheSandboxCannotBeEstablished(t)
+	raw, err := os.ReadFile(fakechildBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "org.example.startup-deadline"
+	v := packagefmt.Variant{VariantID: "native", Entrypoint: "variants/native/child" + exeSuffix}
+	res := &packagefmt.Result{Tier: packagefmt.TierT3, Manifest: &packagefmt.Manifest{ID: id}, FileDigests: map[string]string{v.Entrypoint: digestOf(raw)}}
+	started := time.Now()
+	sup, dir, _, err := startSupervisedNativeWith(res, &v, raw, nil, &Options{ReadyTimeout: map[string]time.Duration{id: 25 * time.Millisecond}}, &AcceleratorProfile{Backend: "cpu"}, "", false, nil)
+	if sup != nil {
+		defer sup.Close()
+	}
+	defer os.RemoveAll(dir)
+	var exit *supervisor.ChildExitError
+	if !errors.As(err, &exit) || exit.Phase != "start" || !strings.Contains(exit.Meaning, "25ms") {
+		t.Fatalf("configured startup refusal: %v", err)
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatal("configured readiness deadline was not enforced")
+	}
 }

@@ -56,6 +56,12 @@ func TestOutboxSurvivesStalledSoleClient(t *testing.T) {
 	// .
 	stalled := dialWS(t, addr)
 	_ = stalled
+	// .
+	// .
+	// .
+	// .
+	// .
+	waitForConns(t, s, 1)
 	time.Sleep(200 * time.Millisecond)
 	dropDeadline := time.Now().Add(15 * time.Second)
 	for {

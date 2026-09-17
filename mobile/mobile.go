@@ -350,6 +350,4 @@ func (r *Runtime) SetForegroundNeedListener(l ForegroundNeedListener) {
 // .
 // .
 // .
-// .
-// .
 func (r *Runtime) DashboardMintedToken() string { return r.a.DashboardMintedToken() }

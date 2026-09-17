@@ -3,8 +3,9 @@
 package supervisor
 
 import (
+	"errors"
 	"fmt"
-	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -50,7 +51,7 @@ import (
 // .
 // .
 // .
-func containProcess(pid int, rlimitASBytes uint64) (func(), string, error) {
+func containProcess(pid int, rlimitASBytes uint64) (func() error, string, error) {
 	job, envelope, err := newJobObject(rlimitASBytes)
 	if err != nil {
 		return nil, "", err
@@ -67,8 +68,7 @@ func containProcess(pid int, rlimitASBytes uint64) (func(), string, error) {
 		_ = windows.CloseHandle(job)
 		return nil, "", fmt.Errorf("supervisor: assign child to job: %w", err)
 	}
-	var once sync.Once
-	cleanup := func() { once.Do(func() { _ = windows.CloseHandle(job) }) }
+	cleanup := onceCleanup(func() error { return errors.Join(terminateAndWaitJob(job), windows.CloseHandle(job)) })
 	return cleanup, "contained (one job object: dies with the supervisor, no breakaway, UI-restricted" + envelope + "; " +
 		"assigned just AFTER spawn, so a brief pre-containment window remains; " +
 		"filesystem and network are broker-mediated, not enforced)", nil
@@ -120,4 +120,29 @@ func newJobObject(rlimitASBytes uint64) (windows.Handle, string, error) {
 		return 0, "", fmt.Errorf("supervisor: set job UI restrictions: %w", err)
 	}
 	return job, envelope, nil
+}
+
+// .
+// .
+func terminateAndWaitJob(job windows.Handle) error {
+	if err := windows.TerminateJobObject(job, 1); err != nil {
+		return fmt.Errorf("terminate contained job: %w", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var info struct {
+			UserTime, KernelTime, PeriodUserTime, PeriodKernelTime           int64
+			PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses uint32
+		}
+		if err := windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil); err != nil {
+			return fmt.Errorf("query contained job retirement: %w", err)
+		}
+		if info.ActiveProcesses == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("contained job still has %d active processes", info.ActiveProcesses)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

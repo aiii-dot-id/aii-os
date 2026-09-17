@@ -2,8 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -155,13 +153,12 @@ func TestProjectFileServingHonorsConfiguredAccessToken(t *testing.T) {
 	}
 	h := &WSHandler{GetProjectRoot: func(id string) (string, bool) { return proj, id == "p1" }}
 	s := New("127.0.0.1", 0, h)
-	sum := sha256.Sum256([]byte("right-token"))
-	s.SetAccessToken(true, hex.EncodeToString(sum[:]))
+	s.SetAccessToken(true, "right-token")
 
-	request := func(token string) *http.Request {
+	request := func(cookie string) *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/p/p1/notes.md", nil)
-		if token != "" {
-			r.AddCookie(&http.Cookie{Name: "aii_token", Value: token})
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: cookie})
 		}
 		return r
 	}
@@ -171,7 +168,7 @@ func TestProjectFileServingHonorsConfiguredAccessToken(t *testing.T) {
 		// .
 		// .
 		// .
-	}{{"missing", "", http.StatusNotFound}, {"wrong", "wrong-token", http.StatusNotFound}, {"right", "right-token", http.StatusOK}} {
+	}{{"missing", "", http.StatusNotFound}, {"wrong", "wrong-token", http.StatusNotFound}, {"right", s.accessHash(), http.StatusOK}} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			s.serveProjectFile(rr, request(tc.token), "p1", "notes.md")

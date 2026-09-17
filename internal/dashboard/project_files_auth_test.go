@@ -2,8 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,8 +38,7 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 	s := New("127.0.0.1", 0, h)
 
 	const token = "the-operator-token"
-	sum := sha256.Sum256([]byte(token))
-	s.SetAccessToken(true, hex.EncodeToString(sum[:]))
+	s.SetAccessToken(true, token)
 
 	addr, err := s.Start(t.TempDir())
 	if err != nil {
@@ -56,7 +53,7 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tok != "" {
-			req.AddCookie(&http.Cookie{Name: "aii_token", Value: tok})
+			req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: tok})
 		}
 		resp, err := testClient.Do(req)
 		if err != nil {
@@ -68,7 +65,7 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 
 	// .
 	// .
-	ok := get("/p/p1/README.md", token)
+	ok := get("/p/p1/README.md", s.accessHash())
 	if ok.StatusCode != http.StatusOK {
 		t.Fatalf("control: the correct token must serve the file; got %d", ok.StatusCode)
 	}
@@ -99,7 +96,7 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 
 	// .
 	// .
-	svg := get("/p/p1/logo.svg", token)
+	svg := get("/p/p1/logo.svg", s.accessHash())
 	if svg.StatusCode != http.StatusOK {
 		t.Fatalf("control: svg must still serve; got %d", svg.StatusCode)
 	}
@@ -136,8 +133,7 @@ func TestSectionFilesRequireTheAccessToken(t *testing.T) {
 	s := New("127.0.0.1", 0, &WSHandler{})
 	s.SetSections(reg)
 	const token = "the-operator-token"
-	sum := sha256.Sum256([]byte(token))
-	s.SetAccessToken(true, hex.EncodeToString(sum[:]))
+	s.SetAccessToken(true, token)
 
 	addr, err := s.Start(t.TempDir())
 	if err != nil {
@@ -152,7 +148,7 @@ func TestSectionFilesRequireTheAccessToken(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tok != "" {
-			req.AddCookie(&http.Cookie{Name: "aii_token", Value: tok})
+			req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: tok})
 		}
 		resp, err := testClient.Do(req)
 		if err != nil {
@@ -163,7 +159,7 @@ func TestSectionFilesRequireTheAccessToken(t *testing.T) {
 	}
 
 	// .
-	if resp := get(token); resp.StatusCode != http.StatusOK {
+	if resp := get(s.accessHash()); resp.StatusCode != http.StatusOK {
 		t.Fatalf("control: a registered section must serve with the token; got %d", resp.StatusCode)
 	}
 	// .
@@ -184,23 +180,18 @@ func TestTokenAuthorizedRefusesRatherThanFallingOpen(t *testing.T) {
 	}
 
 	// .
-	s.SetAccessToken(true, "not-hex")
-	if s.tokenAuthorized(req) {
-		t.Error("a malformed token hash must refuse, not fall open")
-	}
 	s.SetAccessToken(true, "")
 	if s.tokenAuthorized(req) {
-		t.Error("an empty token hash must refuse, not fall open")
+		t.Error("an empty token must refuse, not fall open")
 	}
 
 	// .
 	const token = "t"
-	sum := sha256.Sum256([]byte(token))
-	s.SetAccessToken(true, hex.EncodeToString(sum[:]))
+	s.SetAccessToken(true, token)
 	if s.tokenAuthorized(req) {
 		t.Error("a request with no cookie must be refused")
 	}
-	req.AddCookie(&http.Cookie{Name: "aii_token", Value: token})
+	req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: s.accessHash()})
 	if !s.tokenAuthorized(req) {
 		t.Error("the correct token must be accepted")
 	}

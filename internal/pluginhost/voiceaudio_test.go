@@ -28,7 +28,7 @@ func containedFakechild(t *testing.T) []string {
 	t.Helper()
 	bin := buildFakechild(t)
 	skipWhereTheSandboxCannotBeEstablished(t)
-	argv, _, err := containArgv([]string{bin, "session-audio"})
+	argv, _, err := containArgv([]string{bin, "session-audio"}, nil)
 	if err != nil {
 		t.Skipf("this host cannot contain a native child: %v", err)
 	}
