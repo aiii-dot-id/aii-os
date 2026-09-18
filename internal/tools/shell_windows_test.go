@@ -9,6 +9,7 @@ package tools
 
 import (
 	"context"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,6 +24,17 @@ func TestShellDialectIsDeclaredWindows(t *testing.T) {
 	st := &ShellTool{}
 	if !strings.Contains(st.Description(), "PowerShell") {
 		t.Fatalf("windows shell tool does not declare its dialect: %q", st.Description())
+	}
+}
+
+func TestShellLaunchHidesConsoleWindow(t *testing.T) {
+	cmd := exec.Command("powershell.exe")
+	prepareTree(cmd)
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow {
+		t.Fatal("shell launch does not hide its console window")
+	}
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
+		t.Fatalf("shell launch does not set CREATE_NO_WINDOW: %#x", cmd.SysProcAttr.CreationFlags)
 	}
 }
 
