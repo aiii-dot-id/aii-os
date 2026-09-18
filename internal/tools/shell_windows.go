@@ -126,7 +126,7 @@ func envOr(k, fallback string) string {
 func prepareTree(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
+		CreationFlags: windows.CREATE_NEW_CONSOLE,
 	}
 }
 

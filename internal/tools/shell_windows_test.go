@@ -12,8 +12,10 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -33,8 +35,11 @@ func TestShellLaunchHidesConsoleWindow(t *testing.T) {
 	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow {
 		t.Fatal("shell launch does not hide its console window")
 	}
-	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW == 0 {
-		t.Fatalf("shell launch does not set CREATE_NO_WINDOW: %#x", cmd.SysProcAttr.CreationFlags)
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NEW_CONSOLE == 0 {
+		t.Fatalf("shell launch does not create a hidden console for child inheritance: %#x", cmd.SysProcAttr.CreationFlags)
+	}
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW != 0 {
+		t.Fatalf("shell launch must not combine CREATE_NEW_CONSOLE with CREATE_NO_WINDOW: %#x", cmd.SysProcAttr.CreationFlags)
 	}
 }
 
@@ -184,6 +189,84 @@ func TestShellCommandArrivesVerbatim(t *testing.T) {
 			t.Fatalf("%s: CLIXML serialization noise reached the result: %q", c.name, res.Output)
 		}
 	}
+}
+
+func TestShellNestedConsoleCommandDoesNotOpenWindow(t *testing.T) {
+	st := &ShellTool{timeout: 30 * time.Second, sandbox: t.TempDir()}
+	title := "aii-shell-nested-console-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	resultCh := make(chan struct {
+		result Result
+		err    error
+	}, 1)
+	go func() {
+		result, err := st.Execute(context.Background(), map[string]interface{}{
+			"command": `cmd.exe /c "title ` + title + ` & echo cmd child-process test: OK & ver & ping.exe -n 5 127.0.0.1 >nul"`,
+		})
+		resultCh <- struct {
+			result Result
+			err    error
+		}{result: result, err: err}
+	}()
+
+	visible := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hasVisibleWindowTitle(title) {
+			visible = true
+		}
+		select {
+		case outcome := <-resultCh:
+			if outcome.err != nil {
+				t.Fatal(outcome.err)
+			}
+			if outcome.result.Error != "" {
+				t.Fatalf("nested command failed: %s", outcome.result.Error)
+			}
+			if !strings.Contains(outcome.result.Output, "cmd child-process test: OK") || !strings.Contains(outcome.result.Output, "Microsoft Windows") {
+				t.Fatalf("nested command output was not captured: %q", outcome.result.Output)
+			}
+			if visible {
+				t.Fatalf("nested cmd.exe opened a visible console window")
+			}
+			return
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	outcome := <-resultCh
+	if outcome.err != nil {
+		t.Fatal(outcome.err)
+	}
+	if outcome.result.Error != "" {
+		t.Fatalf("nested command failed: %s", outcome.result.Error)
+	}
+	if !strings.Contains(outcome.result.Output, "cmd child-process test: OK") || !strings.Contains(outcome.result.Output, "Microsoft Windows") {
+		t.Fatalf("nested command output was not captured: %q", outcome.result.Output)
+	}
+	if visible || hasVisibleWindowTitle(title) {
+		t.Fatalf("nested cmd.exe opened a visible console window")
+	}
+}
+
+var getWindowTextW = windows.NewLazySystemDLL("user32.dll").NewProc("GetWindowTextW")
+
+func hasVisibleWindowTitle(title string) bool {
+	found := false
+	callback := windows.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		if !windows.IsWindowVisible(windows.HWND(hwnd)) {
+			return 1
+		}
+		var text [256]uint16
+		length, _, _ := getWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)))
+		if syscall.UTF16ToString(text[:length]) == title {
+			found = true
+			return 0
+		}
+		return 1
+	})
+	_ = windows.EnumWindows(callback, nil)
+	return found
 }
 
 // .
