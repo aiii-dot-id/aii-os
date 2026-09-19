@@ -182,19 +182,33 @@ func (a *App) voiceModeCommitted(prev, next VoiceModeConfig) {
 		return
 	}
 	const why = "the mode's speak turned off"
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	type target struct {
+		h  *voiceHandle
+		id string
+	}
+	var targets []target
 	a.voiceSessions.Range(func(_, v any) bool {
 		h := v.(*voiceHandle)
-		if id, _ := h.inflight.Swap("").(string); id != "" {
-			if err := h.fenceBounded(id, why); err != nil {
-				log.Printf("VOICE: speak turned off; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", id, h.id, err)
-			} else {
-				log.Printf("VOICE: speak turned off; synthesis %s on %s was fenced", id, h.id)
-				h.replyOutcome.Store(replyNotSpokenOutcome)
-			}
+		if cur := h.loadInflight(); cur.id != "" && cur.rev < next.Revision && h.inflight.CompareAndSwap(cur, inflightSynthesis{}) {
+			targets = append(targets, target{h, cur.id})
 		}
 		a.hushFallback(h, why)
 		return true
 	})
+	for _, t := range targets {
+		if err := t.h.fenceBounded(t.id, why); err != nil {
+			log.Printf("VOICE: speak turned off; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", t.id, t.h.id, err)
+		} else {
+			log.Printf("VOICE: speak turned off; synthesis %s on %s was fenced", t.id, t.h.id)
+			t.h.replyOutcome.Store(replyNotSpokenOutcome)
+		}
+	}
 	a.spokenMu.Lock()
 	var ids []string
 	for id, r := range a.spoken {

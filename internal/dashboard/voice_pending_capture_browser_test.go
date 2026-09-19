@@ -310,3 +310,63 @@ run(async () => {
 func TestALateMicrophoneFromACancelledOpenLeavesItsReplacementAlone(t *testing.T) {
 	runPageInEngines(t, voiceReplacementAfterCancelledOpenPage, micModules)
 }
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+const voiceReplacementAfterRejectedOpenPage = micMarkup + `<script type="module">
+import { assert, run } from './__harness.js';
+import { bindTransport, startDuplex, abortDuplex, residentActive, converseForTest, render } from './voice.js';
+import { S } from './state.js';
+
+run(async () => {
+  const msgs = [];
+  bindTransport(() => {}, m => { msgs.push(m); return 'r' + msgs.length; });
+  const opens = () => msgs.filter(m => m.voice && m.voice.action === 'open');
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const tracks = [], answer = [];
+  navigator.mediaDevices.getUserMedia = () => {
+    const d = ac.createMediaStreamDestination();
+    tracks.push(d.stream.getAudioTracks()[0]);
+    return new Promise((resolve, reject) => answer.push({ grant: () => resolve(d.stream), refuse: () => reject(new Error('permission denied for an open nobody holds')) }));
+  };
+  const show = (listen, speak, rev) => {
+    S.stats = { voice_engine: true, voice_state: 'plugin', voice_listen: listen, voice_speak: speak, voice_mode_revision: rev };
+    S.connected = true; render();
+  };
+  const tick = () => new Promise(r => setTimeout(r, 10));
+  const until = async (ok, what) => { for (let i = 0; i < 300 && !ok(); i++) await tick(); assert(ok(), what); };
+
+  try {
+    show('interactive', 'on', 1);
+    converseForTest('waiting');
+    startDuplex();
+    await until(() => answer.length === 1, 'the first open never asked for a microphone');
+    show('off', 'off', 2);
+    show('interactive', 'on', 3);
+    converseForTest('waiting');
+    startDuplex();
+    await until(() => answer.length === 2, 'the second open never asked for a microphone');
+
+    // THE CANCELLED OPEN IS REFUSED FIRST, with the replacement still waiting.
+    answer[0].refuse();
+    for (let i = 0; i < 5; i++) await tick();
+    assert(opens().length === 0, 'a refusal for a stale open sent something: ' + JSON.stringify(msgs));
+
+    // AND THE REPLACEMENT OPENS, untouched by it.
+    answer[1].grant();
+    await until(() => opens().length === 1, 'the stale refusal cancelled the replacement: ' + JSON.stringify(msgs));
+    assert(residentActive(), 'the replacement conversation is not resident');
+    assert(tracks[1].readyState === 'live', 'the replacement lost its microphone: ' + tracks[1].readyState);
+    assert(opens()[0].voice.mode === 'conversation', 'the replacement is not a conversation: ' + JSON.stringify(msgs));
+  } finally { abortDuplex(); tracks.forEach(t => t.stop()); await ac.close(); }
+});
+</script>`
+
+func TestARejectedObsoleteOpenCannotCancelTheNewerCapture(t *testing.T) {
+	runPageInEngines(t, voiceReplacementAfterRejectedOpenPage, micModules)
+}

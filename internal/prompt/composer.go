@@ -532,7 +532,7 @@ const frameRing1Absent = "# Your Core Relationship\n\nYou have no charter yet. "
 // .
 const frameRing1Incomplete = "# Your Core Relationship\n\n" + ring1Incomplete
 
-const ring1Incomplete = "Your operator relationship is RECORDED AND APPROVED, but it carries no charter — the document describing what this relationship is has never been written, so there is nothing here for you to read. This is an incomplete Ring 1, not an absent one and not a finished one. When you can say what the relationship is, propose it with commit relationship.upsert (charter_text) for your operator's affirmation."
+const ring1Incomplete = "Your operator relationship is RECORDED AND APPROVED, but it carries no charter — the document describing what this relationship is has never been written, so there is nothing here for you to read. This is an incomplete Ring 1, not an absent one and not a finished one. When you can say what the relationship is, propose it with commit relationship.upsert (charter_text) for your operator's affirmation. The growth of the relationship is a foundation for your growth together: notice the changes and record them."
 
 const toolGuidance = `# How You Act
 

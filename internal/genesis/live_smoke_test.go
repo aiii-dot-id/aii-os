@@ -22,9 +22,11 @@ package genesis
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +82,40 @@ func TestLiveChainSmoke(t *testing.T) {
 	}
 	if len(r5.Content) == 0 {
 		t.Fatal("empty ring5 content")
+	}
+
+	if !strings.HasPrefix(r0.Content, "# Ring 0 Constitutional Axioms\n") {
+		t.Fatalf("live RING0 is not the constitution: %.80q", r0.Content)
+	}
+
+	// .
+	// .
+	// .
+	// .
+	chainBytes, _, err := c.fetchBundle(c.firewallURL, "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("fetch live ring5 pubkey bundle: %v", err)
+	}
+	keyContent, err := verifyBundlePayload(chainBytes, pinnedRoot(), "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("pinned root must verify the live cross-signed domain-key bundle: %v", err)
+	}
+	var domainKey publicKeyEnvelope
+	if err := json.Unmarshal([]byte(keyContent), &domainKey); err != nil {
+		t.Fatal(err)
+	}
+	bundleBytes, _, err := c.fetchBundle(c.firewallURL, "ring5")
+	if err != nil {
+		t.Fatalf("fetch live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, &domainKey, "ring5.bundle"); err != nil {
+		t.Fatalf("the live domain key must verify the live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, pinnedRoot(), "ring5.bundle"); err == nil {
+		t.Fatal("the root directly verifying a domain-key-signed bundle must FAIL — the chain is not optional")
+	}
+	if _, err := verifyBundlePayload(chainBytes, &domainKey, "ring5.pubkey"); err == nil {
+		t.Fatal("a domain key verifying its own cross-signed envelope must FAIL — only the root vouches for keys")
 	}
 
 	// .

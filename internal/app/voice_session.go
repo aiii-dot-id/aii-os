@@ -56,6 +56,43 @@ func (a *App) voicePlugins() []*pluginhost.ActivePlugin {
 func (a *App) VoiceEngine() bool { return a.voicePlugin() != nil }
 
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+type inflightSynthesis struct {
+	id  string
+	rev uint64
+}
+
+func (h *voiceHandle) setInflight(id string, rev uint64) {
+	h.inflight.Store(inflightSynthesis{id: id, rev: rev})
+}
+
+// .
+func (h *voiceHandle) loadInflight() inflightSynthesis {
+	v, _ := h.inflight.Load().(inflightSynthesis)
+	return v
+}
+
+// .
+// .
+func (h *voiceHandle) detachInflight(id string) bool {
+	cur := h.loadInflight()
+	if cur.id == "" || cur.id != id {
+		return false
+	}
+	return h.inflight.CompareAndSwap(cur, inflightSynthesis{})
+}
+
+// .
+func (h *voiceHandle) takeInflight() string {
+	v, _ := h.inflight.Swap(inflightSynthesis{}).(inflightSynthesis)
+	return v.id
+}
+
 type voiceHandle struct {
 	id   string
 	v    engineSession
@@ -285,7 +322,7 @@ func (h *voiceHandle) PlaybackReport(ctx context.Context, r dashboard.PlaybackRe
 		return err
 	}
 	if r.Terminal && synth != "" {
-		h.inflight.CompareAndSwap(synth, "")
+		h.detachInflight(synth)
 	}
 	return nil
 }
@@ -369,7 +406,7 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	await, err := h.v.SynthesizeForEnqueue(ectx, h.id, synthID, reply)
 	ecancel()
 	if err == nil {
-		h.inflight.Store(synthID)
+		h.setInflight(synthID, admittedUnder.Revision)
 	}
 	h.admit.Unlock()
 	if err != nil {
@@ -420,7 +457,7 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 	// .
 	// .
 	if a.voiceSpeakOffRev.Load() > admittedUnder.Revision {
-		if h.inflight.CompareAndSwap(synthID, "") {
+		if h.detachInflight(synthID) {
 			if ferr := h.fenceBounded(synthID, "the mode's speak turned off"); ferr != nil {
 				log.Printf("VOICE: speak turned off during admission; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", synthID, sessionID, ferr)
 			}
@@ -836,7 +873,7 @@ func (a *App) typedReplyVoice() *voiceBinding {
 	if h == nil {
 		return nil
 	}
-	if prior, _ := h.inflight.Swap("").(string); prior != "" {
+	if prior := h.takeInflight(); prior != "" {
 		if err := h.fenceBounded(prior, "a newer reply took its place"); err != nil {
 			log.Printf("VOICE: a newer reply is taking the voice on %s; the engine did not fence %s (%v)", h.id, prior, err)
 		}

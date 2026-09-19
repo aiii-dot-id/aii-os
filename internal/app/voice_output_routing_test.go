@@ -215,7 +215,7 @@ func TestAReplyIsFencedUntilItsPlaybackIsReported(t *testing.T) {
 	// .
 	a.voiceObserved(pluginhost.Event{Type: "synthesis_end", SessionID: "vs-out",
 		Raw: []byte(`{"type":"synthesis_end","session_id":"vs-out","synthesis_id":"` + first + `","output_stream":7,"playback_verified":false}`)})
-	if id, _ := h.inflight.Load().(string); id != first {
+	if id := h.loadInflight().id; id != first {
 		t.Fatalf("production ending gave up custody of a reply nobody has heard: %q", id)
 	}
 	a.settleVoice(context.Background(), "the answer they are waiting for")
@@ -239,7 +239,7 @@ func TestAReplyIsFencedUntilItsPlaybackIsReported(t *testing.T) {
 		SessionID: "vs-out", Stream: 8, Rendered: 16000, Rate: 16000, Channels: 1, Terminal: true, Outcome: "drained"}); err != nil {
 		t.Fatalf("the page's terminal receipt: %v", err)
 	}
-	if id, _ := h.inflight.Load().(string); id != "" {
+	if id := h.loadInflight().id; id != "" {
 		t.Fatalf("a reply the page reported played is still in flight: %q", id)
 	}
 	before := len(f.opsSeen())
@@ -264,7 +264,7 @@ func TestAReplyIsFencedUntilItsPlaybackIsReported(t *testing.T) {
 		SessionID: "vs-out", Stream: 10, Rendered: 800, Rate: 16000, Channels: 1, Outcome: "progress"}); err != nil {
 		t.Fatal(err)
 	}
-	if id, _ := h.inflight.Load().(string); id != third {
+	if id := h.loadInflight().id; id != third {
 		t.Fatalf("the reply in flight was settled by a foreign or non-terminal report: %q, want %q", id, third)
 	}
 }

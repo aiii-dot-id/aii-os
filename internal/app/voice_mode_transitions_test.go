@@ -676,3 +676,97 @@ func TestTheDoorKeepsTheHalfAChangeDoesNotName(t *testing.T) {
 		t.Fatalf("a listen-only change from the identity gave (%s, %s); want (off, on)", listen, speak)
 	}
 }
+
+// .
+// .
+type blockedFence struct {
+	*fakeEngineSession
+	once    *sync.Once
+	entered chan string
+	release <-chan struct{}
+}
+
+func (f *blockedFence) InterruptFor(ctx context.Context, sid, id, why string) error {
+	f.once.Do(func() {
+		f.entered <- sid
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+		}
+	})
+	return f.fakeEngineSession.InterruptFor(ctx, sid, id, why)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAnOlderOffDoesNotFenceAReplyAdmittedAfterANewerOn(t *testing.T) {
+	a := newVoiceApp(t)
+	voiceModeDoor(t, a, listenInteractive, speakOn)
+	a.voiceReplySink = func(dashboard.VoiceReplyRef, string) {}
+	entered := make(chan string, 1)
+	release := make(chan struct{})
+	var once, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	handles := map[string]*voiceHandle{}
+	engines := map[string]*fakeEngineSession{}
+	for _, id := range []string{"vs-order-a", "vs-order-b"} {
+		f := &fakeEngineSession{}
+		h := &voiceHandle{id: id, v: &blockedFence{fakeEngineSession: f, once: &once, entered: entered, release: release}, done: make(chan struct{})}
+		a.voiceSessions.Store(id, h)
+		handles[id], engines[id] = h, f
+		if got := a.synthesizeReply(context.Background(), id, h.gen.Load(), "an old reply"); got != replyAdmitted {
+			t.Fatalf("%s: %v", id, got)
+		}
+	}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := a.applyConfigChangeWith(map[string]interface{}{"speech.mode": map[string]any{"listen": listenInteractive, "speak": speakOff}}, func(*Config) (bool, error) { return true, nil })
+		finished <- err
+	}()
+	var first string
+	select {
+	case first = <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the off never reached its first fence")
+	}
+	// .
+	// .
+	voiceModeDoor(t, a, listenInteractive, speakOn)
+	second := "vs-order-a"
+	if first == second {
+		second = "vs-order-b"
+	}
+	h := handles[second]
+	if got := a.synthesizeReply(context.Background(), second, h.gen.Load(), "a reply admitted after the newer on"); got != replyAdmitted {
+		t.Fatalf("a reply under the newer on was not admitted: %v", got)
+	}
+	newer := engines[second].producingNow()
+	if newer == "" {
+		t.Fatal("the newer on did not put a reply in production")
+	}
+	unblock()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the off never finished")
+	}
+	if _, speak, _ := a.VoiceMode(); speak != speakOn {
+		t.Fatalf("the newer on was lost: %s", speak)
+	}
+	if now := engines[second].producingNow(); now != newer {
+		t.Fatalf("the older off fenced %s, a reply admitted after the newer on: ops=%v", newer, engines[second].opsSeen())
+	}
+	if engines[first].producingNow() != "" {
+		t.Fatalf("the older off did not fence the reply admitted before it on %s: ops=%v", first, engines[first].opsSeen())
+	}
+}

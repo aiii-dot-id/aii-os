@@ -1089,7 +1089,11 @@ async function startCapture() {
   try {
     stream = await openMicStream();
   } catch (err) {
-
+    // A REJECTION BELONGS TO ITS OWN OPEN. A permission refused for an
+    // acquisition a later gesture has already replaced is not this page's
+    // failure: it touches neither the capture in force nor what the
+    // operator sees.
+    if (epoch !== captureEpoch) return;
     toast('No microphone: ' + (err && err.message ? err.message : err));
     return;
   }
@@ -1505,6 +1509,11 @@ export async function startDuplex(want) {
   try {
     stream = await openMicStream();
   } catch (err) {
+    // A REJECTION BELONGS TO ITS OWN OPEN. A permission refused for an
+    // acquisition a later gesture has already replaced is not this page's
+    // failure: it must not withdraw the intent behind the open that
+    // replaced it, nor tell the operator anything.
+    if (epoch !== captureEpoch) return;
     toast('No microphone: ' + (err && err.message ? err.message : err));
     residentWanted = false; render(); return;
   }
@@ -1550,6 +1559,9 @@ export async function startDuplex(want) {
   try {
     await openMicNode(ctx, src, f32 => { if (resident === conv) conv.frame(f32); });
   } catch (e) {
+    // A capture graph that failed for an open the page no longer holds
+    // releases its own device and touches nothing else.
+    if (media !== stream) { stopTracks(stream); return; }
     toast('The microphone could not start: ' + (e && e.message ? e.message : e));
     abortDuplex(); return;
   }
