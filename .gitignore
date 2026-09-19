@@ -24,6 +24,9 @@ data/
 *.swp
 *.swo
 
+# Local audit artifacts
+/.codex/
+
 # OS
 .DS_Store
 Thumbs.db
