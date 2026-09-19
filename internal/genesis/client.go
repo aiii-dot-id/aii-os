@@ -437,6 +437,30 @@ func validateRing5Manifest(payload json.RawMessage, bundle []byte, key *publicKe
 // .
 // .
 // .
+// .
+// .
+// .
+func VerifyArtifact(bundleBytes []byte, key *publicKeyEnvelope, expectedKind string) (string, error) {
+	return verifyBundle(bundleBytes, key, expectedKind)
+}
+
+// .
+// .
+// .
+// .
+// .
+func DomainKeyFromBundle(bundleBytes []byte, expectedKind string) (*publicKeyEnvelope, error) {
+	content, err := verifyBundlePayload(bundleBytes, pinnedRoot(), expectedKind)
+	if err != nil {
+		return nil, err
+	}
+	var env publicKeyEnvelope
+	if err := json.Unmarshal(content, &env); err != nil {
+		return nil, fmt.Errorf("domain-key bundle payload is not a public key envelope: %w", err)
+	}
+	return &env, nil
+}
+
 func verifyBundlePayload(bundleBytes []byte, pubkey *publicKeyEnvelope, expectedKind string) (json.RawMessage, error) {
 	return sigenvelope.VerifyPayload(bundleBytes, pubkey, expectedKind, crypto.ProfileRoot)
 }

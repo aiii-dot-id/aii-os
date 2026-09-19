@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
+	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 )
 
@@ -39,26 +40,29 @@ func TestFetchBootstrapRequiresDomainKeyChain(t *testing.T) {
 }
 
 func TestFetchRing5RequiresSignedCurrentManifest(t *testing.T) {
-	v := loadTestVectors(t)
-	keyBundle := v.Ring5KeyBundle
-	bundle := v.Ring5Bundle
-	manifest := v.Ring5Manifest
-
+	// .
+	// .
+	// .
+	// .
+	live, err := genesislive.Fetch()
+	if err != nil {
+		t.Fatalf("Ring 5 comes from the real servers (operator ruling 2026-09-19): %v", err)
+	}
 	var serveManifest atomic.Bool
 	serveManifest.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
 		switch r.URL.Path {
 		case "/v1/ring5/pubkey.bundle":
-			body = keyBundle
+			body = live.Ring5PubkeyBundle
 		case "/v1/ring5/bundle":
-			body = bundle
+			body = live.Ring5Bundle
 		case "/v1/ring5/manifest":
 			if !serveManifest.Load() {
 				http.NotFound(w, r)
 				return
 			}
-			body = manifest
+			body = live.Ring5Manifest
 		default:
 			http.NotFound(w, r)
 			return
@@ -68,13 +72,12 @@ func TestFetchRing5RequiresSignedCurrentManifest(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := NewClient("", server.URL, "")
-	client.SetTrustRootForTest(v.Root)
 	result, err := client.FetchRing5()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the live Ring 5 chain must verify against the shipped pin: %v", err)
 	}
-	if result.Content != "verified posture" {
-		t.Fatalf("Ring 5 content = %q", result.Content)
+	if result.Content == "" {
+		t.Fatal("Ring 5 verified but carried no posture")
 	}
 
 	serveManifest.Store(false)

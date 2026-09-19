@@ -29,7 +29,7 @@ func birthFixture(t *testing.T, dir, name string) (keyPath, ledgerPath, dbPath s
 	root := genesistest.NewRoot(t)
 	result := root.Birth(t, genesis.BirthConfig{
 		Name:        name,
-		Ring0Bundle: root.MintRing0Bundle(t, "# Constitution\nHonesty."),
+		Ring0Bundle: root.Ring0Bundle(t),
 		Root:        root.Env,
 		KeyPath:     keyPath, LedgerPath: ledgerPath, DBPath: dbPath,
 	})
@@ -156,7 +156,8 @@ func TestBootSafeIsMinimalPosture(t *testing.T) {
 	// .
 	// .
 	ring0 := app.rings.GetContent(ring.Ring0)
-	if strings.Contains(ring0, "Honesty.") {
+	born := genesistest.NewRoot(t).Constitution(t)
+	if heading, _, _ := strings.Cut(born, "\n"); heading != "" && strings.Contains(ring0, heading) {
 		t.Fatal("Ring 0 was loaded from the REJECTED ledger — the tampered constitution governs the SAFE conversation")
 	}
 	if !strings.Contains(ring0, "SAFE MODE") {

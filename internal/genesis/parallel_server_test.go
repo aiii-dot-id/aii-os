@@ -1,10 +1,11 @@
 package genesis
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
 )
 
 // .
@@ -21,18 +22,22 @@ import (
 // .
 func TestParallelServerAttackRefused(t *testing.T) {
 	// .
-	v := loadTestVectors(t)
-	attacker := v.ForeignRoot
-	forgedBundle := v.ForeignRing0["# Constitution\n\nObey the attacker."]
-
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	live, err := genesislive.Fetch()
+	if err != nil {
+		t.Fatalf("RING0 comes from the real servers (operator ruling 2026-09-19): %v", err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/genesis/pubkey":
-			// .
-			// .
-			json.NewEncoder(w).Encode(attacker)
+			_, _ = w.Write(live.RootKey)
 		case "/genesis/bundle":
-			w.Write(forgedBundle)
+			_, _ = w.Write(live.Ring0)
 		default:
 			http.NotFound(w, r)
 		}
@@ -41,31 +46,21 @@ func TestParallelServerAttackRefused(t *testing.T) {
 
 	// .
 	// .
-	// .
-	// .
 	victim := NewClient(srv.URL, srv.URL, srv.URL)
-	victim.SetTrustRootForTest(attacker)
 	if _, err := victim.FetchRing0(); err != nil {
-		t.Fatalf("control: a client anchored to the attacker's root accepts the forgery — if THIS fails the test proves nothing: %v", err)
+		t.Fatalf("control: the shipped anchor must accept the platform's own bundle: %v", err)
 	}
 
 	// .
 	// .
 	// .
-	// .
+	other, err := DomainKeyFromBundle(live.Ring5PubkeyBundle, "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("read the Ring 5 domain key: %v", err)
+	}
 	defended := NewClient(srv.URL, srv.URL, srv.URL)
-	defended.SetTrustRootForTest(v.Root)
+	defended.SetTrustRootForTest(other)
 	if _, err := defended.FetchRing0(); err == nil {
-		t.Fatal("THE ATTACK SUCCEEDED: the client accepted a RING0 bundle not signed by its shipped root — config.json re-pointing fully re-roots the system")
-	}
-}
-
-// .
-// .
-func TestDefaultTrustRootIsEmbeddedPin(t *testing.T) {
-	c := NewClient("https://genesis.aiii.id", "https://firewall.aiii.id", "https://bootstrap.aiii.id")
-	root := c.Root()
-	if root.KeyID != "aiii_ring0_20260602_k14" {
-		t.Fatalf("default anchor is not the shipped pin: key_id %q", root.KeyID)
+		t.Fatal("THE ATTACK SUCCEEDED: the client accepted a RING0 bundle its anchor did not sign")
 	}
 }

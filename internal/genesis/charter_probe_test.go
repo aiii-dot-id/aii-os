@@ -9,7 +9,7 @@ import (
 
 func TestBirthDoesNotMintRing1(t *testing.T) {
 	dir := t.TempDir()
-	root, bundle := mintTestRing0(t, "# Constitution\nHonesty.")
+	root, bundle, _ := mintTestRing0(t)
 
 	res, err := Birth(&BirthConfig{
 		Name:        "Blank",
