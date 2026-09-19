@@ -55,6 +55,11 @@ type stubSession struct {
 	interrupts chan struct{}
 	reports    chan PlaybackReport
 	done       chan struct{}
+	// .
+	// .
+	// .
+	inputClosed chan struct{}
+	inputWhy    string
 }
 
 func (s *stubSession) ID() string { return s.id }
@@ -68,9 +73,11 @@ func (s *stubSession) PlaybackReport(ctx context.Context, r PlaybackReport) erro
 	s.reports <- r
 	return nil
 }
-func (s *stubSession) Label() string             { return "Listening" }
-func (s *stubSession) Done() <-chan struct{}     { return s.done }
-func (s *stubSession) Released() <-chan struct{} { return s.b.Released() }
+func (s *stubSession) Label() string                 { return "Listening" }
+func (s *stubSession) InputClosed() <-chan struct{}  { return s.inputClosed }
+func (s *stubSession) InputCompletionReason() string { return s.inputWhy }
+func (s *stubSession) Done() <-chan struct{}         { return s.done }
+func (s *stubSession) Released() <-chan struct{}     { return s.b.Released() }
 
 func streamFrame(rate, channels int, kind audio.Kind, seq uint32, start int64, pcm []byte) []byte {
 	out := make([]byte, voiceStreamHeaderBytes+len(pcm))

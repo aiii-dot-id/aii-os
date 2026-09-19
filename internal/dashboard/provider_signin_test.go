@@ -16,7 +16,9 @@ func TestProviderSignInOverWS(t *testing.T) {
 			return "https://auth.example/authorize?state=s1&client=" + name, nil
 		},
 		CompleteSignIn: func(name, input string) error { gotName, gotInput = name, input; return nil },
-		GetProviders:   func() []ProviderInfo { return []ProviderInfo{{Name: "ChatGPT (Plus/Pro)", CanSignIn: true}} },
+		GetProviders: func() ProviderDirectory {
+			return ProviderDirectory{Providers: []ProviderInfo{{Name: "ChatGPT (Plus/Pro)", CanSignIn: true}}}
+		},
 	}
 	s := New("127.0.0.1", 0, h)
 	addr, err := s.Start(t.TempDir())

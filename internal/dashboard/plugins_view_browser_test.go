@@ -38,11 +38,25 @@ run(() => {
                 reason: 'unsigned — below the T2 auto-load level' }],
       catalog_url: 'https://plugins.example.test/aiios-plugins.md',
       catalog_updates: 1,
+      pending: [{ id: 'org.example.big', version: '2.0.0', phase: 'waiting', attempt: 2, retry_at: '2030-01-01T10:20:30Z',
+                  summary: 'models 1.65 GB of 3.08 GB present (14 of 24 files); runtime absent (21.3 MB to fetch)',
+                  bytes_present: 1770000000, bytes_total: 3311000000, files_present: 14, files_total: 24,
+                  last_error: 'the model server answered 503' },
+                { id: 'org.example.slow', version: '1.2.0', phase: 'starting', summary: 'verifying its files and starting it', since: '2030-01-01T10:20:00Z' },
+                { id: 'org.example.bad', version: '0.9.0', phase: 'refused', summary: 'the child did not report readiness within 30s' }],
       catalog: [{ id: 'org.example.foo', version: '1.0.0', tier: 'T3',
                   summary: 'a foo that foos', available: true, installed: false },
                 { id: 'org.example.bar', version: '1.1.0', tier: 'T1', available: true,
                   installed: true, installed_version: '1.0.0', update_available: true,
-                  description: 'Bar keeps the bar.', publisher: 'Example Co', license: 'Apache-2.0', homepage: 'https://example.test/bar' }],
+                  description: 'Bar keeps the bar.', publisher: 'Example Co', license: 'Apache-2.0', homepage: 'https://example.test/bar' },
+                { id: 'org.example.big', version: '2.0.0', tier: 'T3', available: true, installed: false,
+                  pending: 'fetching', pending_text: 'models 1.65 GB of 3.08 GB present (14 of 24 files)' },
+                { id: 'org.example.slow', version: '1.2.0', tier: 'T3', available: true, installed: false,
+                  pending: 'starting', pending_text: 'verifying its files and starting it' },
+                { id: 'org.example.bad', version: '0.9.0', tier: 'T3', available: true, installed: false,
+                  pending: 'refused', pending_text: 'the child did not report readiness within 30s' },
+                { id: 'org.example.future', version: '3.0.0', tier: 'T3', available: false, installed: false,
+                  requires: 'needs AII OS 0.2.0 or newer' }],
       installed: [{ id: 'org.example.bar', version: '1.0.0', tier: 'T1', mode: 'wasm', variant: 'linux-x86_64-wasm',
                     publisher: 'Example Co', publisher_id: 'pub-7', family: 'tool', interfaces: ['tools.provider v1'],
                     capabilities: ['net.fetch', 'files.read'], runtime: 'wasm_component',
@@ -81,6 +95,39 @@ run(() => {
   const inst = st.querySelector('[data-plugin="install:org.example.foo"]');
   assert(inst !== null, 'the catalog entry has no install control');
   assert(inst.textContent.trim() === 'Install', 'an uninstalled offering is offered Install, not ' + inst.textContent);
+
+  // 4a. A package whose models are still arriving is PREPARING: named,
+  //     with how far the download is and why the last attempt stopped;
+  //     the catalog row says so and does not offer Install again.
+  const prep = st.querySelector('[data-pending="org.example.big"]');
+  assert(prep !== null, 'the acquisition in flight is not shown');
+  const bar = prep.querySelector('[role="progressbar"]');
+  assert(bar !== null && bar.getAttribute('aria-valuenow') === '53', 'the progress is not measured: ' + (bar && bar.getAttribute('aria-valuenow')));
+  assert(prep.textContent.includes('1.65 GB of 3.08 GB') && prep.textContent.includes('the model server answered 503') &&
+    prep.textContent.includes('waiting to retry at 10:20:30 UTC') && prep.textContent.includes('attempt 2'),
+    'the preparing block lacks its progress, its last error or its next attempt: ' + prep.textContent);
+  assert(st.querySelector('[data-plugin="install:org.example.big"]') === null, 'a preparing release is offered Install again');
+  assert(st.querySelector('[data-plugin="uninstall:org.example.big"]') !== null, 'a preparing release cannot be removed');
+  const row = st.querySelector('[data-entry="org.example.big"]');
+  assert(row !== null && row.textContent.includes('preparing — models 1.65 GB'), 'the catalog row does not say preparing: ' + (row && row.textContent));
+
+  // 4b. An attempt in progress and a refusal are named too: starting
+  //     offers nothing to click; refused names the reason, offers Try
+  //     again and Uninstall, and never Install.
+  const slow = st.querySelector('[data-pending="org.example.slow"]');
+  assert(slow !== null && slow.textContent.includes('starting') && slow.querySelector('[role="progressbar"]') === null, 'a starting attempt is not shown as such');
+  assert(st.querySelector('[data-plugin="install:org.example.slow"]') === null, 'a starting release is offered Install again');
+  const bad = st.querySelector('[data-pending="org.example.bad"]');
+  assert(bad !== null && bad.textContent.includes('refused: the child did not report readiness within 30s'), 'a refusal is not named with its reason: ' + (bad && bad.textContent));
+  assert(bad.querySelector('[data-plugin="retry:org.example.bad"]') !== null && bad.querySelector('[data-plugin="uninstall:org.example.bad"]') !== null, 'a refused release cannot be retried or removed from its card');
+  // 4c. A release authored for other host versions says what it needs,
+  //     in place of an Install that would refuse at activation.
+  const future = st.querySelector('[data-entry="org.example.future"]');
+  assert(future !== null && future.textContent.includes('needs AII OS 0.2.0 or newer'), 'a release for a newer host does not say so: ' + (future && future.textContent));
+  assert(st.querySelector('[data-plugin="install:org.example.future"]') === null, 'a release this host cannot run is offered Install');
+
+  const badRow = st.querySelector('[data-entry="org.example.bad"]');
+  assert(badRow !== null && badRow.textContent.includes('refused — the child') && badRow.querySelector('[data-plugin="retry:org.example.bad"]') !== null && badRow.querySelector('[data-plugin="install:org.example.bad"]') === null, 'the catalog row of a refused release: ' + (badRow && badRow.textContent));
 
   // 5. A store, not a roadmap: no placeholder cards;
   //    the index is fetched from a URL the operator can see and edit,

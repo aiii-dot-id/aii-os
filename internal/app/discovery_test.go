@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -122,9 +123,57 @@ func TestParseModelListShapesAndWindows(t *testing.T) {
 		t.Fatalf("context_window must be carried, got %+v", meta["gpt-5.6-sol"])
 	}
 
+	// .
+	// .
+	// .
+	omlx := `{"data":[{"id":"qwen3-coder-30b","max_model_len":262144}]}`
+	models, meta, err = parseModelList([]byte(omlx))
+	if err != nil || len(models) != 1 || models[0] != "qwen3-coder-30b" {
+		t.Fatalf("local OpenAI-compatible shape: %v %v", models, err)
+	}
+	if meta["qwen3-coder-30b"].Context != 262144 {
+		t.Fatalf("max_model_len must be carried, got %+v", meta["qwen3-coder-30b"])
+	}
+
+	// .
+	both := `{"data":[{"id":"m","max_input_tokens":1000,"context_length":2000,"max_model_len":3000},{"id":"n","context_length":2000,"max_model_len":3000}]}`
+	if _, meta, err = parseModelList([]byte(both)); err != nil {
+		t.Fatalf("mixed shape: %v", err)
+	}
+	if meta["m"].Context != 1000 || meta["n"].Context != 2000 {
+		t.Fatalf("max_model_len outranked a declared input window: %+v %+v", meta["m"], meta["n"])
+	}
+
 	local := `{"models":[{"name":"llama3.3"}]}`
 	if models, _, err = parseModelList([]byte(local)); err != nil || len(models) != 1 || models[0] != "llama3.3" {
 		t.Fatalf("local-runner shape: %v %v", models, err)
+	}
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	alias := `{"data":[{"id":"deepseek-v4.1-flash","canonical_id":"DeepSeek-V4.1-Ember-oQ4e-mtp","canonical_slug":"DeepSeek-V4.1-Ember-oQ4e-mtp","context_length":262144,"max_model_len":262144}]}`
+	models, meta, err = parseModelList([]byte(alias))
+	if err != nil || !reflect.DeepEqual(models, []string{"deepseek-v4.1-flash"}) {
+		t.Fatalf("the list must stay the server's ids: %v %v", models, err)
+	}
+	if meta["deepseek-v4.1-flash"].Context != 262144 || meta["DeepSeek-V4.1-Ember-oQ4e-mtp"].Context != 262144 {
+		t.Fatalf("the window must be found under the canonical name too, got %+v", meta)
+	}
+
+	// .
+	// .
+	// .
+	for _, body := range []string{
+		`{"data":[{"id":"role","canonical_id":"X","context_length":100},{"id":"X","context_length":200}]}`,
+		`{"data":[{"id":"X","context_length":200},{"id":"role","canonical_id":"X","context_length":100}]}`,
+	} {
+		if _, meta, err = parseModelList([]byte(body)); err != nil || meta["X"].Context != 200 || meta["role"].Context != 100 {
+			t.Fatalf("an alias's claim overrode the model's own row: %+v %v", meta, err)
+		}
 	}
 
 	if _, _, err = parseModelList([]byte("not json")); err == nil {
@@ -234,5 +283,117 @@ func TestTheBootAsksTheProviderForTheWindowItDoesNotDeclare(t *testing.T) {
 	}
 	if entry.ContextLength != 262144 || entry.MaxOutputTokens <= 0 {
 		t.Fatalf("the window the provider lists must be the one resolved: context %d, output %d", entry.ContextLength, entry.MaxOutputTokens)
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestTheWindowIsFoundUnderTheNameTheServerCallsCanonical(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-v4.1-flash","canonical_id":"DeepSeek-V4.1-Ember-oQ4e-mtp","context_length":262144}]}`))
+	}))
+	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	writeTestProviders(t, dir, providerEntry{Name: "Local (oMLX)", APIType: "openai", URL: server.URL + "/v1", APIKey: "k", DefaultModel: "DeepSeek-V4.1-Ember-oQ4e-mtp"})
+	cfg := &Config{SourcePath: filepath.Join(dir, "config.json")}
+	cfg.LLM.Provider = "Local (oMLX)"
+	a := New(cfg)
+	reg, err := a.loadProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.askWindowIfUndeclaredIn(reg, cfg.LLM)
+	_, entry, err := a.resolveLLMConfig(cfg.LLM, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.ContextLength != 262144 {
+		t.Fatalf("the window published under the canonical name must be the one resolved: context %d", entry.ContextLength)
+	}
+	if budget, src := promptBudgetFor(entry, 0); src != budgetDerived || budget != 262144-defaultOutputReserve-promptSafetyTokens {
+		t.Fatalf("the budget must derive from that window: %d (%s)", budget, src)
+	}
+}
+
+// .
+// .
+// .
+func TestAnUnlistedModelIsNamedAsUnlisted(t *testing.T) {
+	var lines []string
+	old := log.Writer()
+	log.SetOutput(writerFunc(func(p []byte) (int, error) { lines = append(lines, string(p)); return len(p), nil }))
+	defer log.SetOutput(old)
+
+	dir := t.TempDir()
+	entry := providerEntry{Name: "Local", APIType: "openai", URL: "https://provider.example/v1", APIKey: "k", DefaultModel: "typed-by-hand"}
+	writeTestProviders(t, dir, entry)
+	cfg := &Config{SourcePath: filepath.Join(dir, "config.json")}
+	cfg.LLM.Provider = "Local"
+	a := New(cfg)
+	a.provStatus = map[string]providerProbe{entry.Name: {
+		state: "ok", models: []string{"a", "b"}, meta: map[string]modelMeta{"a": {Context: 1000}, "b": {Context: 1000}},
+		checkedAt: time.Now(), key: probeKey(entry),
+	}}
+	if _, resolved, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
+		t.Fatalf("an unlisted name has no window to resolve: %d %v", resolved.ContextLength, err)
+	}
+	joined := strings.Join(lines, "")
+	if !strings.Contains(joined, `lists 2 model(s) and none is named "typed-by-hand"`) {
+		t.Fatalf("the miss must name the list and the name, got: %q", joined)
+	}
+
+	// .
+	lines = nil
+	a.provStatus = nil
+	if _, _, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(lines, ""); strings.Contains(joined, "none is named") {
+		t.Fatalf("a provider that listed nothing must not be reported as listing: %q", joined)
+	}
+}
+
+// .
+// .
+func TestAModelIsOfferedUnderTheNameTheServerCallsCanonical(t *testing.T) {
+	models, meta, err := parseModelList([]byte(`{"data":[{"id":"frontier-text","canonical_id":"GLM-5.2-Alis","context_length":262144}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"frontier-text": true, "GLM-5.2-Alis": true, "typo": false} {
+		if got := modelOffered(models, meta, name); got != want {
+			t.Fatalf("modelOffered(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestACanonicalNameWithoutLimitsIsStillOffered(t *testing.T) {
+	for _, field := range []string{"canonical_id", "canonical_slug"} {
+		models, meta, err := parseModelList([]byte(`{"data":[{"id":"alias","` + field + `":"canonical"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !modelOffered(models, meta, "alias") || !modelOffered(models, meta, "canonical") {
+			t.Fatalf("%s: a published name was refused for lacking limits: models=%v meta=%v", field, models, meta)
+		}
+		if m := meta["canonical"]; m.Context != 0 || m.MaxOut != 0 {
+			t.Fatalf("%s: limits were invented for a row that published none: %+v", field, m)
+		}
+		if !reflect.DeepEqual(models, []string{"alias"}) {
+			t.Fatalf("%s: the list must stay the server's ids: %v", field, models)
+		}
+	}
+	_, meta, err := parseModelList([]byte(`{"data":[{"id":"role","canonical_id":"X"},{"id":"X","context_length":200}]}`))
+	if err != nil || meta["X"].Context != 200 {
+		t.Fatalf("an alias without limits overrode the model's own row: %+v %v", meta, err)
+	}
+	if _, _, err := parseModelList([]byte(`{"data":[{"id":"","canonical_id":"nameless"}]}`)); err != nil {
+		t.Fatal(err)
 	}
 }

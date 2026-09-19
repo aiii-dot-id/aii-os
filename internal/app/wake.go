@@ -118,7 +118,7 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 	// .
 	a.markComposedHarvests()
 	a.noteYield(result.Yielded)
-	a.noteTurnShape(result.ContinuedAtCap)
+	a.noteTurnShape(result.ContinuedAtCap || result.ContinuedAtPressure, result.ContinuedAtPressure)
 
 	spoken := result.Spoken
 	if spoken == "" {

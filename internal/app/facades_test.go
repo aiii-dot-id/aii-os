@@ -45,12 +45,12 @@ func TestThePromptOffersSixFacades(t *testing.T) {
 		}
 		return false
 	}
-	for _, mode := range []string{"measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear"} {
+	for _, mode := range []string{"measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear", "voice.mode"} {
 		if !has(enum("work", "action"), mode) {
 			t.Errorf("work action enum must advertise %s", mode)
 		}
 	}
-	for _, param := range []string{"hours", "when", "duration", "message", "project", "outcome", "acceptance", "item", "class", "subject", "pointer"} {
+	for _, param := range []string{"hours", "when", "duration", "message", "project", "outcome", "acceptance", "item", "class", "subject", "pointer", "mode", "listen", "speak"} {
 		if _, ok := byName["work"]["properties"].(map[string]interface{})[param]; !ok {
 			t.Errorf("work schema must carry %s for its absorbed modes", param)
 		}

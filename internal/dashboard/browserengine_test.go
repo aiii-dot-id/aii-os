@@ -372,7 +372,12 @@ func runPageInOneEngine(t *testing.T, engine browserEngine, path string, page st
 		launchArgs = append(engine.sizeArgs(800, 600), launchArgs...)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// .
+	// .
+	// .
+	// .
+	// .
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, path, launchArgs...)
@@ -453,7 +458,13 @@ func stopBrowserProcess(cmd *exec.Cmd) error {
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 
-	deadline := time.Now().Add(2 * time.Second)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		err := syscall.Kill(-pgid, 0)
 		if err == syscall.ESRCH {

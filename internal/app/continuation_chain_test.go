@@ -60,6 +60,26 @@ func contCall(id, name, args string) string {
 // .
 // .
 // .
+// .
+// .
+// .
+func jsonStringFrom(body, marker string) string {
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	for j := i; j < len(body); j++ {
+		if body[j] == '\\' {
+			j++
+			continue
+		}
+		if body[j] == '"' {
+			return body[i:j]
+		}
+	}
+	return body[i:]
+}
+
 func TestCappedTurnContinuesInAFreshTurn(t *testing.T) {
 	app, dir := dispatchApp(t)
 	defer app.Stop()
@@ -125,9 +145,16 @@ func TestCappedTurnContinuesInAFreshTurn(t *testing.T) {
 	if contReq == "" {
 		t.Fatal("no continuation turn reached the model — the capped turn died at its cap")
 	}
-	for _, want := range []string{"still active", "declare steps= for this leg"} {
-		if !strings.Contains(contReq, want) {
-			t.Errorf("the continuation fact omits %q", want)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	fact := jsonStringFrom(contReq, "budget checkpoint — continuation 1")
+	for _, want := range []string{"still active", "declare steps= for this leg", "ended at its declared tool budget", "Resume point: read the probe"} {
+		if !strings.Contains(fact, want) {
+			t.Errorf("the continuation fact omits %q: %q", want, fact)
 		}
 	}
 	app.turnMeterMu.Lock()

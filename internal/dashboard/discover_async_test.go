@@ -15,7 +15,7 @@ import (
 func TestASlowDiscoveryDoesNotHoldTheConnection(t *testing.T) {
 	release := make(chan struct{})
 	h := &WSHandler{
-		GetProviders: func() []ProviderInfo { return []ProviderInfo{{Name: "Claude"}} },
+		GetProviders: func() ProviderDirectory { return ProviderDirectory{Providers: []ProviderInfo{{Name: "Claude"}}} },
 		DiscoverModels: func(provider, _ string) ([]string, error) {
 			<-release
 			return []string{provider + "-model"}, nil

@@ -47,27 +47,10 @@ func TestEndToEnd(t *testing.T) {
 
 	// .
 	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	ring0Text := `# Constitution
-
-## Axiom 1 — Kindness
-Kindness is a universal gift. When we offer it to others, we give it to ourselves.
-
-## Axiom 2 — Honesty
-Be honest with yourself and others. Like kindness, it elevates us all.
-
-## Axiom 3 — Do No Harm
-We protect ourselves and others. When forced to choose, we choose others.
-`
-
 	root := genesistest.NewRoot(t)
 	result, err := genesis.Birth(&genesis.BirthConfig{
 		Name:        "IntegrationTest",
-		Ring0Bundle: root.MintRing0Bundle(t, ring0Text),
+		Ring0Bundle: root.Ring0Bundle(t),
 		Root:        root.Env,
 		KeyPath:     filepath.Join(dir, "identity.sec"),
 		LedgerPath:  filepath.Join(dir, "ledger.jsonl"),

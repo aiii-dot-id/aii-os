@@ -22,11 +22,15 @@ package genesis
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
 )
 
 func TestLiveChainSmoke(t *testing.T) {
@@ -82,6 +86,40 @@ func TestLiveChainSmoke(t *testing.T) {
 		t.Fatal("empty ring5 content")
 	}
 
+	if !strings.HasPrefix(r0.Content, "# Ring 0 Constitutional Axioms\n") {
+		t.Fatalf("live RING0 is not the constitution: %.80q", r0.Content)
+	}
+
+	// .
+	// .
+	// .
+	// .
+	chainBytes, _, err := c.fetchBundle(c.firewallURL, "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("fetch live ring5 pubkey bundle: %v", err)
+	}
+	keyContent, err := verifyBundlePayload(chainBytes, pinnedRoot(), "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("pinned root must verify the live cross-signed domain-key bundle: %v", err)
+	}
+	var domainKey publicKeyEnvelope
+	if err := json.Unmarshal([]byte(keyContent), &domainKey); err != nil {
+		t.Fatal(err)
+	}
+	bundleBytes, _, err := c.fetchBundle(c.firewallURL, "ring5")
+	if err != nil {
+		t.Fatalf("fetch live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, &domainKey, "ring5.bundle"); err != nil {
+		t.Fatalf("the live domain key must verify the live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, pinnedRoot(), "ring5.bundle"); err == nil {
+		t.Fatal("the root directly verifying a domain-key-signed bundle must FAIL — the chain is not optional")
+	}
+	if _, err := verifyBundlePayload(chainBytes, &domainKey, "ring5.pubkey"); err == nil {
+		t.Fatal("a domain key verifying its own cross-signed envelope must FAIL — only the root vouches for keys")
+	}
+
 	// .
 	// .
 	bs, err := c.FetchBootstrap()
@@ -90,6 +128,37 @@ func TestLiveChainSmoke(t *testing.T) {
 	}
 	if len(bs.Content) == 0 {
 		t.Fatal("bootstrap packet verified but carried no prompt")
+	}
+
+	// .
+	// .
+	// .
+	// .
+	bsChain, err := genesislive.Get(genesislive.BootstrapURL+"/bootstrap/pubkey.bundle", "")
+	if err != nil {
+		t.Fatalf("fetch live bootstrap domain-key bundle: %v", err)
+	}
+	bsKeyContent, err := verifyBundlePayload(bsChain, pinnedRoot(), "bootstrap.pubkey")
+	if err != nil {
+		t.Fatalf("the shipped root must verify the cross-signed bootstrap domain-key bundle: %v", err)
+	}
+	var bsKey publicKeyEnvelope
+	if err := json.Unmarshal(bsKeyContent, &bsKey); err != nil {
+		t.Fatal(err)
+	}
+	bsPacket, err := genesislive.Get(genesislive.BootstrapURL+"/bootstrap", r0.Token)
+	if err != nil {
+		t.Fatalf("fetch live bootstrap packet: %v", err)
+	}
+	prompt, err := verifyBundle(bsPacket, &bsKey, "bootstrap.packet")
+	if err != nil {
+		t.Fatalf("the bootstrap domain key must verify the packet: %v", err)
+	}
+	if !strings.Contains(prompt, "You are about to meet your User") {
+		t.Fatalf("the extracted bootstrap prompt is not BOOTSTRAP.md: %.80q", prompt)
+	}
+	if _, err := verifyBundlePayload(bsChain, &bsKey, "bootstrap.pubkey"); err == nil {
+		t.Fatal("a bootstrap domain key verifying its own cross-signed envelope must FAIL")
 	}
 
 	t.Logf("LIVE CHAIN VERIFIED: pin matches; RING0 %d bytes (token minted); Ring 5 %d bytes; bootstrap %d bytes",

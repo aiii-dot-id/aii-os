@@ -19,7 +19,7 @@ import (
 // .
 // .
 func TestBargeInIsNotHeldBehindADelayedAcknowledgement(t *testing.T) {
-	a := &App{}
+	a := &App{cfg: &Config{}}
 	f := &fakeEngineSession{entered: make(chan struct{}), ackGate: make(chan struct{})}
 	id := "vs-1"
 	h := &voiceHandle{id: id, v: f, done: make(chan struct{}), drained: make(chan struct{})}
@@ -84,7 +84,7 @@ func TestBargeInIsNotHeldBehindADelayedAcknowledgement(t *testing.T) {
 // .
 // .
 func TestBargeInBeforeAdmissionRefusesTheReplyBeforeDispatch(t *testing.T) {
-	a := &App{}
+	a := &App{cfg: &Config{}}
 	f := &fakeEngineSession{}
 	id := "vs-1"
 	h := &voiceHandle{id: id, v: f, done: make(chan struct{})}

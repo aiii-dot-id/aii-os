@@ -20,7 +20,7 @@ import (
 // .
 // .
 func TestReplyBoundToSessionAndTurnRefusesStaleAnswers(t *testing.T) {
-	a := &App{}
+	a := &App{cfg: &Config{}}
 	f := &fakeEngineSession{}
 	id := "vs-1"
 	h := &voiceHandle{id: id, v: f, done: make(chan struct{})}
@@ -111,7 +111,7 @@ func TestOldHandleCannotReachAReplacementSession(t *testing.T) {
 			t.Fatalf("%s on an old handle must be refused as stale, got %v", name, err)
 		}
 	}
-	a := &App{}
+	a := &App{cfg: &Config{}}
 	a.voiceSessions.Store("vs-1", old)
 	a.synthesizeReply(ctx, "vs-1", old.gen.Load(), "into the wrong session")
 	if len(f.synthed()) != 0 {
@@ -137,7 +137,7 @@ func TestOldHandleCannotReachAReplacementSession(t *testing.T) {
 // .
 func TestInterruptRacingAdmissionFencesTheAdmittedReply(t *testing.T) {
 	race := func(t *testing.T, id string, f *fakeEngineSession) (synthID string, refused, shown []string) {
-		a := &App{}
+		a := &App{cfg: &Config{}}
 		h := &voiceHandle{id: id, v: f, done: make(chan struct{})}
 		a.voiceSessions.Store(id, h)
 		a.voiceEventSink = func(ev dashboard.VoiceEvent) {

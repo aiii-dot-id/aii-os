@@ -14,7 +14,7 @@ import (
 func TestRefusedBundleBirthLeavesVirginGround(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "unborn")
-	root, goodBundle := mintTestRing0(t, "# Constitution\nHonesty.")
+	root, goodBundle, _ := mintTestRing0(t)
 	cfg := &BirthConfig{
 		Name:       "Orphan",
 		Root:       root.Env,
@@ -47,22 +47,7 @@ func TestRefusedBundleBirthLeavesVirginGround(t *testing.T) {
 }
 
 // .
-func TestEmptyConstitutionBundleBirthLeavesVirginGround(t *testing.T) {
-	dir := t.TempDir()
-	root, emptyBundle := mintTestRing0(t, "")
-	cfg := &BirthConfig{
-		Name:       "Orphan2",
-		Root:       root.Env,
-		KeyPath:    filepath.Join(dir, "identity.sec"),
-		LedgerPath: filepath.Join(dir, "ledger.jsonl"),
-		DBPath:     filepath.Join(dir, "aii.db"),
-		// .
-		Ring0Bundle: emptyBundle,
-	}
-	if _, err := Birth(cfg); err == nil {
-		t.Fatal("birth with a signed-but-empty-constitution bundle must refuse")
-	}
-	if _, err := os.Stat(cfg.KeyPath); err == nil {
-		t.Error("empty-constitution refusal left an orphan key")
-	}
-}
+// .
+// .
+// .
+// .

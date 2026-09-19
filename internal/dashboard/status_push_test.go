@@ -28,7 +28,7 @@ func TestASaveRefreshesTheStatusThePageReadsTheMicrophoneFrom(t *testing.T) {
 			return &ConfigState{}, nil
 		},
 		SetSpeechService: func(string, string, string) error { state.Store("setup"); return nil },
-		GetProviders:     func() []ProviderInfo { return nil },
+		GetProviders:     func() ProviderDirectory { return ProviderDirectory{} },
 		GetConfig:        func() (*ConfigState, error) { return &ConfigState{}, nil },
 	}
 	s := New("127.0.0.1", 0, h)

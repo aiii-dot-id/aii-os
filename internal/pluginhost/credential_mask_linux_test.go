@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,7 +47,7 @@ func TestCredentialStoresAreMaskedInsideTheSandbox(t *testing.T) {
 		`printf "ROOTSSH<%s>\n" "$(ls /root/.ssh 2>/dev/null)"; ` +
 		`printf "OSREL<%s>\n" "$(head -c 40 /etc/os-release 2>/dev/null)"; ` +
 		`printf "LIBS<%s>\n" "$(ls /usr/lib 2>/dev/null | head -1)"`
-	argv, telemetry, err := containArgv([]string{"/bin/sh", "-c", script}, nil)
+	argv, telemetry, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script}, nil)
 	if err != nil {
 		t.Fatalf("containment refused: %v", err)
 	}

@@ -1,6 +1,7 @@
 
 import { startSignIn, signInProgress, signInWanted, credentialExpired, wireSignInCompletion } from '../signin.js';
 import { S } from '../state.js';
+import { settingHTML } from './plugin-setting.js';
 import { $, copyText, esc } from '../util.js';
 import { send, query } from '../ws.js';
 import { spokenAudio } from '../say.js';
@@ -16,6 +17,7 @@ const SECTIONS = [
 let sec = 'substrate';
 let provOpen = null;
 const prov = pendingSlot();
+const provBroken = pendingSlot(); // a Repair or Remove of a broken entry, until the runtime answers
 let provResult = null;
 let provDraft = null;
 const config = pendingSlot();
@@ -43,6 +45,19 @@ function modelField(id, providerName, current) {
     '<datalist id="' + id + '-list">' + models.map(m => '<option value="' + esc(m) + '"></option>').join('') + '</datalist>';
 }
 
+// The window the identity is actually thinking inside, and where the number
+// came from. A fallback printed as a bare figure reads as the model's own
+// window — which is how an identity runs for hours inside a default nobody
+// chose — so it says so, and says what to set. A dash means nothing is known
+// yet, never a silent fallback.
+function contextSummary(llm) {
+  const source = llm.prompt_budget_source || '';
+  const figure = llm.context_length || llm.prompt_budget || 0;
+  if (!source || !figure) return esc(llm.context_length || '—');
+  if (source === 'fallback') return esc(figure) + ' (fallback — set context length on the provider)';
+  return esc(figure) + ' (' + esc(source) + ')';
+}
+
 function substrateHTML(c) {
   if (!c) return '<div class="card"><div class="empty">loading configuration…</div></div>';
 
@@ -56,7 +71,7 @@ function substrateHTML(c) {
     ? '<div style="font-size:11.5px;color:#c0392b;margin-top:8px">pointer does not resolve: ' + esc(c.llm.error) + '</div>'
     : '<div style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6">resolved: <span style="font-family:var(--mono)">' + esc(c.llm.endpoint) + '</span>' +
       ' · key ' + esc(c.llm.api_key_masked || 'none') +
-      ' · context ' + (c.llm.context_length || '—') +
+      ' · context ' + contextSummary(c.llm) +
       ' · max out ' + (c.llm.max_output_tokens || '—') +
 
       (c.llm.thinking_applies ? ' · thinking ' + (c.llm.thinking_budget || '—') : '') +
@@ -197,6 +212,10 @@ const asked = {};
 const listKey = (value, dir) => value + '|' + dir;
 
 function askSpeechLists(dir, value, sp, ask) {
+  // An engine installed here lists nothing over the network: what it
+  // offers it declares, and the page already has it.
+  const local = speechService(value, sp);
+  if (local && local.plugin) return;
   if (!value || value === OWN_SERVER) return;
   const o = speechOffer(dir, value, sp);
   if (!o || !(o.lists_models || o.lists_voices)) return;
@@ -368,7 +387,7 @@ function speechCard(dir, sp) {
   const got = listed(dir, provider);
   const engine = '<label class="f">ENGINE</label><select id="sp-provider-' + dir + '"' + hinted(provider, d.unsetProvider) + '>' +
     '<option value=""' + (provider ? '' : ' selected') + '>' + esc(d.none) + '</option>' +
-    services.map(s => '<option value="' + esc(s.name) + '"' + (s.name === provider ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('') +
+    services.map(s => '<option value="' + esc(s.name) + '"' + (s.name === provider ? ' selected' : '') + '>' + esc(s.title || s.name) + '</option>').join('') +
     (known ? '' : '<option value="' + esc(provider) + '" selected>' + esc(provider) + ' (not a speech service)</option>') +
     '<option value="' + OWN_SERVER + '">OpenAI-compatible…</option>' +
     '</select>';
@@ -376,8 +395,9 @@ function speechCard(dir, sp) {
   const base = '<div id="sp-base-row-' + dir + '"' + (own ? '' : ' hidden') + '><label class="f">BASE URL</label>' +
     '<input type="text" id="sp-base-' + dir + '" value="' + esc(baseValue) + '" placeholder="Base URL, such as http://localhost:8000/v1"' +
     hinted(baseValue, 'Where the OpenAI-compatible server answers, such as http://localhost:8000/v1.') + '></div>';
+  const isPlugin = !!(svc && svc.plugin);
   const k = keyFacts(provider, sp);
-  const key = '<div id="sp-key-row-' + dir + '"' + (provider ? '' : ' hidden') + '><label class="f" id="sp-key-label-' + dir + '">' + esc(k.label) + '</label>' +
+  const key = '<div id="sp-key-row-' + dir + '"' + (provider && !isPlugin ? '' : ' hidden') + '><label class="f" id="sp-key-label-' + dir + '">' + esc(k.label) + '</label>' +
     '<input type="password" id="sp-key-' + dir + '" autocomplete="off"' + hinted('', k.hint) + '>' +
     '<div id="sp-key-note-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:6px">' + esc(k.note) + '</div></div>';
 
@@ -408,7 +428,10 @@ function speechCard(dir, sp) {
     ? { key: 'monthly_minutes', unit: 'minutes', of: 'listening', note: 'the microphone stops until the month turns over' }
     : { key: 'monthly_characters', unit: 'characters', of: 'speaking', note: 'replies are read by the browser\'s own voice until the month turns over' };
   const ceilingValue = (dir === 'stt' ? inForce.monthly_minutes : inForce.monthly_characters) || 0;
-  const ceiling = '<label class="f">MONTHLY CEILING</label>' +
+  // AN ENGINE ON THIS MACHINE SENDS NO BILL. A monthly ceiling is a
+  // spending control over somebody else's service; offering one beside
+  // an engine that runs here would be a control over nothing.
+  const ceiling = isPlugin ? '' : '<label class="f">MONTHLY CEILING</label>' +
     '<input type="number" id="sp-ceiling-' + dir + '" min="0" step="1" value="' + (ceilingValue || '') + '" placeholder="no ceiling"' +
     hinted(ceilingValue ? String(ceilingValue) : '', 'The most ' + d2.unit + ' of ' + d2.of + ' this identity may buy in a calendar month. Reached, ' + d2.note + '. Empty is no ceiling.') + '>' +
     '<div id="sp-spent-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:6px">' + esc(spentLine(dir, sp, ceilingValue)) + '</div>';
@@ -416,23 +439,76 @@ function speechCard(dir, sp) {
   // WHAT IS IN FORCE AND WHAT IS ONLY CHOSEN ARE DIFFERENT THINGS. A
   // sample plays the engine on the card while this line still names the
   // one behind it, and nothing said so.
+  // WHAT IT DECLARED BELONGS BESIDE THIS HALF. The package says which
+  // of its settings are about hearing and which about speaking; those
+  // are drawn here, in the same control its own card draws, and
+  // everything it scoped as neither stays there.
+  const wantScope = dir === 'stt' ? 'hearing' : 'speaking';
+  const tunables = isPlugin ? (svc.settings || []).filter(x => x.scope === wantScope) : [];
+  const engineSettings = tunables.length
+    ? '<div id="sp-engine-settings-' + dir + '" class="engine-settings">' +
+      '<label class="f">' + esc((svc.title || svc.name).toUpperCase()) + ' — ' + (dir === 'stt' ? 'HEARING' : 'SPEAKING') + '</label>' +
+      tunables.map(x => settingHTML(svc.name, x)).join('') + '</div>'
+    : (isPlugin ? '<div id="sp-engine-settings-' + dir + '" class="engine-settings"></div>' : '');
+
   const unsaved = provider && provider !== inForce.provider && provider !== OWN_SERVER
     ? ' — <b>' + esc(provider) + ' is chosen and not saved</b>; Save to put it in force' : '';
-  const readback = !inForce.provider
+  const readback = inForce.plugin
+    ? '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6">in force: <b>' + esc((svc && svc.title) || inForce.provider) + '</b> — installed on this machine' +
+      (inForce.default ? ', and chosen because it is installed; pick a service above to use one instead' : '') + unsaved + '</div>'
+    : !inForce.provider
     ? '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:8px">' + esc(d.off) + unsaved + '</div>'
     : inForce.error
       ? '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:#c0392b;margin-top:8px">pointer does not resolve: ' + esc(inForce.error) + unsaved + '</div>'
       : '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6">in force: <span style="font-family:var(--mono)">' + esc(inForce.endpoint || '') + '</span> · key ' + esc(inForce.api_key_masked || 'none') + unsaved + '</div>';
-  return '<div class="card"><h3>' + d.title + '</h3>' + engine + base + key + language + model + voice + readback +
+  return '<div class="card"><h3>' + d.title + '</h3>' + engine + base + key + language + model + voice + engineSettings + readback +
     ceiling + savebarHTML('speech_' + dir, 'applies live once the service answers a check',
-      dir === 'tts' ? { also: '<button class="btn ghost" id="sp-sample-tts"' + (provider && provider !== OWN_SERVER ? '' : ' disabled') + '>Play sample</button>' +
+      // A SAMPLE IS A SERVICE SPEAKING ONE LINE ON REQUEST. The engine
+      // installed on this machine speaks inside a voice session and has
+      // no such request to answer, so the control is not offered for it
+      // rather than offered and refused (independent review GO110).
+      dir === 'tts' ? { also: '<button class="btn ghost" id="sp-sample-tts"' + (provider && provider !== OWN_SERVER && !isPlugin ? '' : ' disabled') + '>Play sample</button>' +
         '<span class="savesay" id="sp-sample-state" role="status" aria-live="polite"></span>' } : null) + '</div>';
 }
 
 function speechHTML(c) {
   if (!c) return '<div class="card"><div class="empty">loading configuration…</div></div>';
   const sp = c.speech || { stt: {}, tts: {} };
-  return speechCard('stt', sp) + speechCard('tts', sp) + speakersCard(sp);
+  return speechCard('stt', sp) + speechCard('tts', sp) + speakersCard(sp) + voiceModeCard(sp);
+}
+
+// voiceModeCard is what the microphone does and whether replies are
+// spoken: ONE pair with one owner, shown as the two halves the host
+// stores. The microphone control in the composer draws the same pair and
+// changes the same value — this is where it is named in full, where the
+// mode the cycle does not reach can be chosen, and where the operator can
+// hand either half back to the default.
+function voiceModeCard(sp) {
+  const m = sp.mode || { listen: 'interactive', speak: 'auto', revision: 0, name: 'interactive', set: false };
+  const listen = m.listen || 'interactive';
+  const speak = m.speak === 'on' || m.speak === 'off' ? m.speak : '';
+  const opt = (v, cur, label) => '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>';
+  return '<div class="card" id="sp-voice-mode"><h3>Voice mode</h3>' +
+    '<p class="muted">What the microphone does and whether replies are spoken. One pair for this identity: the control in the composer shows the same mode, and the identity is told which one it is in.</p>' +
+    '<label class="f">MICROPHONE</label><select id="sp-mode-listen">' +
+    opt('interactive', listen, 'Interactive — the operator speaks to the identity') +
+    opt('meeting', listen, 'Meeting — record the room; what is heard is not addressed to the identity') +
+    opt('off', listen, 'Off — the operator types') +
+    '</select>' +
+    '<label class="f">SPOKEN REPLIES</label><select id="sp-mode-speak">' +
+    opt('', speak, 'Automatic — spoken when a voice is configured and the operator spoke') +
+    opt('on', speak, 'Spoken') +
+    opt('off', speak, 'Text only') +
+    '</select>' +
+    '<div class="muted" id="sp-mode-readback">' + esc(voiceModeReadback(m)) + '</div>' +
+    savebarHTML('speech_mode', 'both halves travel together — the pair is one value') + '</div>';
+}
+
+export function voiceModeReadback(m) {
+  const listen = m.listen || 'interactive', speak = m.speak || 'auto';
+  return (m.name || '') + ' — listen: ' + listen + ', speak: ' + speak +
+    ' · revision ' + (m.revision || 0) +
+    (m.set ? '' : ' · nothing chosen: the default is in force');
 }
 
 // speakersCard is whose words the identity receives: one policy, read back
@@ -788,6 +864,7 @@ const STATUS_DOT = {
   credential_expired: ['#c9a227', 'adopted credential expired — refresh it with its own tool'],
   unreachable: ['#c0392b', 'endpoint did not answer /models'],
   invalid_url: ['#c0392b', 'URL is not valid'],
+  broken: ['#c0392b', 'broken entry in providers.json — not used until repaired or removed'],
 };
 function dot(status) {
   const d = STATUS_DOT[status] || ['#777', 'not probed yet'];
@@ -858,7 +935,7 @@ function providerEditor(p, tag) {
 // the credential's own line and offers nothing to press.
 function signInRow(p) {
   const progress = signInProgress(p.signin, 'provider', p.name);
-  if (!signInWanted(p)) return progress ? '<div class="signin">' + progress + '</div>' : '';
+  if (!signInWanted(p, S.skipSignInWithValidToken !== false)) return progress ? '<div class="signin">' + progress + '</div>' : '';
   return '<div class="signin">' + progress +
     '<button class="btn" data-prov-signin="' + esc(p.name) + '">Sign in with ' + esc(p.name.replace(/\s*\(.*\)\s*$/, '')) + '</button>' +
     (p.signin && p.signin.status === 'pending' ? '<button class="btn ghost" data-prov-signin-cancel="' + esc(p.name) + '">Cancel sign-in</button>' : '') + '</div>';
@@ -1067,6 +1144,7 @@ function providersHTML() {
   let html = '<div class="card"><h3>PROVIDERS — providers.json</h3>' +
     '<div style="font-size:11.5px;color:var(--faint);margin-bottom:8px;line-height:1.5">The operator\'s file, beside config.json — edited here or by hand. Status describes live model discovery and is never stored; activation is decided by a real inference check.</div>';
   if (prov.waiting()) html += '<div class="config-result">Saving ' + esc(prov.waiting().name) + '… waiting for the runtime to confirm.</div>';
+  else if (provBroken.waiting()) html += '<div class="config-result">' + (provBroken.waiting().type === 'provider_repair' ? 'Repairing ' : 'Removing ') + esc(provBroken.waiting().label) + '… waiting for the runtime to confirm.</div>';
   else if (provResult) html += '<div class="config-result ' + provResult.kind + '">' + esc(provResult.text) + '</div>';
   // SPEECH-ONLY SERVICES ARE NOT LISTED HERE. They have nothing to think
   // with; their place is Settings → Speech, where their keys are entered and
@@ -1092,11 +1170,44 @@ function providersHTML() {
     html += '<div class="muted" style="font-size:11.5px;margin:6px 0 2px">' + speechOnly.length + ' speech-only service' + (one ? '' : 's') +
       ' (' + esc(speechOnly.map(p => p.name).join(', ')) + ') ' + (one ? 'is' : 'are') + ' on <a href="#" data-open-section="speech">Settings → Speech</a>.</div>';
   }
+  html += brokenProvidersHTML();
   html += provOpen === 'new'
     ? providerEditor(null, 'new')
     : '<div class="savebar" style="margin-top:10px"><button class="btn" id="pv-open-new">Add provider</button></div>';
   html += '</div>';
   return html;
+}
+// A BROKEN ENTRY IS SHOWN, NOT HIDDEN. providers.json is admitted entry by
+// entry; an entry the runtime refused is kept in the file as written and used
+// by nothing. Its row says why, and offers Remove and, when the runtime knows
+// one small change that admits it, Repair, named for what it changes. Each
+// action names the entry by its position and digest, so an entry edited by
+// hand since the page was drawn is refused rather than guessed at.
+function brokenProvidersHTML() {
+  const broken = S.brokenProviders || [];
+  if (!broken.length) return '';
+  return '<div class="muted" style="font-size:11.5px;margin:10px 0 4px">' + broken.length + ' broken entr' + (broken.length === 1 ? 'y' : 'ies') +
+    ' in providers.json, not used until repaired or removed:</div>' +
+    broken.map(b => {
+      const label = b.name ? esc(b.name) : 'unnamed entry';
+      const sha = esc(b.sha256);
+      return '<div class="tool-row" data-prov-broken="' + b.position + '" style="align-items:center">' + dot('broken') +
+        '<span class="tn">' + label + ' · broken</span>' +
+        '<span class="td">entry ' + (b.position + 1) + ' in providers.json</span></div>' +
+        '<div style="font-size:11px;color:var(--warn,#c66);margin:-6px 0 4px 22px">' + esc(b.reason) + '</div>' +
+        '<div class="savebar" style="margin:0 0 10px 22px">' +
+        (b.repair ? '<button class="btn" data-prov-repair="' + b.position + '" data-prov-sha="' + sha + '">Repair</button> ' +
+          '<span class="muted" style="font-size:11px">' + esc(b.repair) + '</span> ' : '') +
+        '<button class="btn ghost" data-prov-remove-broken="' + b.position + '" data-prov-sha="' + sha + '">Remove</button></div>';
+    }).join('');
+}
+function brokenProviderAction(type, position, sha256) {
+  const b = (S.brokenProviders || []).find(x => x.position === position && x.sha256 === sha256);
+  const label = b && b.name ? b.name : 'entry ' + (position + 1);
+  provResult = null;
+  const requestID = send({ type, position, entry_sha256: sha256 });
+  if (!provBroken.arm({ type, label, sha256 }, requestID)) provResult = { kind: 'bad', text: 'Not connected — ' + label + ' was not changed.' };
+  renderSettings();
 }
 function commitProvider(tag) {
   const base = (tag !== 'new' && S.providers[parseInt(tag, 10)]) || {};
@@ -1153,6 +1264,14 @@ function commitProvider(tag) {
 }
 
 export function acceptProviderSave(requestID) {
+  const acted = provBroken.claim(requestID);
+  if (acted) {
+    const still = (S.brokenProviders || []).some(b => b.sha256 === acted.sha256);
+    provResult = still
+      ? { kind: 'bad', text: 'Acknowledged, but ' + acted.label + ' is still listed as broken.' }
+      : { kind: 'good', text: (acted.type === 'provider_repair' ? 'Repaired — ' : 'Removed — ') + acted.label + '.' };
+    return true;
+  }
   const added = speechAdd.claim(requestID);
   if (added) {
     const got = S.providers.find(p => p.name === added.name);
@@ -1185,6 +1304,7 @@ export function acceptProviderSave(requestID) {
 export function rejectProviderSave(message, requestID) {
   const adding = speechAdd.waiting();
   if (speechAdd.claim(requestID)) { configResult = { kind: 'bad', section: adding && adding.section, text: message }; renderSettings(); return true; }
+  if (provBroken.claim(requestID)) { provResult = { kind: 'bad', text: message }; renderSettings(); return true; }
   const pending = prov.claim(requestID);
   if (!pending) return false;
   provDraft = pending.entry;
@@ -1242,6 +1362,8 @@ export function renderSettings() {
     };
   });
   st.querySelectorAll('[data-prov-commit]').forEach(btn => { btn.onclick = () => commitProvider(btn.dataset.provCommit); });
+  st.querySelectorAll('[data-prov-repair]').forEach(btn => { btn.onclick = () => brokenProviderAction('provider_repair', parseInt(btn.dataset.provRepair, 10), btn.dataset.provSha); });
+  st.querySelectorAll('[data-prov-remove-broken]').forEach(btn => { btn.onclick = () => brokenProviderAction('provider_remove_broken', parseInt(btn.dataset.provRemoveBroken, 10), btn.dataset.provSha); });
   st.querySelectorAll('[data-prov-del]').forEach(btn => { btn.onclick = () => { provOpen = null; send({ type: 'provider_delete', provider: btn.dataset.provDel }); }; });
   wireProviderSignIn(st);
   st.querySelectorAll('[data-prov-cancel]').forEach(btn => { btn.onclick = () => { provOpen = null; renderSettings(); }; });
@@ -1345,7 +1467,26 @@ function saveSettings(section) {
       if (!Number.isInteger(n) || n < 0) { configResult = { kind: 'bad', section: section, text: 'A monthly ceiling is a whole number, or empty for none.' }; return; }
       ch['speech.' + dir + '.' + (dir === 'stt' ? 'monthly_minutes' : 'monthly_characters')] = n;
     }
-    const key = $('sp-key-' + dir).value.trim();
+    // THE ENGINE'S OWN TUNABLES SAVE WITH THE HALF THEY BELONG TO. The
+    // package declared them as being about hearing or speaking, so
+    // Save here is what an operator expects to put them in force —
+    // having to find the plugin's own card afterwards would make this
+    // card a display rather than a control. They travel under the same
+    // key its own card uses, because it is the same setting.
+    const box = $('sp-engine-settings-' + dir);
+    if (box && svc && svc.plugin) {
+      box.querySelectorAll('[data-pset-plugin]').forEach(el => {
+        const k = 'plugins.settings.' + el.dataset.psetPlugin + '.' + el.dataset.psetKey;
+        const t = el.dataset.psetType;
+        if (t === 'forget') { if (el.checked) ch[k] = null; }
+        else if (t === 'boolean') ch[k] = !!el.checked;
+        else if (t === 'number' || t === 'integer') {
+          const n = el.value.trim() === '' ? NaN : Number(el.value); ch[k] = isNaN(n) ? null : n;
+        } else ch[k] = el.value === '' ? null : el.value;
+      });
+    }
+    const keyEl = $('sp-key-' + dir);
+    const key = keyEl ? keyEl.value.trim() : '';
     const unadded = !own && provider && svc && !svc.added, moved = own && (!svc || svc.endpoint !== baseURL);
     if (unadded || moved || key) { readySpeechService(section, provider, key, baseURL, ch); return; }
   } else if (section === 'speech_speakers') {
@@ -1355,6 +1496,12 @@ function saveSettings(section) {
     const pol = { mode: mode, uids: uids };
     if (mode === 'ignore') pol.unidentified = $('sp-speakers-unid').value;
     ch['speech.speakers'] = pol;
+  } else if (section === 'speech_mode') {
+    // THE PAIR IS ONE VALUE, so both halves travel every time: a change
+    // that named one half would set the other back to the default, and
+    // the operator changing what the microphone does would silently
+    // change whether replies are spoken.
+    ch['speech.mode'] = { listen: $('sp-mode-listen').value, speak: $('sp-mode-speak').value };
   } else if (section === 'dashboard') {
     ch['dashboard.host'] = $('cfg-dhost').value.trim();
     ch['dashboard.port'] = num($('cfg-dport').value);
@@ -1427,6 +1574,11 @@ export function settingsConnectionLost() {
   if (lostProv) {
     provDraft = lostProv.entry;
     provResult = { kind: 'bad', text: 'Connection lost before provider confirmation — check its current state after reconnect.' };
+    changed = true;
+  }
+  const lostBroken = provBroken.drop();
+  if (lostBroken) {
+    provResult = { kind: 'bad', text: 'Connection lost before ' + lostBroken.label + ' was confirmed ' + (lostBroken.type === 'provider_repair' ? 'repaired' : 'removed') + ' — check Providers after reconnect.' };
     changed = true;
   }
   if (speechAdd.drop()) {

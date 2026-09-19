@@ -13,7 +13,11 @@ func TestNewerVersionRanksReleasesAndRefusesTheUnrankable(t *testing.T) {
 		{"0.2.0", "0.1.0", true}, {"0.1.0", "0.2.0", false}, {"0.1.0", "0.1.0", false},
 		{"1.0.0", "0.9.9", true}, {"0.1.10", "0.1.9", true}, {"v0.2.0", "0.1.0", true},
 		{"0.1.0.1", "0.1.0", true}, {"0.1", "0.1.0", false},
-		{"1.0.0", "1.0.0-rc1", true}, {"1.0.0-rc1", "1.0.0", false}, {"1.0.0-rc2", "1.0.0-rc1", false},
+		{"1.0.0", "1.0.0-rc1", true}, {"1.0.0-rc1", "1.0.0", false},
+		// .
+		// .
+		// .
+		{"1.0.0-rc2", "1.0.0-rc1", true},
 		{"latest", "0.1.0", false}, {"0.2.0", "unknown", false}, {"", "0.1.0", false}, {"0.-1.0", "0.1.0", false},
 	} {
 		if got := NewerVersion(tc.candidate, tc.installed); got != tc.newer {

@@ -42,9 +42,9 @@ func firstbootApp(dir string) *App {
 	return a
 }
 
-func fetchVerifiedBootstrap(t *testing.T, root *genesistest.Root, content string) (*genesis.GenesisClient, string) {
+func fetchVerifiedBootstrap(t *testing.T, root *genesistest.Root) (*genesis.GenesisClient, string) {
 	t.Helper()
-	keyBundle, packet := root.MintBootstrapArtifacts(t, content)
+	keyBundle, packet, _ := root.BootstrapArtifacts(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/bootstrap/pubkey.bundle":
@@ -57,7 +57,6 @@ func fetchVerifiedBootstrap(t *testing.T, root *genesistest.Root, content string
 	}))
 	t.Cleanup(server.Close)
 	client := genesis.NewClient("", "", server.URL)
-	client.SetTrustRootForTest(root.Env)
 	result, err := client.FetchBootstrap()
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +76,7 @@ func TestBirthRefusedWithoutVerifiedBootstrap(t *testing.T) {
 func TestBirthValidatesProviderFirst(t *testing.T) {
 	a := firstbootApp(t.TempDir())
 	root := genesistest.NewRoot(t)
-	a.genesisClient, a.bootstrapText = fetchVerifiedBootstrap(t, root, "# BOOTSTRAP.md\nSigned Firstboot fixture.")
+	a.genesisClient, a.bootstrapText = fetchVerifiedBootstrap(t, root)
 	// .
 	// .
 	// .
@@ -94,7 +93,9 @@ func TestBirthValidatesProviderFirst(t *testing.T) {
 }
 
 func TestBirthCeremonyStillCompletes(t *testing.T) {
-	const bootstrap = "# BOOTSTRAP.md\nSigned Firstboot fixture."
+	// .
+	// .
+	bootstrap := genesistest.NewRoot(t).BootstrapPrompt(t)
 	root := genesistest.NewRoot(t)
 
 	prompt := make(chan string, 1)
@@ -137,9 +138,9 @@ func TestBirthCeremonyStillCompletes(t *testing.T) {
 	})
 	a := New(cfg)
 	defer a.Stop()
-	a.genesisClient, a.bootstrapText = fetchVerifiedBootstrap(t, root, bootstrap)
+	a.genesisClient, a.bootstrapText = fetchVerifiedBootstrap(t, root)
 	a.ring0Content = "# Constitution\nHonesty."
-	a.ring0Bundle = root.MintRing0Bundle(t, a.ring0Content)
+	a.ring0Bundle = root.Ring0Bundle(t)
 	a.ring5Content = "# Ring 5\nSecurity posture."
 
 	greeting, err := a.handleGenesis(t.Context(), &dashboard.GenesisRequest{

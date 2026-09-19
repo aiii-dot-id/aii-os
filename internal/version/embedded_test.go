@@ -2,6 +2,7 @@ package version
 
 import (
 	"os"
+	"regexp"
 	"testing"
 )
 
@@ -40,4 +41,17 @@ func trimSpace(s string) string {
 		s = s[1:]
 	}
 	return s
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAuthoredVersionIsAnAIIOSVersion(t *testing.T) {
+	if v := Authored(); !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(v) {
+		t.Errorf("VERSION %q is not three numbers (major.minor.patch): bounded plugins could not be ranked against it", v)
+	}
 }

@@ -270,7 +270,7 @@ function onMessage(e) {
       if (S.view === 'home') renderHome();
       break;
     }
-    case 'providers': S.providers = msg.providers || []; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
+    case 'providers': S.providers = msg.providers || []; S.brokenProviders = msg.broken_providers || []; S.skipSignInWithValidToken = msg.skip_signin_with_valid_token !== false; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
     case 'provider_signin': case 'profile_signin': acceptSignIn(msg); break;
     case 'profile_device': if (S.onProfileDevice) { S.onProfileDevice(msg.device); } break;
     case 'update_check': S.update = msg.update || null; if (S.renderUpdate) S.renderUpdate(); if (S.renderUpdateChip) S.renderUpdateChip(); break;

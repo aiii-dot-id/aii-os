@@ -165,6 +165,7 @@ type Engine struct {
 	ledger   EventWriter
 	rings    *ring.Manager
 	projects ProjectPort
+	voice    VoicePort
 	toolDisc ToolDiscoverer
 	// .
 	// .

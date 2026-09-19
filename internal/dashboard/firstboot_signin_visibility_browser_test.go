@@ -32,6 +32,13 @@ run(() => {
   claude.signin = { status: 'pending', device: { user_code: 'ABCD', verification_uri: 'https://auth.example/device' } };
   renderProviderOptions();
   assert(start() && document.getElementById('fb-signin-cancel') && row().includes('ABCD'), 'a sign-in under way lost its code, its button or its cancel: ' + row());
+  // The setting reaches the birth form too: off, a valid token still offers sign-in.
+  delete claude.signin;
+  renderProviderOptions();
+  assert(!start(), 'a valid token offered sign-in at birth with the setting on');
+  S.skipSignInWithValidToken = false;
+  renderProviderOptions();
+  assert(start(), 'with the setting off, a valid token still hides sign-in at birth');
 });
 </script>`
 

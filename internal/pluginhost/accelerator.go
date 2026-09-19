@@ -42,6 +42,11 @@ const AcceleratorFile = "accelerator.json"
 // .
 // .
 // .
+const MaxStartupMS = 3600000
+
+// .
+// .
+// .
 // .
 const WindowsContainedNativeQualified = true
 
@@ -59,9 +64,33 @@ type AcceleratorProfile struct {
 	RuntimeLibraries []string `json:"runtime_libraries,omitempty"`
 	Precision        string   `json:"precision"`
 	Models           []string `json:"models"`
-	MemoryBytes      int64    `json:"memory_bytes"`
-	SessionLimit     int      `json:"session_limit"`
-	Fallback         string   `json:"fallback"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	MemoryBytes int64 `json:"memory_bytes"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	DeviceMemoryBytes *int64 `json:"device_memory_bytes,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	StartupMS    *int64 `json:"startup_ms,omitempty"`
+	SessionLimit int    `json:"session_limit"`
+	Fallback     string `json:"fallback"`
 }
 
 // .
@@ -111,7 +140,16 @@ func ParseAccelerators(raw []byte, variantIDs []string) (map[string]AcceleratorP
 			}
 		}
 		if p.MemoryBytes <= 0 || p.SessionLimit <= 0 {
-			return nil, fmt.Errorf("profile for %s: memory_bytes and session_limit are measured, positive numbers", id)
+			return nil, fmt.Errorf("profile for %s: memory_bytes and session_limit are declared, positive numbers", id)
+		}
+		// .
+		// .
+		// .
+		if p.DeviceMemoryBytes != nil && *p.DeviceMemoryBytes < 0 {
+			return nil, fmt.Errorf("profile for %s: device_memory_bytes is a reservation in bytes (omit it where there is nothing to declare; 0 declares no device allocation)", id)
+		}
+		if p.StartupMS != nil && (*p.StartupMS <= 0 || *p.StartupMS > MaxStartupMS) {
+			return nil, fmt.Errorf("profile for %s: startup_ms is an allowance of 1..%d milliseconds (omit it to take the host's default)", id, MaxStartupMS)
 		}
 		if p.Fallback != "none" && p.Fallback != "reported" {
 			return nil, fmt.Errorf("profile for %s: fallback is \"none\" or \"reported\" — never taken silently", id)

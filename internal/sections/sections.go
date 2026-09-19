@@ -211,7 +211,17 @@ type Section struct {
 	// .
 	// .
 	PackageID string
+	// .
+	// .
+	// .
+	// .
+	Allowed func() bool
 }
+
+func (s *Section) allowed() bool { return s.Allowed == nil || s.Allowed() }
+
+// .
+var ErrWithdrawn = errors.New("sections: this section was withdrawn before it was registered")
 
 // .
 // .
@@ -265,6 +275,9 @@ func (r *Registry) Safe() (string, bool) {
 func (r *Registry) Register(sec *Section) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !sec.allowed() {
+		return ErrWithdrawn
+	}
 	if _, dup := r.byID[sec.Decl.ID]; dup {
 		return fmt.Errorf("sections: id %q is already registered — refusing the duplicate (deactivate one)", sec.Decl.ID)
 	}
@@ -280,10 +293,55 @@ func (r *Registry) Remove(id string) {
 }
 
 // .
+// .
+// .
+// .
+// .
+// .
+func (r *Registry) RemoveOwned(sec *Section) bool {
+	if sec == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.byID[sec.Decl.ID]; !ok || cur != sec {
+		return false
+	}
+	delete(r.byID, sec.Decl.ID)
+	return true
+}
+
+// .
+// .
+// .
+// .
+// .
+func (r *Registry) Replace(prev, next *Section) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !next.allowed() {
+		return ErrWithdrawn
+	}
+	if cur, dup := r.byID[next.Decl.ID]; dup && cur != prev {
+		return fmt.Errorf("sections: id %q is already registered — refusing the duplicate (deactivate one)", next.Decl.ID)
+	}
+	if prev != nil {
+		if cur, ok := r.byID[prev.Decl.ID]; ok && cur == prev {
+			delete(r.byID, prev.Decl.ID)
+		}
+	}
+	r.byID[next.Decl.ID] = next
+	return nil
+}
+
+// .
 func (r *Registry) Get(id string) (*Section, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	sec, ok := r.byID[id]
+	if ok && !sec.allowed() {
+		return nil, false
+	}
 	return sec, ok
 }
 
@@ -294,7 +352,9 @@ func (r *Registry) List() []*Section {
 	defer r.mu.RUnlock()
 	out := make([]*Section, 0, len(r.byID))
 	for _, sec := range r.byID {
-		out = append(out, sec)
+		if sec.allowed() {
+			out = append(out, sec)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Decl.ID < out[j].Decl.ID })
 	return out

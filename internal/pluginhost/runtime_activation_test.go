@@ -48,6 +48,13 @@ func hostVariantID() string {
 // .
 func nativePackage(t *testing.T, id string, child []byte, root *packagetest.Role, runtimes []byte) string {
 	t.Helper()
+	return nativePackageWithModels(t, id, child, root, runtimes, nil)
+}
+
+// .
+// .
+func nativePackageWithModels(t *testing.T, id string, child []byte, root *packagetest.Role, runtimes, models []byte) string {
+	t.Helper()
 	vid := hostVariantID()
 	files := map[string][]byte{
 		"interfaces/quarantine.probe.v1.schema.json": []byte(`{"interface":"quarantine.probe","v":1}`),
@@ -55,6 +62,9 @@ func nativePackage(t *testing.T, id string, child []byte, root *packagetest.Role
 	}
 	if runtimes != nil {
 		files[RuntimesFile] = runtimes
+	}
+	if models != nil {
+		files[ModelsFile] = models
 	}
 	manifest := packagetest.BuildManifestJSON(id, "0.1.0",
 		[]packagetest.InterfaceSpec{{ID: "quarantine.probe", Version: 1, SchemaFile: "interfaces/quarantine.probe.v1.schema.json", Methods: []string{"ping"}}},

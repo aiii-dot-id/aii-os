@@ -123,6 +123,9 @@ type heardUtterance struct {
 	// .
 	// .
 	SpeakerScore float64
+	// .
+	// .
+	admitted func()
 }
 
 // .
@@ -241,6 +244,23 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 // .
 // .
 // .
+func (a *App) recordRoomWords(text string) error {
+	if a.engine == nil {
+		return nil
+	}
+	if err := a.engine.RecordConversationTurn(roleOperator, voiceMarker+voiceRoomNote+text); err != nil {
+		return fmt.Errorf("record what the operator said: %w", err)
+	}
+	return nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 // .
 // .
 // .
@@ -264,13 +284,7 @@ var voiceWake = (*App).wake
 // .
 func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtterance) error {
 	if !o.Answer {
-		if a.engine == nil {
-			return nil
-		}
-		if err := a.engine.RecordConversationTurn(roleOperator, text); err != nil {
-			return fmt.Errorf("record what the operator said: %w", err)
-		}
-		return nil
+		return a.recordRoomWords(text)
 	}
 	// .
 	// .
@@ -303,6 +317,9 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 		return err
 	}
 	if steered {
+		if o.admitted != nil {
+			o.admitted()
+		}
 		return nil
 	}
 	// .
@@ -314,8 +331,27 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 	// .
 	// .
 	defer a.releaseTurn()
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if listen, _, _ := a.voiceMode(); listen == listenMeeting {
+		if binding != nil {
+			binding.release("recorded as the room's: a meeting began while the words waited")
+		}
+		if o.admitted != nil {
+			o.admitted()
+		}
+		a.noteReplyOutcome(o.SessionID, "recorded (meeting), no reply")
+		return a.recordRoomWords(text)
+	}
 	if binding != nil {
 		a.holdVoice(binding)
+	}
+	if o.admitted != nil {
+		o.admitted()
 	}
 	reply, err := voiceWake(a, ctx, roleOperator, marked)
 	// .
@@ -336,6 +372,13 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 // .
 // .
 const voiceMarker = "[voice] "
+
+// .
+// .
+// .
+// .
+// .
+const voiceRoomNote = "(heard in the room, not addressed to you) "
 
 // .
 // .

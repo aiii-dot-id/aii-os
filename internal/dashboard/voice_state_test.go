@@ -10,6 +10,25 @@ import (
 // .
 // .
 // .
+// .
+// .
+func TestTheStatusCarriesTheVoiceModeInForce(t *testing.T) {
+	stats := func() (*StatsResponse, error) { return &StatsResponse{}, nil }
+	h := &WSHandler{GetStats: stats, VoiceMode: func() (string, string, uint64) { return "meeting", "off", 3 }}
+	msg, ok := New("127.0.0.1", 0, h).statusMessage(h)
+	if !ok {
+		t.Fatal("no status")
+	}
+	if msg.Stats.VoiceListen != "meeting" || msg.Stats.VoiceSpeak != "off" || msg.Stats.VoiceModeRevision != 3 {
+		t.Fatalf("the frame does not carry the mode: listen=%q speak=%q rev=%d", msg.Stats.VoiceListen, msg.Stats.VoiceSpeak, msg.Stats.VoiceModeRevision)
+	}
+	none := &WSHandler{GetStats: stats}
+	msg, ok = New("127.0.0.1", 0, none).statusMessage(none)
+	if !ok || msg.Stats.VoiceListen != "" || msg.Stats.VoiceSpeak != "" {
+		t.Fatalf("a server with no mode hook invented one: %+v", msg.Stats)
+	}
+}
+
 func TestTheStatusNamesOneMicrophoneThisServerCanServe(t *testing.T) {
 	for _, tc := range []struct {
 		why, host, want string

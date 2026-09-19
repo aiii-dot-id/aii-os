@@ -35,7 +35,10 @@ type pluginEvent struct {
 }
 
 type pluginSubscriber struct {
-	id      string
+	id string
+	// .
+	// .
+	owner   *pluginhost.ActivePlugin
 	subs    []pluginhost.SubscriptionDecl
 	queue   chan pluginEvent
 	stop    context.CancelFunc
@@ -44,25 +47,61 @@ type pluginSubscriber struct {
 
 // .
 // .
+// .
+// .
+// .
 func (a *App) startSubscriber(ap *pluginhost.ActivePlugin) {
-	if len(ap.Subscriptions) == 0 {
-		return
+	var s *pluginSubscriber
+	var ctx context.Context
+	if len(ap.Subscriptions) > 0 {
+		var stop context.CancelFunc
+		ctx, stop = context.WithCancel(context.Background())
+		s = &pluginSubscriber{id: ap.ID, owner: ap, subs: append([]pluginhost.SubscriptionDecl(nil), ap.Subscriptions...), queue: make(chan pluginEvent, pluginEventQueue), stop: stop}
 	}
-	ctx, stop := context.WithCancel(context.Background())
-	s := &pluginSubscriber{id: ap.ID, subs: append([]pluginhost.SubscriptionDecl(nil), ap.Subscriptions...), queue: make(chan pluginEvent, pluginEventQueue), stop: stop}
 	a.subMu.Lock()
 	if prior, ok := a.subscribers[ap.ID]; ok {
 		prior.stop()
+		delete(a.subscribers, ap.ID)
 	}
-	if a.subscribers == nil {
-		a.subscribers = map[string]*pluginSubscriber{}
+	if s != nil {
+		if a.subscribers == nil {
+			a.subscribers = map[string]*pluginSubscriber{}
+		}
+		a.subscribers[ap.ID] = s
 	}
-	a.subscribers[ap.ID] = s
 	a.subMu.Unlock()
+	if s == nil {
+		return
+	}
 	go a.deliverEvents(ctx, s)
 	log.Printf("plugin %s: subscribed to %d event topic(s)", ap.ID, len(s.subs))
 }
 
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) stopSubscriberOf(ap *pluginhost.ActivePlugin) {
+	if ap == nil {
+		return
+	}
+	a.subMu.Lock()
+	s, ok := a.subscribers[ap.ID]
+	if ok && s.owner == ap {
+		delete(a.subscribers, ap.ID)
+	} else {
+		ok = false
+	}
+	a.subMu.Unlock()
+	if ok {
+		s.stop()
+	}
+}
+
+// .
 // .
 func (a *App) stopSubscriber(id string) {
 	a.subMu.Lock()

@@ -98,6 +98,22 @@ type SpeechConfigState struct {
 	Resets string        `json:"resets,omitempty"`
 	// .
 	Speakers *SpeakerPolicyState `json:"speakers,omitempty"`
+	// .
+	// .
+	Mode *VoiceModeState `json:"mode,omitempty"`
+}
+
+// .
+// .
+// .
+// .
+// .
+type VoiceModeState struct {
+	Listen   string `json:"listen"`
+	Speak    string `json:"speak"`
+	Revision uint64 `json:"revision"`
+	Name     string `json:"name"`
+	Set      bool   `json:"set"`
 }
 
 // .
@@ -151,6 +167,14 @@ type SpeechResolution struct {
 	Endpoint     string `json:"endpoint,omitempty"`
 	APIKeyMasked string `json:"api_key_masked,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// .
+	// .
+	// .
+	Plugin bool `json:"plugin,omitempty"`
+	// .
+	// .
+	// .
+	Default bool `json:"default,omitempty"`
 }
 
 // .
@@ -170,4 +194,17 @@ type SpeechService struct {
 	// .
 	// .
 	Custom bool `json:"custom,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	Plugin bool   `json:"plugin,omitempty"`
+	Title  string `json:"title,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	Settings []PluginSettingView `json:"settings,omitempty"`
 }

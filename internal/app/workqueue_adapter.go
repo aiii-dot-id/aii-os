@@ -262,11 +262,18 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
 			// .
 			// .
-			HeuristicNudges:     heuristicNudgesOn(cfg.Agency.HeuristicNudges),
-			ContextBudgetTokens: target.budget,
-			ThinkingBudget:      thinking,
-			BreadthNudge:        cfg.Agency.BreadthNudge,
-			PredictedThisTurn:   predictedNow,
+			HeuristicNudges:       heuristicNudgesOn(cfg.Agency.HeuristicNudges),
+			ContextBudgetTokens:   target.budget,
+			ContextBudgetFallback: target.budgetGuess,
+			ThinkingBudget:        thinking,
+			BreadthNudge:          cfg.Agency.BreadthNudge,
+			PredictedThisTurn:     predictedNow,
+			// .
+			// .
+			// .
+			// .
+			// .
+			ReplaySafe: replaySafeHook(h.a.toolReg),
 		})
 	// .
 	// .
@@ -525,10 +532,14 @@ func buildSubagentGoal(depth int, goal string, rounds, calls, legs, wallSeconds 
 }
 
 type runTarget struct {
-	client   conversation.LLMClient
-	budget   int
-	modelID  string
-	fallback bool
+	client  conversation.LLMClient
+	budget  int
+	modelID string
+	// .
+	// .
+	// .
+	budgetGuess bool
+	fallback    bool
 	// .
 	// .
 	// .
@@ -543,7 +554,8 @@ func (a *App) activeRunTarget(fallback bool, cause string) runTarget {
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
 	client := a.llmSwap.Current()
-	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), fallback: fallback, cause: cause}
+	_, src := a.currentPromptBudget()
+	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), budgetGuess: src == budgetFallback, fallback: fallback, cause: cause}
 }
 
 // .
@@ -617,9 +629,9 @@ func (a *App) resolveRunTarget(role string) runTarget {
 			log.Printf("subagent role %q: route %s/%s did not resolve (%v) — using the active model", role, route.Provider, route.Model, err)
 			return a.activeRunTarget(true, "route-down")
 		}
-		budget := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+		budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
 		log.Printf("subagent role %q routed: provider %q model %q (prompt budget %d)", role, entry.Name, cc.Model, budget)
-		return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model}
+		return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, budgetGuess: src == budgetFallback}
 	}
 
 	if cfg.Agency.PreferLocalForRoles && regErr == nil {
@@ -627,9 +639,9 @@ func (a *App) resolveRunTarget(role string) runTarget {
 			a.probeProviders(&providerRegistry{Providers: []providerEntry{local}})[local.Name].state == "ok" {
 			cc, entry, err := a.resolveLLMConfig(LLMConfig{Provider: local.Name, APIKeyEnv: cfg.LLM.APIKeyEnv}, reg)
 			if err == nil {
-				budget := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+				budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
 				log.Printf("subagent role %q → local model %q on %q (checkbox; prompt budget %d)", role, cc.Model, entry.Name, budget)
-				return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model}
+				return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, budgetGuess: src == budgetFallback}
 			}
 			log.Printf("subagent role %q: local entry %q did not resolve (%v) — using the active model", role, local.Name, err)
 		}

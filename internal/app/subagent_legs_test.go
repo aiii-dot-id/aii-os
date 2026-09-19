@@ -47,6 +47,13 @@ func scriptedChild(t *testing.T, toolRounds int) (*httptest.Server, *atomic.Int3
 
 func legFixture(t *testing.T, srvURL string, agency AgencyConfig) (*App, *store.Store, *cognitive.Executor) {
 	t.Helper()
+	return legFixtureBudget(t, srvURL, agency, 32000)
+}
+
+// .
+// .
+func legFixtureBudget(t *testing.T, srvURL string, agency AgencyConfig, budget int) (*App, *store.Store, *cognitive.Executor) {
+	t.Helper()
 	st, err := store.New(filepath.Join(t.TempDir(), "aii.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +65,7 @@ func legFixture(t *testing.T, srvURL string, agency AgencyConfig) (*App, *store.
 	reg := tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
 	cfg := &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
-		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
+		Prompt:     PromptConfig{MaxTokens: budget, MaxToolResultChars: 32000},
 		Agency:     agency,
 	}
 	a := New(cfg)

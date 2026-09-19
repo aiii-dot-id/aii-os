@@ -77,13 +77,23 @@ func (a *App) resolveLLMConfig(cfg LLMConfig, reg *providerRegistry) (llm.Client
 	// .
 	// .
 	if resolved.ContextLength == 0 || resolved.MaxOutputTokens == 0 {
-		if m, ok := a.discoveredMeta(entry.Name, model); ok {
+		m, found, listed := a.discoveredMeta(entry.Name, model)
+		switch {
+		case found:
+			window, reserve := discoveredWindow(m, resolved, entry.Name, model)
 			if resolved.ContextLength == 0 {
-				resolved.ContextLength = m.Context
+				resolved.ContextLength = window
 			}
 			if resolved.MaxOutputTokens == 0 {
-				resolved.MaxOutputTokens = m.MaxOut
+				resolved.MaxOutputTokens = reserve
 			}
+		case resolved.ContextLength == 0 && listed > 0:
+			// .
+			// .
+			// .
+			// .
+			log.Printf("LLM: provider %q lists %d model(s) and none is named %q (by id or canonical name) — its window cannot be derived from the list; set context_length on the entry or use a name the provider lists",
+				entry.Name, listed, model)
 		}
 	}
 	resolved = limitModelOutput(resolved, model, reg.effective())
@@ -109,6 +119,43 @@ const (
 	defaultOutputReserve = llm.DefaultMaxOutputTokens
 	promptSafetyTokens   = 2048
 )
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func discoveredWindow(m modelMeta, entry providerEntry, provider, model string) (window, reserve int) {
+	window, reserve = m.Context, m.MaxOut
+	known := entry.ContextLength
+	if known == 0 {
+		known = window
+	}
+	if reserve > 0 && known > 0 && reserve+promptSafetyTokens >= known {
+		// .
+		// .
+		reserve = 0
+	}
+	return window, reserve
+}
 
 func validateModelWindow(entry providerEntry, model string) error {
 	if entry.ContextLength < 0 || entry.MaxOutputTokens < 0 || entry.ThinkingBudget < 0 {
@@ -205,6 +252,9 @@ func selectProvider(cfg LLMConfig, reg *providerRegistry) (*providerEntry, error
 			}
 		}
 		if entry == nil {
+			if b := brokenNamed(reg, name); b != nil {
+				return nil, fmt.Errorf("llm.provider %q is a broken entry in providers.json (%s); repair or remove it in Settings → Providers", name, b.reason)
+			}
 			return nil, fmt.Errorf("llm.provider %q is not in providers.json (%d providers)", name, len(reg.Providers))
 		}
 	} else {
@@ -215,6 +265,11 @@ func selectProvider(cfg LLMConfig, reg *providerRegistry) (*providerEntry, error
 			}
 		}
 		if entry == nil {
+			for _, b := range reg.broken {
+				if b.isDefault {
+					return nil, fmt.Errorf("llm.provider is empty and the default-flagged entry %q in providers.json is broken (%s); repair or remove it in Settings → Providers", b.name, b.reason)
+				}
+			}
 			return nil, fmt.Errorf("llm.provider is empty and providers.json flags no default provider")
 		}
 	}
@@ -235,7 +290,24 @@ func selectProvider(cfg LLMConfig, reg *providerRegistry) (*providerEntry, error
 // .
 // .
 // .
-func promptBudgetFor(entry providerEntry, promptBudget int) int {
+// .
+type budgetSource string
+
+const (
+	budgetDeclared budgetSource = "declared"
+	budgetDerived  budgetSource = "derived"
+	budgetFallback budgetSource = "fallback"
+)
+
+// .
+// .
+// .
+// .
+func promptBudgetFor(entry providerEntry, promptBudget int) (int, budgetSource) {
+	source := budgetDeclared
+	if promptBudget == 0 {
+		source = budgetFallback
+	}
 	if cl := entry.ContextLength; cl > 0 {
 		reserve := entry.MaxOutputTokens
 		if reserve <= 0 {
@@ -243,7 +315,7 @@ func promptBudgetFor(entry providerEntry, promptBudget int) int {
 		}
 		if derived := cl - reserve - promptSafetyTokens; derived > 0 && (promptBudget == 0 || derived < promptBudget) {
 			log.Printf("Prompt budget derived from model window: %d (context %d - output %d - margin %d)", derived, cl, reserve, promptSafetyTokens)
-			promptBudget = derived
+			promptBudget, source = derived, budgetDerived
 		}
 	}
 	if promptBudget == 0 {
@@ -255,7 +327,28 @@ func promptBudgetFor(entry providerEntry, promptBudget int) int {
 		log.Printf("Prompt budget: FALLBACK %d tokens — provider %q declares no context_length and none was discovered; the model's real window may be far larger. Set context_length on the provider entry (Settings → Providers).",
 			promptBudget, entry.Name)
 	}
-	return promptBudget
+	return promptBudget, source
+}
+
+// .
+// .
+// .
+// .
+// .
+func (a *App) rememberPromptBudget(entry providerEntry, maxPromptTokens int) int {
+	budget, source := promptBudgetFor(entry, maxPromptTokens)
+	a.activeProviderMu.Lock()
+	a.activeBudget, a.activeBudgetSource = budget, source
+	a.activeProviderMu.Unlock()
+	return budget
+}
+
+// .
+// .
+func (a *App) currentPromptBudget() (int, budgetSource) {
+	a.activeProviderMu.RLock()
+	defer a.activeProviderMu.RUnlock()
+	return a.activeBudget, a.activeBudgetSource
 }
 
 // .
@@ -264,7 +357,7 @@ func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPro
 	a.activeProviderMu.Lock()
 	a.activeProvider = entry
 	a.activeProviderMu.Unlock()
-	promptBudget := promptBudgetFor(entry, maxPromptTokens)
+	promptBudget := a.rememberPromptBudget(entry, maxPromptTokens)
 	if a.composer != nil {
 		a.composer.SetMaxTokens(promptBudget)
 	}
@@ -273,6 +366,10 @@ func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPro
 	}
 	if a.conv != nil {
 		a.conv.SetModelLimits(promptBudget, entry.ThinkingBudget)
+		// .
+		// .
+		_, src := a.currentPromptBudget()
+		a.conv.SetContextBudgetFallback(src == budgetFallback)
 	}
 	if a.ledger != nil {
 		a.ledger.SetModelID(client.ModelName())

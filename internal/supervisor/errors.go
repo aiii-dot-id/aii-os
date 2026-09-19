@@ -49,6 +49,27 @@ func (e *ChildExitError) Error() string {
 // .
 // .
 // .
+// .
+// .
+// .
+type StartCancelledError struct {
+	PluginID   string
+	Cause      error
+	StderrTail []string
+}
+
+func (e *StartCancelledError) Error() string {
+	msg := fmt.Sprintf("supervisor: plugin %s: start cancelled before readiness (%v); the child was killed", e.PluginID, e.Cause)
+	if len(e.StderrTail) > 0 {
+		msg += "; stderr tail: " + strings.Join(e.StderrTail, " | ")
+	}
+	return msg
+}
+func (e *StartCancelledError) Unwrap() error { return e.Cause }
+
+// .
+// .
+// .
 type RestartCeilingError struct {
 	PluginID string
 	Restarts int

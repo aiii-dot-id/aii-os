@@ -4,6 +4,7 @@ import { S } from '../state.js';
 import { $, esc } from '../util.js';
 import { send } from '../ws.js';
 import { saveConfigSection, sendConfigChanges, configFeedbackHTML, savebarHTML } from './settings.js';
+import { settingHTML, shown } from './plugin-setting.js';
 
 // The store's view state — what the operator typed, chose and opened —
 // survives the re-render every status frame causes. It is not
@@ -20,7 +21,8 @@ function sizeText(n) {
   if (!n) return '';
   if (n < 1024) return n + ' B';
   if (n < 1048576) return Math.round(n / 1024) + ' KB';
-  return (n / 1048576).toFixed(1) + ' MB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
 }
 function matches(e, q) {
   if (!q) return true;
@@ -61,9 +63,15 @@ function entryHTML(e) {
   let badge = '', btns = '';
   const install = label => '<button class="btn sm" data-plugin="install:' + id + '">' + label + '</button>';
   const uninstall = () => '<button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button>';
-  if (e.installed && e.update_available) { badge = chip('provisional', 'update to ' + esc(e.version)); btns = install('Update') + ' ' + uninstall(); }
+  if (e.pending) {
+    const refused = e.pending === 'refused';
+    badge = chip(refused ? 'unverified' : 'provisional', (refused ? 'refused — ' : e.pending === 'starting' ? 'starting — ' : e.pending === 'retiring' ? 'stopping — ' : e.pending === 'held' ? 'held — ' : 'preparing — ') + esc(e.pending_text || ''));
+    btns = (refused ? '<button class="btn sm" data-plugin="retry:' + id + '">Try again</button> ' : '') + uninstall();
+  }
+  else if (e.installed && e.update_available) { badge = chip('provisional', 'update to ' + esc(e.version)); btns = install('Update') + ' ' + uninstall(); }
   else if (e.installed) { badge = chip('active', 'installed ' + esc(e.installed_version || e.version)); btns = uninstall(); }
   else if (e.available) { btns = install('Install'); }
+  else if (e.requires) { badge = chip('unverified', esc(e.requires)); }
   else { badge = chip('', 'no build for this host'); }
   const open = !!store.open[e.id];
   return '<div class="store-row" data-entry="' + id + '">' +
@@ -166,6 +174,56 @@ function runtimeLimitsHTML(r) {
     savebarHTML('plugin_runtime', 'saved — applies at the next activation');
 }
 
+// PREPARING. A verified package whose models or runtime are still
+// arriving is named here with how far the download is, what stopped
+// the last attempt and when the next one comes. Install used to return
+// and show nothing while the host fetched gigabytes, and the operator
+// clicked again or gave up; the host now downloads in the background
+// and activates on its own, and this block is where that is visible.
+function pendingHTML(pending) {
+  if (!pending || !pending.length) return '';
+  return pending.map(p => {
+    const id = esc(p.id);
+    const refused = p.phase === 'refused', starting = p.phase === 'starting', retiring = p.phase === 'retiring', held = p.phase === 'held';
+    const label = refused ? 'refused' : starting ? 'starting' : retiring ? 'stopping' : held ? 'held' : 'preparing';
+    const when = p.retry_at ? ' at ' + esc(String(p.retry_at).slice(11, 19)) + ' UTC' : '';
+    const state = starting ? 'activation follows on its own'
+      : p.phase === 'ready' ? 'present and verified — activating'
+      : p.phase === 'waiting' ? 'waiting to retry' + when
+      : 'downloading';
+    let bar = '';
+    if (p.bytes_total) {
+      const pct = Math.min(100, Math.round(100 * p.bytes_present / p.bytes_total));
+      bar = '<div class="prep-bar" role="progressbar" aria-label="download" aria-valuenow="' + pct + '" aria-valuemin="0" aria-valuemax="100"><div class="prep-fill" style="width:' + pct + '%"></div></div>';
+    }
+    const body = refused
+      ? '<div class="prep-err">refused: ' + esc(p.summary) + '</div>' + refusalDetailHTML(p) +
+        '<div class="dim-note">' + (p.refusal && p.refusal.class === 'transient' && p.retry_at ? 'It is tried again on its own at ' + esc(p.retry_at) + '.' : 'Nothing is downloading and nothing retries on its own. Fix what the reason names and try again, or remove it.') + '</div>' +
+        '<div class="savebar"><button class="btn sm" data-plugin="retry:' + id + '">Try again</button> <button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button></div>'
+      : held
+      // HELD. Wanted, verified, and not started because the identity is
+      // holding still; the sentence is the host's own and says why. There
+      // is nothing to press: it starts when the hold ends.
+      ? '<div class="dim-note">' + esc(p.summary) + '</div>' +
+        '<div class="dim-note">Nothing to click: it is activated on its own when the hold ends.</div>'
+      : retiring
+      // STOPPING, AND NOT YET STOPPED. Nothing serves and nothing is on
+      // its way up; what the last activation held has not all come
+      // back. The row says which generation, what it still holds and
+      // when the cleanup is asked again — and offers nothing to click,
+      // because starting another engine does not make this one let go.
+      ? '<div class="dim-note">' + esc(p.summary) + '</div>' + lifecycleHTML(p) +
+        '<div class="dim-note">Nothing to click: the host asks the cleanup again on its own' +
+        (p.cleanup_at ? ', next at ' + esc(String(p.cleanup_at).slice(11, 19)) + ' UTC' : '') +
+        ', and nothing new starts for this plugin until what it held has come back.</div>'
+      : '<div class="dim-note">' + esc(p.summary) + ' · ' + state + (p.attempt > 1 ? ' · attempt ' + p.attempt : '') + '</div>' +
+        (p.last_error ? '<div class="prep-err">last attempt: ' + esc(p.last_error) + '</div>' : '') +
+        (p.refusal ? '<div class="prep-err">last attempt refused: ' + esc(p.refusal.cause || '') + '</div>' + refusalDetailHTML({ refusal: p.refusal }) : '') +
+        '<div class="dim-note">Activation follows on its own once every declared file is present and verified; nothing to click.</div>';
+    return '<div class="card prep" data-pending="' + id + '"><h3>' + id + ' <span class="soon">' + esc(p.version) + ' · ' + label + '</span></h3>' + bar + body + '</div>';
+  }).join('');
+}
+
 function installedHTML(installed) {
   if (!installed || !installed.length) return '';
   return installed.map(p => {
@@ -184,11 +242,85 @@ function installedHTML(installed) {
       (p.description ? '<div class="pkg-desc">' + esc(p.description) + '</div>' : '') +
       '<div class="dim-note">' + esc(p.mode) + ', variant ' + esc(p.variant) +
       (p.tools && p.tools.length ? ' · ' + p.tools.length + ' operation' + (p.tools.length === 1 ? '' : 's') + ', reached through the tools organ, never listed in the prompt' : '') + '</div>' +
-      readinessHTML(p) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
-    if (!p.settings || !p.settings.length) return '<div class="card">' + head + '<div class="empty">no settings declared</div></div>';
-    return '<div class="card">' + head + p.settings.map(s => settingHTML(p.id, s)).join('') + sessionSettingsHTML(p) +
+      readinessHTML(p) + startupHTML(p) + lifecycleHTML(p) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
+    // A SETTING IS SHOWN WHERE IT BELONGS, ONCE. What the package
+    // scoped to hearing or speaking is tuned beside that half of
+    // Settings → Speech, next to the engine choice it qualifies; this
+    // card keeps what is about the plugin rather than about the speech
+    // it does, and says where the rest went. Showing both here made
+    // this page a superset of a page that did not mention it.
+    const all = p.settings || [];
+    const elsewhere = all.filter(s => s.scope === 'hearing' || s.scope === 'speaking');
+    const own = all.filter(s => !(s.scope === 'hearing' || s.scope === 'speaking'));
+    const pointer = elsewhere.length
+      ? '<div class="dim-note">' + elsewhere.length + ' setting' + (elsewhere.length === 1 ? '' : 's') +
+        ' for hearing and speaking (' + esc(elsewhere.map(s => s.title || s.key).join(', ')) +
+        ') are tuned on <a href="#" data-open-section="speech">Settings → Speech</a>, beside the engine.</div>'
+      : '';
+    if (!own.length) {
+      return '<div class="card">' + head + (pointer || '<div class="empty">no settings declared</div>') + sessionSettingsHTML(p) + '</div>';
+    }
+    return '<div class="card">' + head + own.map(s => settingHTML(p.id, s)).join('') + pointer + sessionSettingsHTML(p) +
       savebarHTML('plugin:' + p.id, appliesNote(p)) + '</div>';
   }).join('');
+}
+// THE FACILITY'S OWN WORD ON THE CARD. The installed card is the
+// instance: its derived state and since when, every activation that
+// exists — serving, candidate, retiring — with what each stage took,
+// the admission it was granted, what a pending cleanup still holds, and
+// when a refusal is tried again. Read from one committed snapshot,
+// never from a state the page kept for itself.
+function lifecycleHTML(p) {
+  const l = p.lifecycle;
+  if (!l) return '';
+  const bits = [esc(l.state) + (l.since ? ' since ' + esc(l.since) : '')];
+  for (const a of (l.activations || [])) {
+    let s = 'generation ' + a.gen + ' ' + esc(a.role) + (a.version ? ' (' + esc(a.version) + ')' : '');
+    const t = a.timings_ms || {};
+    const parts = Object.keys(t).sort().map(k => esc(k) + ' ' + t[k] + ' ms');
+    if (parts.length) s += ' — ' + parts.join(', ');
+    bits.push(s);
+  }
+  if (l.admission) bits.push(esc(l.admission));
+  if (l.residue && l.residue.length) bits.push('still held: ' + esc(l.residue.join('; ')));
+  if (l.retry_at) bits.push('tried again at ' + esc(l.retry_at));
+  if (l.held) bits.push('held: ' + esc(l.held));
+  // A REPLACEMENT THAT FAILED LEAVES ITS PREDECESSOR SERVING, and the
+  // card of what still serves is the only place its reason can be read.
+  const refusal = l.refusal ? '<div class="prep-err">last attempt refused: ' + esc(l.refusal.cause || '') + '</div>' + refusalDetailHTML({ refusal: l.refusal }) : '';
+  return '<div class="dim-note lifecycle">' + bits.join('<br>') + '</div>' + refusal;
+}
+// A REFUSAL AN OPERATOR CAN ACT ON: where it stopped, whether waiting
+// helps, what to do, and the evidence — beside what a pending cleanup
+// still holds.
+function refusalDetailHTML(p) {
+  const r = p.refusal;
+  let out = '';
+  if (r) {
+    out += '<div class="dim-note refusal">' + esc(r.class || '') + (r.stage ? ' at ' + esc(r.stage) : '') + (r.remedy ? ' — ' + esc(r.remedy) : '') + '</div>';
+    if (r.evidence) out += '<details class="dim-note"><summary>evidence</summary><pre>' + esc(r.evidence) + '</pre></details>';
+  }
+  if (p.residue && p.residue.length) out += '<div class="dim-note">still held: ' + esc(p.residue.join('; ')) + '</div>';
+  return out;
+}
+// THE ALLOWANCE THAT DECIDED WHETHER IT STARTED. An activation runs under
+// a readiness deadline resolved from three places — what the operator
+// set, what the package asked for, the ceiling that caps both — and the
+// host recorded all of it while the page showed none, so the one number
+// that decides whether an engine starts was anonymous on the card. This
+// is the recorded allowance of THIS activation, never today's config
+// re-read; a plugin without one shows nothing.
+function startupHTML(p) {
+  const s = p.startup;
+  if (!s) return '';
+  // AS IT WAS SET. Rounded to a tenth of a second, an accepted 25 ms
+  // read "you set 0 s; capped at the 0 s ceiling".
+  const sec = ms => ms % 1000 === 0 ? (ms / 1000) + ' s' : ms + ' ms';
+  const asked = s.source === 'operator' ? 'you set ' + sec(s.requested_ms)
+    : s.source === 'package' ? 'the package asked for ' + sec(s.requested_ms)
+    : 'the default is ' + sec(s.requested_ms);
+  return '<div class="dim-note startup-note">Allowed ' + sec(s.effective_ms) + ' to report ready — ' + esc(asked) +
+    (s.capped ? '; capped at the ' + sec(s.ceiling_ms) + ' ceiling' : '; ceiling ' + sec(s.ceiling_ms)) + '.</div>';
 }
 // WHAT THE ENGINE CAME UP WITH. A native engine reports its own
 // readiness when its child is warm: how many models it loaded, what it
@@ -311,71 +443,6 @@ function sessionSettingsHTML(p) {
 // A choice list longer than this gets a filter box: it narrows what is
 // shown, never what is offered — the chosen value always stays listed,
 // and an empty filter lists everything.
-const CHOICE_FILTER_FROM = 12;
-function settingHTML(id, s) {
-  const attrs = ' data-pset-plugin="' + esc(id) + '" data-pset-key="' + esc(s.key) + '" data-pset-type="' + esc(s.type) + '"';
-  // A VALUE THIS RELEASE NO LONGER OFFERS. Kept from an earlier one and
-  // read by nothing: there is nothing to edit, so the only control is
-  // forgetting it. Unticked it is left exactly as it is — an upgrade
-  // that drops a setting must not quietly discard what was chosen.
-  if (s.undeclared) {
-    return '<div class="store-setting setting-orphan">' +
-      '<label class="f"><input type="checkbox" data-pset-plugin="' + esc(id) + '" data-pset-key="' + esc(s.key) + '" data-pset-type="forget"> forget ' + esc(s.key) + '</label>' +
-      '<div class="store-hint">saved value ' + esc(JSON.stringify(s.value)) + ' — ' + esc(s.description) + '</div></div>';
-  }
-  const current = s.value !== undefined && s.value !== null ? s.value : s.default;
-  let field;
-  if (s.type === 'boolean') {
-    field = '<label class="f"><input type="checkbox"' + attrs + (current ? ' checked' : '') + '> ' + esc(s.title) + '</label>';
-  } else if (s.type === 'enum') {
-    const labels = s.labels || {};
-    const values = (s.values || []).slice();
-    // A stored choice this release no longer offers stays visible AS
-    // the stored choice, named as such, so the operator sees what they
-    // chose and chooses again; saving it unchanged is refused by the
-    // host by name, never silently replaced.
-    const stale = s.invalid && s.value !== undefined && s.value !== null && !values.includes(String(s.value));
-    // The name is what the person chooses by; the stable value is what
-    // is stored, shown on hover and never appended to the name (the
-    // voice platform: a label may change, the selection
-    // must not).
-    const name = v => labels[v] ? labels[v] : v;
-    field = '<label class="f">' + esc(s.title) + (values.length > CHOICE_FILTER_FROM ? ' <span class="store-hint">— ' + values.length + ' choices</span>' : '') + '</label>' +
-      (values.length > CHOICE_FILTER_FROM ? '<input type="search" class="choice-filter" data-choice-filter-for="' + esc(s.key) + '" placeholder="filter the ' + values.length + ' choices…" aria-label="filter ' + esc(s.title) + '">' : '') +
-      '<select' + attrs + '>' +
-      (stale ? '<option value="' + esc(s.value) + '" selected>' + esc(s.value) + ' — saved, not offered by this release</option>' : '') +
-      values.map(v => '<option value="' + esc(v) + '" title="' + esc(v) + '"' + (v === current ? ' selected' : '') + '>' + esc(name(v)) + '</option>').join('') + '</select>';
-  } else if (s.type === 'secret') {
-    const handles = s.handles || [];
-    field = '<label class="f">' + esc(s.title) + ' — a credential handle</label><select' + attrs + '><option value="">none</option>' +
-      handles.map(h => '<option value="' + esc(h) + '"' + (h === current ? ' selected' : '') + '>' + esc(h) + '</option>').join('') + '</select>' +
-      (handles.length ? '' : '<div class="store-hint">grant this plugin a credential handle first (plugins.grants.' + esc(id) + '.credential_handles)</div>');
-  } else if (s.type === 'number' || s.type === 'integer') {
-    field = '<label class="f">' + esc(s.title) + (s.type === 'integer' ? ' <span class="store-hint">— a whole number</span>' : '') + '</label><input type="number"' + attrs +
-      (s.type === 'integer' ? ' step="1"' : ' step="any"') +
-      (s.minimum !== undefined && s.minimum !== null ? ' min="' + esc(s.minimum) + '"' : '') +
-      (s.maximum !== undefined && s.maximum !== null ? ' max="' + esc(s.maximum) + '"' : '') +
-      ' value="' + (current !== undefined && current !== null ? esc(current) : '') + '">';
-  } else {
-    field = '<label class="f">' + esc(s.title) + '</label><input type="text"' + attrs + ' value="' + (current !== undefined && current !== null ? esc(current) : '') + '">';
-  }
-  const meta = [];
-  if (s.required) meta.push('required');
-  if (s.default !== undefined && s.default !== null && s.type !== 'boolean') meta.push('default ' + esc(shown(s, s.default)));
-  // The stored value against what the plugin reads: when the stored
-  // value no longer holds to this release's declaration the page says
-  // so and names what is in effect instead — never a quiet default.
-  const stale = s.invalid ? '<div class="store-hint setting-stale">your saved value ' + esc(JSON.stringify(s.value)) + ' ' + esc(s.invalid) + ' — in effect: ' +
-    (s.effective !== undefined && s.effective !== null ? esc(shown(s, s.effective)) : 'nothing') + ' until you choose again</div>' : '';
-  return '<div class="store-setting">' + field +
-    (s.description || meta.length ? '<div class="store-hint">' + esc(s.description || '') + (meta.length ? ' (' + meta.join(', ') + ')' : '') + '</div>' : '') + stale + '</div>';
-}
-// shown renders a value the way the page names it: an enum value under
-// its label when the declaration gives one.
-function shown(s, v) {
-  if (s.type === 'enum' && s.labels && s.labels[v]) return s.labels[v];
-  return v;
-}
 // The choice filter narrows the options a long list SHOWS; a match is
 // on the value or its label, case-insensitively; the selected option is
 // always listed, and an empty filter lists every choice again. The list
@@ -398,10 +465,20 @@ function wireChoiceFilters(st) {
     };
   });
 }
+// WHAT IS ON DISK AND NOT RUNNING, AND WHY. Two different things: a
+// verified package the auto-load level keeps off, and a package that
+// was REFUSED before it had an identity to show — an archive that does
+// not verify, a directory holding more than one, an id another
+// directory already provides. A refusal is named by where it was found,
+// never by what an unverified archive says it is called.
 function skipsHTML(skips) {
   if (!skips || !skips.length) return '';
-  return '<div class="store-skips"><label class="f">PRESENT, VERIFIED — NOT LOADED</label>' +
-    skips.map(s => '<div class="store-skip"><b>' + esc(s.id) + '</b> (' + esc(s.tier) + ') — ' + esc(s.reason) + '</div>').join('') + '</div>';
+  const kept = skips.filter(s => !s.kind || s.kind === 'policy');
+  const refused = skips.filter(s => s.kind && s.kind !== 'policy');
+  return (kept.length ? '<div class="store-skips"><label class="f">PRESENT, VERIFIED — NOT LOADED</label>' +
+    kept.map(s => '<div class="store-skip"><b>' + esc(s.id) + '</b> (' + esc(s.tier) + ') — ' + esc(s.reason) + '</div>').join('') + '</div>' : '') +
+    (refused.length ? '<div class="store-skips refused"><label class="f">PRESENT — REFUSED</label>' +
+    refused.map(s => '<div class="store-skip"><b>' + esc(s.package || s.dir) + '</b>' + (s.id ? ' (' + esc(s.id) + ')' : '') + ' — ' + esc(s.reason) + '</div>').join('') + '</div>' : '');
 }
 
 // The list re-renders on its own when the operator searches, sorts or
@@ -440,7 +517,7 @@ function wireList(st) {
   }; });
   st.querySelectorAll('[data-plugin]').forEach(btn => { btn.onclick = () => {
     const spec = btn.dataset.plugin, i = spec.indexOf(':'), action = spec.slice(0, i), id = spec.slice(i + 1);
-    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : 'Removing…';
+    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : action === 'retry' ? 'Retrying…' : 'Removing…';
     send({ type: 'plugin', plugin: { action: action, id: id } });
   }; });
   const rf = st.querySelector('[data-catalog-refresh]');
@@ -482,9 +559,14 @@ export function renderPlugins() {
     profileDraft = connectPrefill(S.connectRequest, c.plugins.providers, c.plugins.installed);
     S.connectRequest = null;
   }
-  st.innerHTML = configFeedbackHTML() + storeHTML(c && c.plugins) + installedHTML(c && c.plugins.installed) + profilesHTML(c && c.plugins) + settingsHTML(c);
+  st.innerHTML = configFeedbackHTML() + storeHTML(c && c.plugins) + pendingHTML(c && c.plugins.pending) + installedHTML(c && c.plugins.installed) + profilesHTML(c && c.plugins) + settingsHTML(c);
   wireProfiles(st);
   st.querySelectorAll('[data-save]').forEach(btn => { btn.onclick = () => { saveConfigSection(btn.dataset.save); renderPlugins(); }; });
+  // The pointer at where a scoped setting is tuned opens that page on
+  // the control itself, not merely the section.
+  st.querySelectorAll('[data-open-section]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); if (S.openSettings) S.openSettings(a.dataset.openSection, 'sp-provider-stt'); };
+  });
   st.querySelectorAll('[data-act-decision]').forEach(btn => { btn.onclick = () => {
     const card = btn.closest('[data-act-card]');
     card.querySelectorAll('button').forEach(b => { b.disabled = true; });

@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,7 +31,7 @@ func TestWindowsProfilesBindFullPluginAndGrantRoots(t *testing.T) {
 	if len(a) > 64 {
 		t.Fatal("profile exceeds Windows limit")
 	}
-	_, before, err := containArgv([]string{"voice.exe"}, nil)
+	_, before, err := containArgv(context.Background(), []string{"voice.exe"}, nil)
 	if err != nil || before.Isolated() {
 		t.Fatal("argv description claims a Windows process is already contained")
 	}
@@ -44,7 +45,7 @@ func TestWindowsNativeImageBindingLivesUntilRetirement(t *testing.T) {
 	const id = "org.example.image-life"
 	v := packagefmt.Variant{VariantID: "native", Entrypoint: "variants/native/plugin.exe"}
 	res := &packagefmt.Result{Tier: packagefmt.TierT3, Manifest: &packagefmt.Manifest{ID: id}, FileDigests: map[string]string{v.Entrypoint: digestOf(raw)}}
-	sup, dir, _, err := startSupervisedNativeWith(res, &v, raw, nil, &Options{}, nil, "", false, nil)
+	sup, dir, _, err := startSupervisedNativeWith(context.Background(), res, &v, raw, nil, &Options{}, nil, "", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

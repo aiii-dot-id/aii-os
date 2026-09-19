@@ -73,6 +73,13 @@ const (
 	SettingSecret  = "secret"
 )
 
+// .
+const (
+	ScopeHearing  = "hearing"
+	ScopeSpeaking = "speaking"
+	ScopeSession  = "session"
+)
+
 var (
 	settingKeyPattern    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	settingHandlePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -90,6 +97,13 @@ type SettingDecl struct {
 	Required    bool              `json:"required,omitempty"`
 	Minimum     *float64          `json:"minimum,omitempty"`
 	Maximum     *float64          `json:"maximum,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	Scope string `json:"scope,omitempty"`
 	// .
 	// .
 	// .
@@ -153,6 +167,11 @@ func ParseSettings(raw []byte) ([]SettingDecl, error) {
 		case SettingString, SettingNumber, SettingInteger, SettingBoolean, SettingEnum, SettingSecret:
 		default:
 			return nil, fmt.Errorf("setting %q: type %q is not string, number, integer, boolean, enum or secret", d.Key, d.Type)
+		}
+		switch d.Scope {
+		case "", ScopeHearing, ScopeSpeaking, ScopeSession:
+		default:
+			return nil, fmt.Errorf("setting %q: scope %q is not %s, %s or %s", d.Key, d.Scope, ScopeHearing, ScopeSpeaking, ScopeSession)
 		}
 		if d.Type == SettingEnum {
 			if len(d.Values) == 0 || len(d.Values) > MaxSettingEnumValues {

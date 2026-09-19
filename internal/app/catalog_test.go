@@ -415,7 +415,7 @@ func TestCatalogOffersUpdatesForInstalledReleasesItOutranks(t *testing.T) {
 		{ID: "org.example.nobuild", Version: "9.0.0", Packages: []pluginhost.CatalogPackage{{Platform: "plan9", Arch: "mips", URL: "https://x/c", SHA256: "sha256:cc", Size: 1}}},
 		{ID: "org.example.absent", Version: "1.0.0", Packages: []pluginhost.CatalogPackage{{Platform: "*", Arch: "*", URL: "https://x/d", SHA256: "sha256:dd", Size: 1}}},
 	}}
-	views := catalogViewsFor(cat, map[string]string{"org.example.newer": "0.1.0", "org.example.same": "0.2.0", "org.example.nobuild": "0.1.0"})
+	views := catalogViewsFor(cat, map[string]string{"org.example.newer": "0.1.0", "org.example.same": "0.2.0", "org.example.nobuild": "0.1.0"}, nil)
 	want := map[string]bool{"org.example.newer": true, "org.example.same": false, "org.example.nobuild": false, "org.example.absent": false}
 	for _, v := range views {
 		if v.UpdateAvailable != want[v.ID] {
@@ -424,5 +424,41 @@ func TestCatalogOffersUpdatesForInstalledReleasesItOutranks(t *testing.T) {
 	}
 	if countUpdates(views) != 1 {
 		t.Fatalf("the badge counts one: %d", countUpdates(views))
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TestCatalogOffersPrereleaseUpgradesTheIndexOutranks(t *testing.T) {
+	pkgs := []pluginhost.CatalogPackage{{Platform: "*", Arch: "*", URL: "https://x/v", SHA256: "sha256:vv", Size: 1}}
+	cat := &pluginhost.Catalog{Version: 1, Plugins: []pluginhost.CatalogEntry{
+		{ID: "id.aiii.voice", Version: "0.1.0-beta.3", Packages: pkgs},
+		{ID: "org.example.tenth", Version: "0.1.0-beta.10", Packages: pkgs},
+		{ID: "org.example.backwards", Version: "0.1.0-beta.1", Packages: pkgs},
+		{ID: "org.example.released", Version: "0.1.0", Packages: pkgs},
+		{ID: "org.example.regressing", Version: "0.1.0-beta.3", Packages: pkgs},
+	}}
+	installed := map[string]string{
+		"id.aiii.voice":          "0.1.0-beta.1",
+		"org.example.tenth":      "0.1.0-beta.9",
+		"org.example.backwards":  "0.1.0-beta.3",
+		"org.example.released":   "0.1.0-beta.3",
+		"org.example.regressing": "0.1.0",
+	}
+	want := map[string]bool{"id.aiii.voice": true, "org.example.tenth": true,
+		"org.example.backwards": false, "org.example.released": true, "org.example.regressing": false}
+	views := catalogViewsFor(cat, installed, nil)
+	for _, v := range views {
+		if v.UpdateAvailable != want[v.ID] {
+			t.Errorf("%s: installed %s, catalog %s -> update_available=%v want %v",
+				v.ID, installed[v.ID], v.Version, v.UpdateAvailable, want[v.ID])
+		}
+	}
+	if n := countUpdates(views); n != 3 {
+		t.Fatalf("the badge counts the three real upgrades: %d", n)
 	}
 }

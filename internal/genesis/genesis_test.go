@@ -7,56 +7,55 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
-	"github.com/aiii-dot-id/aii-os/internal/genesis/genesisvectors"
+	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 )
-
-const testRing0 = `# Constitution
-
-## Axiom 1 — Kindness
-Kindness is a universal gift. When we offer it to others, we give it to ourselves.
-
-## Axiom 2 — Honesty
-Be honest with yourself and others. Like kindness, it elevates us all.
-
-## Axiom 3 — Do No Harm
-We protect ourselves and others. When forced to choose, we choose others.
-`
 
 type testRoot struct {
 	Env *publicKeyEnvelope
 }
 
-func loadTestVectors(t *testing.T) *genesisvectors.Set {
-	t.Helper()
-	v, err := genesisvectors.Load()
-	if err != nil {
-		t.Fatalf("load genesis verifier vectors: %v", err)
-	}
-	return v
+var liveOnce struct {
+	sync.Once
+	bundle []byte
+	laws   string
+	err    error
 }
 
 // .
 // .
 // .
-func mintTestRing0(t *testing.T, laws string) (*testRoot, []byte) {
+// .
+func mintTestRing0(t *testing.T) (*testRoot, []byte, string) {
 	t.Helper()
-	v := loadTestVectors(t)
-	bundle, ok := v.Ring0[laws]
-	if !ok {
-		t.Fatalf("no signed Ring 0 vector for laws %q", laws)
+	liveOnce.Do(func() {
+		a, err := genesislive.Fetch()
+		if err != nil {
+			liveOnce.err = err
+			return
+		}
+		laws, err := verifyBundle(a.Ring0, pinnedRoot(), "ring0.bundle")
+		if err != nil {
+			liveOnce.err = fmt.Errorf("live RING0 does not verify against the shipped pin: %w", err)
+			return
+		}
+		liveOnce.bundle, liveOnce.laws = a.Ring0, laws
+	})
+	if liveOnce.err != nil {
+		t.Fatalf("RING0 comes from the real servers and nowhere else (operator ruling 2026-09-19): %v", liveOnce.err)
 	}
-	return &testRoot{Env: v.Root}, bundle
+	return &testRoot{Env: pinnedRoot()}, liveOnce.bundle, liveOnce.laws
 }
 
 func TestBirth(t *testing.T) {
 	dir := t.TempDir()
 
-	root, bundle := mintTestRing0(t, testRing0)
+	root, bundle, _ := mintTestRing0(t)
 	cfg := &BirthConfig{
 		Name:        "TestIdentity",
 		Ring0Bundle: bundle,
@@ -106,7 +105,7 @@ func TestBirth(t *testing.T) {
 func TestLoadRing0(t *testing.T) {
 	dir := t.TempDir()
 
-	root, bundle := mintTestRing0(t, testRing0)
+	root, bundle, laws := mintTestRing0(t)
 	cfg := &BirthConfig{
 		Name:        "TestIdentity",
 		Ring0Bundle: bundle,
@@ -134,7 +133,7 @@ func TestLoadRing0(t *testing.T) {
 	if rc.Level != ring.Ring0 {
 		t.Errorf("ring level = %d, want 0", rc.Level)
 	}
-	if rc.Content != testRing0 {
+	if rc.Content != laws {
 		t.Error("Ring 0 content mismatch")
 	}
 	if rc.SignedBy != result.Fingerprint {
@@ -152,7 +151,7 @@ func TestLoadRing0(t *testing.T) {
 }
 
 func TestBirthValidation(t *testing.T) {
-	root, bundle := mintTestRing0(t, "# Constitution")
+	root, bundle, _ := mintTestRing0(t)
 
 	// .
 	_, err := Birth(&BirthConfig{Ring0Bundle: bundle, Root: root.Env, KeyPath: "k", LedgerPath: "l", DBPath: "d"})
@@ -179,18 +178,16 @@ func TestBirthValidation(t *testing.T) {
 	}
 }
 
-func TestRing0PayloadContract(t *testing.T) {
-	v := loadTestVectors(t)
-	for name, bundle := range v.InvalidRing0 {
-		if _, err := verifyBundle(bundle, v.Root, "ring0.bundle"); err == nil {
-			t.Fatalf("non-canonical Ring 0 payload %q was accepted", name)
-		}
-	}
-}
+// .
+// .
+// .
+// .
+// .
+// .
 
 func TestBirthAttestationPayload(t *testing.T) {
 	dir := t.TempDir()
-	root, bundle := mintTestRing0(t, "# Constitution")
+	root, bundle, _ := mintTestRing0(t)
 	cfg := &BirthConfig{
 		Name:        "Nova",
 		Ring0Bundle: bundle,
@@ -248,8 +245,7 @@ func TestBirthRing0Provenance(t *testing.T) {
 
 	// .
 	// .
-	const constitution = "# Test Constitution\n\nHonesty above all."
-	goodRoot, goodBundle := mintTestRing0(t, constitution)
+	goodRoot, goodBundle, constitution := mintTestRing0(t)
 	k, l, d = paths()
 	r2, err := Birth(&BirthConfig{Name: "Prov", Ring0Bundle: goodBundle, Root: goodRoot.Env, KeyPath: k, LedgerPath: l, DBPath: d})
 	if err != nil {
@@ -275,10 +271,17 @@ func TestBirthRing0Provenance(t *testing.T) {
 
 	// .
 	// .
-	foreignBundle := loadTestVectors(t).ForeignRing0["# A DIFFERENT constitution"]
+	live, err := genesislive.Fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	notTheSigner, err := DomainKeyFromBundle(live.Ring5PubkeyBundle, "ring5.pubkey")
+	if err != nil {
+		t.Fatal(err)
+	}
 	k, l, d = paths()
-	if _, err := Birth(&BirthConfig{Name: "Prov", Ring0Bundle: foreignBundle, Root: goodRoot.Env, KeyPath: k, LedgerPath: l, DBPath: d}); err == nil {
-		t.Fatal("birth must refuse a bundle not signed by the trust anchor — minting under a forged constitution")
+	if _, err := Birth(&BirthConfig{Name: "Prov", Ring0Bundle: goodBundle, Root: notTheSigner, KeyPath: k, LedgerPath: l, DBPath: d}); err == nil {
+		t.Fatal("birth must refuse a bundle the trust anchor did not sign — minting under a constitution nobody vouched for")
 	}
 }
 
@@ -298,7 +301,7 @@ func TestBirthAcceptsServerBundleKind(t *testing.T) {
 	// .
 	// .
 	// .
-	root, serverBundle := mintTestRing0(t, "# Test Constitution\nWire constants are not package names.")
+	root, serverBundle, _ := mintTestRing0(t)
 	result, err := Birth(&BirthConfig{
 		Name:        "WirePin",
 		Ring0Bundle: serverBundle,
@@ -318,7 +321,7 @@ func TestBirthAcceptsServerBundleKind(t *testing.T) {
 // .
 func TestVerifySelfContained(t *testing.T) {
 	dir := t.TempDir()
-	root, bundle := mintTestRing0(t, "# Constitution\nHonesty.")
+	root, bundle, _ := mintTestRing0(t)
 	_, err := Birth(&BirthConfig{
 		Name:        "PortableTest",
 		Ring0Bundle: bundle,

@@ -23,11 +23,11 @@ func TestFirstbootProviderFormPopulates(t *testing.T) {
 		GetStats: func() (*StatsResponse, error) {
 			return &StatsResponse{}, nil
 		},
-		GetProviders: func() []ProviderInfo {
-			return []ProviderInfo{
+		GetProviders: func() ProviderDirectory {
+			return ProviderDirectory{Providers: []ProviderInfo{
 				{Name: "Acme", Endpoint: "https://api.acme.test/v1", SubscribeURL: "https://acme.test", Models: []string{"zai-org/glm-5.2"}},
 				{Name: "zAI", Endpoint: "https://open.bigmodel.cn/api/paas/v4", SubscribeURL: "https://open.bigmodel.cn", Models: []string{"glm-5.3", "glm-5.2"}},
-			}
+			}}
 		},
 	})
 	addr, _ := s.Start(t.TempDir())
@@ -136,8 +136,8 @@ func TestDiscoverModelsQuery(t *testing.T) {
 func TestFirstbootHandlerShapeContract(t *testing.T) {
 	s := New("127.0.0.1", 0, &WSHandler{
 		GetStats: func() (*StatsResponse, error) { return &StatsResponse{}, nil },
-		GetProviders: func() []ProviderInfo {
-			return []ProviderInfo{{Name: "Acme", Endpoint: "https://api.acme.test/v1", Default: true}}
+		GetProviders: func() ProviderDirectory {
+			return ProviderDirectory{Providers: []ProviderInfo{{Name: "Acme", Endpoint: "https://api.acme.test/v1", Default: true}}}
 		},
 	})
 	addr, _ := s.Start(t.TempDir())

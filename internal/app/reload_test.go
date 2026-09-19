@@ -222,3 +222,61 @@ func TestReloadPreservesRestartEditOnNextSave(t *testing.T) {
 		t.Fatalf("later save overwrote restart-required edit with port %d", persisted.Dashboard.Port)
 	}
 }
+
+// .
+// .
+// .
+// .
+// .
+func TestReloadKeepsTheVoiceModeRevisionMonotonic(t *testing.T) {
+	dir := t.TempDir()
+	writeTestProviders(t, dir, providerEntry{Name: "provider", URL: "http://127.0.0.1:9", APIKey: "key", DefaultModel: "model", Default: true})
+	cfg := defaultConfig()
+	cfg.LLM = LLMConfig{Provider: "provider", Model: "model", TimeoutSeconds: 5, Retries: -1}
+	cfg.SourcePath = filepath.Join(dir, "config.json")
+	if _, err := saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a := New(cfg)
+	a.live = true
+	a.bgCtx = t.Context()
+	a.llmSwap = newSwappableLLM(llm.New(&llm.ClientConfig{Model: "model"}))
+	for i := 0; i < 8; i++ {
+		voiceModeDoor(t, a, listenInteractive, []string{speakOn, speakOff}[i%2])
+	}
+	if _, _, rev := a.VoiceMode(); rev != 8 {
+		t.Fatalf("the fixture door left the revision at %d, want 8", rev)
+	}
+
+	edited := a.configSnapshot()
+	edited.Speech.Mode = VoiceModeConfig{Listen: listenOff, Speak: speakOff}
+	if _, err := saveConfig(&edited); err != nil {
+		t.Fatal(err)
+	}
+	a.reloadConfig()
+	if listen, speak, rev := a.VoiceMode(); listen != listenOff || speak != speakOff || rev != 9 {
+		t.Fatalf("a reload of a changed pair gave (%s, %s, rev %d); want (off, off, rev 9)", listen, speak, rev)
+	}
+
+	// .
+	edited = a.configSnapshot()
+	edited.Speech.Mode = VoiceModeConfig{Listen: listenOff, Speak: speakOff}
+	edited.LLM.TimeoutSeconds = 7
+	if _, err := saveConfig(&edited); err != nil {
+		t.Fatal(err)
+	}
+	a.reloadConfig()
+	if _, _, rev := a.VoiceMode(); rev != 9 {
+		t.Fatalf("a reload of an unchanged pair moved the revision to %d, want 9", rev)
+	}
+	// .
+	edited = a.configSnapshot()
+	edited.Speech.Mode = VoiceModeConfig{Listen: listenMeeting, Speak: speakOff, Revision: 40}
+	if _, err := saveConfig(&edited); err != nil {
+		t.Fatal(err)
+	}
+	a.reloadConfig()
+	if listen, _, rev := a.VoiceMode(); listen != listenMeeting || rev != 40 {
+		t.Fatalf("a reload of a file ahead of the host gave (%s, rev %d); want (meeting, rev 40)", listen, rev)
+	}
+}

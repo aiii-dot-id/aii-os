@@ -38,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,8 +60,12 @@ type Snapshot struct {
 		ProcessedEndSample int64  `json:"processed_end_sample"`
 	} `json:"input"`
 	Recognition struct {
-		UtteranceOpen       bool `json:"utterance_open"`
-		FinalizationPending bool `json:"finalization_pending"`
+		// .
+		// .
+		// .
+		State               string `json:"state"`
+		UtteranceOpen       bool   `json:"utterance_open"`
+		FinalizationPending bool   `json:"finalization_pending"`
 	} `json:"recognition"`
 	Synthesis struct {
 		SynthesisID string `json:"synthesis_id"`
@@ -86,6 +91,33 @@ type InputCompletion struct {
 	EndSample          int64  `json:"end_sample"`
 	ProcessedEndSample int64  `json:"processed_end_sample"`
 	Sequence           int64  `json:"sequence"`
+	// .
+	// .
+	// .
+	// .
+	Reason string `json:"reason,omitempty"`
+	// .
+	// .
+	hasEnd bool
+}
+
+// .
+// .
+// .
+func (c *InputCompletion) UnmarshalJSON(b []byte) error {
+	type plain InputCompletion
+	var aux struct {
+		plain
+		EndSample *int64 `json:"end_sample"`
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*c = InputCompletion(aux.plain)
+	if aux.EndSample != nil {
+		c.EndSample, c.hasEnd = *aux.EndSample, true
+	}
+	return nil
 }
 
 // .
@@ -112,6 +144,11 @@ func terminal(typ, synthesisID string) bool {
 }
 
 // .
+// .
+// .
+// .
+var inputEventTypes = map[string]bool{"transcript_partial": true, "transcript_final": true, "speaker_observation": true, "input_finished": true}
+
 var telemetryTypes = map[string]bool{"vad_probability": true, "transcript_partial": true}
 
 // .
@@ -187,11 +224,22 @@ type VoiceSession struct {
 	foreign      uint64
 
 	terminalCh chan struct{}
-	terminated bool
-	faultCh    chan struct{}
-	faulted    bool
-	endedCh    chan struct{}
-	endOnce    sync.Once
+	// .
+	// .
+	// .
+	inputClosedCh chan struct{}
+	inputReason   string
+	completion    *InputCompletion
+	// .
+	// .
+	// .
+	reconciled                           chan []byte
+	wireCompletion, reconciledCompletion bool
+	terminated                           bool
+	faultCh                              chan struct{}
+	faulted                              bool
+	endedCh                              chan struct{}
+	endOnce                              sync.Once
 
 	observer   chan Event
 	telemetry  chan Event
@@ -199,18 +247,30 @@ type VoiceSession struct {
 
 	// .
 	// .
-	pair       *audioPair
-	binding    *audio.Binding
-	pump       *audio.Pump
-	pumpCancel context.CancelFunc
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	pair        *audioPair
+	binding     *audio.Binding
+	pump        *audio.Pump
+	pumpCancel  context.CancelFunc
+	owner       *audioTaker
+	audioCtx    context.Context
+	audioCancel context.CancelFunc
 }
 
 // .
 // .
 func NewVoiceSession(c *supervisor.SessionClient) *VoiceSession {
 	v := &VoiceSession{c: c, finishCutoff: -1, streams: map[uint32]string{}, reported: map[uint32]int64{},
-		terminalCh: make(chan struct{}), faultCh: make(chan struct{}), endedCh: make(chan struct{}),
-		observer: make(chan Event, observerBuffer), telemetry: make(chan Event, telemetryBuffer)}
+		terminalCh: make(chan struct{}), inputClosedCh: make(chan struct{}),
+		faultCh: make(chan struct{}), endedCh: make(chan struct{}),
+		observer: make(chan Event, observerBuffer), telemetry: make(chan Event, telemetryBuffer),
+		reconciled: make(chan []byte, 4)}
 	go v.consume()
 	return v
 }
@@ -232,6 +292,12 @@ func (v *VoiceSession) releaseAudioLocked() {
 	if v.pumpCancel != nil {
 		v.pumpCancel()
 		v.pumpCancel = nil
+	}
+	if v.audioCancel != nil {
+		// .
+		// .
+		v.audioCancel()
+		v.audioCancel = nil
 	}
 	if v.binding != nil {
 		v.binding.Release()
@@ -272,7 +338,26 @@ func (v *VoiceSession) Untrusted() <-chan struct{} {
 // .
 // .
 func (v *VoiceSession) consume() {
-	for raw := range v.c.Events() {
+	wire := v.c.Events()
+	for {
+		// .
+		// .
+		// .
+		// .
+		var raw []byte
+		var ok, reconciled bool
+		select {
+		case raw, ok = <-wire:
+		default:
+			select {
+			case raw, ok = <-wire:
+			case raw = <-v.reconciled:
+				ok, reconciled = true, true
+			}
+		}
+		if !ok {
+			break
+		}
 		var ev struct {
 			Type        string `json:"type"`
 			SessionID   string `json:"session_id"`
@@ -281,13 +366,36 @@ func (v *VoiceSession) consume() {
 		}
 		_ = json.Unmarshal(raw, &ev)
 		isTerminal := terminal(ev.Type, ev.SynthesisID)
+		// .
+		// .
+		named, namedSynthesis, names := uint32(0), "", false
+		if ev.Type == "synthesis_start" {
+			var body struct {
+				SynthesisID  string `json:"synthesis_id"`
+				OutputStream *int64 `json:"output_stream"`
+			}
+			if json.Unmarshal(raw, &body) == nil && body.SynthesisID != "" && body.OutputStream != nil && *body.OutputStream >= 0 && *body.OutputStream <= math.MaxUint32 {
+				named, namedSynthesis, names = uint32(*body.OutputStream), body.SynthesisID, true
+			}
+		}
 		v.mu.Lock()
 		if ev.SessionID != "" && v.sessionID != "" && ev.SessionID != v.sessionID {
 			v.foreign++
+			if names && v.pair != nil {
+				// .
+				// .
+				if err := v.pair.disown(named); err != nil {
+					v.markFaultLocked(err.Error())
+				}
+			}
 			v.mu.Unlock()
 			continue
 		}
-		if ev.Sequence != 0 {
+		// .
+		// .
+		// .
+		// .
+		if !reconciled && ev.Sequence != 0 {
 			if ev.Sequence <= v.lastSeq {
 				v.mu.Unlock()
 				continue
@@ -297,18 +405,45 @@ func (v *VoiceSession) consume() {
 			}
 			v.lastSeq = ev.Sequence
 		}
+		if inputEventTypes[ev.Type] && v.binding != nil && !v.binding.HasInput() {
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			v.markFaultLocked(fmt.Sprintf("the engine reported %s on a session that was opened output-only — there is no input to hear or finish", ev.Type))
+			v.mu.Unlock()
+			continue
+		}
 		if ev.Type == "input_finished" {
 			v.applyInputFinishedLocked(raw)
 		}
-		if ev.Type == "synthesis_start" {
+		if names && ev.SessionID == "" {
 			// .
 			// .
-			var body struct {
-				SynthesisID  string `json:"synthesis_id"`
-				OutputStream *int64 `json:"output_stream"`
+			// .
+			// .
+			// .
+			v.markFaultLocked(fmt.Sprintf("the engine named output stream %d without a session_id — the host will not guess whose audio it is", named))
+			names = false
+		}
+		if names {
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			var refused error
+			if v.pair != nil {
+				refused = v.pair.bind(named, v.owner, namedSynthesis)
 			}
-			if json.Unmarshal(raw, &body) == nil && body.SynthesisID != "" && body.OutputStream != nil && *body.OutputStream >= 0 {
-				v.streams[uint32(*body.OutputStream)] = body.SynthesisID
+			if refused != nil {
+				v.markFaultLocked(refused.Error())
+			} else {
+				v.streams[named] = namedSynthesis
 			}
 		}
 		if isTerminal {
@@ -318,6 +453,22 @@ func (v *VoiceSession) consume() {
 				v.closed, v.closeWhy = true, "engine reported "+ev.Type
 			}
 			v.markTerminalLocked()
+		}
+		if ev.Type == "input_finished" {
+			// .
+			// .
+			// .
+			// .
+			// .
+			if (reconciled && v.wireCompletion) || (!reconciled && v.reconciledCompletion) {
+				v.mu.Unlock()
+				continue
+			}
+			if reconciled {
+				v.reconciledCompletion = true
+			} else {
+				v.wireCompletion = true
+			}
 		}
 		e := Event{Type: ev.Type, SessionID: ev.SessionID, Sequence: ev.Sequence, Raw: raw}
 		if telemetryTypes[ev.Type] {
@@ -339,6 +490,12 @@ func (v *VoiceSession) consume() {
 		v.mu.Unlock()
 	}
 	v.transportEnded()
+	// .
+	// .
+	// .
+	// .
+	close(v.telemetry)
+	close(v.observer)
 }
 
 // .
@@ -425,6 +582,17 @@ func (v *VoiceSession) open(ctx context.Context, sessionID string, args map[stri
 	v.inst++
 	inst := v.inst
 	v.binding, v.pump = b, nil
+	// .
+	// .
+	// .
+	// .
+	// .
+	v.owner, v.audioCtx = nil, nil
+	if v.pair != nil && b != nil {
+		actx, acancel := context.WithCancel(context.Background())
+		v.audioCtx, v.audioCancel = actx, acancel
+		v.owner = v.pair.attach(actx)
+	}
 	v.sessionID, v.admission = sessionID, "pending"
 	v.lastSeq, v.gaps, v.foreign = 0, 0, 0
 	v.finishedIn, v.closing, v.closed, v.closeWhy = false, false, false, ""
@@ -433,6 +601,8 @@ func (v *VoiceSession) open(ctx context.Context, sessionID string, args map[stri
 	v.failed, v.failReason, v.untrusted, v.untrustWhy = false, "", false, ""
 	v.lastSnapshot = Snapshot{}
 	v.terminalCh, v.terminated = make(chan struct{}), false
+	v.inputClosedCh, v.inputReason, v.completion = make(chan struct{}), "", nil
+	v.wireCompletion, v.reconciledCompletion = false, false
 	v.faultCh, v.faulted = make(chan struct{}), false
 	v.mu.Unlock()
 
@@ -507,32 +677,143 @@ func (v *VoiceSession) sessionResources(sessionID string) (inst uint64, p *audio
 // .
 // .
 func (v *VoiceSession) applyInputFinishedLocked(raw json.RawMessage) {
-	var body struct {
-		StreamID  string `json:"stream_id"`
-		EndSample *int64 `json:"end_sample"`
-	}
-	if json.Unmarshal(raw, &body) != nil || body.EndSample == nil {
+	var c InputCompletion
+	if json.Unmarshal(raw, &c) != nil {
 		v.markFaultLocked("input_finished without an exact cutoff")
 		return
 	}
-	if v.finishCutoff >= 0 && v.finishStream != "" && body.StreamID != v.finishStream {
-		v.markFaultLocked(fmt.Sprintf("input_finished names input handle %q; the registered Finish named %q", body.StreamID, v.finishStream))
-		return
+	v.admitInputCompletionLocked(c, "input_finished")
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (v *VoiceSession) admitInputCompletionLocked(c InputCompletion, source string) bool {
+	if !c.hasEnd {
+		v.markFaultLocked(source + " without an exact cutoff")
+		return false
+	}
+	if v.finishCutoff >= 0 && v.finishStream != "" && c.StreamID != v.finishStream {
+		v.markFaultLocked(fmt.Sprintf("%s names input handle %q; the registered Finish named %q", source, c.StreamID, v.finishStream))
+		return false
 	}
 	if v.inputFinished {
-		if *body.EndSample != v.inputEnd {
-			v.markFaultLocked(fmt.Sprintf("a second input_finished names cutoff %d; the first named %d", *body.EndSample, v.inputEnd))
+		if c.EndSample != v.inputEnd {
+			v.markFaultLocked(fmt.Sprintf("a second %s names cutoff %d; the first completion named %d", source, c.EndSample, v.inputEnd))
 		}
+		return false
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if v.finishCutoff >= 0 && c.EndSample != v.finishCutoff {
+		if c.EndSample > v.finishCutoff || v.finishedIn {
+			v.markFaultLocked(fmt.Sprintf("%s names cutoff %d; the host registered %d", source, c.EndSample, v.finishCutoff))
+			return false
+		}
+	}
+	v.noteInputCompletionLocked(c)
+	return true
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (v *VoiceSession) queueReconciledCompletionLocked(c InputCompletion) {
+	raw, err := json.Marshal(struct {
+		Type      string `json:"type"`
+		SessionID string `json:"session_id"`
+		InputCompletion
+	}{"input_finished", v.sessionID, c})
+	if err != nil {
+		v.markFaultLocked("the reconciled input completion could not be encoded: " + err.Error())
 		return
 	}
-	if v.finishCutoff >= 0 && *body.EndSample != v.finishCutoff {
-		v.markFaultLocked(fmt.Sprintf("input_finished names cutoff %d; the host registered %d", *body.EndSample, v.finishCutoff))
+	select {
+	case v.reconciled <- raw:
+	default:
+		v.markFaultLocked("the reconciled input completion could not be queued for the observer")
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (v *VoiceSession) noteInputCompletionLocked(c InputCompletion) {
+	// .
+	// .
+	engineEnded := v.finishCutoff < 0 || c.EndSample != v.finishCutoff
+	v.inputFinished, v.inputEnd = true, c.EndSample
+	done := c
+	v.completion = &done
+	if !engineEnded {
 		return
 	}
-	v.inputFinished, v.inputEnd = true, *body.EndSample
-	if v.finishCutoff < 0 {
-		v.finishCutoff = *body.EndSample
+	v.finishCutoff, v.inputReason = c.EndSample, c.Reason
+	select {
+	case <-v.inputClosedCh:
+	default:
+		close(v.inputClosedCh)
 	}
+}
+
+// .
+// .
+// .
+// .
+func (v *VoiceSession) InputCompletionInfo() *InputCompletion {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.completion == nil {
+		return nil
+	}
+	out := *v.completion
+	return &out
+}
+
+// .
+// .
+// .
+func (v *VoiceSession) InputClosed() <-chan struct{} {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.inputClosedCh
+}
+
+// .
+// .
+func (v *VoiceSession) InputCompletionReason() string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.inputReason
 }
 
 // .
@@ -639,6 +920,14 @@ func (v *VoiceSession) InterruptFor(ctx context.Context, sessionID, synthesisID,
 
 // .
 // .
+func (v *VoiceSession) SynthesisFor(stream uint32) string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.streams[stream]
+}
+
+// .
+// .
 // .
 // .
 // .
@@ -684,7 +973,10 @@ func (v *VoiceSession) PlaybackReportFor(ctx context.Context, sessionID string, 
 	}
 	st, ok := p.OutputStream(r.Stream)
 	if !ok {
-		return fmt.Errorf("voicesession: output stream %d was never delivered on session %s", r.Stream, sessionID)
+		// .
+		// .
+		// .
+		return fmt.Errorf("voicesession: output stream %d is not open on session %s: it was never delivered, or its playback was already reported terminal", r.Stream, sessionID)
 	}
 	if synthID == "" {
 		return fmt.Errorf("voicesession: no synthesis owns output stream %d on session %s", r.Stream, sessionID)
@@ -728,6 +1020,27 @@ func (v *VoiceSession) PlaybackReportFor(ctx context.Context, sessionID string, 
 		"rendered_samples": engineRendered, "terminal": r.Terminal}); err != nil {
 		return err
 	}
+	if r.Terminal {
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		p.RetireOutputStream(r.Stream)
+		if v.pair != nil {
+			// .
+			// .
+			// .
+			// .
+			v.pair.retire(r.Stream)
+		}
+		v.apply(inst, func() {
+			delete(v.streams, r.Stream)
+			delete(v.reported, r.Stream)
+		})
+		return nil
+	}
 	v.apply(inst, func() { v.reported[r.Stream] = r.Rendered })
 	return nil
 }
@@ -747,6 +1060,13 @@ func (v *VoiceSession) FinishInputFor(ctx context.Context, sessionID, streamID s
 	inst, p, _, err := v.sessionResources(sessionID)
 	if err != nil {
 		return err
+	}
+	// .
+	v.mu.Lock()
+	absent := v.inst == inst && v.binding != nil && !v.binding.HasInput()
+	v.mu.Unlock()
+	if absent {
+		return ErrNoInput
 	}
 	engineEnd := endSample
 	if p != nil {
@@ -821,7 +1141,16 @@ func (v *VoiceSession) CloseFor(ctx context.Context, sessionID, mode, reason str
 		return err
 	}
 	if mode == "drain" && !ok {
-		return fmt.Errorf("voicesession: a drain close needs a prior finish_input cutoff — refusing to invent one")
+		// .
+		// .
+		// .
+		// .
+		v.mu.Lock()
+		absent := v.inst == inst && v.binding != nil && !v.binding.HasInput()
+		v.mu.Unlock()
+		if !absent {
+			return fmt.Errorf("voicesession: a drain close needs a prior finish_input cutoff — refusing to invent one")
+		}
 	}
 	if _, err := v.control(ctx, "speech.session.close", map[string]any{
 		"session_id": sessionID, "mode": mode, "reason": reason}); err != nil {
@@ -867,6 +1196,19 @@ func (v *VoiceSession) Status(ctx context.Context) (Snapshot, error) {
 	}
 	if snap.StateSequence >= v.lastSnapshot.StateSequence {
 		v.lastSnapshot = snap
+		// .
+		// .
+		// .
+		// .
+		if c := snap.InputCompletion; c != nil {
+			if v.binding != nil && !v.binding.HasInput() {
+				// .
+				// .
+				v.markFaultLocked("the engine's status carries an input_completion on a session that was opened output-only — there is no input to finish")
+			} else if v.admitInputCompletionLocked(*c, "status") {
+				v.queueReconciledCompletionLocked(*c)
+			}
+		}
 		switch snap.Lifecycle {
 		case "closed":
 			v.closed, v.closeWhy = true, "engine snapshot reports closed"

@@ -21,7 +21,7 @@ func TestVoiceTurnHandoffKeepsSuccessorReplyAndFinishHold(t *testing.T) {
 			name = "previous turn lost its reply"
 		}
 		t.Run(name, func(t *testing.T) {
-			a := &App{turnGate: make(chan struct{})}
+			a := &App{cfg: &Config{}, turnGate: make(chan struct{})}
 			var oldReleased, nextReleased atomic.Int32
 			if oldUnanswered {
 				a.holdVoice(&voiceBinding{session: "previous", done: func() { oldReleased.Add(1) }})

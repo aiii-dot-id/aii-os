@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/json"
@@ -18,7 +19,7 @@ import (
 // .
 // .
 // .
-func containArgv(argv []string, _ *AcceleratorProfile) ([]string, supervisor.Containment, error) {
+func containArgv(_ context.Context, argv []string, _ *AcceleratorProfile) ([]string, supervisor.Containment, error) {
 	return argv, supervisor.Containment{Description: "contained at process creation: the AppContainer and the job object (supervisor/appcontainer_windows.go)"}, nil
 }
 

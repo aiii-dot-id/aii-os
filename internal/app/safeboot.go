@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
@@ -129,10 +130,14 @@ func (a *App) startSafeBoot(reason string) error {
 		log.Printf("BOOT-SAFE: no API key on provider %q — the SAFE conversation will refuse until one is configured; the operator surface stays up", llmEntry.Name)
 	}
 	promptBudget := cfg.Prompt.MaxTokens
+	budgetGuess := false
 	if rerr == nil {
-		promptBudget = promptBudgetFor(llmEntry, promptBudget)
+		promptBudget = a.rememberPromptBudget(llmEntry, promptBudget)
+		_, src := a.currentPromptBudget()
+		budgetGuess = src == budgetFallback
 	}
 	if promptBudget == 0 {
+		budgetGuess = true
 		promptBudget = 32000
 	}
 	a.llmClient = a.newLLMClient(cc, promptBudget)
@@ -157,15 +162,31 @@ func (a *App) startSafeBoot(reason string) error {
 	a.loadRing5()
 
 	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	a.safeTools = &safeToolRecord{}
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
-		appTranscript{st: st, actor: "safe"}, appEmitter{a: a}, conversation.Config{
+		a.safeTools, appEmitter{a: a}, conversation.Config{
 			MaxIterations:      cfg.Agency.MaxToolRounds,
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
 			// .
 			// .
-			HeuristicNudges:     heuristicNudgesOn(cfg.Agency.HeuristicNudges),
-			ContextBudgetTokens: promptBudget,
-			ThinkingBudget:      llmEntry.ThinkingBudget,
+			HeuristicNudges:       heuristicNudgesOn(cfg.Agency.HeuristicNudges),
+			ContextBudgetTokens:   promptBudget,
+			ContextBudgetFallback: budgetGuess,
+			ThinkingBudget:        llmEntry.ThinkingBudget,
+			// .
+			// .
+			// .
+			// .
+			ReplaySafe: replaySafeHook(toolReg),
 		})
 	a.promptGate = prompt.NewGate(appRingSource{rm: a.rings}, promptBudget)
 	a.composer = prompt.New(a.rings, promptBudget)
@@ -185,6 +206,7 @@ func (a *App) startSafeBoot(reason string) error {
 	}
 	a.projects = project.NewManager(projRoot)
 	a.engine.SetProjects(projectsAdapter{a})
+	a.engine.SetVoice(voiceModeAdapter{a})
 	a.engine.SetTimers(identity.NewStoreTimers(st))
 	a.engine.SetEmbedder(memoryEmbedder{a})
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)
@@ -237,4 +259,59 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	updates.WriteBootMarker(filepath.Dir(cfg.Identity.LedgerPath))
 	return nil
+}
+
+// .
+// .
+// .
+// .
+type safeToolRecord struct {
+	mu     sync.Mutex
+	events []SafeToolEvent
+}
+
+// .
+type SafeToolEvent struct {
+	TurnID  string
+	Ordinal int
+	Tool    string
+	Model   string
+	Done    bool
+	Failed  bool
+}
+
+const safeToolRecordKept = 200
+
+func (r *safeToolRecord) RecordToolStart(turnID string, ordinal int, _, tool, _, model string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, SafeToolEvent{TurnID: turnID, Ordinal: ordinal, Tool: tool, Model: model})
+	if len(r.events) > safeToolRecordKept {
+		r.events = append(r.events[:0], r.events[len(r.events)-safeToolRecordKept:]...)
+	}
+	return nil
+}
+
+func (r *safeToolRecord) RecordToolDone(turnID string, ordinal int, tool, _, _ string, failed, _ bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.events) - 1; i >= 0; i-- {
+		if e := &r.events[i]; e.TurnID == turnID && e.Ordinal == ordinal && !e.Done {
+			e.Done, e.Failed = true, failed
+			return nil
+		}
+	}
+	return fmt.Errorf("SAFE tool record: no started call matches %s #%d (%s)", turnID, ordinal, tool)
+}
+
+// .
+// .
+// .
+func (r *safeToolRecord) TranscriptResultExcerptLimit() int { return 0 }
+
+// .
+func (r *safeToolRecord) Events() []SafeToolEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]SafeToolEvent(nil), r.events...)
 }

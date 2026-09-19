@@ -12,7 +12,7 @@ const micMarkup = `<!doctype html>
 <button class="converse" id="converse" disabled hidden aria-pressed="false">&#127908;</button>
 <button class="mic" id="mic" type="button" hidden aria-pressed="false">&#127908;</button>
 <button class="mic-more" id="mic-more" type="button" hidden aria-expanded="false"></button>
-<div class="mic-menu" id="mic-menu" hidden><div id="mic-voice" hidden></div><div id="mic-source"></div><button type="button" id="mic-settings">Speech settings</button></div>
+<div class="mic-menu" id="mic-menu" hidden><div id="mic-voice" hidden></div><div id="mic-mode" hidden></div><div id="mic-source"></div><div class="mic-inputs" id="mic-inputs" hidden></div><button type="button" role="menuitemradio" aria-checked="false" id="mic-meeting" hidden>Meeting</button><button type="button" id="mic-settings">Speech settings</button></div>
 `
 
 var micModules = map[string][]byte{
@@ -44,7 +44,7 @@ run(() => {
 
   show('cloud', true);
   assert(conv.hidden && !mic.hidden && !mic.disabled && !mic.classList.contains('faint'), 'cloud speech is push-to-talk: ' + mic.outerHTML);
-  assert(mic.title === 'Talk — tap, or hold', 'push-to-talk says how: ' + mic.title);
+  assert(mic.title === 'Interactive — tap to talk, or hold', 'push-to-talk names its mode and says how: ' + mic.title);
   assert(!more.hidden && document.getElementById('mic-source').textContent === 'Cloud speech — ElevenLabs · scribe_v2', 'the chevron names the service');
   show('cloud', false);
   assert(mic.disabled, 'push-to-talk waits for the connection');
@@ -158,6 +158,131 @@ run(async () => {
   speak();
   mic.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
   await until(() => frames.length === 3, 'the second Space did not send');
+});
+</script>`
+	runPageInEngines(t, page, micModules)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestTheMicrophoneMenuNamesTheElectionAndTakesAChoice(t *testing.T) {
+	page := micMarkup + `<script type="module">
+import { render, wireMic, bindTransport } from './voice.js';
+import { S } from './state.js';
+import { assert, run } from './__harness.js';
+run(async () => {
+  try { localStorage.removeItem('aii.mic'); } catch (e) {  }
+  const asked = [];           // the deviceId each getUserMedia asked for, '' = the browser's own
+  let devices = [
+    { kind: 'audioinput', deviceId: 'default', label: 'Default - Built-in Microphone' },
+    { kind: 'audioinput', deviceId: 'builtin', label: 'Built-in Microphone' },
+    { kind: 'audiooutput', deviceId: 'spk', label: 'Speakers' },
+  ];
+  let ended = null;           // the live track's own 'ended' listener
+  const want = c => (c && c.audio && c.audio.deviceId && c.audio.deviceId.exact) || '';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.addEventListener) {
+    Object.defineProperty(navigator, 'mediaDevices', { value: new EventTarget(), configurable: true });
+  }
+  navigator.mediaDevices.enumerateDevices = async () => devices.slice();
+  navigator.mediaDevices.getUserMedia = async c => {
+    const id = want(c);
+    asked.push(id);
+    if (id && !devices.some(d => d.deviceId === id)) { const e = new Error('no such device'); e.name = 'OverconstrainedError'; throw e; }
+    const d = devices.find(x => x.deviceId === (id || 'builtin'));
+    const track = { label: d ? d.label : '', stop() {}, getSettings: () => ({}), addEventListener(t, fn) { if (t === 'ended') ended = fn; } };
+    return { getAudioTracks: () => [track], getTracks: () => [track] };
+  };
+  let node = null;
+  window.AudioContext = class {
+    constructor() { this.sampleRate = 16000; this.destination = {}; }
+    createMediaStreamSource() { return { connect() {} }; }
+    createScriptProcessor() { node = { connect() {}, disconnect() {}, onaudioprocess: null }; return node; }
+    close() {}
+  };
+  bindTransport(() => {}, () => {});
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const until = async (ok, what) => { for (let i = 0; i < 200 && !ok(); i++) await tick(); assert(ok(), what); };
+  const mic = document.getElementById('mic'), more = document.getElementById('mic-more');
+  const list = document.getElementById('mic-inputs');
+  const press = type => mic.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true }));
+  const rows = () => Array.from(list.querySelectorAll('button')).map(b => b.textContent);
+  const rowFor = text => Array.from(list.querySelectorAll('button')).find(b => b.textContent.indexOf(text) === 0);
+  const talk = async () => { const n = asked.length; press('pointerdown'); press('pointerup'); await until(() => asked.length > n, 'the microphone never opened'); await until(() => node && node.onaudioprocess, 'the capture graph never opened'); };
+  const done = async () => { press('pointerdown'); press('pointerup'); await tick(); await tick(); };
+
+  S.stats = { voice_state: 'cloud', voice_source: 'ElevenLabs' }; S.connected = true;
+  wireMic(); render();
+  more.click();
+
+  // 1. The election is named and chosen: the browser's own default row
+  //    carries the name the browser gives it, and the real devices are
+  //    listed beside it — outputs are not.
+  await until(() => rows().length >= 2, 'the menu never listed the inputs: ' + list.innerHTML);
+  assert(!list.hidden, 'the input list is hidden beside a working microphone');
+  const def = rowFor('Browser default');
+  assert(def && def.getAttribute('aria-checked') === 'true', 'the browser\'s election is not the chosen row: ' + rows().join(' / '));
+  assert(def.textContent === 'Browser default — Built-in Microphone', 'the election is not named: ' + def.textContent);
+  assert(rowFor('Built-in Microphone') !== undefined, 'a real input is missing: ' + rows().join(' / '));
+  assert(!rows().some(r => r.indexOf('Speakers') === 0), 'an output device was offered as a microphone: ' + rows().join(' / '));
+
+  // 2. With nothing pinned the page asks for NO device: the browser
+  //    elects, exactly as it did before this control existed.
+  await talk();
+  assert(asked[0] === '', 'the page overrode the browser\'s election: asked for ' + JSON.stringify(asked[0]));
+  await until(() => (list.textContent || '').indexOf('Listening with Built-in Microphone') >= 0,
+    'the device that is listening is not named: ' + list.textContent);
+
+  // 3. A device taken away ends the capture and says so — it does not
+  //    go on streaming silence.
+  assert(typeof ended === 'function', 'nothing watched the live track');
+  ended();
+  await until(() => !mic.classList.contains('live'), 'the capture outlived its device');
+  assert((globalThis.toasts || []).some(m => m.indexOf('was disconnected') > 0), 'the disconnection was silent: ' + JSON.stringify(globalThis.toasts));
+
+  // 4. A microphone plugged in while the page is open appears.
+  devices = devices.concat([{ kind: 'audioinput', deviceId: 'webcam', label: 'Webcam Microphone' }]);
+  navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  await until(() => rowFor('Webcam Microphone') !== undefined, 'a microphone attached while the page was open never appeared: ' + rows().join(' / '));
+
+  // 5. Choosing it pins it for THIS BROWSER, and the next capture asks
+  //    for exactly that device.
+  rowFor('Webcam Microphone').click();
+  await until(() => rowFor('Webcam Microphone') && rowFor('Webcam Microphone').getAttribute('aria-checked') === 'true', 'the choice was not marked: ' + list.innerHTML);
+  assert(JSON.parse(localStorage.getItem('aii.mic')).id === 'webcam', 'the choice did not survive as this browser\'s: ' + localStorage.getItem('aii.mic'));
+  assert(rowFor('Browser default').getAttribute('aria-checked') === 'false', 'the election is still marked chosen beside a pin');
+  await talk();
+  assert(asked[1] === 'webcam', 'the pinned device was not asked for: ' + JSON.stringify(asked));
+  await done();
+
+  // 6. A pin whose device is gone falls back to the election, out loud,
+  //    and keeps the pin for when it returns.
+  devices = devices.filter(d => d.deviceId !== 'webcam');
+  navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  await talk();
+  assert(asked[2] === 'webcam' && asked[3] === '', 'an absent pin did not fall back to the browser: ' + JSON.stringify(asked));
+  assert((globalThis.toasts || []).some(m => m.indexOf('is not connected') > 0), 'the fallback was silent: ' + JSON.stringify(globalThis.toasts));
+  assert(JSON.parse(localStorage.getItem('aii.mic')).id === 'webcam', 'an absent device dropped the operator\'s choice');
+  await until(() => rowFor('Webcam Microphone') !== undefined, 'the pinned device is not shown while it is away: ' + rows().join(' / '));
+  assert(rowFor('Webcam Microphone').textContent.indexOf('not connected') > 0 && rowFor('Webcam Microphone').disabled,
+    'an absent pin is not named as absent: ' + rowFor('Webcam Microphone').textContent);
+  await done();
+
+  // 7. Browser default gives the election back.
+  rowFor('Browser default').click();
+  assert(localStorage.getItem('aii.mic') === null, 'the pin outlived the choice to drop it');
+  await talk();
+  assert(asked[4] === '', 'after choosing the browser default the page still asked for a device: ' + JSON.stringify(asked));
+  await done();
+  try { localStorage.removeItem('aii.mic'); } catch (e) {  }
 });
 </script>`
 	runPageInEngines(t, page, micModules)

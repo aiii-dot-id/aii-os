@@ -24,7 +24,17 @@ type ConsolidateConfig struct {
 	// .
 	// .
 	Salience memory.SalienceWeights
+	// .
+	// .
+	Ring3MaxChars int
 }
+
+// .
+// .
+// .
+// .
+// .
+const defaultRing3MaxChars = 8000
 
 // .
 // .
@@ -114,6 +124,9 @@ func NewConsolidate(store ConsolidateStore, llm LLMCaller, lg ConsolidateLedger,
 	}
 	if cfg.MaxOps == 0 {
 		cfg.MaxOps = 32
+	}
+	if cfg.Ring3MaxChars <= 0 {
+		cfg.Ring3MaxChars = defaultRing3MaxChars
 	}
 	return &ConsolidateFacility{
 		store:      store,
@@ -258,6 +271,13 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		// .
 		switch {
 		case len(outputs) > 0 && env.Ring3View != "" && c.ringWriter != nil:
+			if !c.ring3ViewFits(env.Ring3View) {
+				// .
+				// .
+				// .
+				c.writeRing3Deterministic()
+				break
+			}
 			c.ringWriter.SetRingSection(ring.Ring3, "working_truth", env.Ring3View)
 			log.Printf("CONSOLIDATE: wrote %d chars to Ring 3 (working_truth)", len(env.Ring3View))
 		case len(outputs) == 0:
@@ -678,11 +698,75 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	}
 
 	if output != "" {
+		if !c.ring3ViewFits(output) {
+			c.writeRing3Deterministic()
+			return
+		}
 		// .
 		// .
 		c.ringWriter.SetRingSection(ring.Ring3, "working_truth", output)
 		log.Printf("CONSOLIDATE: wrote %d chars to Ring 3 (working_truth)", len(output))
 	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (c *ConsolidateFacility) ring3ViewFits(view string) bool {
+	if len(view) <= c.config.Ring3MaxChars {
+		return true
+	}
+	log.Printf("CONSOLIDATE: Ring 3 view REFUSED — %d chars over the %d-char bound (prompt.ring3_max_chars); "+
+		"rendering working truth from the store instead (the beliefs are in the ledger)",
+		len(view), c.config.Ring3MaxChars)
+	return false
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func boundRing3Render(render string, maxChars int) string {
+	if len(render) <= maxChars {
+		return render
+	}
+	lines := strings.Split(strings.TrimRight(render, "\n"), "\n")
+	// .
+	// .
+	declare := func(dropped int) string {
+		return fmt.Sprintf("\n[%d of %d lines not in view; recall (source=ledger) reaches the rest]\n", dropped, len(lines))
+	}
+	room := maxChars - len(declare(len(lines)))
+	kept, used := 0, 0
+	for _, line := range lines {
+		if used+len(line)+1 > room {
+			break
+		}
+		used += len(line) + 1
+		kept++
+	}
+	return strings.Join(lines[:kept], "\n") + declare(len(lines)-kept)
 }
 
 // .
@@ -749,7 +833,14 @@ func (c *ConsolidateFacility) writeRing3Deterministic() {
 	}
 
 	if sb.Len() > 0 {
-		c.ringWriter.SetRingSection(ring.Ring3, "working_truth", sb.String())
+		render := sb.String()
+		bounded := boundRing3Render(render, c.config.Ring3MaxChars)
+		if bounded != render {
+			log.Printf("CONSOLIDATE: deterministic Ring 3 render bounded — %d chars over the %d-char bound "+
+				"(prompt.ring3_max_chars); whole trailing lines dropped, declared in the render",
+				len(render), c.config.Ring3MaxChars)
+		}
+		c.ringWriter.SetRingSection(ring.Ring3, "working_truth", bounded)
 	}
 }
 

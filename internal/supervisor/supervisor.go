@@ -207,6 +207,11 @@ type Spec struct {
 	// .
 	// .
 	// .
+	ReadyAllowance string
+	// .
+	// .
+	// .
+	// .
 	// .
 	// .
 	// .
@@ -259,6 +264,14 @@ func (s Spec) logger() *log.Logger {
 		return s.Log
 	}
 	return log.Default()
+}
+
+// .
+func (s Spec) readyProvenance() string {
+	if s.ReadyAllowance == "" {
+		return ""
+	}
+	return " (" + s.ReadyAllowance + ")"
 }
 
 func (s Spec) readyTimeout() time.Duration {
@@ -407,11 +420,27 @@ func (c *child) tailLines() []string {
 // .
 // .
 func Start(spec Spec, dispatcher Dispatcher) (*Supervisor, error) {
+	return StartContext(context.Background(), spec, dispatcher)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func StartContext(ctx context.Context, spec Spec, dispatcher Dispatcher) (*Supervisor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(spec.Argv) == 0 {
 		return nil, fmt.Errorf("supervisor: %s: empty argv", spec.PluginID)
 	}
 	s := &Supervisor{spec: spec, dispatcher: dispatcher, state: StateStarting, invokeGate: make(chan struct{}, 1)}
-	if err := s.spawnAndAwaitReady(); err != nil {
+	if err := s.spawnAndAwaitReady(ctx); err != nil {
 		s.mu.Lock()
 		s.state = StateStopped
 		s.stopReason = err
@@ -543,7 +572,7 @@ func (s *Supervisor) Pid() int {
 // .
 var applyLimit = applyAddressSpaceLimit
 
-func (s *Supervisor) spawnAndAwaitReady() (spawnErr error) {
+func (s *Supervisor) spawnAndAwaitReady(ctx context.Context) (spawnErr error) {
 	s.mu.Lock()
 	if s.state == StateStopped {
 		s.mu.Unlock()
@@ -774,6 +803,21 @@ func (s *Supervisor) spawnAndAwaitReady() (spawnErr error) {
 			Meaning: s.exitMeaning(code), Phase: "start",
 			StderrTail: c.tailLines(),
 		}
+	case <-ctx.Done():
+		// .
+		// .
+		s.kill(c, true)
+		select {
+		case <-c.exited:
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+		default:
+			if pending := s.retirementPending(c, fmt.Errorf("start cancelled; child retirement still pending")); pending != nil {
+				return pending
+			}
+		}
+		return &StartCancelledError{PluginID: s.spec.PluginID, Cause: ctx.Err(), StderrTail: c.tailLines()}
 	case <-time.After(s.spec.readyTimeout()):
 		s.kill(c, false)
 		select {
@@ -788,7 +832,7 @@ func (s *Supervisor) spawnAndAwaitReady() (spawnErr error) {
 		}
 		return &ChildExitError{
 			PluginID: s.spec.PluginID, Code: -1,
-			Meaning: fmt.Sprintf("no readiness mark within %s; killed", s.spec.readyTimeout()),
+			Meaning: fmt.Sprintf("no readiness mark within %s%s; killed", s.spec.readyTimeout(), s.spec.readyProvenance()),
 			Phase:   "start", StderrTail: c.tailLines(),
 		}
 	}
@@ -1027,7 +1071,11 @@ func (s *Supervisor) restart(n int) {
 	s.state = StateStarting
 	s.mu.Unlock()
 
-	if err := s.spawnAndAwaitReady(); err != nil {
+	// .
+	// .
+	// .
+	// .
+	if err := s.spawnAndAwaitReady(context.Background()); err != nil {
 		s.mu.Lock()
 		if s.state == StateStopped {
 			s.mu.Unlock()

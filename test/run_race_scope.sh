@@ -21,15 +21,91 @@ marker="$run_dir/.aii-race-scope"
 : > "$marker"
 active_pids=
 
+# Everything this run starts inherits its run directory in the
+# environment, so whatever outlives the run can be FOUND (sweep_strays).
+#
+# OWNERSHIP IS A CHAIN, because `all` runs this script once per scope
+# beneath itself, and a self-test runs it beneath a gate. Each runner
+# APPENDS its run directory to the chain it inherited, so every process
+# carries the mark of every runner above it: a runner sweeps whatever
+# has its own directory ANYWHERE in the chain — all of its descendants,
+# at any depth, including those of a nested runner that was killed
+# outright before its own trap could sweep — and nothing else: a healthy
+# sibling's children and a concurrent run's do not carry it.
+AII_RACE_SCOPE_CHAIN=${AII_RACE_SCOPE_CHAIN:+$AII_RACE_SCOPE_CHAIN:}$run_dir
+export AII_RACE_SCOPE_CHAIN
+
+# How long an interrupted run lets its jobs leave on their own before it
+# kills them, in seconds.
+grace_seconds=${AII_RACE_SCOPE_GRACE:-2}
+case "$grace_seconds" in '' | *[!0-9]*) grace_seconds=2 ;; esac
+# Accepted digits are decimal seconds, including zero-padded values.
+# Bash otherwise interprets a leading zero as an octal base.
+grace_seconds=$((10#$grace_seconds))
+
+# A page test starts each browser in a process group of its own, so that
+# it can stop the whole tree — which also puts that tree out of reach of
+# the group kill below. A shard that is killed rather than finishing (a
+# package timeout, an interrupt) therefore left its browsers running for
+# ever, their working directory long deleted: forty-seven of them, days
+# old, were found on one build host. When this runs every shard has
+# ended, so anything still carrying this run's mark is a stray by
+# definition. Linux only; elsewhere there is no /proc to ask.
+still_running() {
+	sr_stat=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+	case "$sr_stat" in
+		'' | Z*) return 1 ;;
+	esac
+	return 0
+}
+
+sweep_strays() {
+	[ -d /proc ] || return 0
+	# ONE grep over every environment, never a pipeline per process: this
+	# runs inside the interrupt path, which has seconds to be gone, on a
+	# host with thousands of processes.
+	ss_dir=$(printf '%s' "$run_dir" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+	ss_hits=$(grep -lzE "^AII_RACE_SCOPE_CHAIN=(.*:)?${ss_dir}(:.*)?\$" /proc/[0-9]*/environ 2>/dev/null || true)
+	for ss_env in $ss_hits; do
+		ss_pid=${ss_env#/proc/}
+		ss_pid=${ss_pid%/environ}
+		[ "$ss_pid" = "$$" ] && continue
+		kill -KILL "$ss_pid" 2>/dev/null || true
+	done
+	return 0
+}
+
 cleanup() {
 	rc=$?
 	trap - EXIT HUP INT TERM
 	for pid in $active_pids; do
 		kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
 	done
+	# A BOUNDED GRACE, THEN KILL, AND ONLY THEN THE REAP. The reap used to
+	# come straight after the TERM, with no bound: one job that ignored it
+	# held this runner in `wait` for ever, and nothing after that line —
+	# the sweep included — was ever reached. A job that has exited is a
+	# zombie until it is reaped and still answers kill -0, so what is
+	# asked here is whether it is still RUNNING.
+	cl_ticks=0
+	while [ "$cl_ticks" -lt $((grace_seconds * 5)) ]; do
+		cl_alive=
+		for pid in $active_pids; do
+			if still_running "$pid"; then
+				cl_alive=1
+			fi
+		done
+		[ -n "$cl_alive" ] || break
+		sleep 0.2
+		cl_ticks=$((cl_ticks + 1))
+	done
+	for pid in $active_pids; do
+		kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+	done
 	for pid in $active_pids; do
 		wait "$pid" 2>/dev/null || true
 	done
+	sweep_strays
 	if [ -f "$marker" ]; then
 		rm -rf -- "$run_dir"
 	fi

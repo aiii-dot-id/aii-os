@@ -108,7 +108,8 @@ func (a *App) reloadConfig() {
 			var cc llm.ClientConfig
 			cc, entry, err = a.resolveLLMConfig(fresh.LLM, providers)
 			if err == nil {
-				client = a.newLLMClient(cc, promptBudgetFor(entry, current.Prompt.MaxTokens))
+				candidateBudget, _ := promptBudgetFor(entry, current.Prompt.MaxTokens)
+				client = a.newLLMClient(cc, candidateBudget)
 				if substrateChanged {
 					proved = a.substrateCapabilityRecord()
 					err = a.probeSubstrate(client, cc, entry, providers, fresh.LLM.ProbeTimeoutSeconds)
@@ -201,8 +202,25 @@ func (a *App) reloadConfig() {
 			}
 		}
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if fresh.Speech.Mode.Listen != current.Speech.Mode.Listen || fresh.Speech.Mode.Speak != current.Speech.Mode.Speak {
+		if fresh.Speech.Mode.Revision <= current.Speech.Mode.Revision {
+			fresh.Speech.Mode.Revision = current.Speech.Mode.Revision + 1
+		}
+	} else if fresh.Speech.Mode.Revision < current.Speech.Mode.Revision {
+		fresh.Speech.Mode.Revision = current.Speech.Mode.Revision
+	}
 	*a.cfg = *fresh
+	a.publishVoiceMode(fresh.Speech.Mode)
 	a.cfgMu.Unlock()
+	if !reflect.DeepEqual(current.Speech.Mode, fresh.Speech.Mode) {
+		a.voiceModeCommitted(current.Speech.Mode, fresh.Speech.Mode)
+	}
 	// .
 	// .
 	// .

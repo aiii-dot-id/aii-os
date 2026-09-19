@@ -103,9 +103,15 @@ func (a *App) hushSpoken(id string) {
 		r.done, r.err = true, errHushed
 		r.cond.Broadcast()
 	}
+	started := r.started
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if !started {
+		// .
+		// .
+		a.settleSpeaking(r.settle(-1))
 	}
 }
 
@@ -158,8 +164,25 @@ func (r *spokenReply) settle(n int) int {
 
 // .
 // .
+// .
+// .
+// .
+// .
+var errSpeakOff = errors.New("replies are not spoken: the voice mode's speak is off — the microphone control or work action=voice.mode changes it")
+
+// .
+// .
 func (a *App) replyVoice() string {
-	return strings.TrimSpace(a.configSnapshot().Speech.TTS.Provider)
+	name := strings.TrimSpace(a.configSnapshot().Speech.TTS.Provider)
+	if a.engineServes(name) {
+		// .
+		// .
+		// .
+		// .
+		// .
+		return ""
+	}
+	return name
 }
 
 // .
@@ -182,6 +205,21 @@ func (a *App) speakMint(say dashboard.SpeakText) (string, error) {
 // .
 // .
 func (a *App) mint(say dashboard.SpeakText) (*spokenReply, error) {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if _, speak, _ := a.voiceMode(); speak == speakOff && !say.Sample {
+		return nil, errSpeakOff
+	}
 	text := strings.TrimSpace(say.Text)
 	if say.Sample {
 		text = sampleWords
@@ -206,6 +244,15 @@ func (a *App) mint(say dashboard.SpeakText) (*spokenReply, error) {
 	}
 	if strings.TrimSpace(tc.Provider) == "" {
 		return nil, errors.New("no speaking service is configured")
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if a.engineServes(tc.Provider) {
+		return nil, fmt.Errorf("%s speaks inside a voice session, so there is no sample to play from here", tc.Provider)
 	}
 	reg, err := a.loadProviders()
 	if err != nil {
@@ -287,10 +334,23 @@ func (a *App) speakAhead(text string) string {
 }
 
 // .
+// .
+// .
+// .
+// .
+// .
+// .
 func (a *App) speakStart(r *spokenReply) {
 	r.mu.Lock()
-	if r.started {
+	if r.started || r.done {
 		r.mu.Unlock()
+		return
+	}
+	if _, speak, _ := a.voiceMode(); speak == speakOff && !r.say.Sample {
+		r.done, r.err = true, errSpeakOff
+		r.cond.Broadcast()
+		r.mu.Unlock()
+		a.settleSpeaking(r.settle(-1))
 		return
 	}
 	r.started = true
@@ -369,6 +429,13 @@ func (a *App) speakPlay(ctx context.Context, id string, w io.Writer) error {
 	a.spokenMu.Unlock()
 	if r == nil {
 		return errors.New("that reply is no longer here to be spoken")
+	}
+	// .
+	// .
+	// .
+	// .
+	if _, speak, _ := a.voiceMode(); speak == speakOff && !r.say.Sample {
+		return errSpeakOff
 	}
 	a.speakStart(r)
 

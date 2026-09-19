@@ -32,6 +32,13 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	if ap.superseded.Load() {
 		return "", fmt.Errorf("plugin %s: this activation was superseded by an update; a draining release finishes what it was given and admits nothing new", ap.ID)
 	}
+	// .
+	// .
+	// .
+	// .
+	if !ap.admitted.Load() {
+		return "", fmt.Errorf("plugin %s: this release is being admitted; publish once it serves", ap.ID)
+	}
 	if !rePublishedName.MatchString(spec.Name) || len(spec.Name) > 64 {
 		return "", fmt.Errorf("name %q is not lowercase dotted segments of at most 64 bytes", spec.Name)
 	}
@@ -71,6 +78,13 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	// .
 	if ap.superseded.Load() {
 		return "", fmt.Errorf("plugin %s: this activation was superseded by an update; a draining release finishes what it was given and admits nothing new", ap.ID)
+	}
+	if !ap.isAuthorized() {
+		return "", fmt.Errorf("plugin %s: %w", ap.ID, ErrWithdrawn)
+	}
+	// .
+	if !ap.admitted.Load() {
+		return "", fmt.Errorf("plugin %s: this release is being admitted; publish once it serves", ap.ID)
 	}
 	if len(ap.published) >= MaxPublishedTools {
 		return "", fmt.Errorf("tool %s: %d tools are published; the ceiling is %d — withdraw one", spec.Name, len(ap.published), MaxPublishedTools)

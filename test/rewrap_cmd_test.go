@@ -53,7 +53,7 @@ func bornIdentity(t *testing.T) (ledgerPath, keyPath string) {
 	// .
 	result, err := genesis.Birth(&genesis.BirthConfig{
 		Name:        "RewrapTest",
-		Ring0Bundle: root.MintRing0Bundle(t, "# Constitution"),
+		Ring0Bundle: root.Ring0Bundle(t),
 		Root:        root.Env,
 		KeyPath:     keyPath,
 		LedgerPath:  ledgerPath,
@@ -80,7 +80,7 @@ func TestRewrapRefusesALedgerAnotherProcessHolds(t *testing.T) {
 	root := genesistest.NewRoot(t)
 	result, err := genesis.Birth(&genesis.BirthConfig{
 		Name:        "HeldLedger",
-		Ring0Bundle: root.MintRing0Bundle(t, "# Constitution"),
+		Ring0Bundle: root.Ring0Bundle(t),
 		Root:        root.Env,
 		KeyPath:     keyPath,
 		LedgerPath:  ledgerPath,

@@ -217,7 +217,7 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	// .
 	a.markComposedHarvests()
 	a.noteYield(result.Yielded)
-	a.noteTurnShape(result.ContinuedAtCap)
+	a.noteTurnShape(result.ContinuedAtCap || result.ContinuedAtPressure, result.ContinuedAtPressure)
 	finalText := result.FinalText
 
 	// .

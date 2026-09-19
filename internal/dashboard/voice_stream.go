@@ -59,6 +59,11 @@ type VoiceSession interface {
 	Label() string
 	Done() <-chan struct{}
 	Released() <-chan struct{}
+	// .
+	// .
+	// .
+	InputClosed() <-chan struct{}
+	InputCompletionReason() string
 }
 
 // .
@@ -138,6 +143,11 @@ type VoiceEvent struct {
 	Attribution string   `json:"attribution,omitempty"`
 }
 
+// .
+// .
+const voiceOutputMode = "output"
+
+// .
 // .
 type connVoice struct {
 	session VoiceSession
@@ -305,21 +315,36 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 		}
 		cl.vmu.Unlock()
 		n := voiceConnSeq.Add(1)
-		cv := &connVoice{mic: newBrowserSource(f), micID: fmt.Sprintf("browser:%d:mic", n), spkID: fmt.Sprintf("browser:%d:spk", n), format: f}
+		cv := &connVoice{spkID: fmt.Sprintf("browser:%d:spk", n), format: f}
 		plane := h.AudioPlane()
-		if err := plane.Register(&audio.Endpoint{ID: cv.micID, Label: "browser", Source: cv.mic}); err != nil {
-			s.sendVoiceState(ctx, conn, VoiceSessionState{State: "refused", Reason: err.Error()})
-			return
+		// .
+		// .
+		// .
+		// .
+		// .
+		if mode != voiceOutputMode {
+			cv.mic, cv.micID = newBrowserSource(f), fmt.Sprintf("browser:%d:mic", n)
+			if err := plane.Register(&audio.Endpoint{ID: cv.micID, Label: "browser", Source: cv.mic}); err != nil {
+				s.sendVoiceState(ctx, conn, VoiceSessionState{State: "refused", Reason: err.Error()})
+				return
+			}
+		}
+		unregister := func() {
+			if cv.micID != "" {
+				_ = plane.Unregister(cv.micID)
+			}
+			_ = plane.Unregister(cv.spkID)
 		}
 		if err := plane.Register(&audio.Endpoint{ID: cv.spkID, Label: "browser", Sink: &browserSink{s: s, conn: conn, f: f}}); err != nil {
-			_ = plane.Unregister(cv.micID)
+			if cv.micID != "" {
+				_ = plane.Unregister(cv.micID)
+			}
 			s.sendVoiceState(ctx, conn, VoiceSessionState{State: "refused", Reason: err.Error()})
 			return
 		}
 		sess, err := h.VoiceSessionOpen(ctx, cv.micID, cv.spkID, mode)
 		if err != nil {
-			_ = plane.Unregister(cv.micID)
-			_ = plane.Unregister(cv.spkID)
+			unregister()
 			s.sendVoiceState(ctx, conn, VoiceSessionState{State: "refused", Reason: err.Error()})
 			return
 		}
@@ -335,14 +360,36 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 		s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "open", Label: sess.Label()})
 		// .
 		// .
+		// .
+		// .
+		// .
+		// .
+		go func() {
+			select {
+			case <-sess.InputClosed():
+			case <-sess.Done():
+				return
+			}
+			select {
+			case <-sess.Done():
+				return
+			default:
+			}
+			why := sess.InputCompletionReason()
+			log.Printf("VOICE: session %s stopped accepting speech (%s)", sess.ID(), clip(why, 120))
+			s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "input_complete", Label: sess.Label(), Reason: why})
+		}()
+		// .
+		// .
 		go func() {
 			<-sess.Done()
 			log.Printf("VOICE: session %s of the page at %s ended (%s)", sess.ID(), cl.addr, sess.Label())
 			s.sendVoiceState(context.Background(), conn, VoiceSessionState{SessionID: sess.ID(), State: "closed", Label: sess.Label()})
-			cv.mic.end()
+			if cv.mic != nil {
+				cv.mic.end()
+			}
 			<-sess.Released()
-			_ = plane.Unregister(cv.micID)
-			_ = plane.Unregister(cv.spkID)
+			unregister()
 			cl.vmu.Lock()
 			if cl.voice == cv {
 				cl.voice = nil
@@ -422,6 +469,13 @@ func (s *Server) handleVoiceStream(ctx context.Context, conn *websocket.Conn, da
 		s.sendError(ctx, conn, "no voice session is open — open one before streaming")
 		return
 	}
+	if cv.mic == nil {
+		// .
+		// .
+		// .
+		s.sendError(ctx, conn, "this page's voice session has no microphone — it was opened to speak replies only")
+		return
+	}
 	f, fr, err := decodeVoiceStream(data)
 	if err != nil {
 		s.sendError(ctx, conn, err.Error())
@@ -458,7 +512,9 @@ func (s *Server) dropVoiceSession(conn *websocket.Conn) {
 	if cv == nil {
 		return
 	}
-	cv.mic.end()
+	if cv.mic != nil {
+		cv.mic.end()
+	}
 	_ = cv.session.Close(context.Background(), "abort")
 }
 

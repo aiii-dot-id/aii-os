@@ -562,3 +562,25 @@ func TestPrioritiesAreAReadTimeViewNotASnapshot(t *testing.T) {
 		t.Fatal("no active intention, yet priorities rendered")
 	}
 }
+
+// .
+// .
+// .
+// .
+// .
+func TestHowYouActAsksForAWordBeforeARunOfTools(t *testing.T) {
+	composer := New(ring.NewManager(), 32000)
+	prompt, err := composer.Compose("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := strings.Index(prompt.Text, "# How You Act")
+	if act < 0 {
+		t.Fatal("no How You Act section")
+	}
+	for _, want := range []string{"Before you set off into a run of tool calls, tell your human operator what you intend to do", "beside you in the work", "leaves them alone"} {
+		if !strings.Contains(prompt.Text[act:], want) {
+			t.Fatalf("How You Act does not say %q:\n%s", want, prompt.Text[act:])
+		}
+	}
+}

@@ -3,9 +3,15 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 )
+
+// .
+// .
+func errNotTheFileRead(path string) error {
+	return fmt.Errorf("%s is no longer the file this edit read — it was replaced in between; nothing was written. Read it again and reissue the edit", path)
+}
 
 // .
 // .
@@ -38,7 +44,18 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 		return Result{Error: "file_path and old_string are required"}, nil
 	}
 
-	data, err := os.ReadFile(path)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	f, st, err := openRegular(path)
+	if err != nil {
+		return Result{Error: err.Error()}, nil
+	}
+	data, err := io.ReadAll(f)
+	f.Close()
 	if err != nil {
 		return Result{Error: err.Error()}, nil
 	}
@@ -72,9 +89,14 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
+	if err := ctx.Err(); err != nil {
+		return Result{Error: fmt.Sprintf("edit cancelled before anything was written: %v", err)}, nil
+	}
 	// .
 	// .
-	if err := writeFileNoFollow(path, []byte(newContent), 0644); err != nil {
+	// .
+	// .
+	if err := rewriteSameFile(path, []byte(newContent), st); err != nil {
 		return Result{Error: err.Error()}, nil
 	}
 

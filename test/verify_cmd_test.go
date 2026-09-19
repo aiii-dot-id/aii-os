@@ -25,7 +25,6 @@ import (
 // .
 // .
 // .
-const conformanceRing0 = `# Constitution`
 
 func buildVerify(t *testing.T) string {
 	t.Helper()
@@ -68,7 +67,7 @@ func TestVerifyBinaryAcceptsAGoodChainAndRefusesADamagedOne(t *testing.T) {
 	root := genesistest.NewRoot(t)
 	if _, err := genesis.Birth(&genesis.BirthConfig{
 		Name:        "VerifyCmdTest",
-		Ring0Bundle: root.MintRing0Bundle(t, conformanceRing0),
+		Ring0Bundle: root.Ring0Bundle(t),
 		Root:        root.Env,
 		KeyPath:     filepath.Join(dir, "identity.sec"),
 		LedgerPath:  path,

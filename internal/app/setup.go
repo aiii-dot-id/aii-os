@@ -53,10 +53,11 @@ func (a *App) configState() *dashboard.ConfigState {
 		ProbeTimeoutSeconds: c.LLM.ProbeTimeoutSeconds,
 	}
 	reg, err := a.loadProviders()
-	speechSt := speechState(c, reg, err)
+	speechSt := speechState(c, reg, err, a.speechEngines())
 	speechSt.Spent = a.speechSpend()
 	speechSt.Resets = a.speechResets(time.Now()).Format("2 January")
 	speechSt.Speakers = a.speakerPolicyState()
+	speechSt.Mode = a.voiceModeState()
 	if err != nil {
 		llmSt.Error = err.Error()
 	} else if cc, entry, err := a.resolveLLMConfig(c.LLM, reg); err != nil {
@@ -69,6 +70,12 @@ func (a *App) configState() *dashboard.ConfigState {
 		llmSt.ThinkingBudget = entry.ThinkingBudget
 		llmSt.MaxOutputTokens = entry.MaxOutputTokens
 		llmSt.ContextLength = entry.ContextLength
+		// .
+		// .
+		// .
+		if budget, source := a.currentPromptBudget(); source != "" {
+			llmSt.PromptBudget, llmSt.PromptBudgetSource = budget, string(source)
+		}
 		llmSt.ReasoningEffort = entry.ReasoningEffort
 		// .
 		// .
@@ -442,6 +449,17 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			}
 			pol.Revision = cfg.Speech.Speakers.Revision + 1
 			cfg.Speech.Speakers = pol
+		// .
+		// .
+		// .
+		// .
+		case "speech.mode":
+			m, err := voiceModeFromChange(v, cfg.Speech.Mode)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			m.Revision = cfg.Speech.Mode.Revision + 1
+			cfg.Speech.Mode = m
 		case "speech.stt.provider", "speech.stt.model", "speech.stt.language",
 			"speech.tts.provider", "speech.tts.model", "speech.tts.voice":
 			s, err := str(key, v)
@@ -613,7 +631,8 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			return nil, fmt.Errorf("substrate refused: %w", rerr)
 		}
 		resolvedRegistry = reg
-		validatedClient = a.newLLMClient(cc, promptBudgetFor(entry, cfg.Prompt.MaxTokens))
+		candidateBudget, _ := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+		validatedClient = a.newLLMClient(cc, candidateBudget)
 		if substrateChanged {
 			if err := a.probeSubstrate(validatedClient, cc, entry, reg, cfg.LLM.ProbeTimeoutSeconds); err != nil {
 				return nil, err
@@ -625,8 +644,18 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 	// .
 	// .
 	// .
-	if (sttChanged && strings.TrimSpace(cfg.Speech.STT.Provider) != "") ||
-		(ttsChanged && strings.TrimSpace(cfg.Speech.TTS.Provider) != "") {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	sttNetwork := sttChanged && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineServes(cfg.Speech.STT.Provider)
+	ttsNetwork := ttsChanged && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineServes(cfg.Speech.TTS.Provider)
+	if sttNetwork || ttsNetwork {
 		if resolvedRegistry == nil {
 			providerPath = a.providersPath()
 			reg, rerr := loadProvidersFile(providerPath)
@@ -635,7 +664,7 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			}
 			resolvedRegistry = reg
 		}
-		if err := a.checkSpeech(cfg, resolvedRegistry, sttChanged, ttsChanged); err != nil {
+		if err := a.checkSpeech(cfg, resolvedRegistry, sttNetwork, ttsNetwork); err != nil {
 			return nil, err
 		}
 	}
@@ -676,6 +705,7 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 		configPublished = published
 		if published {
 			*a.cfg = *cfg
+			a.publishVoiceMode(cfg.Speech.Mode)
 			// .
 			if holdTurn {
 				a.activateLLMRuntime(validatedClient, resolvedEntry, cfg.Prompt.MaxTokens)
@@ -697,6 +727,11 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 	}
 	if configPublished && grantsChanged {
 		a.publishGrants(*cfg)
+	}
+	if configPublished && !reflect.DeepEqual(orig.Speech.Mode, cfg.Speech.Mode) {
+		// .
+		// .
+		a.voiceModeCommitted(orig.Speech.Mode, cfg.Speech.Mode)
 	}
 	if commitErr != nil {
 		return nil, commitErr

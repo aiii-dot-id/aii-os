@@ -12,6 +12,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"time"
 )
 
 type IdentityConfig struct {
@@ -69,6 +71,29 @@ type SpeechConfig struct {
 	// .
 	// .
 	Speakers SpeakerPolicyConfig `json:"speakers,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	Mode VoiceModeConfig `json:"mode,omitempty"`
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+type VoiceModeConfig struct {
+	Listen   string `json:"listen,omitempty"`
+	Speak    string `json:"speak,omitempty"`
+	Revision uint64 `json:"revision,omitempty"`
 }
 
 // .
@@ -181,6 +206,20 @@ type DashboardConfig struct {
 	// .
 	// .
 	Origin string `json:"origin,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	SkipSignInWithValidToken *bool `json:"skip_signin_with_valid_token,omitempty"`
+}
+
+// .
+func (d DashboardConfig) skipSignInWithValidToken() bool {
+	return d.SkipSignInWithValidToken == nil || *d.SkipSignInWithValidToken
 }
 
 // .
@@ -357,6 +396,23 @@ type PromptConfig struct {
 	// .
 	PulseIntervalSeconds int `json:"pulse_interval_seconds,omitempty"`
 	RecentTurns          int `json:"recent_turns"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	Ring3MaxChars int `json:"ring3_max_chars,omitempty"`
 }
 
 // .
@@ -749,6 +805,26 @@ type PluginRuntimeConfig struct {
 	MaxCompressedBytes int64 `json:"max_compressed_bytes"`
 	MaxDepth           int   `json:"max_depth"`
 	RootsKept          int   `json:"roots_kept"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	MaxStartupMS int64 `json:"max_startup_ms,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	AdmissionMemoryReserveBytes int64 `json:"admission_memory_reserve_bytes,omitempty"`
+	AdmissionMemoryBudgetBytes  int64 `json:"admission_memory_budget_bytes,omitempty"`
+	MaxConcurrentStarts         int   `json:"max_concurrent_starts,omitempty"`
 }
 
 // .
@@ -790,6 +866,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if r.RootsKept <= 0 {
 		r.RootsKept = 2
+	}
+	if r.MaxStartupMS <= 0 {
+		r.MaxStartupMS = int64(pluginhost.DefaultStartupCeiling / time.Millisecond)
 	}
 	// .
 	// .

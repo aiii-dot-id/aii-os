@@ -257,19 +257,44 @@ func (a *App) steerWith(role, text string, voice *voiceBinding) (bool, error) {
 // .
 // .
 func (a *App) DrainSteering() []string {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	listen, _, _ := a.voiceMode()
+	meeting := listen == listenMeeting
 	a.turnMu.Lock()
-	said := a.steers
+	queued := a.steers
 	a.steers = nil
-	// .
-	// .
-	for _, e := range said {
+	said := queued[:0:0]
+	var room []steerEntry
+	for _, e := range queued {
+		if e.voice != nil && meeting {
+			room = append(room, e)
+			continue
+		}
+		said = append(said, e)
+		// .
+		// .
 		if e.voice != nil {
 			a.turnVoice = append(a.turnVoice, e.voice)
 		}
 	}
 	a.turnMu.Unlock()
+	for _, e := range room {
+		e.voice.release("recorded as the room's: a meeting began while the words waited for the turn")
+		a.noteReplyOutcome(e.voice.session, "recorded (meeting), no reply")
+		if err := a.recordRoomWords(strings.TrimPrefix(e.content, voiceMarker)); err != nil {
+			log.Printf("steering: the room's words were not recorded: %v", err)
+		}
+	}
 
 	if len(said) == 0 {
+		if len(room) > 0 && a.dashboard != nil {
+			a.dashboard.BroadcastSteering()
+		}
 		return nil
 	}
 	if a.engine != nil {
@@ -431,7 +456,20 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 	a.turnVoice = nil
 	a.turnMu.Unlock()
 	if len(held) == 0 {
-		return
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		if strings.TrimSpace(reply) == "" {
+			return
+		}
+		if b := a.typedReplyVoice(); b != nil {
+			held = []*voiceBinding{b}
+		} else {
+			return
+		}
 	}
 	latest := map[string]*voiceBinding{}
 	for _, b := range held {

@@ -176,6 +176,10 @@ type EndpointState struct {
 
 // .
 // .
+// .
+// .
+// .
+// .
 type Binding struct {
 	SessionID    string
 	InputID      string
@@ -250,12 +254,52 @@ func (p *Plane) Bind(sessionID, inputID, outputID string, contained bool) (*Bind
 }
 
 // .
+func (b *Binding) HasInput() bool { return b.Source != nil }
+
+// .
+// .
+// .
+// .
+func (p *Plane) BindOutput(sessionID, outputID string, contained bool) (*Binding, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out, ok := p.endpoints[outputID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrEndpointUnknown, outputID)
+	}
+	if out.Sink == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNotASink, outputID)
+	}
+	if p.SafeMode != nil {
+		if reason, safe := p.SafeMode(); safe {
+			if !contained {
+				return nil, fmt.Errorf("%w: the engine is not contained (%s)", ErrSafe, reason)
+			}
+			if out.Remote {
+				return nil, fmt.Errorf("%w: a remote endpoint (%s)", ErrSafe, reason)
+			}
+		}
+	}
+	if s, busy := p.bound[outputID]; busy && s != sessionID {
+		return nil, fmt.Errorf("%w: %s is held by session %s", ErrEndpointBusy, outputID, s)
+	}
+	p.bound[outputID] = sessionID
+	return &Binding{
+		SessionID: sessionID, OutputID: outputID,
+		OutputHandle: "out:" + sessionID + ":" + outputID,
+		OutFormat:    out.Sink.Format(), Sink: out.Sink,
+		Contained: contained, Remote: out.Remote,
+		plane: p, released: make(chan struct{}),
+	}, nil
+}
+
+// .
 // .
 // .
 func (b *Binding) Release() {
 	b.once.Do(func() {
 		b.plane.mu.Lock()
-		if b.plane.bound[b.InputID] == b.SessionID {
+		if b.InputID != "" && b.plane.bound[b.InputID] == b.SessionID {
 			delete(b.plane.bound, b.InputID)
 		}
 		if b.plane.bound[b.OutputID] == b.SessionID {
@@ -285,8 +329,11 @@ type Channel interface {
 // .
 // .
 type Pump struct {
-	b  *Binding
-	ch Channel
+	// .
+	// .
+	runCtx context.Context
+	b      *Binding
+	ch     Channel
 	// .
 	// .
 	Stream uint32
@@ -306,6 +353,8 @@ type Pump struct {
 	inDone    bool
 	inErr     error
 	outErr    error
+	failed    chan struct{}
+	failOnce  sync.Once
 	dropped   uint64
 	done      chan struct{}
 	// .
@@ -325,6 +374,25 @@ type OutputStream struct {
 
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (p *Pump) RetireOutputStream(stream uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.outputs, stream)
+}
+
 func (p *Pump) OutputStream(stream uint32) (OutputStream, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -386,7 +454,7 @@ func (p *Pump) outputLocked(stream uint32) *OutputStream {
 
 // .
 func NewPump(b *Binding, ch Channel) *Pump {
-	return &Pump{b: b, ch: ch, cutoff: -1, done: make(chan struct{}), outputs: map[uint32]*OutputStream{}}
+	return &Pump{b: b, ch: ch, cutoff: -1, done: make(chan struct{}), failed: make(chan struct{}), outputs: map[uint32]*OutputStream{}}
 }
 
 // .
@@ -394,17 +462,41 @@ func NewPump(b *Binding, ch Channel) *Pump {
 // .
 // .
 func (p *Pump) Run(ctx context.Context) {
+	p.mu.Lock()
+	p.runCtx = ctx
+	p.mu.Unlock()
 	defer close(p.done)
 	defer p.ch.Close()
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); p.runInput(ctx) }()
+	// .
+	// .
+	// .
+	if p.b.HasInput() {
+		wg.Add(1)
+		go func() { defer wg.Done(); p.runInput(ctx) }()
+	}
+	wg.Add(1)
 	go func() { defer wg.Done(); p.runOutput(ctx) }()
 	wg.Wait()
 }
 
 // .
 func (p *Pump) Done() <-chan struct{} { return p.done }
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (p *Pump) Failed() <-chan struct{} { return p.failed }
+
+// .
+func (p *Pump) markFailed() { p.failOnce.Do(func() { close(p.failed) }) }
 
 func (p *Pump) engineIn() Format {
 	if p.EngineIn.Rate == 0 {
@@ -440,8 +532,27 @@ func (p *Pump) writeInput(fr Frame) error {
 	p.mu.Unlock()
 	if err := p.ch.WriteInput(fr); err != nil {
 		p.mu.Lock()
-		p.inErr, p.inDone = err, true
+		retired := p.runCtx != nil && p.runCtx.Err() != nil
+		p.inDone = true
+		if !retired {
+			p.inErr = err
+		}
 		p.mu.Unlock()
+		if retired {
+			// .
+			// .
+			return err
+		}
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		p.markFailed()
 		return err
 	}
 	return nil
@@ -454,12 +565,27 @@ func (p *Pump) runInput(ctx context.Context) {
 	for {
 		fr, err := p.b.Source.Read(ctx)
 		if err != nil {
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			broken := err != io.EOF && ctx.Err() == nil
 			p.mu.Lock()
-			if err != io.EOF {
+			if broken {
 				p.inErr = err
 			}
 			p.inDone = true
 			p.mu.Unlock()
+			if broken {
+				p.markFailed()
+			}
 			return
 		}
 		p.mu.Lock()
@@ -588,6 +714,9 @@ func (p *Pump) runOutput(ctx context.Context) {
 				p.outErr = err
 			}
 			p.mu.Unlock()
+			if err != io.EOF {
+				p.markFailed()
+			}
 			return
 		}
 		// .

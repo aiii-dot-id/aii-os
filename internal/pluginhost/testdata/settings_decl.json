@@ -1012,6 +1012,79 @@
      "maximum": 200
     }
    ]
+  },
+  {
+   "name": "a setting beside what the identity hears",
+   "ok": true,
+   "decl": [
+    {
+     "key": "stt_language",
+     "type": "enum",
+     "title": "Recognition language",
+     "values": [
+      "en"
+     ],
+     "default": "en",
+     "scope": "hearing"
+    }
+   ]
+  },
+  {
+   "name": "a setting beside what it speaks with",
+   "ok": true,
+   "decl": [
+    {
+     "key": "tts_voice",
+     "type": "enum",
+     "title": "Voice",
+     "values": [
+      "ash",
+      "river"
+     ],
+     "default": "ash",
+     "scope": "speaking"
+    }
+   ]
+  },
+  {
+   "name": "a setting beside the session itself",
+   "ok": true,
+   "decl": [
+    {
+     "key": "turn_pause_ms",
+     "type": "integer",
+     "title": "Pause",
+     "minimum": 320,
+     "maximum": 5000,
+     "scope": "session"
+    }
+   ]
+  },
+  {
+   "name": "a scope the host does not know",
+   "ok": false,
+   "error_contains": "scope",
+   "decl": [
+    {
+     "key": "loudness",
+     "type": "integer",
+     "title": "Loudness",
+     "scope": "louder"
+    }
+   ]
+  },
+  {
+   "name": "a scope in the wrong case is not the scope",
+   "ok": false,
+   "error_contains": "scope",
+   "decl": [
+    {
+     "key": "tts_voice",
+     "type": "string",
+     "title": "Voice",
+     "scope": "Speaking"
+    }
+   ]
   }
  ]
 }

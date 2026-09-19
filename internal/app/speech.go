@@ -50,6 +50,9 @@ func (a *App) resolveSpeech() (*speech.Client, error) {
 	if strings.TrimSpace(sc.Provider) == "" {
 		return nil, nil
 	}
+	if a.engineServes(sc.Provider) {
+		return nil, nil
+	}
 	reg, err := a.loadProviders()
 	if err != nil {
 		return nil, err
@@ -65,7 +68,7 @@ func (a *App) resolveSpeech() (*speech.Client, error) {
 func transcriberFor(sc STTConfig, reg *providerRegistry) (*speech.Client, *providerEntry, error) {
 	entry := entryNamed(reg, sc.Provider)
 	if entry == nil {
-		return nil, nil, fmt.Errorf("speech.stt.provider %q is not in providers.json (%d providers)", sc.Provider, len(reg.Providers))
+		return nil, nil, fmt.Errorf("speech.stt.provider %q is not in providers.json (%d providers)", sc.Provider, providerCount(reg))
 	}
 	svc := entry.Speech.service(speech.STT)
 	if svc.Uses(speech.STT, "model") && sc.Model == "" {
@@ -88,6 +91,9 @@ func (a *App) resolveTTS() (*speech.Synthesizer, error) {
 	if strings.TrimSpace(tc.Provider) == "" {
 		return nil, nil
 	}
+	if a.engineServes(tc.Provider) {
+		return nil, nil
+	}
 	reg, err := a.loadProviders()
 	if err != nil {
 		return nil, err
@@ -104,7 +110,7 @@ func (a *App) resolveTTS() (*speech.Synthesizer, error) {
 func synthesizerFor(tc TTSConfig, reg *providerRegistry) (*speech.Synthesizer, *providerEntry, error) {
 	entry := entryNamed(reg, tc.Provider)
 	if entry == nil {
-		return nil, nil, fmt.Errorf("speech.tts.provider %q is not in providers.json (%d providers)", tc.Provider, len(reg.Providers))
+		return nil, nil, fmt.Errorf("speech.tts.provider %q is not in providers.json (%d providers)", tc.Provider, providerCount(reg))
 	}
 	s, err := synthesizerForEntry(tc, entry, "")
 	return s, entry, err
@@ -151,7 +157,20 @@ func synthesizerForEntry(tc TTSConfig, entry *providerEntry, typedKey string) (*
 	}), nil
 }
 
+// .
+// .
+// .
+func providerCount(reg *providerRegistry) int {
+	if reg == nil {
+		return 0
+	}
+	return len(reg.Providers)
+}
+
 func entryNamed(reg *providerRegistry, name string) *providerEntry {
+	if reg == nil {
+		return nil
+	}
 	for i := range reg.Providers {
 		if reg.Providers[i].Name == name {
 			return &reg.Providers[i]
@@ -174,12 +193,34 @@ var checkSilence = make([]byte, 16000)
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) engineServes(provider string) bool {
+	if strings.TrimSpace(provider) == "" {
+		return false
+	}
+	_, serves, _ := speechEngineServes(provider, a.speechEngines())
+	return serves
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func (a *App) checkSpeech(cfg *Config, reg *providerRegistry, input, output bool) error {
 	ctx := a.bgCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if input && strings.TrimSpace(cfg.Speech.STT.Provider) != "" {
+	if input && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineServes(cfg.Speech.STT.Provider) {
 		c, entry, err := transcriberFor(cfg.Speech.STT, reg)
 		if err != nil {
 			return fmt.Errorf("voice input refused: %w", err)
@@ -196,7 +237,7 @@ func (a *App) checkSpeech(cfg *Config, reg *providerRegistry, input, output bool
 		a.speechTrouble.clear()
 		pushVoiceStatus(a)
 	}
-	if output && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" {
+	if output && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineServes(cfg.Speech.TTS.Provider) {
 		s, entry, err := synthesizerFor(cfg.Speech.TTS, reg)
 		if err != nil {
 			return fmt.Errorf("voice replies refused: %w", err)
@@ -245,13 +286,47 @@ func keyed(e providerEntry) bool {
 // .
 // .
 // .
-func speechState(c Config, reg *providerRegistry, regErr error) dashboard.SpeechConfigState {
+func speechState(c Config, reg *providerRegistry, regErr error, engines []dashboard.SpeechService) dashboard.SpeechConfigState {
 	sc, tc := c.Speech.STT, c.Speech.TTS
 	st := dashboard.SpeechConfigState{
 		STT: dashboard.SpeechInputState{Provider: sc.Provider, Model: sc.Model, Language: sc.Language, MonthlyMinutes: sc.MonthlyMinutes},
 		TTS: dashboard.SpeechOutputState{Provider: tc.Provider, Model: tc.Model, Voice: tc.Voice, MonthlyCharacters: tc.MonthlyCharacters},
 	}
-	inputSet, outputSet := strings.TrimSpace(sc.Provider) != "", strings.TrimSpace(tc.Provider) != ""
+	// .
+	// .
+	// .
+	// .
+	st.Services = append([]dashboard.SpeechService(nil), engines...)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	st.Services = append(st.Services, speechServices(reg)...)
+
+	// .
+	// .
+	// .
+	// .
+	sttPlugin, sttServes, sttDefault := speechEngineServes(sc.Provider, engines)
+	if sttServes {
+		st.STT.Provider, st.STT.Plugin, st.STT.Default = sttPlugin, true, sttDefault
+	}
+	ttsPlugin, ttsServes, ttsDefault := speechEngineServes(tc.Provider, engines)
+	if ttsServes {
+		st.TTS.Provider, st.TTS.Plugin, st.TTS.Default = ttsPlugin, true, ttsDefault
+	}
+	if sttServes && ttsServes {
+		return st
+	}
+
+	inputSet := !sttServes && strings.TrimSpace(sc.Provider) != ""
+	outputSet := !ttsServes && strings.TrimSpace(tc.Provider) != ""
 	if regErr != nil {
 		if inputSet {
 			st.STT.Error = regErr.Error()
@@ -277,7 +352,6 @@ func speechState(c Config, reg *providerRegistry, regErr error) dashboard.Speech
 			st.TTS.APIKeyMasked = maskKey(providerAPIKey(*entry, "", tc.APIKeyEnv))
 		}
 	}
-	st.Services = speechServices(reg)
 	return st
 }
 
@@ -287,6 +361,9 @@ func speechState(c Config, reg *providerRegistry, regErr error) dashboard.Speech
 // .
 // .
 func speechServices(reg *providerRegistry) []dashboard.SpeechService {
+	if reg == nil {
+		return nil
+	}
 	var out []dashboard.SpeechService
 	shipped := map[string]bool{}
 	for _, e := range embeddedRegistry().Providers {
@@ -325,11 +402,17 @@ func (a *App) VoiceStatus() (state, reason, source string) {
 	if why, inSafe := a.SafeMode(); inSafe {
 		return "safe", why, ""
 	}
-	if id := activeVoicePlugin(a); id != "" {
+	sc := a.configSnapshot().Speech.STT
+	chosen := strings.TrimSpace(sc.Provider)
+	// .
+	// .
+	// .
+	// .
+	// .
+	if id := activeVoicePlugin(a); id != "" && (chosen == "" || chosen == id) {
 		return "plugin", "", id
 	}
-	sc := a.configSnapshot().Speech.STT
-	if strings.TrimSpace(sc.Provider) == "" {
+	if chosen == "" {
 		return "setup", "", ""
 	}
 	c, err := a.resolveSpeech()
@@ -498,12 +581,20 @@ func (a *App) HearUtterance(ctx context.Context, pcm []byte, sampleRate, channel
 		// .
 		a.fanVoiceEvent(dashboard.VoiceEvent{Type: "transcript_final", Final: true, Operator: true, Text: strings.TrimSpace(res.Text)})
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	listen, _, _ := a.voiceMode()
 	return a.observeVoice(ctx, heardUtterance{
 		// .
 		// .
 		Source:   "speech endpoint " + client.Model(),
 		Text:     res.Text,
-		Answer:   answer,
+		Answer:   answer && listen != listenMeeting,
 		Operator: true,
 	})
 }

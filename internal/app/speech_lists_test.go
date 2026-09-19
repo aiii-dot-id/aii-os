@@ -40,13 +40,16 @@ func TestNothingShipsAVendorsCatalogue(t *testing.T) {
 	}
 	// .
 	// .
+	// .
 	bad := `{"providers":[{"name":"my-voice","url":"http://127.0.0.1:9","speech":{"tts":{"voices":[{"id":"x"}]}}}]}`
 	path := filepath.Join(t.TempDir(), "providers.json")
 	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadProvidersFile(path); err == nil || !strings.Contains(err.Error(), "voices") {
-		t.Errorf("a file carrying a catalogue loaded: %v", err)
+	reg, err := loadProvidersFile(path)
+	if err != nil || len(reg.Providers) != 0 || len(reg.broken) != 1 ||
+		reg.broken[0].name != "my-voice" || !strings.Contains(reg.broken[0].reason, "voices") {
+		t.Errorf("an entry carrying a catalogue was admitted, or not set aside by name: %v %+v", err, reg)
 	}
 }
 

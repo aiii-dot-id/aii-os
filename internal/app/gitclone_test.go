@@ -135,12 +135,11 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 		t.Fatalf("expected one active plugin before no-op pull sweep, got %d", nactive)
 	}
 	activeBefore := app.plugins[0]
-	// .
-	app.pluginFinger = "force-no-op-sweep"
 	app.pluginMu.Unlock()
-	app.convergePlugins(t.Context())
+	// .
+	app.rescanPlugins(t.Context())
 	app.pluginMu.Lock()
-	unchanged := app.pluginFinger != "force-no-op-sweep" && len(app.plugins) == 1 && app.plugins[0] == activeBefore
+	unchanged := len(app.plugins) == 1 && app.plugins[0] == activeBefore
 	app.pluginMu.Unlock()
 	if !unchanged {
 		t.Fatal("a pull with no package change churned the running plugin")

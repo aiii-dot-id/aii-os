@@ -58,9 +58,12 @@ func TestAnEntryThatNeitherChatsNorSpeaksIsRefused(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"nothing","url":"https://nothing.test","chat":false}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := a.loadProviders()
-	if err == nil || !strings.Contains(err.Error(), `"nothing" says chat: false`) {
-		t.Fatalf("an entry with nothing to serve was accepted: %v", err)
+	reg, err := a.loadProviders()
+	if err != nil || len(reg.Providers) != 0 || len(reg.broken) != 1 || !strings.Contains(reg.broken[0].reason, `"nothing" says chat: false`) {
+		t.Fatalf("an entry with nothing to serve was admitted, or not set aside with its reason: %v %+v", err, reg)
+	}
+	if reg.broken[0].repair != nil {
+		t.Fatalf("a repair was offered that would change what the entry is for: %+v", reg.broken[0].repair)
 	}
 }
 
@@ -185,13 +188,17 @@ func TestASpeechOnlyEntryIsNeverTheSubstrate(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"ElevenLabs","url":"https://api.elevenlabs.io","chat":false,"default":true}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.loadProviders(); err == nil || !strings.Contains(err.Error(), `"ElevenLabs" is speech-only but flagged default`) {
-		t.Fatalf("a speech-only default was admitted: %v", err)
+	loaded, err := a.loadProviders()
+	if err != nil || len(loaded.broken) != 1 || !strings.Contains(loaded.broken[0].reason, `"ElevenLabs" is speech-only but flagged default`) {
+		t.Fatalf("a speech-only default was admitted, or not set aside with its reason: %v %+v", err, loaded)
+	}
+	if r := loaded.broken[0].repair; r == nil || r.what != "clear its default flag" {
+		t.Fatalf("the repair for a speech-only default is not its flag: %+v", r)
 	}
 	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"ElevenLabs","url":"https://api.elevenlabs.io","chat":false}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := a.setProviderInfo(dashboard.ProviderInfo{Name: "ElevenLabs", Endpoint: "https://api.elevenlabs.io", Default: true})
+	err = a.setProviderInfo(dashboard.ProviderInfo{Name: "ElevenLabs", Endpoint: "https://api.elevenlabs.io", Default: true})
 	if err == nil || !strings.Contains(err.Error(), `"ElevenLabs" is speech-only but flagged default`) {
 		t.Fatalf("the form wrote a speech-only default: %v", err)
 	}

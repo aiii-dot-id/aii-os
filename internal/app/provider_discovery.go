@@ -125,13 +125,27 @@ func discoverModelsWith(ctx context.Context, dialect, base, token string, bearer
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 	var out struct {
 		Data []struct {
 			ID            string `json:"id"`
+			CanonicalID   string `json:"canonical_id"`
+			CanonicalSlug string `json:"canonical_slug"`
 			MaxInput      int    `json:"max_input_tokens"`
 			MaxTokens     int    `json:"max_tokens"`
 			ContextLength int    `json:"context_length"`
+			MaxModelLen   int    `json:"max_model_len"`
 		} `json:"data"`
 		Models []struct {
 			Slug          string `json:"slug"`
@@ -146,17 +160,43 @@ func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 	}
 	models := make([]string, 0, len(out.Data)+len(out.Models))
 	meta := map[string]modelMeta{}
+	own := make(map[string]bool, len(out.Data))
 	for _, m := range out.Data {
 		if m.ID == "" {
 			continue
 		}
 		models = append(models, m.ID)
+		own[m.ID] = true
 		ctx := m.MaxInput
 		if ctx == 0 {
 			ctx = m.ContextLength
 		}
+		if ctx == 0 {
+			// .
+			ctx = m.MaxModelLen
+		}
 		if ctx > 0 || m.MaxTokens > 0 {
 			meta[m.ID] = modelMeta{Context: ctx, MaxOut: m.MaxTokens}
+		}
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	for _, m := range out.Data {
+		if m.ID == "" {
+			continue
+		}
+		known := meta[m.ID]
+		for _, name := range []string{m.CanonicalID, m.CanonicalSlug} {
+			if name == "" || name == m.ID || own[name] {
+				continue
+			}
+			if _, taken := meta[name]; !taken {
+				meta[name] = known
+			}
 		}
 	}
 	for _, m := range out.Models {
@@ -178,6 +218,8 @@ func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 	return models, meta, nil
 }
 
+// .
+// .
 // .
 // .
 // .
@@ -269,6 +311,21 @@ func (a *App) discoverForProvider(ctx context.Context, reg *providerRegistry, na
 		}
 	}
 	return nil, fmt.Errorf("unknown provider %q", name)
+}
+
+// .
+// .
+// .
+// .
+// .
+func modelOffered(models []string, meta map[string]modelMeta, model string) bool {
+	for _, m := range models {
+		if m == model {
+			return true
+		}
+	}
+	_, ok := meta[model]
+	return ok
 }
 
 func mergeModels(lists ...[]string) []string {

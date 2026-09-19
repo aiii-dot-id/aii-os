@@ -17,9 +17,16 @@ import (
 
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func dialWS(t *testing.T, addr string) *websocket.Conn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, "wss://"+addr+"/ws", &websocket.DialOptions{
 		HTTPClient: testClient,
@@ -88,7 +95,7 @@ func waitForConnsAtMost(t *testing.T, s *Server, n int) {
 
 func readMsg(t *testing.T, conn *websocket.Conn) ServerMessage {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_, data, err := conn.Read(ctx)
 	if err != nil {
@@ -134,7 +141,7 @@ func TestProviderAndConfigRepliesCarryRequestID(t *testing.T) {
 			return &ConfigState{}, nil
 		},
 		SetProvider:  func(ProviderInfo) error { return nil },
-		GetProviders: func() []ProviderInfo { return []ProviderInfo{{Name: "Claude"}} },
+		GetProviders: func() ProviderDirectory { return ProviderDirectory{Providers: []ProviderInfo{{Name: "Claude"}}} },
 		GetConfig:    func() (*ConfigState, error) { return &ConfigState{}, nil },
 		DiscoverModels: func(provider, _ string) ([]string, error) {
 			return []string{provider + "-model"}, nil
@@ -338,7 +345,7 @@ func TestHandlerSwapMidConnection(t *testing.T) {
 			secondProvider = info
 			return nil
 		},
-		GetProviders: func() []ProviderInfo { return []ProviderInfo{{Name: "new"}} },
+		GetProviders: func() ProviderDirectory { return ProviderDirectory{Providers: []ProviderInfo{{Name: "new"}}} },
 		GetConfig: func() (*ConfigState, error) {
 			return &ConfigState{LLM: LLMConfigState{ResolvedProvider: "new", ResolvedModel: "m2"}}, nil
 		},

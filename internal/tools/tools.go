@@ -10,6 +10,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -67,6 +68,41 @@ func (r Result) Text() string {
 // .
 type ReadOnlyTool interface {
 	ReadOnly() bool
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+type ReplaySafeTool interface {
+	ReplaySafe() bool
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (r *Registry) ReplaySafe(name string) bool {
+	r.regMu.RLock()
+	t, ok := r.tools[name]
+	r.regMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if ro, ok := t.(ReadOnlyTool); ok && ro.ReadOnly() {
+		return true
+	}
+	rs, ok := t.(ReplaySafeTool)
+	return ok && rs.ReplaySafe()
 }
 
 // .
@@ -408,11 +444,31 @@ func (r *Registry) Deregister(name string) {
 // .
 // .
 func (r *Registry) SupersedeOrigin(origin string, set []Tool, hostOnly map[string]bool) error {
+	return r.SupersedeOriginIf(origin, set, hostOnly, nil)
+}
+
+// .
+// .
+var ErrSupersedeRefused = errors.New("supersede refused by its guard; the registry is unchanged")
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (r *Registry) SupersedeOriginIf(origin string, set []Tool, hostOnly map[string]bool, allowed func() bool) error {
 	if origin == "" || origin == "builtin" {
 		return fmt.Errorf("supersede requires a non-builtin origin, got %q", origin)
 	}
 	r.regMu.Lock()
 	defer r.regMu.Unlock()
+	if allowed != nil && !allowed() {
+		return ErrSupersedeRefused
+	}
 	next := make(map[string]bool, len(set))
 	for _, t := range set {
 		name := t.Name()

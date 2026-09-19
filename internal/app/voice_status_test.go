@@ -32,8 +32,23 @@ func TestTheMicrophoneFollowsTheOperatorsOrder(t *testing.T) {
 	prev := activeVoicePlugin
 	t.Cleanup(func() { activeVoicePlugin = prev })
 	activeVoicePlugin = func(*App) string { return "id.test.voice" }
+	// .
+	// .
+	// .
+	// .
+	// .
+	chosen := a.cfg.Speech.STT.Provider
+	a.cfg.Speech.STT.Provider = ""
 	if state, _, source := a.VoiceStatus(); state != "plugin" || source != "id.test.voice" {
-		t.Fatalf("a live voice plugin did not come before the service: %q (%q)", state, source)
+		t.Fatalf("with nothing chosen the installed engine serves: %q (%q)", state, source)
+	}
+	a.cfg.Speech.STT.Provider = "id.test.voice"
+	if state, _, source := a.VoiceStatus(); state != "plugin" || source != "id.test.voice" {
+		t.Fatalf("naming the engine is the same answer said out loud: %q (%q)", state, source)
+	}
+	a.cfg.Speech.STT.Provider = chosen
+	if state, _, source := a.VoiceStatus(); state != "cloud" || source != "local-speech · whisper-1" {
+		t.Fatalf("a service the operator named must be the one used: %q (%q)", state, source)
 	}
 	activeVoicePlugin = prev
 	a.cfg.Speech.STT.Provider = "not-in-providers"
@@ -159,6 +174,16 @@ func TestSpokenWordsInAMeetingAreRecordedAsTheOperators(t *testing.T) {
 	}
 	if !strings.Contains(found, "the ledger and the outbox disagree") {
 		t.Fatalf("the words did not survive the journey: %+v", turns)
+	}
+	// .
+	// .
+	// .
+	// .
+	if !strings.HasPrefix(found, voiceMarker+voiceRoomNote) {
+		t.Fatalf("words heard in the room were recorded as if addressed to the identity: %q", found)
+	}
+	if got := attributeContent(found, "Sam"); !strings.HasPrefix(got, "[voice · Sam] "+voiceRoomNote) {
+		t.Fatalf("the note cost the words their attribution: %q", got)
 	}
 }
 
