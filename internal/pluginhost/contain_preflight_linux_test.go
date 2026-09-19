@@ -140,7 +140,7 @@ func TestTheDocumentedProfileIsTheOneTheHostPrints(t *testing.T) {
 		if !strings.Contains(bwrapProfileRemedy, line) {
 			t.Fatalf("the refusal has stopped printing %q", line)
 		}
-		if doc != "" && !strings.Contains(doc, line) {
+		if err == nil && !strings.Contains(doc, line) {
 			t.Fatalf("docs/CONTAINMENT-LINUX.md no longer matches the refusal: missing %q", line)
 		}
 	}
