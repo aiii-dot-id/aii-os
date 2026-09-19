@@ -15,12 +15,16 @@ func TestAcceleratorProfilesReadinessAndTheWindowsGate(t *testing.T) {
 		t.Fatalf("a good declaration parses: %v %+v", err, profiles)
 	}
 	for name, tc := range map[string]struct{ raw, want string }{
-		"unknown variant":   {`{"windows-x86_64-native":{"os":"windows","arch":"x86_64","backend":"directml","precision":"fp16","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"none"}}`, "not a variant"},
-		"no models":         {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":[],"memory_bytes":1,"session_limit":1,"fallback":"none"}}`, "at least one model"},
-		"silent fallback":   {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"silent"}}`, "never taken silently"},
-		"unmeasured memory": {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":0,"session_limit":1,"fallback":"none"}}`, "measured"},
-		"unknown member":    {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"none","npu_only":true}}`, "unknown field"},
-		"not an object":     {`[{"os":"macos"}]`, "not an object"},
+		"unknown variant": {`{"windows-x86_64-native":{"os":"windows","arch":"x86_64","backend":"directml","precision":"fp16","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"none"}}`, "not a variant"},
+		"no models":       {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":[],"memory_bytes":1,"session_limit":1,"fallback":"none"}}`, "at least one model"},
+		"silent fallback": {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"silent"}}`, "never taken silently"},
+		// .
+		// .
+		// .
+		// .
+		"an undeclared reservation": {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":0,"session_limit":1,"fallback":"none"}}`, "declared"},
+		"unknown member":            {`{"macos-arm64-native":{"os":"macos","arch":"arm64","backend":"mlx","precision":"int8","models":["m"],"memory_bytes":1,"session_limit":1,"fallback":"none","npu_only":true}}`, "unknown field"},
+		"not an object":             {`[{"os":"macos"}]`, "not an object"},
 	} {
 		if _, err := ParseAccelerators([]byte(tc.raw), []string{"macos-arm64-native"}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v (want %q)", name, err, tc.want)

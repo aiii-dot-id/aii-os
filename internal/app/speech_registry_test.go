@@ -384,15 +384,19 @@ func TestTextToSpeechAsksOnlyForWhatItsServiceUses(t *testing.T) {
 
 // .
 // .
-func TestABadSpeechMappingFailsTheLoadByName(t *testing.T) {
+func TestABadSpeechMappingSetsTheEntryAsideByName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
 	bad := `{"providers":[{"name":"my-voice","url":"http://127.0.0.1:9","speech":{"tts":{"query":{"x":"{secret}"}}}}]}`
 	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := loadProvidersFile(path)
-	if err == nil || !strings.Contains(err.Error(), `"my-voice"`) || !strings.Contains(err.Error(), "unknown placeholder {secret}") {
-		t.Fatalf("a bad mapping loaded, or failed without naming itself: %v", err)
+	reg, err := loadProvidersFile(path)
+	if err != nil || len(reg.Providers) != 0 || len(reg.broken) != 1 || reg.broken[0].name != "my-voice" ||
+		!strings.Contains(reg.broken[0].reason, `"my-voice"`) || !strings.Contains(reg.broken[0].reason, "unknown placeholder {secret}") {
+		t.Fatalf("a bad mapping was admitted, or set aside without naming itself: %v %+v", err, reg)
+	}
+	if reg.broken[0].repair != nil {
+		t.Fatalf("a repair was offered for speech settings no release ships for this name: %+v", reg.broken[0].repair)
 	}
 }
 

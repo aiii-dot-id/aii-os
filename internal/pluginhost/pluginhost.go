@@ -148,6 +148,9 @@ type ActivePlugin struct {
 	Readiness   *Readiness
 	// .
 	// .
+	Startup *StartupAllowance
+	// .
+	// .
 	Models    []ModelDecl
 	ModelsDir string
 	// .
@@ -191,6 +194,21 @@ type ActivePlugin struct {
 	// .
 	// .
 	superseded atomic.Bool
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	admitted atomic.Bool
+
+	// .
+	// .
+	// .
+	authorized atomic.Pointer[func() bool]
 
 	// .
 	// .
@@ -274,7 +292,13 @@ type Options struct {
 	MemoryMax map[string]uint64
 	// .
 	// .
+	// .
+	// .
 	ReadyTimeout map[string]time.Duration
+	// .
+	// .
+	// .
+	StartupCeiling time.Duration
 	// .
 	// .
 	// .
@@ -304,6 +328,17 @@ type Options struct {
 	RuntimeLimits    packagefmt.TreeLimits
 	RuntimeRoots     *RuntimeRoots
 	RuntimeRootsKept int
+	// .
+	// .
+	// .
+	HostVersion string
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	Acquirer *Acquirer
 	// .
 	// .
 	Log *log.Logger
@@ -351,29 +386,32 @@ func ActivateShadow(ctx context.Context, pkgPath string, reg *tools.Registry, op
 }
 
 func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, opts *Options, registerNow bool) (*ActivePlugin, error) {
-	if opts == nil {
-		opts = &Options{}
-	}
-	res, err := packagefmt.VerifyFile(pkgPath, opts.Roots)
+	st, err := Stage(ctx, pkgPath, opts)
 	if err != nil {
 		return nil, err
 	}
+	return st.Start(ctx, reg, registerNow)
+}
+
+// .
+// .
+// .
+// .
+// .
+func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow bool) (*ActivePlugin, error) {
+	pkgPath, opts, res, sel := s.pkgPath, s.opts, s.res, s.sel
 	m := res.Manifest
-
 	// .
 	// .
 	// .
 	// .
+	// .
+	if s.material.PluginID != "" && !s.acquired {
+		return nil, &NotAcquiredError{PluginID: m.ID, Version: m.Version}
+	}
 	host := currentHost(opts)
-	variant, serr := selectVariant(res, host)
-	if serr != nil {
-		return nil, serr
-	}
-
-	artifactBytes, err := loadVerifiedMember(pkgPath, res, variant.Entrypoint)
-	if err != nil {
-		return nil, err
-	}
+	variant, artifactBytes := sel.variant, sel.artifactBytes
+	material, runtimeRoot := s.material, s.runtimeRoot
 
 	// .
 	// .
@@ -460,7 +498,9 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 	switch {
 	case host.supervised && variant.ExecutionRuntime == "wasm_component":
 		ap.Mode = ModeSupervised
-		sup, dir, serr := startSupervisedWASM(res, variant, artifactBytes, binding, opts)
+		wasmAllow := sel.Startup
+		ap.Startup = &wasmAllow
+		sup, dir, serr := startSupervisedWASM(ctx, res, variant, artifactBytes, binding, opts)
 		if serr != nil {
 			_ = binding.Close()
 			return nil, serr
@@ -472,49 +512,16 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 		// .
 		// .
 		ap.Mode = ModeSupervised
-		profile, perr := loadAccelerator(pkgPath, res, m, variant.VariantID)
-		if perr != nil {
-			_ = binding.Close()
-			return nil, perr
-		}
+		profile, models := sel.profile, sel.models
 		ap.Accelerator = profile
-		models, merr := loadModels(pkgPath, res, m, profile)
-		if merr != nil {
-			_ = binding.Close()
-			return nil, merr
-		}
+		allow := sel.Startup
+		ap.Startup = &allow
 		ap.Models = models
-		if len(models) > 0 {
-			if opts.PluginModelsDir == "" {
-				_ = binding.Close()
-				return nil, &ModelsMissingError{PluginID: m.ID, Missing: modelNames(models), Cause: fmt.Errorf("this host keeps no models directory")}
-			}
-			ap.ModelsDir = filepath.Join(opts.PluginModelsDir, sanitizeToken(m.ID))
-			if err := EnsureModels(ctx, m.ID, models, ap.ModelsDir, opts.ModelFetcher, opts.logf); err != nil {
-				_ = binding.Close()
-				return nil, err
-			}
-		}
-		// .
-		// .
-		// .
-		// .
+		ap.ModelsDir = material.ModelsDir
+		decl, root := material.Runtime, runtimeRoot
 		var rt *runtimeBinding
-		if decl, rerr := loadRuntime(pkgPath, res, m, variant.VariantID); rerr != nil {
-			_ = binding.Close()
-			return nil, rerr
-		} else if decl != nil {
-			if opts.PluginRuntimeDir == "" {
-				_ = binding.Close()
-				return nil, &RuntimeMissingError{PluginID: m.ID, Cause: fmt.Errorf("this host keeps no runtime directory")}
-			}
-			entry := entrypointSpec{Name: filepath.Base(variant.Entrypoint), Bytes: artifactBytes, Digest: res.FileDigests[variant.Entrypoint]}
-			pluginDir := filepath.Join(opts.PluginRuntimeDir, sanitizeToken(m.ID))
-			root, rerr := EnsureRuntime(ctx, m.ID, decl, pluginDir, opts.RuntimeFetcher, opts.RuntimeLimits, entry, opts.logf)
-			if rerr != nil {
-				_ = binding.Close()
-				return nil, rerr
-			}
+		if decl != nil {
+			pluginDir, entry := material.RuntimeDir, material.entry
 			rt = &runtimeBinding{root: root, entry: entry, check: runtimeSpawnCheck(root, decl, entry)}
 			if opts.RuntimeRoots != nil {
 				opts.RuntimeRoots.Pin(root)
@@ -531,7 +538,7 @@ func activatePackage(ctx context.Context, pkgPath string, reg *tools.Registry, o
 			}
 			ap.RuntimeRoot = root
 		}
-		sup, dir, contained, serr := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, profile, ap.ModelsDir, m.PluginFamily == "voice_interface", rt)
+		sup, dir, contained, serr := startSupervisedNativeWith(ctx, res, variant, artifactBytes, binding, opts, profile, ap.ModelsDir, m.PluginFamily == "voice_interface", rt)
 		if serr != nil {
 			var cleanup *supervisor.ContainmentCleanupError
 			if !errors.As(serr, &cleanup) {
@@ -774,6 +781,8 @@ func (ap *ActivePlugin) newOperationTool(name, operation, description string, de
 		desc:        desc,
 		seam:        ap.binding,
 		inFlight:    &ap.inFlight,
+		gate:        &ap.admitted,
+		authorized:  ap.isAuthorized,
 		description: description,
 		parameters:  desc.params(),
 		disc:        disc,
@@ -793,12 +802,21 @@ func (ap *ActivePlugin) offersOperationsFor(interfaceID string) bool {
 // .
 // .
 func (ap *ActivePlugin) registerTools() error {
+	ap.pubMu.Lock()
+	defer ap.pubMu.Unlock()
+	if !ap.isAuthorized() {
+		return fmt.Errorf("plugin %s: %w", ap.ID, ErrWithdrawn)
+	}
+	// .
+	// .
+	ap.admitted.Store(true)
 	for _, pt := range ap.pending {
 		register := ap.reg.RegisterDynamic
 		if pt.hostOp {
 			register = ap.reg.RegisterHostOp
 		}
 		if rerr := register(pt.tool, ap.ID); rerr != nil {
+			ap.admitted.Store(false)
 			for _, n := range ap.ToolNames {
 				ap.reg.Deregister(n)
 			}
@@ -867,6 +885,31 @@ func (ap *ActivePlugin) Health(ctx context.Context) error {
 // .
 // .
 // .
+var ErrWithdrawn = errors.New("this activation was withdrawn before it was published; nothing of it is reachable")
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (ap *ActivePlugin) Authorize(valid func() bool) {
+	if valid == nil {
+		ap.authorized.Store(nil)
+		return
+	}
+	ap.authorized.Store(&valid)
+}
+
+func (ap *ActivePlugin) isAuthorized() bool {
+	valid := ap.authorized.Load()
+	return valid == nil || (*valid)()
+}
+
+// .
+// .
 // .
 // .
 // .
@@ -875,6 +918,18 @@ func (ap *ActivePlugin) Health(ctx context.Context) error {
 var redirectSwapped = func() {}
 
 func (ap *ActivePlugin) Redirect(prev *ActivePlugin) error {
+	// .
+	ap.pubMu.Lock()
+	defer ap.pubMu.Unlock()
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if !ap.isAuthorized() {
+		return fmt.Errorf("plugin %s: %w", ap.ID, ErrWithdrawn)
+	}
 	if prev != nil {
 		// .
 		// .
@@ -890,7 +945,22 @@ func (ap *ActivePlugin) Redirect(prev *ActivePlugin) error {
 		defer prev.pubMu.Unlock()
 	}
 	set, hostOnly := ap.toolSet()
-	if err := ap.reg.SupersedeOrigin(ap.ID, set, hostOnly); err != nil {
+	// .
+	// .
+	// .
+	ap.admitted.Store(true)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if err := ap.reg.SupersedeOriginIf(ap.ID, set, hostOnly, ap.isAuthorized); err != nil {
+		ap.admitted.Store(false)
+		if errors.Is(err, tools.ErrSupersedeRefused) {
+			return fmt.Errorf("plugin %s: %w", ap.ID, ErrWithdrawn)
+		}
 		return err
 	}
 	redirectSwapped()
@@ -954,11 +1024,30 @@ func (ap *ActivePlugin) CloseQuiet(ctx context.Context) error {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+func (ap *ActivePlugin) Tools() []string {
+	if ap == nil {
+		return nil
+	}
+	ap.pubMu.Lock()
+	defer ap.pubMu.Unlock()
+	return append([]string(nil), ap.ToolNames...)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
 func (p *ActivePlugin) Deactivate(ctx context.Context) error {
 	if p.sessionCancel != nil {
 		p.sessionCancel()
 	}
-	for _, name := range p.ToolNames {
+	for _, name := range p.Tools() {
 		p.reg.Deregister(name)
 	}
 	err := p.closeChannel(ctx)
@@ -1088,7 +1177,15 @@ func supervisorDispatcher(binding *broker.Binding) supervisor.Dispatcher {
 // .
 // .
 // .
-func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options) (*supervisor.Supervisor, string, error) {
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func startSupervisedWASM(ctx context.Context, res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options) (*supervisor.Supervisor, string, error) {
 	dir, path, verify, err := extractArtifact(res, variant, artifactBytes, "artifact.wasm", 0o600)
 	if err != nil {
 		return nil, "", err
@@ -1097,7 +1194,7 @@ func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, ar
 	if memoryMax == 0 {
 		memoryMax = pluginworker.DefaultMemoryMaxBytes
 	}
-	sup, err := supervisor.Start(supervisor.Spec{
+	sup, err := supervisor.StartContext(ctx, supervisor.Spec{
 		PluginID: res.Manifest.ID,
 		Argv: append(append([]string{opts.WorkerBinary}, opts.WorkerArgs...), "-forward",
 			fmt.Sprintf("-memory-max=%d", memoryMax),
@@ -1107,7 +1204,8 @@ func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, ar
 			// .
 			"-module-sha256="+res.FileDigests[variant.Entrypoint], path),
 		ReadyMark:      "event=ready",
-		ReadyTimeout:   opts.ReadyTimeout[res.Manifest.ID],
+		ReadyTimeout:   startupAllowance(opts, res.Manifest.ID, nil).Effective,
+		ReadyAllowance: startupAllowance(opts, res.Manifest.ID, nil).Sentence(),
 		VerifyArtifact: verify,
 		ExitMeaning:    supervisor.WorkerExitMeaning,
 		Log:            opts.Log,
@@ -1126,15 +1224,15 @@ func startSupervisedWASM(res *packagefmt.Result, variant *packagefmt.Variant, ar
 // .
 // .
 // .
-func startSupervisedNative(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options) (*supervisor.Supervisor, string, error) {
-	sup, dir, _, err := startSupervisedNativeWith(res, variant, artifactBytes, binding, opts, nil, "", false, nil)
+func startSupervisedNative(ctx context.Context, res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options) (*supervisor.Supervisor, string, error) {
+	sup, dir, _, err := startSupervisedNativeWith(ctx, res, variant, artifactBytes, binding, opts, nil, "", false, nil)
 	return sup, dir, err
 }
 
 // .
 // .
 // .
-func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options, profile *AcceleratorProfile, modelsDir string, sessionMode bool, rt *runtimeBinding) (*supervisor.Supervisor, string, bool, error) {
+func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, variant *packagefmt.Variant, artifactBytes []byte, binding *broker.Binding, opts *Options, profile *AcceleratorProfile, modelsDir string, sessionMode bool, rt *runtimeBinding) (*supervisor.Supervisor, string, bool, error) {
 	var dir, path string
 	var verify func() error
 	if rt != nil {
@@ -1178,7 +1276,7 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 
 	// .
 	// .
-	argv, containment, cerr := containArgv(image.Argv(), profile)
+	argv, containment, cerr := containArgv(ctx, image.Argv(), profile)
 	if cerr != nil {
 		image.Close()
 		removeArtifactDir(dir)
@@ -1194,7 +1292,8 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 		PluginID:        res.Manifest.ID,
 		ArgvContainment: containment,
 		Artifact:        image,
-		ReadyTimeout:    opts.ReadyTimeout[res.Manifest.ID],
+		ReadyTimeout:    startupAllowance(opts, res.Manifest.ID, profile).Effective,
+		ReadyAllowance:  startupAllowance(opts, res.Manifest.ID, profile).Sentence(),
 		Argv:            argv,
 		Env:             []string{"SEV_PLUGIN_SOCKET=stdio:", "SEV_PLUGIN_ID=" + res.Manifest.ID},
 		RLimitASBytes:   opts.MemoryMax[res.Manifest.ID],
@@ -1234,7 +1333,7 @@ func startSupervisedNativeWith(res *packagefmt.Result, variant *packagefmt.Varia
 		grants = append(grants, modelsDir)
 	}
 	spec.AppContainer = wallFor(res.Manifest.ID, grants)
-	sup, err := supervisor.Start(spec, supervisorDispatcher(binding))
+	sup, err := supervisor.StartContext(ctx, spec, supervisorDispatcher(binding))
 	if err != nil {
 		var cleanup *supervisor.ContainmentCleanupError
 		if !errors.As(err, &cleanup) {
@@ -1628,11 +1727,25 @@ type operationTool struct {
 	disc        tools.Discovery
 	plugin      string
 	acts        ActProposer
+	gate        *atomic.Bool
+	authorized  func() bool
 }
 
 // .
 // .
 func (t *operationTool) Discovery() tools.Discovery { return t.disc }
+
+// .
+// .
+// .
+// .
+// .
+func (t *operationTool) ReplaySafe() bool {
+	if t.desc == nil || t.disc.OperatorConfirms {
+		return false
+	}
+	return t.desc.effects == broker.EffectsReadInternal || t.desc.effects == broker.EffectsReadExternal
+}
 
 func (t *operationTool) Name() string        { return t.name }
 func (t *operationTool) Description() string { return t.description }
@@ -1701,6 +1814,18 @@ type rpcErrorObject struct {
 // .
 // .
 func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}) (tools.Result, error) {
+	// .
+	// .
+	if t.gate != nil && !t.gate.Load() {
+		return tools.Result{Error: fmt.Sprintf("plugin %s: this release is being admitted; its operations are not yet callable", t.plugin)}, nil
+	}
+	// .
+	// .
+	// .
+	// .
+	if t.authorized != nil && !t.authorized() {
+		return tools.Result{Error: fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin)}, nil
+	}
 	// .
 	// .
 	// .
@@ -1801,6 +1926,11 @@ func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}
 		if err := ctx.Err(); err != nil {
 			return tools.Result{Error: "the call was cancelled before it was dispatched; nothing ran"}, nil
 		}
+	}
+	// .
+	// .
+	if t.authorized != nil && !t.authorized() {
+		return tools.Result{Error: fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin)}, nil
 	}
 	if t.seam != nil && t.desc != nil {
 		t.seam.BeginOperation(broker.OperationScope{Operation: t.operation, Effects: t.desc.effects,

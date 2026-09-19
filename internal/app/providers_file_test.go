@@ -250,21 +250,46 @@ func TestProviderCredentialChangeDropsPriorOptions(t *testing.T) {
 	t.Fatal("provider was not saved")
 }
 
+// .
+// .
+// .
+// .
+// .
 func TestProvidersFileRejectsUnknownAndTrailingData(t *testing.T) {
 	for _, body := range []string{
 		`{"providers":[],"typo":true}`,
 		`{"providers":[]} {}`,
-		`{"providers":[{"name":"bad","api_type":"anthropicc","url":"https://example.com"}]}`,
-		`{"providers":[{"name":""}]}`,
-		`{"providers":[{"name":"same"},{"name":"same"}]}`,
-		`{"providers":[{"name":"one","default":true},{"name":"two","default":true}]}`,
 	} {
 		path := filepath.Join(t.TempDir(), "providers.json")
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := loadProvidersFile(path); err == nil {
-			t.Fatalf("invalid provider data was accepted: %s", body)
+			t.Fatalf("a file that is not a providers file was accepted: %s", body)
+		}
+	}
+	good := `{"name":"ok","url":"https://ok.test","models":["m"]}`
+	for _, c := range []struct{ bad, reason string }{
+		{`{"name":"bad","api_type":"anthropicc","url":"https://example.com"}`, `unknown api_type "anthropicc"`},
+		{`{"name":""}`, "provider name is empty"},
+		{`{"name":"ok","url":"https://again.test"}`, `duplicate provider "ok"`},
+		{`{"name":"two","url":"https://two.test","default":true}`, `are both default`},
+	} {
+		first := strings.Replace(good, `"models"`, `"default":true,"models"`, 1)
+		body := `{"providers":[` + first + `,` + c.bad + `]}`
+		path := filepath.Join(t.TempDir(), "providers.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		reg, err := loadProvidersFile(path)
+		if err != nil {
+			t.Fatalf("one bad entry refused the whole file: %v\n%s", err, body)
+		}
+		if len(reg.Providers) != 1 || reg.Providers[0].Name != "ok" {
+			t.Fatalf("the good entry is not in use: %+v", reg.Providers)
+		}
+		if len(reg.broken) != 1 || reg.broken[0].position != 1 || !strings.Contains(reg.broken[0].reason, c.reason) {
+			t.Fatalf("the bad entry was not set aside with its reason %q: %+v", c.reason, reg.broken)
 		}
 	}
 }
@@ -699,6 +724,11 @@ func TestCredentialInfoNoticesAFileRemovedAfterItWasRead(t *testing.T) {
 	fillEmbeddedCredentialOptions(&reg)
 	opts = reg.Providers[0].CredentialOptions
 	app := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
+	// .
+	// .
+	// .
+	// .
+	opts["keychain_service"] = "aii-os-test-absent-" + dir
 	entry := providerEntry{Credential: "claude-code", CredentialOptions: opts}
 	if info := app.credentialInfo(entry); info == nil || info.Error != "" || info.Expired {
 		t.Fatalf("a readable, unexpired credential is not described as one: %+v", info)

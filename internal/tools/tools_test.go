@@ -87,6 +87,53 @@ func TestWriteTool(t *testing.T) {
 	}
 }
 
+// .
+// .
+// .
+// .
+// .
+func TestWriteToolReceiptNamesWhatItReplaced(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRegistry(dir, nil, Timeouts{})
+	path := filepath.Join(dir, "pkg.go")
+
+	write := func(t *testing.T, content string) string {
+		t.Helper()
+		result, err := r.Execute(context.Background(), "write", map[string]interface{}{
+			"file_path": path, "content": content,
+		})
+		if err != nil || result.Error != "" {
+			t.Fatalf("write failed: %v %s", err, result.Error)
+		}
+		return result.Output
+	}
+
+	if out := write(t, "one\ntwo\nthree\n"); !strings.Contains(out, "(new file)") {
+		t.Fatalf("a first write must say it made the file, got %q", out)
+	}
+
+	// .
+	if out := write(t, "one\n"); !strings.Contains(out, "(replaced 14 bytes; −2 lines)") {
+		t.Fatalf("a write that deleted two lines reported %q", out)
+	}
+	if out := write(t, "one\ntwo\nthree\nfour\n"); !strings.Contains(out, "(replaced 4 bytes; +3 lines)") {
+		t.Fatalf("a write that added three lines reported %q", out)
+	}
+	// .
+	// .
+	if out := write(t, "1\n2\n3\n4\n"); !strings.Contains(out, "(replaced 19 bytes; ±0 lines)") {
+		t.Fatalf("a same-line-count rewrite reported %q", out)
+	}
+	if out := write(t, "1\n2\n3"); !strings.Contains(out, "(replaced 8 bytes; −1 lines)") {
+		t.Fatalf("dropping the last line reported %q", out)
+	}
+	// .
+	// .
+	if out := write(t, "1\n2\n3\n"); !strings.Contains(out, "(replaced 5 bytes; ±0 lines)") {
+		t.Fatalf("an unterminated last line was not counted: %q", out)
+	}
+}
+
 func TestEditTool(t *testing.T) {
 	dir := t.TempDir()
 	r := NewRegistry(dir, nil, Timeouts{})

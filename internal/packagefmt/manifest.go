@@ -90,6 +90,15 @@ type Manifest struct {
 	// .
 	// .
 	// .
+	AiiosMinVersion          string `json:"aiios_min_version,omitempty"`
+	AiiosMaxExclusiveVersion string `json:"aiios_max_exclusive_version,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	// .
 	// .
 	// .
@@ -227,6 +236,19 @@ func parseManifest(raw []byte) (*Manifest, *Error) {
 		}
 	}
 
+	// .
+	// .
+	// .
+	// .
+	// .
+	for _, name := range []string{"aiios_min_version", "aiios_max_exclusive_version"} {
+		if bound, present := keys[name]; present {
+			if err := CheckHostBoundRaw(name, bound); err != nil {
+				return nil, fail(ReasonManifestInvalid, "manifest", "%s", err)
+			}
+		}
+	}
+
 	var m Manifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, fail(ReasonManifestInvalid, "manifest", "manifest fields mistyped: %v", err)
@@ -241,6 +263,13 @@ func parseManifest(raw []byte) (*Manifest, *Error) {
 	}
 	if !reManifestID.MatchString(m.ID) {
 		return nil, fail(ReasonManifestInvalid, "manifest", "id %q does not match the manifest id grammar", m.ID)
+	}
+	// .
+	// .
+	// .
+	// .
+	if err := CheckHostWindow(m.AiiosMinVersion, m.AiiosMaxExclusiveVersion); err != nil {
+		return nil, fail(ReasonManifestInvalid, "manifest", "%s", err)
 	}
 	if m.Version == "" {
 		return nil, fail(ReasonManifestInvalid, "manifest", "required field version is missing or empty")

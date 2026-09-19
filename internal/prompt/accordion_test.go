@@ -68,7 +68,8 @@ func TestAccordionFoldLadder(t *testing.T) {
 	rm.SetSection(ring.Ring3, "working_truth", big)
 
 	// .
-	c := newTestComposer(rm, 800)
+	// .
+	c := newTestComposer(rm, 1000)
 	c.SetName("FoldTest")
 	p, err := c.Compose(strings.Repeat("live work state line. ", 100), 0)
 	if err != nil {
@@ -100,8 +101,8 @@ func TestAccordionFoldLadder(t *testing.T) {
 
 	// .
 	// .
-	if p.TokenEstimate > 800 {
-		t.Fatalf("after the fold ladder the prompt must fit: %d tokens > 800 budget", p.TokenEstimate)
+	if p.TokenEstimate > 1000 {
+		t.Fatalf("after the fold ladder the prompt must fit: %d tokens > 1000 budget", p.TokenEstimate)
 	}
 
 	// .
@@ -123,13 +124,13 @@ func TestComposerLiveBudgetChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.SetMaxTokens(800)
+	c.SetMaxTokens(1000)
 	after, err := c.Compose(strings.Repeat("work state. ", 200), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.TokenEstimate > 800 {
-		t.Fatalf("live provider budget was not applied: %d > 800", after.TokenEstimate)
+	if after.TokenEstimate > 1000 {
+		t.Fatalf("live provider budget was not applied: %d > 1000", after.TokenEstimate)
 	}
 	if after.Text == before.Text {
 		t.Fatal("composition did not change after the live model budget narrowed")
@@ -167,12 +168,13 @@ func TestComposerBudgetIncludesReserveAndOmissionReceipt(t *testing.T) {
 	// .
 	// .
 	// .
-	c := newTestComposer(rm, 1200)
+	// .
+	c := newTestComposer(rm, 1400)
 	p, err := c.Compose(strings.Repeat("live state. ", 300), 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.TokenEstimate+200 > 1200 {
+	if p.TokenEstimate+200 > 1400 {
 		t.Fatalf("composed request uses %d prompt + 200 reserved tokens", p.TokenEstimate)
 	}
 }

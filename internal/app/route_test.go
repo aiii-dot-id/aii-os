@@ -484,3 +484,60 @@ func TestDisablingStopsTheRelayWhileAPassIsStillOnTheWire(t *testing.T) {
 		t.Fatal("the intent change did not advance the revision that fences a late answer")
 	}
 }
+
+// .
+// .
+type blockingStatusPublisher struct {
+	*stubNamePublisher
+	entered chan struct{}
+}
+
+func (p *blockingStatusPublisher) ServiceStatus(ctx context.Context) (certs.ServiceStatus, error) {
+	close(p.entered)
+	<-ctx.Done()
+	return certs.ServiceStatus{}, ctx.Err()
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TestASupersededRoutePassIsNotReportedAsAnOutage(t *testing.T) {
+	cfg := &Config{}
+	cfg.Certificate.RouteMode = routeDisabled
+	app := &App{cfg: cfg}
+	app.pn.name = &store.PublicName{Name: "x.example.test", Zone: "example.test"}
+	entered := make(chan struct{})
+	app.pn.publisher = &blockingStatusPublisher{stubNamePublisher: &stubNamePublisher{}, entered: entered}
+	done := make(chan error, 1)
+	go func() {
+		_, err := app.reconcileRoute(context.Background())
+		done <- err
+	}()
+	<-entered
+	app.signalRoute()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a superseded pass must return its cancellation, got %v", err)
+	}
+	app.pn.mu.Lock()
+	last, route := app.pn.lastError, app.pn.route.LastError
+	app.pn.mu.Unlock()
+	if last != "" || route != "" {
+		t.Fatalf("a superseded pass was recorded as the service's failure: %q / %q", last, route)
+	}
+}
+
+// .
+// .
+func TestTheRouteOwnerStartsOnceAndOnlyLaterCallersSignal(t *testing.T) {
+	app := &App{cfg: &Config{}}
+	if !app.startRouteOwner() {
+		t.Fatal("the first call did not start the owner")
+	}
+	if app.startRouteOwner() {
+		t.Fatal("a second call claimed to start the owner again")
+	}
+}

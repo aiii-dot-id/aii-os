@@ -75,23 +75,32 @@ function next() {
     // retracted to #/projects without a history entry.
     fresh();
     location.hash = '#/projects/nonexistent-id';
-    setTimeout(() => {
+    // WAIT FOR THE THING THE STEP IS ABOUT, bounded — not a fixed timer.
+    // Eighty milliseconds was enough alone and not under a sharded gate
+    // on a loaded host, where the router had not landed yet and the
+    // step reported a retraction that was still on its way.
+    (function poll(waited) {
+      const landed = document.getElementById('ghost-banner') && location.hash === '#/projects';
+      if (!landed && waited < 3000) { setTimeout(() => poll(waited + 20), 20); return; }
       const banner = document.getElementById('ghost-banner');
       if (!banner) { fail('no banner after a real ghost navigation (router did not land the ghost)'); return; }
       if (location.hash !== '#/projects') { fail('address not retracted: ' + location.hash); return; }
       next();
-    }, 80);
+    })(0);
   } else if (step === 3) {
     // A REAL id still works after a ghost: alpha renders, no banner.
     location.hash = '#/projects/alpha';
-    setTimeout(() => {
+    (function poll(waited) {
+      const landed = !document.getElementById('ghost-banner') &&
+        document.getElementById('proj-space').textContent.includes('Alpha') && document.title.indexOf('Alpha') >= 0;
+      if (!landed && waited < 3000) { setTimeout(() => poll(waited + 20), 20); return; }
       if (document.getElementById('ghost-banner')) { fail('banner survived a real navigation'); return; }
       if (!document.getElementById('proj-space').textContent.includes('Alpha')) { fail('real project does not render after a ghost'); return; }
       // TITLE: the focused project's name is the refinement go()'s
       // base title receives — the same fact that renders the page.
       if (document.title.indexOf('Alpha') < 0) { fail('focused project did not title the tab: ' + document.title); return; }
       next();
-    }, 80);
+    })(0);
   } else {
     report('OK');
   }

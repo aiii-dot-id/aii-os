@@ -206,7 +206,8 @@ func TestResolveLLMModelWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cc.MaxOutputTokens != 4096 || promptBudgetFor(entry, 32000) != 10240 {
+	budget, _ := promptBudgetFor(entry, 32000)
+	if cc.MaxOutputTokens != 4096 || budget != 10240 {
 		t.Fatalf("resolved limits did not reach the client: %+v %+v", cc, entry)
 	}
 

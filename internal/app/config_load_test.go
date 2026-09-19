@@ -133,15 +133,49 @@ func TestPromptMaxTokensZeroMeansDerive(t *testing.T) {
 	// .
 	// .
 	entry := providerEntry{ContextLength: 1_000_000, MaxOutputTokens: 32_000}
-	got := promptBudgetFor(entry, 0)
+	got, source := promptBudgetFor(entry, 0)
 	want := 1_000_000 - 32_000 - promptSafetyTokens
 	if got != want {
 		t.Fatalf("derived budget = %d, want %d (window - output - margin)", got, want)
 	}
+	if source != budgetDerived {
+		t.Fatalf("a budget taken from the window is %q, want %q", source, budgetDerived)
+	}
 
 	// .
-	if got := promptBudgetFor(entry, 50_000); got != 50_000 {
-		t.Fatalf("explicit budget = %d, want 50000 — an operator ceiling is not overridden", got)
+	if got, source := promptBudgetFor(entry, 50_000); got != 50_000 || source != budgetDeclared {
+		t.Fatalf("explicit budget = %d/%q, want 50000/%q — an operator ceiling is not overridden", got, source, budgetDeclared)
+	}
+
+	// .
+	// .
+	if got, source := promptBudgetFor(providerEntry{Name: "Local (oMLX)"}, 0); got != 32000 || source != budgetFallback {
+		t.Fatalf("undeclared window = %d/%q, want 32000/%q", got, source, budgetFallback)
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestLoadConfigRefusesANegativeRing3Bound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20,"ring3_max_chars":-1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "prompt.ring3_max_chars") {
+		t.Fatalf("got %v, want prompt.ring3_max_chars refusal", err)
+	}
+
+	// .
+	// .
+	zero := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(zero, []byte(`{"prompt":{"recent_turns":20,"ring3_max_chars":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(zero)
+	if err != nil || cfg.Prompt.Ring3MaxChars != 0 {
+		t.Fatalf("zero ring3_max_chars: cfg=%v err=%v", cfg.Prompt.Ring3MaxChars, err)
 	}
 }
 

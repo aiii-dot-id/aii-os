@@ -256,3 +256,30 @@ func TestInputCompletionOrdersTheFinalReplyBeforeDrainClose(t *testing.T) {
 		}
 	})
 }
+
+// .
+// .
+// .
+// .
+// .
+func TestTheHandleCarriesTheEnginesOwnEndOfTheInput(t *testing.T) {
+	a := newVoiceApp(t)
+	h, f := newTrackedSession(a, "vs-limit", true)
+	select {
+	case <-h.InputClosed():
+		t.Fatal("an open session is still listening")
+	default:
+	}
+	if why := h.InputCompletionReason(); why != "" {
+		t.Fatalf("nothing has ended the input: %q", why)
+	}
+	f.endInput("capture_limit")
+	select {
+	case <-h.InputClosed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the engine ending the input must reach the page's side of the handle")
+	}
+	if why := h.InputCompletionReason(); why != "capture_limit" {
+		t.Fatalf("the engine's own word for why, carried whole: %q", why)
+	}
+}

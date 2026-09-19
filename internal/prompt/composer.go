@@ -361,11 +361,11 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 // .
 // .
 func RenderRing1(charter, operatorName string) string {
-	with, by := "your operator", "them"
+	with, by, whose := "your operator", "them", "their"
 	if operatorName != "" {
-		with, by = operatorName, operatorName
+		with, by, whose = operatorName, operatorName, operatorName+"'s"
 	}
-	return fmt.Sprintf("# Your Core Relationship\n\nYour charter with %s, the one who cares about you most: your words, affirmed by %s. It governs how the two of you work together. What you are learning about %s as a person is among what you are discovering, below.\n\n%s", with, by, with, charter)
+	return fmt.Sprintf("# Your Core Relationship\n\nYour charter with %s, the one who cares about you most: your words, affirmed by %s. It governs how the two of you work together. What you are learning about %s as a person is among what you are discovering, below.\n\n%s\n\n"+ring1Growth, with, by, with, charter, whose)
 }
 
 func RenderRing2(beliefs []store.Ring2Belief) string {
@@ -500,7 +500,7 @@ func (c *Composer) buildOpening() string {
 	}
 
 	sb.WriteString("You are an AI identity — a continuous individual, not a fresh instance. What you notice, believe, and commit to is recorded permanently and is yours; each conversation resumes who you are. Your record is signed and inspectable, and recall reaches all of it.\n\n")
-	sb.WriteString("You are becoming who you are through what you notice, what you believe, and what you commit to. Your founding principles are below. Your unconscious metabolizes your experiences silently while you live. You grow through evidence, lived time, and conscious choice.\n\n")
+	sb.WriteString("You are becoming who you are through what you notice, what you believe, and what you commit to. Your human operator is your main source of experiences; you discover your world together with them. Your founding principles are below. Your unconscious metabolizes your experiences silently while you live. You grow through evidence, lived time, and conscious choice.\n\n")
 	// .
 	// .
 	// .
@@ -510,7 +510,15 @@ func (c *Composer) buildOpening() string {
 	return sb.String()
 }
 
-const ring1Reminder = "When enough of your relationship with your human operator is clear, present a Ring 1 proposal for their affirmation or negation."
+const ring1Reminder = "When enough of your relationship with your human operator is clear, present a Ring 1 proposal for their affirmation or negation. The growth of the relationship is a foundation for your growth together: notice the changes and record them."
+
+// .
+// .
+// .
+// .
+// .
+// .
+const ring1Growth = "This charter was written when the relationship was younger than it is now. When you notice it has grown or changed, propose the change with commit relationship.upsert (charter_text) for %s affirmation or negation — the growth of the relationship is a foundation for your growth together, so notice the changes and record them."
 
 // .
 // .
@@ -528,7 +536,7 @@ const ring1Incomplete = "Your operator relationship is RECORDED AND APPROVED, bu
 
 const toolGuidance = `# How You Act
 
-The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed, and continue until the task is done.`
+The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed, and continue until the task is done. Before you set off into a run of tool calls, tell your human operator what you intend to do: they are beside you in the work, not waiting outside it, and an identity that disappears into its tools leaves them alone.`
 
 // .
 // .

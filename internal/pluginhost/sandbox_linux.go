@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 	"os"
@@ -45,7 +46,7 @@ import (
 // .
 // .
 // .
-func containArgv(argv []string, profile *AcceleratorProfile) ([]string, supervisor.Containment, error) {
+func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile) ([]string, supervisor.Containment, error) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		// .
@@ -64,6 +65,13 @@ func containArgv(argv []string, profile *AcceleratorProfile) ([]string, supervis
 	}
 	if len(argv) == 0 {
 		return nil, supervisor.Containment{}, fmt.Errorf("nothing to contain")
+	}
+	// .
+	// .
+	// .
+	// .
+	if err := checkNamespace(ctx, bwrap); err != nil {
+		return nil, supervisor.Containment{}, err
 	}
 	// .
 	// .

@@ -55,6 +55,25 @@ const planningBriefText = "### Before you act\n" +
 	"say which: done, with its scope; continue, with the exact resume point; stop, with why. The " +
 	"practice is METHOD.md at your root."
 
+// .
+// .
+// .
+// .
+// .
+// .
+func resumeCardFor(ws *store.WorkSession) string {
+	return store.RenderResumeCard(store.ResumeFields{
+		Focus:            ws.Focus,
+		Established:      ws.State,
+		NextAction:       ws.NextMove,
+		ExpectedEvidence: ws.ExpectedEvidence,
+		Falsifier:        ws.Falsifier,
+		DecisionNeeded:   ws.DecisionNeeded,
+		ResumePoint:      ws.Plan,
+		Evidence:         ws.Evidence,
+	})
+}
+
 func (a *App) buildWorkState() (string, error) {
 	var parts []string
 	// .
@@ -190,16 +209,7 @@ func (a *App) buildWorkState() (string, error) {
 	// .
 	// .
 	if ws != nil {
-		if card := store.RenderResumeCard(store.ResumeFields{
-			Focus:            ws.Focus,
-			Established:      ws.State,
-			NextAction:       ws.NextMove,
-			ExpectedEvidence: ws.ExpectedEvidence,
-			Falsifier:        ws.Falsifier,
-			DecisionNeeded:   ws.DecisionNeeded,
-			ResumePoint:      ws.Plan,
-			Evidence:         ws.Evidence,
-		}); card != "" {
+		if card := resumeCardFor(ws); card != "" {
 			parts = append(parts, card)
 		}
 	}
@@ -251,6 +261,14 @@ func (a *App) buildWorkState() (string, error) {
 			}
 			parts = append(parts, spb.String())
 		}
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	if line := a.voiceWorkStateLine(); line != "" {
+		parts = append(parts, line)
 	}
 	// .
 	// .
@@ -359,6 +377,34 @@ func (a *App) buildWorkState() (string, error) {
 		}
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) voiceWorkStateLine() string {
+	if a.cfg == nil {
+		return ""
+	}
+	heard := false
+	switch st, _, _ := a.VoiceStatus(); st {
+	case "plugin", "cloud":
+		heard = true
+	}
+	if !heard && a.replyVoice() == "" {
+		return ""
+	}
+	listen, speak, _ := a.voiceMode()
+	// .
+	// .
+	// .
+	// .
+	// .
+	return "### Voice — " + voiceModeSentence(listen, speak) +
+		"\nChange it with work action=voice.mode: mode= names a pair, or listen= and/or speak=."
 }
 
 // .

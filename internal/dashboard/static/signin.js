@@ -61,9 +61,12 @@ export function credentialExpired(ci) {
 // credential's self-description does: a file that vanished after it was
 // first read still described itself as usable, and the button the status
 // line pointed to was hidden. Settings and the birth form share this rule.
+// skipWithValidToken is the operator's dashboard.skip_signin_with_valid_token,
+// on unless turned off: off, sign-in is offered beside a valid token too.
 const CREDENTIAL_REFUSED = ['no_credential', 'credential_expired'];
-export function signInWanted(p) {
+export function signInWanted(p, skipWithValidToken = true) {
   if (p.signin && p.signin.status === 'pending') return true;
+  if (!skipWithValidToken) return true;
   if (p.credential && CREDENTIAL_REFUSED.includes(p.status)) return true;
   const ci = p.credential_info;
   return !ci || !!ci.error || credentialExpired(ci);

@@ -330,6 +330,39 @@ func TestConfigStatePreservesDefaultPointerAndReportsResolution(t *testing.T) {
 	}
 }
 
+// .
+// .
+// .
+// .
+func TestConfigStateNamesWhereThePromptBudgetCameFrom(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		entry      providerEntry
+		maxTokens  int
+		wantBudget int
+		wantSource string
+	}{
+		{"fallback", providerEntry{Name: "Local (oMLX)", URL: "http://127.0.0.1:10240/v1", DefaultModel: "m", Default: true}, 0, 32000, "fallback"},
+		{"derived", providerEntry{Name: "Local (oMLX)", URL: "http://127.0.0.1:10240/v1", DefaultModel: "m", Default: true, ContextLength: 262144, MaxOutputTokens: 32000}, 0, 262144 - 32000 - promptSafetyTokens, "derived"},
+		{"declared", providerEntry{Name: "Local (oMLX)", URL: "http://127.0.0.1:10240/v1", DefaultModel: "m", Default: true}, 50_000, 50_000, "declared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestProviders(t, dir, tc.entry)
+			a := resolverApp(dir, LLMConfig{})
+			// .
+			if st := a.configState(); st.LLM.PromptBudget != 0 || st.LLM.PromptBudgetSource != "" {
+				t.Fatalf("before a client is adopted the budget must be unknown, got %d/%q", st.LLM.PromptBudget, st.LLM.PromptBudgetSource)
+			}
+			a.activateLLMRuntime(nil, tc.entry, tc.maxTokens)
+			st := a.configState()
+			if st.LLM.PromptBudget != tc.wantBudget || st.LLM.PromptBudgetSource != tc.wantSource {
+				t.Fatalf("budget = %d/%q, want %d/%q", st.LLM.PromptBudget, st.LLM.PromptBudgetSource, tc.wantBudget, tc.wantSource)
+			}
+		})
+	}
+}
+
 func TestSubstrateProbeDoesNotHoldConfigLock(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})

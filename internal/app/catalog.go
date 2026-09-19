@@ -28,6 +28,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
+	"github.com/aiii-dot-id/aii-os/internal/version"
 )
 
 // .
@@ -245,13 +246,14 @@ func (a *App) pluginsState(c *Config) dashboard.PluginsState {
 	url, at, refusal := a.catalogState()
 	views := a.catalogViews()
 	return dashboard.PluginsState{
-		Autoload: c.Plugins.Autoload, Skips: a.pluginSkipViews(), Installed: a.pluginViews(c), Catalog: views,
+		Autoload: c.Plugins.Autoload, Skips: a.pluginSkipViews(), Pending: a.pluginPendingViews(), Installed: a.pluginViews(c), Catalog: views,
 		CatalogURL: url, CatalogDir: c.Plugins.CatalogDir, CatalogFetchedAt: at, CatalogError: refusal,
 		CatalogUpdates: countUpdates(views),
 		Runtime: &dashboard.RuntimeLimitsView{
 			MaxInstalledBytes: c.Plugins.Runtime.MaxInstalledBytes, MaxFiles: c.Plugins.Runtime.MaxFiles,
 			MaxFileBytes: c.Plugins.Runtime.MaxFileBytes, MaxCompressedBytes: c.Plugins.Runtime.MaxCompressedBytes,
 			MaxDepth: c.Plugins.Runtime.MaxDepth, RootsKept: c.Plugins.Runtime.RootsKept,
+			MaxStartupMS: c.Plugins.Runtime.MaxStartupMS,
 		},
 		AuthProfiles: a.authProfileViews(c), Providers: a.providerViews(),
 	}
@@ -284,13 +286,13 @@ func (a *App) catalogViews() []dashboard.CatalogEntryView {
 		ver[p.ID] = p.Version
 	}
 	a.pluginMu.Unlock()
-	return catalogViewsFor(cat, ver)
+	return catalogViewsFor(cat, ver, a.pendingSummaries())
 }
 
 // .
 // .
 // .
-func catalogViewsFor(cat *pluginhost.Catalog, installed map[string]string) []dashboard.CatalogEntryView {
+func catalogViewsFor(cat *pluginhost.Catalog, installed map[string]string, pending map[string]pendingMark) []dashboard.CatalogEntryView {
 	out := make([]dashboard.CatalogEntryView, 0, len(cat.Plugins))
 	for _, e := range cat.Plugins {
 		_, pkg, _ := cat.Select(e.ID)
@@ -304,6 +306,18 @@ func catalogViewsFor(cat *pluginhost.Catalog, installed map[string]string) []das
 			v.Installed = true
 			v.InstalledVersion = iv
 			v.UpdateAvailable = pkg != nil && pluginhost.NewerVersion(e.Version, iv)
+		}
+		// .
+		// .
+		// .
+		if pm, ok := pending[e.ID]; ok {
+			v.Pending, v.PendingText = pm.phase, pm.text
+		}
+		// .
+		// .
+		// .
+		if ok, why := e.SupportedBy(version.Authored()); !ok {
+			v.Available, v.Requires = false, why
 		}
 		out = append(out, v)
 	}

@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 )
@@ -11,7 +12,15 @@ import (
 // .
 func startLiveForTest(a *App) error {
 	a.ring5Content = "# Verified Ring 5 test fixture"
-	return a.startLive()
+	if err := a.startLive(); err != nil {
+		return err
+	}
+	// .
+	// .
+	// .
+	// .
+	settlePlugins(a, 30*time.Second)
+	return nil
 }
 
 func TestMissingRing5EntersSafeBeforeReplay(t *testing.T) {

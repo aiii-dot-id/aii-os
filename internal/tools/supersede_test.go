@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // .
 // .
@@ -54,5 +57,52 @@ func TestSupersedeOriginRefusesCrossOrigin(t *testing.T) {
 	}
 	if got, _ := r.Get("pl_b_two"); got != Tool(bTwo) {
 		t.Fatal("B's tool is untouched by A's refused supersede")
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+func TestAGuardedSupersedeRefusedLeavesEveryRouteWhereItWas(t *testing.T) {
+	r := NewRegistry(t.TempDir(), nil, Timeouts{})
+	serving := &namedTool{n: "pl_a_one"}
+	dropped := &namedTool{n: "pl_a_two"}
+	_ = r.RegisterDynamic(serving, "org.a")
+	_ = r.RegisterDynamic(dropped, "org.a")
+	asked := 0
+	err := r.SupersedeOriginIf("org.a", []Tool{&namedTool{n: "pl_a_one"}, &namedTool{n: "pl_a_three"}}, nil, func() bool {
+		asked++
+		// .
+		// .
+		if r.regMu.TryLock() {
+			r.regMu.Unlock()
+			t.Error("the guard was asked outside the registry's lock")
+		}
+		return false
+	})
+	if !errors.Is(err, ErrSupersedeRefused) || asked != 1 {
+		t.Fatalf("err=%v asked=%d", err, asked)
+	}
+	if got, _ := r.Get("pl_a_one"); got != Tool(serving) {
+		t.Error("a refused supersede redirected a name")
+	}
+	if got, _ := r.Get("pl_a_two"); got != Tool(dropped) {
+		t.Error("a refused supersede removed a name")
+	}
+	if _, ok := r.Get("pl_a_three"); ok {
+		t.Error("a refused supersede added a name")
+	}
+	// .
+	next := &namedTool{n: "pl_a_one"}
+	if err := r.SupersedeOriginIf("org.a", []Tool{next}, nil, func() bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get("pl_a_one"); got != Tool(next) {
+		t.Error("an allowed supersede did not redirect")
+	}
+	if _, ok := r.Get("pl_a_two"); ok {
+		t.Error("an allowed supersede kept a dropped name")
 	}
 }

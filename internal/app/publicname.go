@@ -206,8 +206,13 @@ func (a *App) wirePublicName(cfg Config) error {
 	// .
 	// .
 	// .
-	a.startRouteOwner()
-	a.signalRoute()
+	// .
+	// .
+	// .
+	// .
+	if !a.startRouteOwner() {
+		a.signalRoute()
+	}
 	if mgr.Certificate() == nil {
 		go a.issuePublicCertificate(mgr)
 	}
@@ -451,19 +456,35 @@ func (a *App) claimPublicName() (dashboard.PublicNameState, error) {
 }
 
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func (a *App) retryPublicCertificate() (dashboard.PublicNameState, error) {
 	a.pn.mu.Lock()
 	mgr := a.pn.manager
+	if mgr != nil {
+		a.pn.status = publicNameClaiming
+		a.pn.lastError = ""
+	}
 	a.pn.mu.Unlock()
 	if mgr == nil {
 		return a.publicNameState(), errors.New("no public name is claimed")
 	}
 	go a.issuePublicCertificate(mgr)
-	a.pn.mu.Lock()
-	a.pn.status = publicNameClaiming
-	a.pn.mu.Unlock()
+	retryIssueStarted()
 	return a.publicNameState(), nil
 }
+
+// .
+// .
+// .
+// .
+var retryIssueStarted = func() {}
 
 // .
 func (a *App) publicNameState() dashboard.PublicNameState {

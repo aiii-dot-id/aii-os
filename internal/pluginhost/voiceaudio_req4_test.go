@@ -32,7 +32,7 @@ func TestEngineFormatsRequiresBothConfirmed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			in, out, err := engineFormats(c.result)
+			in, out, err := engineFormats(c.result, true)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("engineFormats err=%v wantErr=%v", err, c.wantErr)
 			}

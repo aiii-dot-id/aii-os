@@ -62,3 +62,34 @@ func TestRing1RendersAllThreeStates(t *testing.T) {
 		})
 	}
 }
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAnAffirmedCharterStillInvitesItsRevision(t *testing.T) {
+	const charter = "Sam is my operator."
+	for _, c := range []struct{ name, operator, want string }{
+		{"named operator", "Sam", "for Sam's affirmation or negation"},
+		{"unnamed operator", "", "for their affirmation or negation"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			composer := New(ring.NewManager(), 32000)
+			composer.SetIdentitySource(staticIdentitySource{identity: store.PromptIdentity{HasOperatorRelationship: true, Charter: charter, OperatorName: c.operator}})
+			prompt, err := composer.Compose("", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"When you notice it has grown or changed", "commit relationship.upsert (charter_text)", c.want, "foundation for your growth together"} {
+				if !strings.Contains(prompt.Text, want) {
+					t.Fatalf("the frame with a charter does not carry %q:\n%s", want, prompt.Text)
+				}
+			}
+			if strings.Contains(prompt.Text, ring1Reminder) {
+				t.Fatal("the absent-charter reminder rode a frame that has a charter")
+			}
+		})
+	}
+}

@@ -302,7 +302,16 @@ type LLMConfigState struct {
 	APIKeyMasked        string `json:"api_key_masked"`
 	ThinkingBudget      int    `json:"thinking_budget"`
 	ContextLength       int    `json:"context_length"`
-	ReasoningEffort     string `json:"reasoning_effort"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	PromptBudget       int    `json:"prompt_budget"`
+	PromptBudgetSource string `json:"prompt_budget_source"`
+	ReasoningEffort    string `json:"reasoning_effort"`
 	// .
 	// .
 	// .
@@ -363,6 +372,31 @@ type PromptConfigState struct {
 
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+type ProviderDirectory struct {
+	Providers                []ProviderInfo
+	Broken                   []BrokenProviderInfo
+	SkipSignInWithValidToken bool
+}
+
+// .
+// .
+// .
+// .
+type BrokenProviderInfo struct {
+	Position int    `json:"position"`
+	SHA256   string `json:"sha256"`
+	Name     string `json:"name,omitempty"`
+	Reason   string `json:"reason"`
+	// .
+	// .
+	Repair string `json:"repair,omitempty"`
+}
+
 type ProviderInfo struct {
 	Name     string `json:"name"`
 	APIType  string `json:"api_type,omitempty"`
@@ -451,10 +485,11 @@ type CredentialInfo struct {
 
 // .
 type PluginsState struct {
-	Autoload  string             `json:"autoload"`
-	Skips     []PluginSkipView   `json:"skips,omitempty"`
-	Installed []PluginView       `json:"installed,omitempty"`
-	Catalog   []CatalogEntryView `json:"catalog,omitempty"`
+	Autoload  string              `json:"autoload"`
+	Skips     []PluginSkipView    `json:"skips,omitempty"`
+	Pending   []PluginPendingView `json:"pending,omitempty"`
+	Installed []PluginView        `json:"installed,omitempty"`
+	Catalog   []CatalogEntryView  `json:"catalog,omitempty"`
 	// .
 	CatalogURL       string `json:"catalog_url"`
 	CatalogDir       string `json:"catalog_dir,omitempty"`
@@ -564,6 +599,56 @@ type RuntimeLimitsView struct {
 	MaxCompressedBytes int64 `json:"max_compressed_bytes"`
 	MaxDepth           int   `json:"max_depth"`
 	RootsKept          int   `json:"roots_kept"`
+	MaxStartupMS       int64 `json:"max_startup_ms"`
+}
+
+// .
+// .
+// .
+type StartupView struct {
+	EffectiveMS int64  `json:"effective_ms"`
+	RequestedMS int64  `json:"requested_ms"`
+	CeilingMS   int64  `json:"ceiling_ms"`
+	Source      string `json:"source"`
+	Capped      bool   `json:"capped,omitempty"`
+}
+
+// .
+// .
+// .
+// .
+// .
+type PluginLifecycleView struct {
+	State       string                 `json:"state"`
+	Since       string                 `json:"since,omitempty"`
+	Admission   string                 `json:"admission,omitempty"`
+	Residue     []string               `json:"residue,omitempty"`
+	RetryAt     string                 `json:"retry_at,omitempty"`
+	Activations []PluginActivationView `json:"activations,omitempty"`
+	Refusal     *PluginRefusalView     `json:"refusal,omitempty"`
+	// .
+	// .
+	Held string `json:"held,omitempty"`
+}
+
+// .
+type PluginActivationView struct {
+	Gen     uint64           `json:"gen"`
+	Role    string           `json:"role"`
+	Version string           `json:"version,omitempty"`
+	Since   string           `json:"since,omitempty"`
+	Timings map[string]int64 `json:"timings_ms,omitempty"`
+}
+
+// .
+// .
+// .
+type PluginRefusalView struct {
+	Stage    string `json:"stage"`
+	Class    string `json:"class"`
+	Cause    string `json:"cause"`
+	Remedy   string `json:"remedy,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
 }
 
 // .
@@ -613,6 +698,10 @@ type PluginView struct {
 	// .
 	Accelerator *AcceleratorView `json:"accelerator,omitempty"`
 	Readiness   *ReadinessView   `json:"readiness,omitempty"`
+	// .
+	Startup *StartupView `json:"startup,omitempty"`
+	// .
+	Lifecycle *PluginLifecycleView `json:"lifecycle,omitempty"`
 	// .
 	// .
 	Models []ModelView `json:"models,omitempty"`
@@ -696,6 +785,14 @@ type CatalogEntryView struct {
 	Installed        bool     `json:"installed"`
 	InstalledVersion string   `json:"installed_version,omitempty"`
 	UpdateAvailable  bool     `json:"update_available,omitempty"`
+	// .
+	// .
+	// .
+	Pending     string `json:"pending,omitempty"`
+	PendingText string `json:"pending_text,omitempty"`
+	// .
+	// .
+	Requires string `json:"requires,omitempty"`
 }
 
 // .
@@ -726,6 +823,9 @@ type PluginSettingView struct {
 	Minimum    *float64          `json:"minimum,omitempty"`
 	Maximum    *float64          `json:"maximum,omitempty"`
 	Handles    []string          `json:"handles,omitempty"`
+	// .
+	// .
+	Scope string `json:"scope,omitempty"`
 	// .
 	// .
 	OAuth *SettingOAuthHintView `json:"oauth,omitempty"`
@@ -764,10 +864,49 @@ type PluginActFinal struct {
 // .
 // .
 type PluginSkipView struct {
-	Dir    string `json:"dir"`
-	ID     string `json:"id"`
-	Tier   string `json:"tier"`
-	Reason string `json:"reason"`
+	// .
+	// .
+	// .
+	// .
+	Kind    string `json:"kind,omitempty"`
+	Dir     string `json:"dir"`
+	Package string `json:"package,omitempty"`
+	ID      string `json:"id"`
+	Tier    string `json:"tier"`
+	Reason  string `json:"reason"`
+}
+
+// .
+// .
+// .
+// .
+type PluginPendingView struct {
+	ID              string      `json:"id"`
+	Version         string      `json:"version"`
+	Phase           string      `json:"phase"`
+	Since           string      `json:"since,omitempty"`
+	Summary         string      `json:"summary"`
+	Attempt         int         `json:"attempt,omitempty"`
+	LastError       string      `json:"last_error,omitempty"`
+	RetryAt         string      `json:"retry_at,omitempty"`
+	BytesPresent    int64       `json:"bytes_present"`
+	BytesTotal      int64       `json:"bytes_total"`
+	FilesPresent    int         `json:"files_present"`
+	FilesTotal      int         `json:"files_total"`
+	RuntimeDeclared bool        `json:"runtime_declared,omitempty"`
+	RuntimePresent  bool        `json:"runtime_present,omitempty"`
+	RuntimeBytes    int64       `json:"runtime_bytes,omitempty"`
+	Models          []ModelView `json:"models,omitempty"`
+	// .
+	// .
+	// .
+	Refusal *PluginRefusalView `json:"refusal,omitempty"`
+	Residue []string           `json:"residue,omitempty"`
+	// .
+	// .
+	// .
+	Lifecycle *PluginLifecycleView `json:"lifecycle,omitempty"`
+	CleanupAt string               `json:"cleanup_at,omitempty"`
 }
 
 type DashboardState struct {
@@ -982,6 +1121,11 @@ type WSHandler struct {
 	// .
 	// .
 	// .
+	VoiceMode func() (listen, speak string, revision uint64)
+	// .
+	// .
+	// .
+	// .
 	// .
 	// .
 	// .
@@ -1001,12 +1145,17 @@ type WSHandler struct {
 
 	// .
 	// .
-	GetProviders func() []ProviderInfo
+	GetProviders func() ProviderDirectory
 	// .
 	// .
 	SetProvider    func(ProviderInfo) error
 	SetEffort      func(level string) error
 	DeleteProvider func(name string) error
+	// .
+	// .
+	// .
+	RepairProvider       func(position int, sha256 string) error
+	RemoveBrokenProvider func(position int, sha256 string) error
 	// .
 	// .
 	// .
@@ -1183,6 +1332,13 @@ type StatsResponse struct {
 	VoiceReason string `json:"voice_reason,omitempty"`
 	// .
 	VoiceSource string `json:"voice_source,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	VoiceListen       string `json:"voice_listen,omitempty"`
+	VoiceSpeak        string `json:"voice_speak,omitempty"`
+	VoiceModeRevision uint64 `json:"voice_mode_revision,omitempty"`
 	// .
 	// .
 	ReplyVoice string `json:"reply_voice,omitempty"`
@@ -1398,6 +1554,8 @@ type ClientMessage struct {
 	Name        string                 `json:"name,omitempty"`
 	Q           string                 `json:"q,omitempty"`
 	Entry       *ProviderInfo          `json:"entry,omitempty"`
+	Position    *int                   `json:"position,omitempty"`
+	EntrySHA256 string                 `json:"entry_sha256,omitempty"`
 	Input       string                 `json:"input,omitempty"`
 	Effort      string                 `json:"effort,omitempty"`
 	Voice       *VoiceRequest          `json:"voice,omitempty"`
@@ -1433,30 +1591,34 @@ type SectionState struct {
 
 // .
 type ServerMessage struct {
-	PublicName  *PublicNameState `json:"public_name,omitempty"`
-	RequestID   string           `json:"request_id,omitempty"`
-	Type        string           `json:"type"`
-	Message     string           `json:"message,omitempty"`
-	Stats       *StatsResponse   `json:"stats,omitempty"`
-	Outbox      []OutboxItem     `json:"outbox,omitempty"`
-	Asks        []AskView        `json:"asks,omitempty"`
-	Device      *DeviceCodeView  `json:"device,omitempty"`
-	Projects    []ProjectState   `json:"projects,omitempty"`
-	Sandbox     *SandboxState    `json:"sandbox,omitempty"`
-	Work        *WorkState       `json:"work,omitempty"`
-	Workspace   *WorkspaceState  `json:"workspace,omitempty"`
-	History     []HistoryTurn    `json:"history,omitempty"`
-	Tools       []ToolState      `json:"tools,omitempty"`
-	Identity    *IdentityState   `json:"identity,omitempty"`
-	Query       string           `json:"query,omitempty"`
-	Continuity  *ContinuityState `json:"continuity,omitempty"`
-	Config      *ConfigState     `json:"config,omitempty"`
-	Providers   []ProviderInfo   `json:"providers,omitempty"`
-	SignInURL   string           `json:"signin_url,omitempty"`
-	Update      *UpdateState     `json:"update,omitempty"`
-	Provider    string           `json:"provider,omitempty"`
-	ModelList   []string         `json:"model_list,omitempty"`
-	SpeechLists *SpeechLists     `json:"speech_lists,omitempty"`
+	PublicName *PublicNameState `json:"public_name,omitempty"`
+	RequestID  string           `json:"request_id,omitempty"`
+	Type       string           `json:"type"`
+	Message    string           `json:"message,omitempty"`
+	Stats      *StatsResponse   `json:"stats,omitempty"`
+	Outbox     []OutboxItem     `json:"outbox,omitempty"`
+	Asks       []AskView        `json:"asks,omitempty"`
+	Device     *DeviceCodeView  `json:"device,omitempty"`
+	Projects   []ProjectState   `json:"projects,omitempty"`
+	Sandbox    *SandboxState    `json:"sandbox,omitempty"`
+	Work       *WorkState       `json:"work,omitempty"`
+	Workspace  *WorkspaceState  `json:"workspace,omitempty"`
+	History    []HistoryTurn    `json:"history,omitempty"`
+	Tools      []ToolState      `json:"tools,omitempty"`
+	Identity   *IdentityState   `json:"identity,omitempty"`
+	Query      string           `json:"query,omitempty"`
+	Continuity *ContinuityState `json:"continuity,omitempty"`
+	Config     *ConfigState     `json:"config,omitempty"`
+	Providers  []ProviderInfo   `json:"providers,omitempty"`
+	// .
+	// .
+	BrokenProviders          []BrokenProviderInfo `json:"broken_providers,omitempty"`
+	SkipSignInWithValidToken *bool                `json:"skip_signin_with_valid_token,omitempty"`
+	SignInURL                string               `json:"signin_url,omitempty"`
+	Update                   *UpdateState         `json:"update,omitempty"`
+	Provider                 string               `json:"provider,omitempty"`
+	ModelList                []string             `json:"model_list,omitempty"`
+	SpeechLists              *SpeechLists         `json:"speech_lists,omitempty"`
 	// .
 	// .
 	DashboardToken string `json:"dashboard_token,omitempty"`
@@ -3007,7 +3169,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 					s.sendMsg(ctx, conn, ServerMessage{Type: "providers", Providers: nil})
 					continue
 				}
-				s.sendMsg(ctx, conn, ServerMessage{Type: "providers", Providers: h.GetProviders()})
+				s.sendMsg(ctx, conn, providersMessage("", h.GetProviders()))
 			case "discover":
 				if h.DiscoverModels == nil {
 					s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "error", Message: "not available", Provider: msg.Provider})
@@ -3350,7 +3512,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if h.GetProviders != nil {
-				s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "providers", Providers: h.GetProviders()})
+				s.sendMsg(ctx, conn, providersMessage(msg.RequestID, h.GetProviders()))
 			}
 		case "grade":
 			// .
@@ -3444,7 +3606,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if h.GetProviders != nil {
-					s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "providers", Providers: h.GetProviders()})
+					s.sendMsg(ctx, conn, providersMessage(reqID, h.GetProviders()))
 				}
 				if h.GetConfig != nil {
 					state, err := h.GetConfig()
@@ -3460,7 +3622,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.BroadcastConfig()
 			}(msg.RequestID, msg.Effort)
 
-		case "provider_set", "provider_delete", "speech_service":
+		case "provider_set", "provider_delete", "provider_repair", "provider_remove_broken", "speech_service":
 			h := s.currentHandler()
 			var err error
 			switch {
@@ -3468,6 +3630,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				err = h.SetProvider(*msg.Entry)
 			case msg.Type == "provider_delete" && h.DeleteProvider != nil:
 				err = h.DeleteProvider(msg.Provider)
+			case msg.Type == "provider_repair" && h.RepairProvider != nil && msg.Position != nil:
+				err = h.RepairProvider(*msg.Position, msg.EntrySHA256)
+			case msg.Type == "provider_remove_broken" && h.RemoveBrokenProvider != nil && msg.Position != nil:
+				err = h.RemoveBrokenProvider(*msg.Position, msg.EntrySHA256)
 			case msg.Type == "speech_service" && h.SetSpeechService != nil:
 				err = h.SetSpeechService(msg.Provider, msg.APIKey, msg.BaseURL)
 			default:
@@ -3478,7 +3644,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if h.GetProviders != nil {
-				s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "providers", Providers: h.GetProviders()})
+				s.sendMsg(ctx, conn, providersMessage(msg.RequestID, h.GetProviders()))
 			}
 			if h.GetConfig != nil {
 				state, err := h.GetConfig()
@@ -3666,6 +3832,9 @@ func (s *Server) statusMessage(h *WSHandler) (ServerMessage, bool) {
 	stats.VoiceState = "setup"
 	if h.VoiceStatus != nil {
 		stats.VoiceState, stats.VoiceReason, stats.VoiceSource = h.VoiceStatus()
+	}
+	if h.VoiceMode != nil {
+		stats.VoiceListen, stats.VoiceSpeak, stats.VoiceModeRevision = h.VoiceMode()
 	}
 	// .
 	// .
@@ -3876,12 +4045,20 @@ func (s *Server) BroadcastSystemLine(text string) {
 	s.broadcast(ServerMessage{Type: "response", Role: "system", Done: true, Message: text})
 }
 
+// .
+// .
+func providersMessage(requestID string, d ProviderDirectory) ServerMessage {
+	skip := d.SkipSignInWithValidToken
+	return ServerMessage{RequestID: requestID, Type: "providers", Providers: d.Providers,
+		BrokenProviders: d.Broken, SkipSignInWithValidToken: &skip}
+}
+
 func (s *Server) BroadcastProviders() {
 	h := s.currentHandler()
 	if h == nil || h.GetProviders == nil {
 		return
 	}
-	s.broadcast(ServerMessage{Type: "providers", Providers: h.GetProviders()})
+	s.broadcast(providersMessage("", h.GetProviders()))
 }
 
 func (s *Server) BroadcastProjects() {

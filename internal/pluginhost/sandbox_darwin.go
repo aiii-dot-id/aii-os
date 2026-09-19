@@ -3,6 +3,7 @@
 package pluginhost
 
 import (
+	"context"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 	"os/exec"
@@ -54,7 +55,7 @@ const seatbeltProfile = `(version 1)
 (deny file-read* (regex #"^/Users/[^/]+/\.ssh"))
 `
 
-func containArgv(argv []string, _ *AcceleratorProfile) ([]string, supervisor.Containment, error) {
+func containArgv(_ context.Context, argv []string, _ *AcceleratorProfile) ([]string, supervisor.Containment, error) {
 	if len(argv) == 0 {
 		return nil, supervisor.Containment{}, fmt.Errorf("nothing to contain")
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,7 +38,13 @@ func readFrame(r io.Reader) ([]byte, error) {
 	return payload, nil
 }
 
+// .
+// .
+var frameMu sync.Mutex
+
 func writeFrame(w io.Writer, payload []byte) {
+	frameMu.Lock()
+	defer frameMu.Unlock()
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
 	if _, err := w.Write(header[:]); err != nil {
@@ -72,7 +79,9 @@ func main() {
 		// .
 		// .
 		// .
-		go audioEcho()
+		if in, ok := openAudioPair(); ok {
+			go audioEcho(in)
+		}
 	}
 
 	if mode == "ready-fields" {
@@ -205,10 +214,10 @@ func serveModes(mode string) {
 				Params struct {
 					Operation string `json:"operation"`
 					Arguments struct {
-						Audio struct {
-							Input  *struct{ Rate, Channels int } `json:"input"`
-							Output *struct{ Rate, Channels int } `json:"output"`
-						} `json:"audio"`
+						SessionID   string                     `json:"session_id"`
+						SynthesisID string                     `json:"synthesis_id"`
+						InputHandle *string                    `json:"input_handle"`
+						AudioRaw    map[string]json.RawMessage `json:"audio"`
 					} `json:"arguments"`
 				} `json:"params"`
 			}
@@ -222,8 +231,34 @@ func serveModes(mode string) {
 			// .
 			// .
 			if req.Params.Operation == "speech.session.open" {
-				a := req.Params.Arguments.Audio
+				// .
+				// .
+				var a struct {
+					Input  *struct{ Rate, Channels int }
+					Output *struct{ Rate, Channels int }
+				}
+				if raw, ok := req.Params.Arguments.AudioRaw["input"]; ok && string(raw) != "null" {
+					_ = json.Unmarshal(raw, &a.Input)
+				}
+				if raw, ok := req.Params.Arguments.AudioRaw["output"]; ok && string(raw) != "null" {
+					_ = json.Unmarshal(raw, &a.Output)
+				}
+				engineSession(req.Params.Arguments.SessionID)
+				// .
+				// .
+				// .
+				// .
+				// .
+				// .
+				rawIn, inPresent := req.Params.Arguments.AudioRaw["input"]
+				outputOnly := inPresent && string(rawIn) == "null" && req.Params.Arguments.InputHandle == nil && a.Output != nil
 				switch {
+				case outputOnly && os.Getenv("FAKE_OMIT_INPUT") != "":
+					writeFrame(os.Stdout, respond(id, fmt.Sprintf(`{"accepted":true,"audio":{"output":{"rate":%d,"channels":%d}}}`, a.Output.Rate, a.Output.Channels)))
+				case outputOnly && os.Getenv("FAKE_DUPLEX_ANYWAY") != "":
+					writeFrame(os.Stdout, respond(id, fmt.Sprintf(`{"accepted":true,"audio":{"input":{"rate":%d,"channels":%d},"output":{"rate":%d,"channels":%d}}}`, a.Output.Rate, a.Output.Channels, a.Output.Rate, a.Output.Channels)))
+				case outputOnly:
+					writeFrame(os.Stdout, respond(id, fmt.Sprintf(`{"accepted":true,"audio":{"input":null,"output":{"rate":%d,"channels":%d}}}`, a.Output.Rate, a.Output.Channels)))
 				case os.Getenv("FAKE_NO_FORMATS") != "":
 					writeFrame(os.Stdout, respond(id, `{"accepted":true}`))
 				case os.Getenv("FAKE_ENGINE_RATE") != "":
@@ -238,6 +273,13 @@ func serveModes(mode string) {
 				writeFrame(os.Stdout, respond(id, `{"accepted":true}`))
 			}
 			if req.Params.Operation == "speech.session.synthesize" {
+				// .
+				// .
+				// .
+				// .
+				if n, err := strconv.Atoi(os.Getenv("FAKE_SPEAK")); err == nil && n > 0 {
+					speak(req.Params.Arguments.SynthesisID, n)
+				}
 				writeFrame(os.Stdout, []byte(`{"jsonrpc":"2.0","method":"session.event","params":{"type":"synthesis_end","synthesis_id":"s1","sequence":1}}`))
 			}
 			if req.Params.Operation == "speech.session.close" && os.Getenv("FAKE_NO_TERMINAL") == "" {
@@ -245,7 +287,7 @@ func serveModes(mode string) {
 				// .
 				// .
 				// .
-				writeFrame(os.Stdout, []byte(`{"jsonrpc":"2.0","method":"session.event","params":{"type":"session_end","session_id":"s1","sequence":2}}`))
+				writeFrame(os.Stdout, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"session.event","params":{"type":"session_end","session_id":%q,"sequence":2}}`, currentSession())))
 			}
 		}
 	}
@@ -261,22 +303,110 @@ func block() {
 }
 
 // .
-func audioEcho() {
+// .
+var (
+	engineMu   sync.Mutex
+	engineSess string
+	audioOutMu sync.Mutex
+	audioOut   *os.File
+	spoken     uint32 = 1000
+)
+
+func engineSession(id string) {
+	engineMu.Lock()
+	engineSess = id
+	engineMu.Unlock()
+}
+
+func currentSession() string {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	return engineSess
+}
+
+// .
+// .
+func nameStream(synthesis string, stream uint32) {
+	writeFrame(os.Stdout, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","method":"session.event","params":{"type":"synthesis_start","session_id":%q,"synthesis_id":%q,"output_stream":%d}}`, currentSession(), synthesis, stream)))
+}
+
+func writeAudio(fr audio.Frame) error {
+	audioOutMu.Lock()
+	defer audioOutMu.Unlock()
+	if audioOut == nil {
+		return fmt.Errorf("fakechild: no audio pair")
+	}
+	return audio.WriteFrame(audioOut, fr)
+}
+
+// .
+func speak(synthesis string, n int) {
+	spoken++
+	stream := spoken
+	nameStream(synthesis, stream)
+	const per = 320
+	seq := uint32(0)
+	for at := 0; at < n; at += per {
+		k := per
+		if n-at < k {
+			k = n - at
+		}
+		pcm := make([]byte, 2*k)
+		for i := 0; i < k; i++ {
+			binary.LittleEndian.PutUint16(pcm[2*i:], uint16(at+i))
+		}
+		seq++
+		if writeAudio(audio.Frame{Kind: audio.KindPCM, Stream: stream, Seq: seq, Start: int64(at), PCM: pcm}) != nil {
+			return
+		}
+	}
+	_ = writeAudio(audio.Frame{Kind: audio.KindEnd, Stream: stream, Seq: seq + 1, Start: int64(n)})
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func openAudioPair() (in *os.File, ok bool) {
 	inFD, err1 := strconv.Atoi(os.Getenv("AII_AUDIO_IN_FD"))
 	outFD, err2 := strconv.Atoi(os.Getenv("AII_AUDIO_OUT_FD"))
 	if err1 != nil || err2 != nil {
 		fmt.Fprintln(os.Stderr, "fakechild: session-audio needs AII_AUDIO_IN_FD and AII_AUDIO_OUT_FD")
-		return
+		return nil, false
 	}
-	in := os.NewFile(uintptr(inFD), "audio-in")
-	out := os.NewFile(uintptr(outFD), "audio-out")
-	defer out.Close()
+	audioOutMu.Lock()
+	audioOut = os.NewFile(uintptr(outFD), "audio-out")
+	audioOutMu.Unlock()
+	return os.NewFile(uintptr(inFD), "audio-in"), true
+}
+
+func audioEcho(in *os.File) {
+	defer func() {
+		audioOutMu.Lock()
+		out := audioOut
+		audioOutMu.Unlock()
+		if out != nil {
+			out.Close()
+		}
+	}()
+	named := map[uint32]bool{}
 	for {
 		fr, err := audio.ReadFrame(in)
 		if err != nil {
 			return
 		}
-		if err := audio.WriteFrame(out, fr); err != nil {
+		// .
+		// .
+		// .
+		// .
+		// .
+		if !named[fr.Stream] {
+			named[fr.Stream] = true
+			nameStream(fmt.Sprintf("echo-%d", fr.Stream), fr.Stream)
+		}
+		if err := writeAudio(fr); err != nil {
 			return
 		}
 		// .

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,8 +16,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/fsdir"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
-	"github.com/aiii-dot-id/aii-os/internal/sections"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
@@ -48,6 +47,17 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	cfg := a.configSnapshot()
 	opts := &pluginhost.Options{}
 	var err error
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if cfg.Plugins.Runtime.MaxStartupMS != 0 {
+		if opts.StartupCeiling, err = cfg.Plugins.Runtime.startupCeiling(); err != nil {
+			return nil, fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
+		}
+	}
 	if opts.Roots.PublisherCertifier, err = packagefmt.PinnedOrShipped(cfg.Plugins.CertifierRoot, packagefmt.KeyTypePublisherCertifier); err != nil {
 		return nil, fmt.Errorf("plugins.certifier_root: %w", err)
 	}
@@ -118,19 +128,32 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	// .
 	// .
 	opts.PluginModelsDir = filepath.Join(dataDir, "plugins-models")
-	opts.ModelFetcher = fetchModel
+	fetch := a.modelFetch
+	if fetch == nil {
+		fetch = fetchModel
+	}
+	opts.ModelFetcher = fetch
 	// .
 	// .
 	// .
 	// .
 	opts.PluginRuntimeDir = filepath.Join(dataDir, "plugins-runtime")
-	opts.RuntimeFetcher = fetchModel
+	opts.RuntimeFetcher = fetch
 	opts.RuntimeLimits = cfg.Plugins.Runtime.TreeLimits()
 	opts.RuntimeRootsKept = cfg.Plugins.Runtime.RootsKept
 	if a.runtimeRoots == nil {
 		a.runtimeRoots = pluginhost.NewRuntimeRoots()
 	}
 	opts.RuntimeRoots = a.runtimeRoots
+	// .
+	// .
+	// .
+	// .
+	// .
+	opts.Acquirer = pluginhost.NewAcquirer(pluginhost.AcquirerConfig{
+		ModelFetcher: fetch, RuntimeFetcher: fetch,
+		Spawn: a.runBackground, Ready: a.materialReady, Changed: a.pluginsChanged,
+	})
 	protected := []string{cfg.Identity.LedgerPath, cfg.Identity.KeyPath, cfg.Identity.DBPath, cfg.SourcePath,
 		filepath.Join(dataDir, "trust"), filepath.Join(dataDir, "tls"), opts.PluginDataDir, opts.PluginModelsDir, opts.PluginRuntimeDir, "plugins"}
 	if abs, err := filepath.Abs("plugins"); err == nil {
@@ -194,6 +217,11 @@ func (a *App) pokePluginSweep() {
 	case a.sweepPoke <- struct{}{}:
 	default:
 	}
+	// .
+	// .
+	if a.facility != nil {
+		a.facility.Poke("app")
+	}
 }
 
 // .
@@ -213,6 +241,18 @@ func (a *App) pokePluginSweep() {
 // .
 func (a *App) startPluginSweep(ctx context.Context) {
 	a.sweepPoke = make(chan struct{}, 1)
+	// .
+	// .
+	// .
+	// .
+	// .
+	a.pluginFacility().Attach(ctx)
+	a.watchFacility(ctx)
+	// .
+	// .
+	if acq := a.acquirer(); acq != nil {
+		acq.Attach(ctx)
+	}
 	// .
 	// .
 	// .
@@ -248,10 +288,11 @@ func (a *App) startPluginSweep(ctx context.Context) {
 			case <-trustC:
 			case <-a.sweepPoke:
 			}
-			if _, safe := a.SafeMode(); safe {
-				continue
-			}
-			a.convergePlugins(ctx)
+			// .
+			// .
+			// .
+			// .
+			a.rescanPlugins(ctx)
 		}
 	})
 }
@@ -261,17 +302,48 @@ func (a *App) startPluginSweep(ctx context.Context) {
 // .
 // .
 // .
-func (a *App) convergePlugins(ctx context.Context) {
+func (a *App) discoverPlugins() pluginfacility.Discovery {
+	var out pluginfacility.Discovery
+	dirs, _ := filepath.Glob(filepath.Join("plugins", "*"))
+	sort.Strings(dirs)
+	for _, pdir := range dirs {
+		if st, err := os.Stat(pdir); err != nil || !st.IsDir() {
+			continue
+		}
+		pkgs, _ := filepath.Glob(filepath.Join(pdir, "*.aiiospkg"))
+		if len(pkgs) == 0 {
+			continue
+		}
+		if len(pkgs) > 1 {
+			out.Ambiguous = append(out.Ambiguous, pdir)
+			continue
+		}
+		st, err := os.Stat(pkgs[0])
+		if err != nil {
+			continue
+		}
+		out.Found = append(out.Found, pluginfacility.Found{Dir: pdir, Package: pkgs[0], Size: st.Size(), MTime: st.ModTime().UnixNano()})
+	}
+	return out
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) rescanPlugins(ctx context.Context) {
 	cfg := a.configSnapshot()
 	autoload := cfg.Plugins.Autoload
-	minTier, loadNone, tierOK := autoloadTier(autoload)
+	minTier, _, tierOK := autoloadTier(autoload)
 	if !tierOK {
 		log.Printf("plugins: autoload %q is not a level (none, T0..T3) — using T1", autoload)
-		minTier, loadNone = packagefmt.TierT1, false
+		minTier = packagefmt.TierT1
 	}
 
-	// .
-	// .
 	// .
 	// .
 	// .
@@ -287,301 +359,74 @@ func (a *App) convergePlugins(ctx context.Context) {
 			for _, line := range a.pluginOpts.Roots.Revocation.Describe() {
 				log.Printf("plugins: trust directory changed — %s", line)
 			}
-			a.pluginVerify = nil
 			trustChanged = true
 		}
 	}
 
-	type found struct {
-		dir, pkg    string
-		size, mtime int64
-	}
-	var scan []found
-	dirs, _ := filepath.Glob(filepath.Join("plugins", "*"))
-	sort.Strings(dirs)
-	var finger strings.Builder
-	finger.WriteString(autoload)
-	for _, pdir := range dirs {
-		if st, err := os.Stat(pdir); err != nil || !st.IsDir() {
-			continue
-		}
-		pkgs, _ := filepath.Glob(filepath.Join(pdir, "*.aiiospkg"))
-		if len(pkgs) == 0 {
-			continue
-		}
-		if len(pkgs) > 1 {
-			fmt.Fprintf(&finger, "|%s!ambiguous", pdir)
-			continue
-		}
-		st, err := os.Stat(pkgs[0])
-		if err != nil {
-			continue
-		}
-		f := found{dir: pdir, pkg: pkgs[0], size: st.Size(), mtime: st.ModTime().UnixNano()}
-		scan = append(scan, f)
-		fmt.Fprintf(&finger, "|%s=%s:%d:%d", pdir, f.pkg, f.size, f.mtime)
-	}
-	fp := finger.String()
-	a.pluginMu.Lock()
-	unchanged := fp == a.pluginFinger && !trustChanged
-	a.pluginFinger = fp
-	a.pluginMu.Unlock()
-	if unchanged {
-		return
-	}
-
-	// .
-	for _, pdir := range dirs {
-		if pkgs, _ := filepath.Glob(filepath.Join(pdir, "*.aiiospkg")); len(pkgs) > 1 {
-			log.Printf("plugin dir %s: %d packages — ambiguous, REFUSED (one package per directory)", pdir, len(pkgs))
-		}
-	}
-	secRoots := packagefmt.TrustRoots{}
-	if a.pluginOpts != nil {
-		secRoots = a.pluginOpts.Roots
-	}
-	if a.pluginVerify == nil {
-		a.pluginVerify = make(map[string]verifyMemo)
-	}
-	type want struct {
-		found
-		res *packagefmt.Result
-	}
-	desired := map[string]want{}
-	var skips []pluginSkip
-	for _, f := range scan {
-		memo, ok := a.pluginVerify[f.pkg]
-		if !ok || memo.size != f.size || memo.mtime != f.mtime {
-			res, err := packagefmt.VerifyFile(f.pkg, secRoots)
-			memo = verifyMemo{size: f.size, mtime: f.mtime, res: res, err: err}
-			a.pluginVerify[f.pkg] = memo
-		}
-		if memo.err != nil {
-			log.Printf("plugin %s: verification FAILED, package skipped (identity unaffected; this is not T0 — invalid evidence refuses at every autoload level): %v", f.pkg, memo.err)
-			continue
-		}
-		vid := memo.res.Manifest.ID
-		if prev, dup := desired[vid]; dup {
-			log.Printf("plugin dir %s: verified id %q already provided by %s — duplicate REFUSED", f.dir, vid, prev.dir)
-			continue
-		}
-		if base := filepath.Base(f.dir); base != vid {
-			log.Printf("plugin dir %s: note — directory name differs from verified id %q (identity comes from the signature)", f.dir, vid)
-		}
-		if loadNone || memo.res.Tier < minTier {
-			skips = append(skips, pluginSkip{Dir: f.dir, ID: vid, Tier: memo.res.Tier.String(), Reason: fmt.Sprintf("verified %s is below plugins.autoload %s", memo.res.Tier, autoload)})
-			log.Printf("plugin %s (%s): below plugins.autoload %s — present, verified, NOT loaded", vid, memo.res.Tier, autoload)
-			continue
-		}
-		desired[vid] = want{found: f, res: memo.res}
-	}
+	f := a.pluginFacility()
+	f.Rescan(a.pluginPolicy(cfg, minTier, trustChanged))
 
 	// .
 	// .
-	a.pluginMu.Lock()
-	if a.activeMeta == nil {
-		a.activeMeta = make(map[string]activePkgMeta)
-	}
-	var deactivate []string
-	var updates []updateJob
-	unverified := map[string]error{}
-	for id, meta := range a.activeMeta {
-		w, still := desired[id]
-		if still && activationIsCurrent(w.pkg, w.res.PackageHash, meta) {
-			delete(desired, id)
-			continue
-		}
-		// .
-		// .
-		// .
-		// .
-		// .
-		// .
-		if still && meta.kind == "plugin" {
-			if memo, ok := a.pluginVerify[w.pkg]; ok && memo.err == nil {
-				updates = append(updates, updateJob{id: id, dir: w.dir, pkg: w.pkg, hash: w.res.PackageHash})
-				delete(desired, id)
-				continue
-			}
-		}
-		deactivate = append(deactivate, id)
-		if memo, ok := a.pluginVerify[meta.pkg]; ok && memo.err != nil {
-			unverified[id] = memo.err
+	// .
+	// .
+	// .
+	wanted := map[string]bool{}
+	for _, v := range f.Snapshot().Instances {
+		if v.Wanted {
+			wanted[v.ID] = true
 		}
 	}
-	sort.Strings(deactivate)
-	a.pluginSkips = skips
-	a.pluginMu.Unlock()
-
-	for _, id := range deactivate {
-		if why, ok := unverified[id]; ok {
+	_, safe := a.SafeMode()
+	if acq := a.acquirer(); acq != nil {
+		if safe {
 			// .
 			// .
-			// .
-			log.Printf("plugin %s: DEACTIVATED — its package no longer verifies under the current trust status: %v", id, why)
+			acq.Keep(map[string]bool{})
+		} else {
+			acq.Keep(wanted)
 		}
-		a.deactivateByID(ctx, id)
 	}
-	sort.Slice(updates, func(i, j int) bool { return updates[i].id < updates[j].id })
-	for _, u := range updates {
-		a.updateInPlace(ctx, u, secRoots)
-	}
-
-	ids := make([]string, 0, len(desired))
-	for id := range desired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		w := desired[id]
-		_, granted := cfg.Plugins.Grants[id]
-		a.activateOne(ctx, id, w.dir, w.pkg, w.res.PackageHash, secRoots, granted)
-	}
-
-	a.pluginMu.Lock()
-	activeIDs := make(map[string]bool, len(a.activeMeta))
-	for id := range a.activeMeta {
-		activeIDs[id] = true
-	}
-	a.pluginMu.Unlock()
+	granted := make([]string, 0, len(cfg.Plugins.Grants))
 	for gid := range cfg.Plugins.Grants {
-		if !activeIDs[gid] {
-			log.Printf("plugins: grant for %q references no active plugin — orphaned or below-threshold policy (harmless)", gid)
-		}
+		granted = append(granted, gid)
+	}
+	for _, gid := range orphanedGrants(granted, wanted) {
+		log.Printf("plugins: grant for %q references no package this host wants — orphaned or below-threshold policy (harmless)", gid)
 	}
 	// .
 	// .
-	a.convergeChannels(ctx)
+	// .
+	if !safe {
+		a.convergeChannels(ctx)
+	}
+	// .
+	// .
+	a.pluginsChanged()
 }
 
 // .
 // .
-func (a *App) activateOne(ctx context.Context, id, dir, pkg, hash string, secRoots packagefmt.TrustRoots, granted bool) {
-	sec, serr := sections.ActivateFromPackage(pkg, secRoots)
-	switch {
-	case serr == nil:
-		if rerr := a.sections.Register(sec); rerr != nil {
-			_ = sec.Close()
-			log.Printf("section %s: registration REFUSED, package skipped (identity unaffected): %v", pkg, rerr)
-			return
-		}
-		a.pluginMu.Lock()
-		a.sectionActs = append(a.sectionActs, sec)
-		a.activeMeta[id] = activePkgMeta{dir: dir, pkg: pkg, hash: hash, kind: "section"}
-		a.pluginMu.Unlock()
-		log.Printf("section %s activated (id %s, slot %s): commands %v topics %v", sec.PackageID, sec.Decl.ID, sec.Decl.Slot, sec.Decl.Commands, sec.Decl.Topics)
-		return
-	case errors.Is(serr, sections.ErrAssetNotSection):
-		a.pluginMu.Lock()
-		a.activeMeta[id] = activePkgMeta{dir: dir, pkg: pkg, hash: hash, kind: "asset"}
-		a.pluginMu.Unlock()
-		log.Printf("plugin %s: kind=asset without section.json — nothing activates for it yet (skipped)", pkg)
-		return
-	case errors.Is(serr, sections.ErrNotAsset):
-		// .
-	default:
-		log.Printf("section %s: activation REFUSED, package skipped (identity unaffected): %v", pkg, serr)
-		return
-	}
-
-	actCtx, actCancel := context.WithTimeout(ctx, 30*time.Second)
-	ap, err := pluginhost.Activate(actCtx, pkg, a.pluginToolReg, a.pluginOpts)
-	actCancel()
-	if err != nil {
-		log.Printf("plugin %s: activation REFUSED, package skipped (identity unaffected): %v", pkg, err)
-		return
-	}
-	a.pluginMu.Lock()
-	a.plugins = append(a.plugins, ap)
-	a.activeMeta[id] = activePkgMeta{dir: dir, pkg: pkg, hash: hash, kind: "plugin"}
-	a.pluginMu.Unlock()
-	a.startSubscriber(ap)
-	granted = granted && a.pluginOpts != nil && a.pluginOpts.Broker != nil
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	log.Printf("plugin %s activated (%s, %s, variant %s, %s): tools %v", ap.ID, ap.Tier, ap.Mode, ap.VariantID, activationPosture(ap.Capabilities, granted), ap.ToolNames)
-	// .
-	// .
-	// .
-	if g, ok := a.configSnapshot().Plugins.Grants[ap.ID]; ok && len(g.Roots) > 0 && len(g.Hosts) > 0 {
-		var roots []string
-		for _, r := range g.Roots {
-			roots = append(roots, r.Name)
-		}
-		log.Printf("plugin %s: WARNING — holds readable root(s) %v AND egress to %v: files in those roots can leave this machine through this plugin", ap.ID, roots, g.Hosts)
-	}
-}
-
 // .
 // .
-func (a *App) deactivateByID(ctx context.Context, id string) {
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	a.pluginMu.Lock()
-	meta, ok := a.activeMeta[id]
-	if !ok {
-		a.pluginMu.Unlock()
-		return
-	}
-	delete(a.activeMeta, id)
-	var ap *pluginhost.ActivePlugin
-	var sec *sections.Section
-	switch meta.kind {
-	case "plugin":
-		for i, p := range a.plugins {
-			if p.ID == id {
-				ap = p
-				a.plugins = append(a.plugins[:i], a.plugins[i+1:]...)
-				break
-			}
-		}
-	case "section":
-		for i, s := range a.sectionActs {
-			if s.PackageID == id {
-				sec = s
-				a.sectionActs = append(a.sectionActs[:i], a.sectionActs[i+1:]...)
-				break
-			}
+func orphanedGrants(granted []string, wanted map[string]bool) []string {
+	var out []string
+	for _, gid := range granted {
+		if !wanted[gid] {
+			out = append(out, gid)
 		}
 	}
-	a.pluginMu.Unlock()
-	if ap != nil {
-		a.stopSubscriber(ap.ID)
-		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
-		if err := ap.Deactivate(dctx); err != nil {
-			log.Printf("plugin %s: deactivate: %v", id, err)
-		}
-		dcancel()
-		log.Printf("plugin %s deactivated (removed from plugins/ or below the autoload level)", id)
-	}
-	if sec != nil {
-		if a.sections != nil {
-			a.sections.Remove(sec.Decl.ID)
-		}
-		if err := sec.Close(); err != nil {
-			log.Printf("section %s: cache removal: %v", id, err)
-		}
-		log.Printf("section %s deactivated", id)
-	}
+	sort.Strings(out)
+	return out
 }
 
 // .
 // .
 func (a *App) pluginSkipViews() []dashboard.PluginSkipView {
-	a.pluginMu.Lock()
-	defer a.pluginMu.Unlock()
-	out := make([]dashboard.PluginSkipView, 0, len(a.pluginSkips))
-	for _, sk := range a.pluginSkips {
-		out = append(out, dashboard.PluginSkipView{Dir: sk.Dir, ID: sk.ID, Tier: sk.Tier, Reason: sk.Reason})
+	skips := a.pluginFacility().Skips()
+	out := make([]dashboard.PluginSkipView, 0, len(skips))
+	for _, sk := range skips {
+		out = append(out, dashboard.PluginSkipView{Kind: sk.Kind, Dir: sk.Dir, Package: sk.Package, ID: sk.ID, Tier: sk.Tier, Reason: sk.Reason})
 	}
 	return out
 }
@@ -606,136 +451,6 @@ func (a *App) pluginSkipViews() []dashboard.PluginSkipView {
 // .
 // .
 // .
-// .
-// .
-type updateJob struct{ id, dir, pkg, hash string }
-
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-// .
-func (a *App) updateInPlace(ctx context.Context, u updateJob, secRoots packagefmt.TrustRoots) {
-	a.pluginMu.Lock()
-	var oldAp *pluginhost.ActivePlugin
-	for _, p := range a.plugins {
-		if p.ID == u.id {
-			oldAp = p
-			break
-		}
-	}
-	a.pluginMu.Unlock()
-	if oldAp == nil {
-		// .
-		// .
-		_, granted := a.configSnapshot().Plugins.Grants[u.id]
-		a.activateOne(ctx, u.id, u.dir, u.pkg, u.hash, secRoots, granted)
-		return
-	}
-	fromV := oldAp.Version
-
-	actCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	newAp, err := pluginhost.ActivateShadow(actCtx, u.pkg, a.pluginToolReg, a.pluginOpts)
-	cancel()
-	if err != nil {
-		log.Printf("plugin %s: update REFUSED at shadow activation — release %s keeps serving, unchanged: %v", u.id, fromV, err)
-		return
-	}
-	hctx, hcancel := context.WithTimeout(ctx, 10*time.Second)
-	herr := newAp.Health(hctx)
-	hcancel()
-	if herr != nil {
-		cctx, ccancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = newAp.CloseQuiet(cctx)
-		ccancel()
-		log.Printf("plugin %s: update to %s FAILED health — rolled back, release %s keeps serving: %v", u.id, newAp.Version, fromV, herr)
-		return
-	}
-
-	// .
-	// .
-	if rerr := newAp.Redirect(oldAp); rerr != nil {
-		cctx, ccancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = newAp.CloseQuiet(cctx)
-		ccancel()
-		log.Printf("plugin %s: update redirect REFUSED — release %s keeps serving: %v", u.id, fromV, rerr)
-		return
-	}
-	a.pluginMu.Lock()
-	for i, p := range a.plugins {
-		if p.ID == u.id {
-			a.plugins[i] = newAp
-			break
-		}
-	}
-	a.activeMeta[u.id] = activePkgMeta{dir: u.dir, pkg: u.pkg, hash: u.hash, kind: "plugin"}
-	a.pluginMu.Unlock()
-	// .
-	// .
-	// .
-	a.stopSubscriber(u.id)
-	a.startSubscriber(newAp)
-	log.Printf("plugin %s: updated %s -> %s side by side; draining the predecessor", u.id, fromV, newAp.Version)
-
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if oldAp.Pinned() {
-		log.Printf("plugin %s: predecessor %s holds an open session — pinned until it closes or its process exits", u.id, fromV)
-		a.retire(oldAp)
-		go func() {
-			released := oldAp.PinReleased()
-			untrusted := oldAp.Voice.Untrusted()
-			for {
-				select {
-				case <-released:
-					if !a.claimRetiring(oldAp) {
-						return
-					}
-					cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-					if cerr := oldAp.CloseQuiet(cctx); cerr != nil {
-						log.Printf("plugin %s: pinned predecessor %s stop: %v", u.id, fromV, cerr)
-					}
-					ccancel()
-					log.Printf("plugin %s: pinned predecessor %s released and stopped", u.id, fromV)
-					return
-				case <-untrusted:
-					// .
-					// .
-					// .
-					// .
-					// .
-					untrusted = nil
-					log.Printf("plugin %s: pinned predecessor %s: session untrusted (%s) — asking the engine to abort", u.id, fromV, oldAp.Voice.FaultReason())
-					actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
-					if cerr := oldAp.Voice.Close(actx, "abort", "host fault: "+oldAp.Voice.FaultReason()); cerr != nil {
-						log.Printf("plugin %s: pinned predecessor %s: abort not admitted (%v); waiting for the reap", u.id, fromV, cerr)
-					}
-					acancel()
-				}
-			}
-		}()
-		return
-	}
-	// .
-	// .
-	if !oldAp.WaitIdle(10 * time.Second) {
-		log.Printf("plugin %s: predecessor %s did not go idle within the drain window — stopping it anyway (an in-flight call sees the wall close)", u.id, fromV)
-	}
-	cctx, ccancel := context.WithTimeout(ctx, 5*time.Second)
-	if cerr := oldAp.CloseQuiet(cctx); cerr != nil {
-		log.Printf("plugin %s: predecessor %s stop: %v", u.id, fromV, cerr)
-	}
-	ccancel()
-}
-
 func activationIsCurrent(pkg, hash string, meta activePkgMeta) bool {
 	return pkg == meta.pkg && hash != "" && hash == meta.hash
 }
@@ -900,4 +615,188 @@ func activationPosture(capabilities []string, granted bool) string {
 		return signed + ", brokered (operator grant active)"
 	}
 	return signed + ", quarantine, no operator grant"
+}
+
+// .
+// .
+func (a *App) acquirer() *pluginhost.Acquirer {
+	if a.pluginOpts == nil {
+		return nil
+	}
+	return a.pluginOpts.Acquirer
+}
+
+// .
+// .
+func (a *App) forgetAcquisition(id string) {
+	if acq := a.acquirer(); acq != nil {
+		acq.Forget(id)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+func (a *App) materialReady(id string) {
+	a.rerunPluginSweep()
+	a.pluginsChanged()
+}
+
+// .
+// .
+// .
+func (a *App) rerunPluginSweep() { a.pokePluginSweep() }
+
+// .
+// .
+func (a *App) pluginsChanged() {
+	if a.dashboard != nil {
+		a.dashboard.BroadcastConfig()
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+const (
+	lifeStarting = "starting"
+	lifeRefused  = "refused"
+	// .
+	// .
+	lifeRetiring = "retiring"
+	// .
+	lifeHeld = "held"
+)
+
+type pluginLifecycle struct {
+	// .
+	note                   string
+	version, phase, reason string
+	since                  time.Time
+	// .
+	view pluginfacility.InstanceView
+}
+
+// .
+// .
+func (a *App) markPlugin(id, version, phase, reason string) {
+	a.pluginMu.Lock()
+	if phase == "" {
+		delete(a.pluginLife, id)
+	} else {
+		if a.pluginLife == nil {
+			a.pluginLife = map[string]pluginLifecycle{}
+		}
+		a.pluginLife[id] = pluginLifecycle{version: version, phase: phase, reason: reason, since: time.Now()}
+	}
+	a.pluginMu.Unlock()
+	a.pluginsChanged()
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) RetryPlugin(id string) error {
+	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return fmt.Errorf("plugins: refusing to retry %q — not a plain plugin id", id)
+	}
+	if !a.pluginFacility().Retry(id) {
+		return fmt.Errorf("plugins: %q is not a plugin this host has — nothing to try again", id)
+	}
+	// .
+	// .
+	a.rerunPluginSweep()
+	log.Printf("plugins: retrying %s at the operator's word", id)
+	return nil
+}
+
+// .
+// .
+type pendingMark struct{ phase, text string }
+
+// .
+// .
+// .
+// .
+func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
+	byID := map[string]dashboard.PluginPendingView{}
+	if acq := a.acquirer(); acq != nil {
+		for _, st := range acq.Snapshot() {
+			v := dashboard.PluginPendingView{ID: st.PluginID, Version: st.Version, Phase: st.Phase, Summary: st.Summary(),
+				Attempt: st.Attempt, LastError: st.LastError,
+				BytesPresent: st.BytesPresent, BytesTotal: st.BytesTotal, FilesPresent: st.FilesPresent, FilesTotal: st.FilesTotal,
+				RuntimeDeclared: st.RuntimeDeclared, RuntimePresent: st.RuntimePresent, RuntimeBytes: st.RuntimeBytes}
+			if !st.RetryAt.IsZero() {
+				v.RetryAt = st.RetryAt.UTC().Format(time.RFC3339)
+			}
+			for _, ms := range st.Models {
+				v.Models = append(v.Models, dashboard.ModelView{Name: ms.Name, Size: ms.Size, Present: ms.Present, Partial: ms.Partial})
+			}
+			byID[st.PluginID] = v
+		}
+	}
+	a.pluginMu.Lock()
+	for id, l := range a.pluginLife {
+		// .
+		pv := dashboard.PluginPendingView{ID: id, Version: l.version, Phase: l.phase, Summary: lifecycleText(l), Since: l.since.UTC().Format(time.RFC3339),
+			Refusal: refusalView(l.view.Refusal), Residue: append([]string(nil), l.view.Residue...)}
+		if !l.view.RetryAt.IsZero() {
+			pv.RetryAt = l.view.RetryAt.UTC().Format(time.RFC3339)
+		}
+		if l.phase == lifeRetiring {
+			// .
+			// .
+			// .
+			pv.Lifecycle = lifecycleView(l.view)
+			pv.RetryAt = ""
+			if !l.view.CleanupAt.IsZero() {
+				pv.CleanupAt = l.view.CleanupAt.UTC().Format(time.RFC3339)
+			}
+		}
+		byID[id] = pv
+	}
+	a.pluginMu.Unlock()
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]dashboard.PluginPendingView, 0, len(byID))
+	for _, v := range byID {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func lifecycleText(l pluginLifecycle) string {
+	if l.phase == lifeRefused {
+		return l.reason
+	}
+	if l.phase == lifeRetiring {
+		return "stopping — what it held has not all come back"
+	}
+	if l.note != "" {
+		return l.note
+	}
+	return "verifying its files and starting it"
+}
+
+// .
+// .
+func (a *App) pendingSummaries() map[string]pendingMark {
+	out := map[string]pendingMark{}
+	for _, v := range a.pluginPendingViews() {
+		out[v.ID] = pendingMark{phase: v.Phase, text: v.Summary}
+	}
+	return out
 }

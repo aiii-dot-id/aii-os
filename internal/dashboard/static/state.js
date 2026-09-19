@@ -8,7 +8,7 @@ export const S = {
 
   projects: [], activeProject: null, viewedProject: null, dockFilter: '',
   focusDraft: null,
-  providers: [], providersLoaded: false,
+  providers: [], brokenProviders: [], skipSignInWithValidToken: true, providersLoaded: false,
   thinking: false, toolBusyTimer: null, reconnectTimer: null,
 
   tokenPrompted: false, wsEverOpened: false,

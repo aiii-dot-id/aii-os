@@ -467,7 +467,7 @@ func TestNativeT3LaneRunsVerifiedArtifact(t *testing.T) {
 		FileDigests: map[string]string{"variants/native/child": digestOf(raw)},
 	}
 	sink := &logSink{}
-	sup, dir, serr := startSupervisedNative(res, &res.Manifest.Variants[0], raw, nil,
+	sup, dir, serr := startSupervisedNative(context.Background(), res, &res.Manifest.Variants[0], raw, nil,
 		&Options{Log: log.New(sink, "", 0)})
 	if serr != nil {
 		t.Fatalf("native lane start: %v", serr)
@@ -541,7 +541,7 @@ func TestNativeConfiguredReadyDeadlineIsEnforced(t *testing.T) {
 	v := packagefmt.Variant{VariantID: "native", Entrypoint: "variants/native/child" + exeSuffix}
 	res := &packagefmt.Result{Tier: packagefmt.TierT3, Manifest: &packagefmt.Manifest{ID: id}, FileDigests: map[string]string{v.Entrypoint: digestOf(raw)}}
 	started := time.Now()
-	sup, dir, _, err := startSupervisedNativeWith(res, &v, raw, nil, &Options{ReadyTimeout: map[string]time.Duration{id: 25 * time.Millisecond}}, &AcceleratorProfile{Backend: "cpu"}, "", false, nil)
+	sup, dir, _, err := startSupervisedNativeWith(context.Background(), res, &v, raw, nil, &Options{ReadyTimeout: map[string]time.Duration{id: 25 * time.Millisecond}}, &AcceleratorProfile{Backend: "cpu"}, "", false, nil)
 	if sup != nil {
 		defer sup.Close()
 	}
@@ -552,5 +552,37 @@ func TestNativeConfiguredReadyDeadlineIsEnforced(t *testing.T) {
 	}
 	if time.Since(started) > 5*time.Second {
 		t.Fatal("configured readiness deadline was not enforced")
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAReadinessRefusalNamesItsAllowance(t *testing.T) {
+	skipWhereTheSandboxCannotBeEstablished(t)
+	raw, err := os.ReadFile(fakechildBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "org.example.startup-provenance"
+	v := packagefmt.Variant{VariantID: "native", Entrypoint: "variants/native/child" + exeSuffix}
+	res := &packagefmt.Result{Tier: packagefmt.TierT3, Manifest: &packagefmt.Manifest{ID: id}, FileDigests: map[string]string{v.Entrypoint: digestOf(raw)}}
+	opts := &Options{ReadyTimeout: map[string]time.Duration{id: 25 * time.Millisecond}, StartupCeiling: 20 * time.Millisecond}
+	sup, dir, _, err := startSupervisedNativeWith(context.Background(), res, &v, raw, nil, opts, &AcceleratorProfile{Backend: "cpu"}, "", false, nil)
+	if sup != nil {
+		defer sup.Close()
+	}
+	defer os.RemoveAll(dir)
+	var exit *supervisor.ChildExitError
+	if !errors.As(err, &exit) || exit.Phase != "start" {
+		t.Fatalf("a child that never reports ready is refused at start: %v", err)
+	}
+	if !strings.Contains(exit.Meaning, "within 20ms") || !strings.Contains(exit.Meaning, "you set 25ms; capped at the ceiling 20ms") {
+		t.Fatalf("the refusal must name the allowance and where it came from: %s", exit.Meaning)
 	}
 }

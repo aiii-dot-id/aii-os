@@ -64,6 +64,15 @@ run(() => {
   claude.signin = { status: 'failed' };
   renderSettings();
   assert(!button() && stack().includes('Sign-in failed.'), 'a failed sign-in beside a valid token lost its notice or offered the button: ' + stack().slice(0, 300));
+  // THE OPERATOR MAY ASK FOR SIGN-IN BESIDE A VALID TOKEN: with
+  // dashboard.skip_signin_with_valid_token off, the button is offered anyway.
+  delete claude.signin;
+  S.skipSignInWithValidToken = false;
+  renderSettings();
+  assert(button(), 'with the setting off, a valid token still hides sign-in');
+  S.skipSignInWithValidToken = true;
+  renderSettings();
+  assert(!button(), 'with the setting back on, a valid token still offers sign-in');
 });
 </script>`
 

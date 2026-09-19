@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -120,7 +121,15 @@ type Config struct {
 	MaxIterations       int
 	MaxToolResultChars  int
 	ContextBudgetTokens int
-	ThinkingBudget      int
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ContextBudgetFallback bool
+	ThinkingBudget        int
 	// .
 	// .
 	// .
@@ -171,7 +180,22 @@ type Config struct {
 	// .
 	// .
 	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	IsAct func(call llm.ToolCall) bool
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ReplaySafe func(call llm.ToolCall) bool
 
 	// .
 	// .
@@ -229,6 +253,15 @@ type Result struct {
 	// .
 	// .
 	ContinuedAtCap bool
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ContinuedAtPressure bool
 	// .
 	// .
 	// .
@@ -385,6 +418,23 @@ func (l *Loop) SetModelLimits(contextBudgetTokens, thinkingBudget int) {
 // .
 // .
 // .
+func (l *Loop) SetContextBudgetFallback(fallback bool) {
+	l.cfgMu.Lock()
+	defer l.cfgMu.Unlock()
+	l.cfg.ContextBudgetFallback = fallback
+}
+
+// .
+// .
+func (l *Loop) ContextBudgetFallback() bool {
+	l.cfgMu.RLock()
+	defer l.cfgMu.RUnlock()
+	return l.cfg.ContextBudgetFallback
+}
+
+// .
+// .
+// .
 func (l *Loop) Run(ctx context.Context, systemPrompt string, history []llm.Message) (Result, error) {
 	return l.RunSystem(ctx, llm.Message{Role: "system", Content: systemPrompt}, history, 0)
 }
@@ -421,7 +471,8 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 	// .
 	systemBase := system.Content + systemAdditions()
 	messages := append([]llm.Message{system}, history...)
-	fit := fitState{current: len(messages) - 1, omitted: omittedHistory}
+	fit := fitState{current: len(messages) - 1, omitted: omittedHistory, baseOmitted: omittedHistory,
+		fallback: cfg.ContextBudgetFallback, readOnly: cfg.ReplaySafe}
 
 	// .
 	// .
@@ -474,6 +525,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 	yielded := false
 	yieldAnswer := ""
 	continuedAtCap := false
+	continuedAtPressure := false
 	exhaustedBudget := false
 	exhaustedCallBudget := false
 	// .
@@ -536,6 +588,9 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			if i == 0 {
 				return fail(err)
 			}
+			// .
+			// .
+			continuedAtPressure = true
 			pressureBase := systemBase + "\n\n## Context pressure\nAnswer now from the available context without calling more tools."
 			finalTools, fitErr := fitFinalRequest(&messages, &fit, pressureBase, toolDefs, cfg.ContextBudgetTokens, l.transcript)
 			if fitErr != nil {
@@ -555,7 +610,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 				return fail(err)
 			}
 			spoken = append(spoken, finalText,
-				declare("The context filled during this turn. The answer above was finished without further tool calls, and older turns were dropped from the request."))
+				declare("The context filled during this turn after %d tool calls. The answer above was finished without further tool calls, and older turns were dropped from the request; while its work session is still active, the work continues automatically in a fresh turn.", toolCallsSoFar))
 			break
 		}
 
@@ -1131,7 +1186,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 		} else if yielded {
 			boundary = append(boundary, "You yielded this turn. Reply with one line of status — your gate is free, and a delivery or message wakes you next.")
 		} else if i == softCapFinal {
-			boundary = append(boundary, "Budget checkpoint: reply now with a brief status of where this leg ended. The work session stays active and continues automatically in a fresh turn.")
+			boundary = append(boundary, "Budget checkpoint: reply now with a brief status of where this leg ended. While the work session is still active, the work continues automatically in a fresh turn.")
 		}
 		if len(boundary) > 0 {
 			messages = append(messages, llm.Message{Role: "user", Content: strings.Join(boundary, "\n\n")})
@@ -1187,9 +1242,9 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 	// .
 	// .
 	if len(spoken) > 0 {
-		return Result{Spoken: strings.Join(spoken, "\n\n"), FinalText: finalText, ModelID: modelID, Usage: turnUsage, ContinuedAtCap: continuedAtCap, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: roundsUsed, ToolCallsUsed: toolCallsSoFar}, nil
+		return Result{Spoken: strings.Join(spoken, "\n\n"), FinalText: finalText, ModelID: modelID, Usage: turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtPressure: continuedAtPressure, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: roundsUsed, ToolCallsUsed: toolCallsSoFar}, nil
 	}
-	return Result{FinalText: finalText, ModelID: modelID, Usage: turnUsage, ContinuedAtCap: continuedAtCap, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: roundsUsed, ToolCallsUsed: toolCallsSoFar}, nil
+	return Result{FinalText: finalText, ModelID: modelID, Usage: turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtPressure: continuedAtPressure, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: roundsUsed, ToolCallsUsed: toolCallsSoFar}, nil
 }
 
 func finalResponse(response *llm.Response, circumstance string) (string, string, error) {
@@ -1220,6 +1275,19 @@ type fitState struct {
 	omitted  int
 	abridged int
 	warned   bool
+	// .
+	// .
+	// .
+	baseOmitted int
+	// .
+	folded int
+	// .
+	// .
+	// .
+	// .
+	readOnly func(llm.ToolCall) bool
+	// .
+	fallback bool
 }
 
 func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
@@ -1237,6 +1305,7 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 			if before != (*messages)[0].Content {
 				resetProviderReasoning(messages)
 			}
+			noteIfPressured(messages, st, tools, budget)
 			return llm.ValidateInput(*messages, tools, budget)
 		}
 		var limitErr *llm.ContextLimitError
@@ -1244,14 +1313,38 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 			return err
 		}
 
-		if foldToolResult(*messages, st.current, transcript) {
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		if st.current > 1 {
+			yieldOldestTurn(messages, st, systemBase)
+			continue
+		}
+		// .
+		// .
+		// .
+		// .
+		if foldToolResult(*messages, st, transcript, true) || foldToolResult(*messages, st, transcript, false) {
 			resetProviderReasoning(messages)
 			continue
 		}
-		if st.current <= 1 {
-			return err
-		}
+		return err
+	}
+}
 
+// .
+// .
+func yieldOldestTurn(messages *[]llm.Message, st *fitState, systemBase string) {
+	{
 		// .
 		// .
 		// .
@@ -1285,7 +1378,7 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 				resetProviderReasoning(messages)
 				st.abridged++
 				setFitSystem(&(*messages)[0], systemBase, st)
-				continue
+				return
 			}
 		}
 
@@ -1301,6 +1394,54 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 		}
 		setFitSystem(&(*messages)[0], systemBase, st)
 	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+const contextLinePrefix = "\n[context: "
+
+func noteIfPressured(messages *[]llm.Message, st *fitState, tools []llm.ToolDefinition, budget int) {
+	if budget <= 0 || len(*messages) == 0 {
+		return
+	}
+	last := &(*messages)[len(*messages)-1]
+	if last.Role != "tool" || strings.Contains(last.Content, contextLinePrefix) {
+		return
+	}
+	used, err := llm.EstimateInputTokens(*messages, tools)
+	if err != nil {
+		return
+	}
+	dropped := st.omitted - st.baseOmitted
+	if st.folded == 0 && st.abridged == 0 && dropped <= 0 && used*100 < budget*contextTightPercent {
+		return
+	}
+	line := contextLine(used, budget, dropped, st)
+	last.Content += line
+	if llm.ValidateInput(*messages, tools, budget) != nil {
+		last.Content = strings.TrimSuffix(last.Content, line)
+	}
+}
+
+func contextLine(used, budget, dropped int, st *fitState) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s~%d of %d tokens used", contextLinePrefix, used, budget)
+	if st.fallback {
+		b.WriteString(" — that window is a FALLBACK guess: the provider declares no context_length and none was discovered, so the model's real window may be far larger; your operator can set it on the provider entry")
+	}
+	fmt.Fprintf(&b, "; %d tool result(s) folded this turn", st.folded)
+	if dropped > 0 || st.abridged > 0 {
+		fmt.Fprintf(&b, "; %d older turn(s) dropped and %d abridged under pressure", max(dropped, 0), st.abridged)
+	}
+	b.WriteString(". A spawned sub-agent starts with an empty history.]")
+	return b.String()
 }
 
 // .
@@ -1378,21 +1519,111 @@ func HistoryOmissionNote(omitted int) string {
 	return fmt.Sprintf("\n\n## Conversation context\n%d older conversation turns are not shown. Each is still individually searchable by its own words: recall(query=\"<a distinctive word or phrase>\", source=conversation).", omitted)
 }
 
-func foldToolResult(messages []llm.Message, current int, transcript Transcript) bool {
-	notice := "[tool result folded under context pressure — do not repeat the tool solely to recover this output; continue from available evidence"
+// .
+// .
+const foldNoticePrefix = "[tool result folded under context pressure"
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func foldToolResult(messages []llm.Message, st *fitState, transcript Transcript, mustPay bool) bool {
+	ordinal := 0
+	for i := st.current + 1; i < len(messages); i++ {
+		m := messages[i]
+		if m.Role != "tool" {
+			continue
+		}
+		ordinal++
+		if strings.HasPrefix(m.Content, foldNoticePrefix) {
+			continue
+		}
+		call, found := callFor(messages, st.current, i, m.ToolCallID)
+		notice := foldNotice(call, found, st.readOnly, transcript)
+		if len(m.Content) <= len(notice) || (mustPay && len(m.Content) < 2*len(notice)) {
+			continue
+		}
+		name := "a tool"
+		if found {
+			name = call.Function.Name
+		}
+		how := "folded"
+		if !mustPay {
+			how = "folded as a last resort, saving little"
+		}
+		log.Printf("fold: result %d of this turn (%s, %d runes) %s under context pressure — %d folded so far", ordinal, name, utf8.RuneCountInString(m.Content), how, st.folded+1)
+		messages[i].Content = notice
+		st.folded++
+		return true
+	}
+	return false
+}
+
+// .
+// .
+func callFor(messages []llm.Message, from, to int, id string) (llm.ToolCall, bool) {
+	if id == "" {
+		return llm.ToolCall{}, false
+	}
+	for j := to - 1; j > from; j-- {
+		if messages[j].Role != "assistant" {
+			continue
+		}
+		for _, tc := range messages[j].ToolCalls {
+			if tc.ID == id {
+				return tc, true
+			}
+		}
+	}
+	return llm.ToolCall{}, false
+}
+
+// .
+// .
+const foldNoticeArgRunes = 80
+
+func foldNotice(call llm.ToolCall, found bool, readOnly func(llm.ToolCall) bool, transcript Transcript) string {
+	if found && readOnly != nil && readOnly(call) {
+		return fmt.Sprintf("%s — it was the read-only call %s(%s) and may be repeated exactly if its content is needed]",
+			foldNoticePrefix, call.Function.Name, argExcerpt(call.Function.Arguments))
+	}
+	notice := foldNoticePrefix
+	if found {
+		notice += fmt.Sprintf(" — it was %s(%s);", call.Function.Name, argExcerpt(call.Function.Arguments))
+	} else {
+		notice += " —"
+	}
+	notice += " do not repeat the tool solely to recover this output; continue from available evidence"
 	if transcript != nil && transcript.TranscriptResultExcerptLimit() > 0 {
 		notice += fmt.Sprintf("; ask the operator for the transcript excerpt if essential (first %d characters retained)", transcript.TranscriptResultExcerptLimit())
 	} else {
 		notice += "; no transcript excerpt is available"
 	}
-	notice += "]"
-	for i := current + 1; i < len(messages); i++ {
-		if messages[i].Role == "tool" && len(messages[i].Content) > len(notice) {
-			messages[i].Content = notice
-			return true
-		}
+	return notice + "]"
+}
+
+func argExcerpt(args string) string {
+	r := []rune(strings.TrimSpace(args))
+	if len(r) <= foldNoticeArgRunes {
+		return string(r)
 	}
-	return false
+	return string(r[:foldNoticeArgRunes]) + "…"
 }
 
 // .
@@ -1775,13 +2006,13 @@ func checkpointNote(declared, spent, grace int) string {
 		return declare("Declared budget reached: you estimated %d calls and have spent %d. "+
 			"Checkpoint NOW — `work update next_move=` with the exact resume point (revise plan= if it drifted), "+
 			"and say which this is: done with its scope, continue from that point, or stop with why. "+
-			"You have %d more rounds; then this turn ends and the work continues automatically in a fresh turn.",
+			"You have %d more rounds; then this turn ends and, while its work session is still active, the work continues automatically in a fresh turn.",
 			declared, spent, grace)
 	}
 	return declare("This turn has spent %d calls with no declared budget. "+
 		"Checkpoint NOW — `work update next_move=` with the exact resume point, declare steps= for the remainder, "+
 		"and say which this is: done with its scope, continue from that point, or stop with why. "+
-		"You have %d more rounds; then this turn ends and the work continues automatically in a fresh turn.",
+		"You have %d more rounds; then this turn ends and, while its work session is still active, the work continues automatically in a fresh turn.",
 		spent, grace)
 }
 

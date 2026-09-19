@@ -134,13 +134,17 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 		HandleMessage:  a.handleBootstrapMessage,
 		SetProvider:    a.setProviderInfo,
 		DeleteProvider: a.deleteProvider,
-		HandleGenesis:  a.handleGenesis,
+		// .
+		// .
+		RepairProvider:       a.repairBrokenProvider,
+		RemoveBrokenProvider: a.removeBrokenProvider,
+		HandleGenesis:        a.handleGenesis,
 		// .
 		// .
 		// .
 		// .
 		// .
-		GetProviders:        a.providerDirectoryLive,
+		GetProviders:        a.providerDirectory,
 		SignInProvider:      a.SignInProvider,
 		CompleteSignIn:      a.CompleteSignIn,
 		CancelSignIn:        a.CancelSignIn,
@@ -236,14 +240,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 	if err != nil {
 		return "", fmt.Errorf("provider validation failed (%s): %w", req.Endpoint, err)
 	}
-	offered := false
-	for _, m := range models {
-		if m == req.Model {
-			offered = true
-			break
-		}
-	}
-	if !offered {
+	if !modelOffered(models, meta, req.Model) {
 		return "", fmt.Errorf("model %q is not offered by %s (%d models offered)", req.Model, req.Endpoint, len(models))
 	}
 	if discovered, ok := meta[req.Model]; ok {
@@ -271,7 +268,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 	if terr != nil {
 		return "", terr
 	}
-	bootConfig.MaxInputTokens = promptBudgetFor(bentry, bootCfg.Prompt.MaxTokens)
+	bootConfig.MaxInputTokens, _ = promptBudgetFor(bentry, bootCfg.Prompt.MaxTokens)
 	bootClient := llm.New(&bootConfig)
 	bootResp, err := bootClient.Chat(ctx, []llm.Message{{Role: "system", Content: a.bootstrapText}}, llm.ChatOptions{})
 	if err == nil && (bootResp == nil || len(bootResp.Choices) == 0) {

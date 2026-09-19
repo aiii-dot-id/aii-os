@@ -76,7 +76,7 @@ func TestTouchingAPackageDoesNotTearItDown(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
-	app.convergePlugins(t.Context())
+	app.rescanPlugins(t.Context())
 
 	if out := buf.String(); strings.Contains(out, "deactivated") {
 		t.Fatalf("a restamp with identical bytes tore the activation down — plugin KV is activation-scoped, so this wipes the plugin's working set:\n%s", out)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -306,11 +307,19 @@ func readRecord(root string) (*rootRecord, error) {
 // .
 var ensureLocks sync.Map
 
-func lockRoot(root string) func() {
-	v, _ := ensureLocks.LoadOrStore(root, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+func lockRoot(ctx context.Context, root string) (func(), error) {
+	v, _ := ensureLocks.LoadOrStore(root, make(chan struct{}, 1))
+	gate := v.(chan struct{})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-gate
+			return nil, err
+		}
+		return func() { <-gate }, nil
+	}
 }
 
 // .
@@ -325,6 +334,9 @@ func lockRoot(root string) func() {
 // .
 // .
 func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir string, fetch ModelFetcher, limits packagefmt.TreeLimits, entry entrypointSpec, logf func(string, ...interface{})) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if entry.Name == "" || strings.ContainsAny(entry.Name, "/\\") {
 		return "", &RuntimeError{PluginID: pluginID, Detail: fmt.Sprintf("entrypoint name %q is not one file name", entry.Name)}
 	}
@@ -333,10 +345,16 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 	}
 	key := RuntimeRootKey(d.VariantID, d.InventorySHA256, entry.Name, entry.Digest)
 	root := filepath.Join(dir, key)
-	unlock := lockRoot(root)
+	unlock, err := lockRoot(ctx, root)
+	if err != nil {
+		return "", err
+	}
 	defer unlock()
 	if _, err := os.Stat(root); err == nil {
-		if verr := VerifyRuntimeRoot(root, d, entry, limits); verr != nil {
+		if verr := verifyRuntimeRoot(ctx, root, d, entry, limits); verr != nil {
+			if cancelled := ctx.Err(); cancelled != nil {
+				return "", cancelled
+			}
 			return "", &RuntimeError{PluginID: pluginID, Detail: fmt.Sprintf("the installed runtime does not verify: %v", verr)}
 		}
 		return root, nil
@@ -355,8 +373,13 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 		abandon()
 		return "", err
 	}
-	rep, xerr := packagefmt.ExtractTree(f, "sha256:"+d.InventorySHA256, limits, partial)
+	rep, xerr := packagefmt.ExtractTree(acquisitionReader{ctx, f}, "sha256:"+d.InventorySHA256, limits, partial)
 	f.Close()
+	if cancelled := ctx.Err(); cancelled != nil {
+		// .
+		// .
+		return "", errors.Join(cancelled, os.RemoveAll(partial))
+	}
 	if xerr != nil {
 		abandon()
 		_ = os.Remove(archive)
@@ -388,6 +411,9 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 		abandon()
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", errors.Join(err, os.RemoveAll(partial), os.Remove(recordPath(root)))
+	}
 	if err := os.Rename(partial, root); err != nil {
 		abandon()
 		_ = os.Remove(recordPath(root))
@@ -405,24 +431,36 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 // .
 // .
 func ensureArchive(ctx context.Context, pluginID string, d *RuntimeDecl, dir string, fetch ModelFetcher, logf func(string, ...interface{})) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	adir := filepath.Join(dir, archivesDir)
 	if err := os.MkdirAll(adir, 0o700); err != nil {
 		return "", fmt.Errorf("pluginhost: runtime archives: %w", err)
 	}
 	path := filepath.Join(adir, d.SHA256+archiveSuffix)
 	if st, err := os.Stat(path); err == nil {
-		if sum, n, herr := hashFile(path); herr == nil && n == st.Size() && n == d.Size && sum == d.SHA256 {
+		if sum, n, herr := hashFileContext(ctx, path); herr == nil && n == st.Size() && n == d.Size && sum == d.SHA256 {
 			return path, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		// .
 		_ = os.Remove(path)
 	}
-	if fetch == nil {
-		return "", &RuntimeMissingError{PluginID: pluginID, Cause: fmt.Errorf("offline: no download path")}
-	}
+	// .
+	// .
+	// .
 	partial := path + ".partial"
 	if err := fetchArchive(ctx, pluginID, d, partial, fetch, logf); err != nil {
+		if cancelled := ctx.Err(); cancelled != nil {
+			return "", cancelled
+		}
 		return "", &RuntimeMissingError{PluginID: pluginID, Cause: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	if err := os.Rename(partial, path); err != nil {
 		return "", err
@@ -433,15 +471,34 @@ func ensureArchive(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 // .
 // .
 func fetchArchive(ctx context.Context, pluginID string, d *RuntimeDecl, path string, fetch ModelFetcher, logf func(string, ...interface{})) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var offset int64
-	if st, err := os.Stat(path); err == nil {
+	if st, err := os.Lstat(path); err == nil {
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("runtime partial is not a regular file")
+		}
 		offset = st.Size()
 		if offset > d.Size {
-			_ = os.Remove(path)
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("discard oversized runtime partial: %w", err)
+			}
 			offset = 0
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect runtime partial: %w", err)
 	}
+	// .
+	// .
+	// .
 	if offset < d.Size {
+		if fetch == nil {
+			if offset == 0 {
+				return fmt.Errorf("offline: no download path")
+			}
+			return fmt.Errorf("offline: runtime partial has %d of %d bytes; no download path", offset, d.Size)
+		}
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 		if err != nil {
 			return err
@@ -449,6 +506,9 @@ func fetchArchive(ctx context.Context, pluginID string, d *RuntimeDecl, path str
 		lw := &limitedWriter{w: f, remaining: d.Size - offset}
 		_, ferr := fetch(ctx, d.URL, offset, lw)
 		cerr := f.Close()
+		if cancelled := ctx.Err(); cancelled != nil {
+			return cancelled
+		}
 		if lw.overflow {
 			_ = os.Remove(path)
 			return fmt.Errorf("the archive is larger than its declared %d bytes", d.Size)
@@ -463,7 +523,7 @@ func fetchArchive(ctx context.Context, pluginID string, d *RuntimeDecl, path str
 			return cerr
 		}
 	}
-	sum, n, err := hashFile(path)
+	sum, n, err := hashFileContext(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -477,6 +537,9 @@ func fetchArchive(ctx context.Context, pluginID string, d *RuntimeDecl, path str
 	if sum != d.SHA256 {
 		_ = os.Remove(path)
 		return fmt.Errorf("the archive does not match its declared digest")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if logf != nil {
 		logf("plugin %s: runtime archive verified (%d bytes)", pluginID, n)
@@ -511,6 +574,13 @@ func placeEntrypoint(root string, inv *packagefmt.Inventory, entry entrypointSpe
 // .
 // .
 func VerifyRuntimeRoot(root string, d *RuntimeDecl, entry entrypointSpec, limits packagefmt.TreeLimits) error {
+	return verifyRuntimeRoot(context.Background(), root, d, entry, limits)
+}
+
+func verifyRuntimeRoot(ctx context.Context, root string, d *RuntimeDecl, entry entrypointSpec, limits packagefmt.TreeLimits) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rec, err := readRecord(root)
 	if err != nil {
 		return fmt.Errorf("root record: %w", err)
@@ -531,6 +601,9 @@ func VerifyRuntimeRoot(root string, d *RuntimeDecl, entry entrypointSpec, limits
 	}
 	seen := map[string]bool{}
 	err = filepath.WalkDir(root, func(path string, de fs.DirEntry, werr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if werr != nil {
 			return werr
 		}
@@ -556,7 +629,7 @@ func VerifyRuntimeRoot(root string, d *RuntimeDecl, entry entrypointSpec, limits
 			if _, clash := expected[rel]; clash {
 				return fmt.Errorf("%s is both the carrier and an inventory file", rel)
 			}
-			sum, _, err := hashFile(path)
+			sum, _, err := hashFileContext(ctx, path)
 			if err != nil {
 				return err
 			}
@@ -576,7 +649,7 @@ func VerifyRuntimeRoot(root string, d *RuntimeDecl, entry entrypointSpec, limits
 		if exec := info.Mode().Perm()&0o100 != 0; exec != (e.Mode == "exec") {
 			return fmt.Errorf("%s has the wrong mode", rel)
 		}
-		sum, _, err := hashFile(path)
+		sum, _, err := hashFileContext(ctx, path)
 		if err != nil {
 			return err
 		}

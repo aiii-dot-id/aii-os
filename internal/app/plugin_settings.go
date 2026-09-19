@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
@@ -58,12 +60,33 @@ func (a *App) applyPluginSetting(cfg *Config, key string, v interface{}) error {
 	// .
 	// .
 	if v == nil || v == "" {
-		if cfg.Plugins.Settings != nil {
-			delete(cfg.Plugins.Settings[id], setting)
-			if len(cfg.Plugins.Settings[id]) == 0 {
-				delete(cfg.Plugins.Settings, id)
+		if cfg.Plugins.Settings == nil || cfg.Plugins.Settings[id] == nil {
+			return nil
+		}
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		next := make(map[string]map[string]interface{}, len(cfg.Plugins.Settings))
+		for pid, vals := range cfg.Plugins.Settings {
+			if pid != id {
+				next[pid] = vals
+				continue
+			}
+			kept := make(map[string]interface{}, len(vals))
+			for k, val := range vals {
+				if k != setting {
+					kept[k] = val
+				}
+			}
+			if len(kept) > 0 {
+				next[pid] = kept
 			}
 		}
+		cfg.Plugins.Settings = next
 		return nil
 	}
 	if decl == nil {
@@ -119,10 +142,16 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 	a.pluginMu.Lock()
 	active := append([]*pluginhost.ActivePlugin(nil), a.plugins...)
 	a.pluginMu.Unlock()
+	// .
+	// .
+	life := map[string]pluginfacility.InstanceView{}
+	for _, v := range a.pluginFacility().Snapshot().Instances {
+		life[v.ID] = v
+	}
 	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
 	views := make([]dashboard.PluginView, 0, len(active))
 	for _, ap := range active {
-		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Mode: ap.Mode, Variant: ap.VariantID, Tools: append([]string(nil), ap.ToolNames...)}
+		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Mode: ap.Mode, Variant: ap.VariantID, Tools: ap.Tools()}
 		view.Publisher, view.PublisherID, view.Family, view.Runtime, view.PackageHash = ap.Publisher, ap.PublisherID, ap.Family, ap.Runtime, ap.PackageHash
 		view.Title, view.Description = ap.Title, ap.Description
 		view.Interfaces, view.Capabilities = append([]string(nil), ap.Interfaces...), append([]string(nil), ap.Capabilities...)
@@ -131,6 +160,14 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 		}
 		if r := ap.Readiness; r != nil {
 			view.Readiness = &dashboard.ReadinessView{ModelsLoaded: r.ModelsLoaded, Accelerator: r.Accelerator, ProbeMS: r.ProbeMS}
+		}
+		if s := ap.Startup; s != nil {
+			ms := func(d time.Duration) int64 { return int64(d / time.Millisecond) }
+			view.Startup = &dashboard.StartupView{EffectiveMS: ms(s.Effective), RequestedMS: ms(s.Requested),
+				CeilingMS: ms(s.Ceiling), Source: s.Source, Capped: s.Capped}
+		}
+		if v, ok := life[ap.ID]; ok {
+			view.Lifecycle = lifecycleView(v)
 		}
 		if len(ap.Models) > 0 && ap.ModelsDir != "" {
 			for _, st := range pluginhost.ModelStatuses(ap.Models, ap.ModelsDir) {
@@ -155,7 +192,7 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 		view.Acts = a.pendingActViews(ap.ID)
 		effective := pluginhost.EffectiveSettings(ap.Settings, values)
 		for _, d := range ap.Settings {
-			sv := dashboard.PluginSettingView{Key: d.Key, Type: d.Type, Title: d.Title, Description: d.Description, Default: d.Default, Values: d.Values, Labels: d.Labels, Required: d.Required, Minimum: d.Minimum, Maximum: d.Maximum}
+			sv := dashboard.PluginSettingView{Key: d.Key, Type: d.Type, Title: d.Title, Description: d.Description, Default: d.Default, Values: d.Values, Labels: d.Labels, Required: d.Required, Minimum: d.Minimum, Maximum: d.Maximum, Scope: d.Scope}
 			if d.OAuth != nil {
 				sv.OAuth = &dashboard.SettingOAuthHintView{Provider: d.OAuth.Provider, Services: append([]string(nil), d.OAuth.Services...)}
 			}

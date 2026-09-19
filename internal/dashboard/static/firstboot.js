@@ -65,7 +65,7 @@ function renderSignIn(p) {
   // The rule Settings applies (signInWanted): progress whenever there is a
   // sign-in to report, the button only when a valid token is not in hand.
   row.innerHTML = signInProgress(p.signin, 'provider', p.name) +
-    (signInWanted(p) ? '<button class="btn" id="fb-signin-start">Sign in with ' + esc(p.name) + '</button>' : '') +
+    (signInWanted(p, S.skipSignInWithValidToken !== false) ? '<button class="btn" id="fb-signin-start">Sign in with ' + esc(p.name) + '</button>' : '') +
     (p.signin && p.signin.status === 'pending' ? '<button class="btn ghost" id="fb-signin-cancel">Cancel sign-in</button>' : '');
   wireSignInCompletion(row);
   const cancel = $('fb-signin-cancel'); if (cancel) cancel.onclick = () => send({type:'provider_signin_cancel',provider:p.name});

@@ -136,11 +136,13 @@ func (a *App) signalRoute() {
 
 // .
 // .
-func (a *App) startRouteOwner() {
+// .
+// .
+func (a *App) startRouteOwner() bool {
 	a.pn.mu.Lock()
 	if a.pn.routeOwner {
 		a.pn.mu.Unlock()
-		return
+		return false
 	}
 	a.pn.routeOwner = true
 	a.pn.routeWake = make(chan struct{}, 1)
@@ -155,6 +157,11 @@ func (a *App) startRouteOwner() {
 				return
 			}
 			next, err := a.reconcileRoute(ctx)
+			if err != nil && errors.Is(err, context.Canceled) {
+				// .
+				// .
+				err = nil
+			}
 			if err != nil {
 				// .
 				if err.Error() != last {
@@ -199,6 +206,7 @@ func (a *App) startRouteOwner() {
 			}
 		}
 	})
+	return true
 }
 
 // .
@@ -278,6 +286,13 @@ func (a *App) reconcileRoute(ctx context.Context) (time.Duration, error) {
 
 	st, err := pub.ServiceStatus(ctx)
 	if err != nil {
+		// .
+		// .
+		// .
+		// .
+		if ctx.Err() != nil {
+			return routeRetry, ctx.Err()
+		}
 		a.setRouteError("certificate service: " + err.Error())
 		return a.serviceDelay(err, routeRetry), fmt.Errorf("the certificate service could not be reached: %w", err)
 	}
@@ -308,6 +323,9 @@ func (a *App) reconcileRoute(ctx context.Context) (time.Duration, error) {
 
 	current, err := pub.ReadRecords(ctx, name, lease)
 	if err != nil {
+		if ctx.Err() != nil {
+			return routeRetry, ctx.Err()
+		}
 		// .
 		// .
 		// .
@@ -341,6 +359,9 @@ func (a *App) reconcileRoute(ctx context.Context) (time.Duration, error) {
 		a.setRouteError("the route write may or may not have committed; reading it back")
 		return routeDebounce, fmt.Errorf("the route write was not acknowledged: %w", err)
 	default:
+		if ctx.Err() != nil {
+			return routeRetry, ctx.Err()
+		}
 		if wait := a.serviceDelay(err, 0); wait > 0 {
 			a.setRouteError("the service asked us to wait: " + err.Error())
 			return wait, nil

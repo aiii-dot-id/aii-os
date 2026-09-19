@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
@@ -120,6 +121,26 @@ func (o *observed) count(typ string) int {
 	n := 0
 	for _, ev := range o.events {
 		if ev.Type == typ {
+			n++
+		}
+	}
+	return n
+}
+
+// .
+func (o *observed) countFor(typ, synthesisID string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := 0
+	for _, ev := range o.events {
+		if ev.Type != typ {
+			continue
+		}
+		var body struct {
+			SynthesisID string `json:"synthesis_id"`
+		}
+		_ = json.Unmarshal(ev.Raw, &body)
+		if body.SynthesisID == synthesisID {
 			n++
 		}
 	}
@@ -280,10 +301,16 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	// .
 	// .
 	swapPackage(t, dir, id, v1, v2)
-	app.convergePlugins(ctx)
+	app.rescanPlugins(ctx)
+	awaitPluginVersion(t, app, id, "0.2.0")
 	if v, n := activeRelease(app, id); v != "0.2.0" || n != 1 {
 		t.Fatalf("exactly the new release is active, got %q n=%d", v, n)
 	}
+	// .
+	// .
+	// .
+	// .
+	voiceWait(t, "the pinned predecessor to be handed over", 10*time.Second, func() bool { return retiring() == 1 })
 	if !ap1.Pinned() || retiring() != 1 {
 		t.Fatalf("the predecessor with an open session is pinned and retiring: pinned=%v retiring=%d", ap1.Pinned(), retiring())
 	}
@@ -347,8 +374,8 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	if err := ap1.Voice.Interrupt(ctx, "g1", "operator"); err != nil {
 		t.Fatal(err)
 	}
-	voiceWait(t, "the synthesis resolves as cancelled", 5*time.Second, func() bool { return o1.count("synthesis_cancelled") == 1 })
-	if o1.count("synthesis_end") != 0 {
+	voiceWait(t, "the synthesis resolves as cancelled", 5*time.Second, func() bool { return o1.countFor("synthesis_cancelled", "g1") == 1 })
+	if o1.countFor("synthesis_end", "g1") != 0 {
 		t.Fatal("a cancelled synthesis must not also end")
 	}
 	if fired(ap1.Voice.Done(), 500*time.Millisecond) {
@@ -373,10 +400,22 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	}
 	voiceWait(t, "the fenced reply's stream ends at the sink", 5*time.Second, func() bool { _, ok := reply(); return ok })
 	replyStream, _ := reply()
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if err := ap1.Voice.PlaybackReportFor(ctx, "s1", pluginhost.PlaybackReport{Stream: echoStream, Rendered: int64(len(spk.StreamPCM(echoStream)) / 2), Rate: 16000, Channels: 1, Terminal: true, Outcome: "drained"}); err != nil {
+		t.Fatalf("the echo's playback receipt: %v", err)
+	}
+	if fired(ap1.Voice.Done(), 300*time.Millisecond) {
+		t.Fatal("the session ended on the echo's receipt alone — the reply's is still owed")
+	}
 	if err := ap1.Voice.PlaybackReportFor(ctx, "s1", pluginhost.PlaybackReport{Stream: replyStream, Rendered: int64(len(spk.StreamPCM(replyStream)) / 2), Rate: 16000, Channels: 1, Terminal: true, Outcome: "stopped"}); err != nil {
 		t.Fatalf("the reply's playback receipt: %v", err)
 	}
-	voiceWait(t, "the engine's playback observation of the receipt", 5*time.Second, func() bool { return o1.count("playback_observation") == 1 })
+	voiceWait(t, "the engine's playback observation of the receipt", 5*time.Second, func() bool { return o1.countFor("playback_observation", "g1") == 1 })
 	if !fired(ap1.PinReleased(), 5*time.Second) {
 		t.Fatal("the engine's session_end must release the pin")
 	}
@@ -472,11 +511,17 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 		t.Fatal("a host-side fault must not close the session or release its pin")
 	}
 	swapPackage(t, dir, id, v2, v3)
-	app.convergePlugins(ctx)
+	app.rescanPlugins(ctx)
+	awaitPluginVersion(t, app, id, "0.3.0")
 	if v, _ := activeRelease(app, id); v != "0.3.0" {
 		t.Fatalf("release after the second update = %q", v)
 	}
-	voiceWait(t, "the application resolves the untrusted predecessor through the engine and stops it", 15*time.Second, func() bool { return retiring() == 0 })
+	// .
+	// .
+	// .
+	// .
+	voiceWait(t, "the application resolves the untrusted predecessor through the engine and stops it", 20*time.Second,
+		func() bool { return !ap2.Pinned() && retiring() == 0 })
 	if ap2.Pinned() || ap2.Voice.Label() != "Closed" && ap2.Voice.Label() != "Failed" {
 		t.Fatalf("after the abort: pinned=%v label=%q", ap2.Pinned(), ap2.Voice.Label())
 	}
@@ -495,6 +540,7 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	if !app.VoiceEngine() {
 		t.Fatal("an active engine is a speech engine")
 	}
+	opMark := len(spk.Frames())
 	vh, err := app.OpenVoiceSession(ctx, "mic", "spk", "meeting")
 	if err != nil {
 		t.Fatalf("open a voice session: %v", err)
@@ -523,8 +569,69 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	// .
 	// .
 	// .
+	// .
+	pageReceipt := func(what string, mark int, pump *audio.Pump, report func(context.Context, dashboard.PlaybackReport) error) {
+		t.Helper()
+		var echoOut uint32
+		voiceWait(t, what, 10*time.Second, func() bool {
+			frames := spk.Frames()
+			if n := len(frames); n > mark && frames[n-1].Kind == audio.KindEnd {
+				echoOut = frames[n-1].Stream
+				return true
+			}
+			return false
+		})
+		played, _ := pump.OutputStream(echoOut)
+		if err := report(ctx, dashboard.PlaybackReport{Stream: echoOut, Rendered: played.Written, Rate: 16000, Channels: 1, Terminal: true, Outcome: "drained"}); err != nil {
+			t.Fatalf("the page's receipt for the echo it played: %v", err)
+		}
+	}
+	pageReceipt("the echo of the operator's audio ends at the speaker", opMark, opPump, vh.PlaybackReport)
+	// .
+	// .
+	// .
+	// .
+	// .
 	if !fired(vh.Done(), 5*time.Second) || !fired(vh.Released(), 5*time.Second) {
 		t.Fatal("the host's drain after the final transcript, then the engine's word, must end the session and return the endpoints")
+	}
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	outMark := len(spk.Frames())
+	vo, err := app.OpenVoiceSession(ctx, "", "spk", "output")
+	if err != nil {
+		t.Fatalf("open an output-only voice session: %v", err)
+	}
+	if !ap3.Voice.OutputOnly() {
+		t.Fatal("the driver must know this session has no input")
+	}
+	for _, ep := range plane.Endpoints() {
+		if ep.ID == "mic" && ep.BoundTo != "" {
+			t.Fatalf("an output-only session holds the microphone: bound to %q", ep.BoundTo)
+		}
+	}
+	_, outPump := ap3.Voice.Audio()
+	app.settleVoice(ctx, "a reply to words that were typed")
+	if !app.voiceReplyShown.Swap(false) {
+		t.Fatal("the typed reply was not taken by the engine's voice")
+	}
+	pageReceipt("the typed reply ends at the speaker", outMark, outPump, vo.PlaybackReport)
+	if got := len(spk.Frames()) - outMark; got < 2 {
+		t.Fatalf("the typed reply carried no audio to the speaker: %d frame(s)", got)
+	}
+	if err := vo.Close(ctx, "drain"); err != nil {
+		t.Fatalf("a drain close with no input boundary: %v", err)
+	}
+	if !fired(vo.Done(), 10*time.Second) || !fired(vo.Released(), 5*time.Second) {
+		t.Fatal("the engine's word must end the output-only session and return the speaker")
+	}
+	if ap3.Voice.Faulted() {
+		t.Fatalf("nothing about an output-only session is a fault: %s", ap3.Voice.FaultReason())
 	}
 
 	// .
@@ -552,6 +659,7 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	if _, err := app.OpenVoiceSession(ctx, "call-in", "call-out", "meeting"); !errors.Is(err, audio.ErrSafe) {
 		t.Fatalf("under SAFE a remote endpoint is refused at entry: %v", err)
 	}
+	safeMark := len(spk.Frames())
 	safe, err := app.OpenVoiceSession(ctx, "mic", "spk", "meeting")
 	if err != nil {
 		t.Fatalf("under SAFE the contained engine on the host's endpoints is allowed: %v", err)
@@ -565,6 +673,9 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	if n := turnsMentioning("the tail, finalized"); n != recorded {
 		t.Fatalf("under SAFE the engine's transcript is recorded by no one: %d turns, was %d", n, recorded)
 	}
+	// .
+	// .
+	pageReceipt("the echo under SAFE ends at the speaker", safeMark, safePump, safe.PlaybackReport)
 	// .
 	// .
 	// .

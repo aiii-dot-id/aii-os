@@ -146,6 +146,15 @@ func (e *ModelsMissingError) Error() string {
 }
 
 // .
+// .
+func (e *ModelsMissingError) Unwrap() error { return e.Cause }
+
+// .
+// .
+// .
+var errNoDownloadPath = errors.New("no download path")
+
+// .
 func ParseModels(raw []byte) ([]ModelDecl, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -289,13 +298,42 @@ func noLinks(dir string, d ModelDecl) error {
 
 // .
 func hashFile(path string) (string, int64, error) {
+	return hashFileContext(context.Background(), path)
+}
+
+// .
+// .
+// .
+type acquisitionReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r acquisitionReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) > 32<<10 {
+		p = p[:32<<10]
+	}
+	n, err := r.r.Read(p)
+	if cancelled := r.ctx.Err(); cancelled != nil {
+		return n, cancelled
+	}
+	return n, err
+}
+
+func hashFileContext(ctx context.Context, path string) (string, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, f)
+	n, err := io.Copy(h, acquisitionReader{ctx, f})
 	if err != nil {
 		return "", 0, err
 	}
@@ -324,6 +362,9 @@ func ModelStatuses(decls []ModelDecl, dir string) []ModelStatus {
 // .
 // .
 func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir string, fetch ModelFetcher, logf func(string, ...interface{})) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(decls) == 0 {
 		return nil
 	}
@@ -333,6 +374,9 @@ func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir s
 	var missing []string
 	var cause error
 	for _, d := range decls {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := noLinks(dir, d); err != nil {
 			missing = append(missing, d.Name)
 			if cause == nil {
@@ -344,7 +388,7 @@ func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir s
 		if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 			return fmt.Errorf("pluginhost: models dir for %s: %w", d.Name, err)
 		}
-		if sum, n, err := hashFile(final); err == nil {
+		if sum, n, err := hashFileContext(ctx, final); err == nil {
 			if sum == d.SHA256 && n == d.Size {
 				continue
 			}
@@ -354,14 +398,23 @@ func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir s
 				logf("plugin %s: model %s on disk does not match its declared hash — refetching", pluginID, d.Name)
 			}
 			_ = os.Remove(final)
+		} else if cancelled := ctx.Err(); cancelled != nil {
+			return cancelled
 		}
-		if fetch == nil {
-			missing = append(missing, d.Name)
-			continue
-		}
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
 		if err := fetchModel(ctx, pluginID, d, dir, fetch, logf); err != nil {
+			if cancelled := ctx.Err(); cancelled != nil {
+				return cancelled
+			}
 			missing = append(missing, d.Name)
-			if cause == nil {
+			if cause == nil && !errors.Is(err, errNoDownloadPath) {
 				cause = err
 			}
 		}
@@ -373,42 +426,70 @@ func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir s
 }
 
 func fetchModel(ctx context.Context, pluginID string, d ModelDecl, dir string, fetch ModelFetcher, logf func(string, ...interface{})) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	final := modelFile(dir, d)
 	partial := final + modelPartialSuffx
 	var offset int64
-	if fi, err := os.Stat(partial); err == nil && fi.Mode().IsRegular() {
+	// .
+	// .
+	if fi, err := os.Lstat(partial); err == nil {
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("partial for %s is not a regular file", d.Name)
+		}
 		offset = fi.Size()
 		if offset > d.Size {
-			_ = os.Remove(partial)
+			if err := os.Remove(partial); err != nil {
+				return fmt.Errorf("discard oversized partial for %s: %w", d.Name, err)
+			}
 			offset = 0
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect partial for %s: %w", d.Name, err)
 	}
-	f, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open partial: %w", err)
-	}
-	if logf != nil {
-		logf("plugin %s: fetching model %s (%d of %d bytes present)", pluginID, d.Name, offset, d.Size)
-	}
+	var n int64
 	// .
 	// .
-	limited := &limitedWriter{w: f, remaining: d.Size - offset}
-	n, ferr := fetch(ctx, d.URL, offset, limited)
-	cerr := f.Close()
-	if limited.overflow {
-		_ = os.Remove(partial)
-		return fmt.Errorf("fetch %s: the server sent more than the declared %d bytes", d.Name, d.Size)
-	}
-	if ferr != nil {
-		if offset > 0 && strings.Contains(ferr.Error(), "does not resume") {
-			_ = os.Remove(partial)
+	if offset < d.Size {
+		if fetch == nil {
+			// .
+			// .
+			// .
+			// .
+			return fmt.Errorf("model %s is incomplete (%d of %d bytes): %w", d.Name, offset, d.Size, errNoDownloadPath)
 		}
-		return fmt.Errorf("fetch %s: %w", d.Name, ferr)
+		f, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open partial: %w", err)
+		}
+		if logf != nil {
+			logf("plugin %s: fetching model %s (%d of %d bytes present)", pluginID, d.Name, offset, d.Size)
+		}
+		// .
+		// .
+		limited := &limitedWriter{w: f, remaining: d.Size - offset}
+		var ferr error
+		n, ferr = fetch(ctx, d.URL, offset, limited)
+		cerr := f.Close()
+		if cancelled := ctx.Err(); cancelled != nil {
+			return cancelled
+		}
+		if limited.overflow {
+			_ = os.Remove(partial)
+			return fmt.Errorf("fetch %s: the server sent more than the declared %d bytes", d.Name, d.Size)
+		}
+		if ferr != nil {
+			if offset > 0 && strings.Contains(ferr.Error(), "does not resume") {
+				_ = os.Remove(partial)
+			}
+			return fmt.Errorf("fetch %s: %w", d.Name, ferr)
+		}
+		if cerr != nil {
+			return fmt.Errorf("write %s: %w", d.Name, cerr)
+		}
 	}
-	if cerr != nil {
-		return fmt.Errorf("write %s: %w", d.Name, cerr)
-	}
-	sum, size, err := hashFile(partial)
+	sum, size, err := hashFileContext(ctx, partial)
 	if err != nil {
 		return err
 	}
@@ -418,6 +499,9 @@ func fetchModel(ctx context.Context, pluginID string, d ModelDecl, dir string, f
 	if sum != d.SHA256 {
 		_ = os.Remove(partial)
 		return fmt.Errorf("fetch %s: the bytes do not hash to the declared sha256 — discarded", d.Name)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := os.Chmod(partial, 0o600); err != nil {
 		return err

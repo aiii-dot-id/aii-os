@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,21 @@ func (a *App) voicePlugin() *pluginhost.ActivePlugin {
 		}
 	}
 	return nil
+}
+
+// .
+// .
+// .
+func (a *App) voicePlugins() []*pluginhost.ActivePlugin {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	var out []*pluginhost.ActivePlugin
+	for _, p := range a.plugins {
+		if p.Voice != nil && p.Voice.Alive() {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // .
@@ -85,6 +101,13 @@ type voiceHandle struct {
 	// .
 	// .
 	// .
+	// .
+	// .
+	inflight atomic.Value
+	// .
+	// .
+	// .
+	// .
 	closing atomic.Bool
 	// .
 	// .
@@ -108,11 +131,21 @@ type voiceHandle struct {
 	heldMu   sync.Mutex
 	held     map[int64]*heldFinal
 	withheld map[int64]bool
+	// .
+	// .
+	// .
+	heldDraining bool
+	heardTail    <-chan struct{}
 }
 
 // .
 // .
 const voiceAdmissionBound = 5 * time.Second
+
+// .
+// .
+// .
+const replyNotSpokenOutcome = "reply delivered as text: replies are not spoken in this mode"
 
 // .
 // .
@@ -124,6 +157,10 @@ func (h *voiceHandle) supersede() { h.gen.Add(1) }
 type replyVerdict int
 
 const (
+	// .
+	// .
+	// .
+	// .
 	// .
 	replyAdmitted replyVerdict = iota
 	// .
@@ -166,7 +203,14 @@ type engineSession interface {
 	// .
 	SynthesizeForEnqueue(ctx context.Context, sessionID, synthesisID, text string) (func(context.Context) error, error)
 	PlaybackReportFor(ctx context.Context, sessionID string, r pluginhost.PlaybackReport) error
+	// .
+	// .
+	SynthesisFor(stream uint32) string
 	Label() string
+	// .
+	// .
+	InputClosed() <-chan struct{}
+	InputCompletionReason() string
 }
 
 func (h *voiceHandle) ID() string { return h.id }
@@ -209,16 +253,41 @@ func (h *voiceHandle) Interrupt(ctx context.Context) error {
 	h.hushNow("the operator spoke")
 	return h.v.InterruptFor(ctx, h.id, "", "operator")
 }
-func (h *voiceHandle) Label() string             { return h.v.Label() }
-func (h *voiceHandle) Done() <-chan struct{}     { return h.done }
-func (h *voiceHandle) Released() <-chan struct{} { return h.b.Released() }
+func (h *voiceHandle) Label() string { return h.v.Label() }
+
+// .
+// .
+// .
+// .
+func (h *voiceHandle) InputClosed() <-chan struct{}  { return h.v.InputClosed() }
+func (h *voiceHandle) InputCompletionReason() string { return h.v.InputCompletionReason() }
+func (h *voiceHandle) Done() <-chan struct{}         { return h.done }
+func (h *voiceHandle) Released() <-chan struct{}     { return h.b.Released() }
 
 // .
 // .
 // .
 // .
 func (h *voiceHandle) PlaybackReport(ctx context.Context, r dashboard.PlaybackReport) error {
-	return h.v.PlaybackReportFor(ctx, h.id, pluginhost.PlaybackReport{Stream: r.Stream, Rendered: r.Rendered, Rate: r.Rate, Channels: r.Channels, Terminal: r.Terminal, Outcome: r.Outcome})
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	synth := h.v.SynthesisFor(r.Stream)
+	if err := h.v.PlaybackReportFor(ctx, h.id, pluginhost.PlaybackReport{Stream: r.Stream, Rendered: r.Rendered, Rate: r.Rate, Channels: r.Channels, Terminal: r.Terminal, Outcome: r.Outcome}); err != nil {
+		return err
+	}
+	if r.Terminal && synth != "" {
+		h.inflight.CompareAndSwap(synth, "")
+	}
+	return nil
 }
 
 // .
@@ -254,6 +323,13 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 		return replySuperseded
 	}
 	h = val.(*voiceHandle)
+	textOnly := func() replyVerdict {
+		h.replyOutcome.Store(replyNotSpokenOutcome)
+		if a.voiceReplySink != nil {
+			a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: sessionID, Route: "plugin", TextOnly: true}, reply)
+		}
+		return replyAdmitted
+	}
 	// .
 	// .
 	// .
@@ -266,10 +342,35 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 		refuse("a barge-in, close, abort or cancellation superseded this reply")
 		return replySuperseded
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	admittedUnder := a.publishedVoiceMode()
+	if _, speak, _ := resolveVoiceMode(admittedUnder); speak == speakOff {
+		h.admit.Unlock()
+		return textOnly()
+	}
 	synthID := fmt.Sprintf("%s-syn-%d", sessionID, a.voiceSeq.Add(1))
 	ectx, ecancel := context.WithTimeout(ctx, voiceAdmissionBound)
 	await, err := h.v.SynthesizeForEnqueue(ectx, h.id, synthID, reply)
 	ecancel()
+	if err == nil {
+		h.inflight.Store(synthID)
+	}
 	h.admit.Unlock()
 	if err != nil {
 		refuse("not dispatched: " + err.Error())
@@ -310,6 +411,22 @@ func (a *App) synthesizeReply(ctx context.Context, sessionID string, gen uint64,
 		refuse("superseded while its admission was pending; its synthesis " + synthID + " was fenced")
 		return replySuperseded
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if a.voiceSpeakOffRev.Load() > admittedUnder.Revision {
+		if h.inflight.CompareAndSwap(synthID, "") {
+			if ferr := h.fenceBounded(synthID, "the mode's speak turned off"); ferr != nil {
+				log.Printf("VOICE: speak turned off during admission; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", synthID, sessionID, ferr)
+			}
+		}
+		return textOnly()
+	}
 	h.replyOutcome.Store("reply admitted")
 	if a.voiceReplySink != nil {
 		a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: sessionID, SynthesisID: synthID, Route: "plugin"}, reply)
@@ -345,6 +462,23 @@ func (a *App) speakFallback(ctx context.Context, b *voiceBinding, reply string) 
 	if h.gen.Load() != b.gen || h.closing.Load() || ctx.Err() != nil {
 		a.noteReplyOutcome(b.session, "reply refused by the engine, then superseded before another voice could take it")
 		return false
+	}
+	// .
+	// .
+	// .
+	_, speak, _ := a.voiceMode()
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if speak == speakOff {
+		if a.voiceReplySink != nil {
+			a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: b.session, Route: "plugin", TextOnly: true}, reply)
+		}
+		a.noteReplyOutcome(b.session, replyNotSpokenOutcome)
+		return true
 	}
 	route, id := "browser", voiceFallbackMint(a, reply)
 	if id != "" {
@@ -408,6 +542,19 @@ func (h *voiceHandle) fenceBounded(synthID, cause string) error {
 // .
 // .
 func (a *App) handleHeard(ctx context.Context, heard heardUtterance) {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if heard.Answer {
+		if listen, _, _ := a.voiceMode(); listen == listenMeeting {
+			heard.Answer = false
+		}
+	}
 	err := a.observeVoice(ctx, heard)
 	switch {
 	case err != nil:
@@ -538,17 +685,61 @@ func (a *App) voiceObserved(ev pluginhost.Event) {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) voiceOpenMode(id, asked string) string {
+	if listen, _, _ := a.voiceMode(); listen == listenMeeting {
+		asked = listenMeeting
+	}
+	a.voiceModes.Store(id, asked == "conversation")
+	return asked
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func (a *App) OpenVoiceSession(ctx context.Context, inputID, outputID, mode string) (dashboard.VoiceSession, error) {
 	ap := a.voicePlugin()
 	if ap == nil {
 		return nil, errors.New("no speech engine is active")
 	}
 	id := fmt.Sprintf("vs-%d", a.voiceSeq.Add(1))
-	b, err := a.AudioPlane().Bind(id, inputID, outputID, ap.Contained)
+	var b *audio.Binding
+	var err error
+	if inputID != "" {
+		a.yieldVoiceOutput(ctx)
+	}
+	if inputID == "" {
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		b, err = a.AudioPlane().BindOutput(id, outputID, ap.Contained)
+		mode = voiceOutputMode
+	} else {
+		b, err = a.AudioPlane().Bind(id, inputID, outputID, ap.Contained)
+	}
 	if err != nil {
 		return nil, err
 	}
-	a.voiceModes.Store(id, mode == "conversation")
+	if b.HasInput() {
+		mode = a.voiceOpenMode(id, mode)
+	} else {
+		a.voiceModes.Store(id, false)
+	}
 	a.ensureVoiceObserver(ap)
 	if err := ap.Voice.OpenWithAudio(ctx, id, b, map[string]any{"mode": mode}); err != nil {
 		// .
@@ -568,6 +759,89 @@ func (a *App) OpenVoiceSession(ctx context.Context, inputID, outputID, mode stri
 		a.voiceSessionEnded(h)
 	}()
 	return h, nil
+}
+
+// .
+// .
+const voiceOutputMode = "output"
+
+// .
+// .
+// .
+func (a *App) voiceOutputSession() *voiceHandle {
+	var found *voiceHandle
+	a.voiceSessions.Range(func(_, val any) bool {
+		h := val.(*voiceHandle)
+		if h.b == nil || h.b.HasInput() || h.closing.Load() {
+			return true
+		}
+		select {
+		case <-h.done:
+			return true
+		default:
+		}
+		found = h
+		return false
+	})
+	return found
+}
+
+// .
+// .
+const voiceYieldBound = 5 * time.Second
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) yieldVoiceOutput(ctx context.Context) {
+	h := a.voiceOutputSession()
+	if h == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, voiceYieldBound)
+	defer cancel()
+	if err := h.Close(cctx, "abort"); err != nil {
+		log.Printf("VOICE: output-only session %s could not be asked to yield the engine: %v", h.id, err)
+		return
+	}
+	select {
+	case <-h.done:
+		log.Printf("VOICE: output-only session %s yielded the engine to an operator who is about to speak", h.id)
+	case <-cctx.Done():
+		log.Printf("VOICE: output-only session %s did not end within %s of being asked to yield", h.id, voiceYieldBound)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) typedReplyVoice() *voiceBinding {
+	h := a.voiceOutputSession()
+	if h == nil {
+		return nil
+	}
+	if prior, _ := h.inflight.Swap("").(string); prior != "" {
+		if err := h.fenceBounded(prior, "a newer reply took its place"); err != nil {
+			log.Printf("VOICE: a newer reply is taking the voice on %s; the engine did not fence %s (%v)", h.id, prior, err)
+		}
+	}
+	return &voiceBinding{session: h.id, gen: h.gen.Load()}
 }
 
 // .
@@ -667,7 +941,7 @@ func (a *App) observeEngine(ap *pluginhost.ActivePlugin, v *pluginhost.VoiceSess
 		defer close(telemetryDone)
 		for ev := range v.Telemetry() {
 			_, safe := a.SafeMode()
-			if ve, ok := voiceEventFor(ev, safe); ok {
+			if ve, ok := a.voicePageEvent(ev, safe); ok {
 				enqueue(ve)
 			}
 		}
@@ -700,6 +974,25 @@ func (a *App) observeEngine(ap *pluginhost.ActivePlugin, v *pluginhost.VoiceSess
 // .
 // .
 func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event, enqueue func(dashboard.VoiceEvent)) {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if ev.Type == "transcript_final" || ev.Type == "transcript_partial" {
+		if val, ok := a.voiceSessions.Load(ev.SessionID); ok {
+			if h := val.(*voiceHandle); h.b != nil && h.b.Source == nil && h.b.InputHandle == "" {
+				// .
+				engine := "the speech engine"
+				if ap != nil {
+					engine += " " + ap.ID
+				}
+				log.Printf("VOICE: %s sent a %s on %s, a session opened with no input — the contract says none comes; the words reach no page, record or turn", engine, ev.Type, ev.SessionID)
+				return
+			}
+		}
+	}
 	reason, safe := a.SafeMode()
 	// .
 	// .
@@ -709,19 +1002,25 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	// .
 	// .
 	pol := a.speakerPolicyNow()
-	ve, shown := voiceEventFor(ev, safe)
-	if shown && pol.restricted() && ev.Type == "transcript_partial" {
-		a.speakerWithheldPartials.Add(1)
-		shown = false
+	holdForSpeaker := pol.restricted()
+	if ev.Type == "transcript_final" && !holdForSpeaker {
+		if val, ok := a.voiceSessions.Load(ev.SessionID); ok {
+			h := val.(*voiceHandle)
+			h.heldMu.Lock()
+			holdForSpeaker = len(h.held) != 0 || h.heldDraining
+			h.heldMu.Unlock()
+		}
 	}
+	ve, shown := a.voicePageEvent(ev, safe)
 	// .
 	// .
 	// .
-	skipNote := false
 	if ev.Type == "speaker_observation" && !safe {
-		skipNote = a.observationForHeld(ev)
+		if a.observationForHeld(ev) {
+			return
+		}
 	}
-	if shown && !(pol.restricted() && ev.Type == "transcript_final") {
+	if shown && !(holdForSpeaker && ev.Type == "transcript_final") {
 		enqueue(ve)
 	}
 	// .
@@ -730,7 +1029,7 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	if ev.Type == "session_ready" {
 		a.noteAppliedSettings(ev)
 	}
-	if ev.Type == "speaker_observation" && !skipNote {
+	if ev.Type == "speaker_observation" {
 		a.noteSpeakerObservation(ev, safe)
 	}
 	if ev.Type != "transcript_final" {
@@ -749,7 +1048,7 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 		Speaker string `json:"speaker"`
 	}
 	_ = json.Unmarshal(ev.Raw, &body)
-	if !pol.restricted() {
+	if !holdForSpeaker {
 		a.rememberFinal(ev.SessionID, ev.Sequence, body.Text)
 	}
 	answer := false
@@ -765,7 +1064,7 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 	// .
 	// .
 	heard := heardUtterance{Source: source, Text: body.Text, Speaker: body.Speaker, Answer: answer, SessionID: ev.SessionID, Sequence: ev.Sequence, Gen: a.voiceGen(ev.SessionID), Operator: true}
-	if pol.restricted() {
+	if holdForSpeaker {
 		// .
 		// .
 		// .
@@ -775,6 +1074,11 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 			h := val.(*voiceHandle)
 			if !h.inputDone.Load() {
 				a.holdFinal(h, &heldFinal{ve: ve, shown: shown, heard: heard, enqueue: enqueue})
+				if !pol.restricted() {
+					// .
+					// .
+					a.decideHeld(h, ev.Sequence, "", "", false, nil)
+				}
 				return
 			}
 		}
@@ -793,6 +1097,15 @@ func (a *App) voiceEngineEvent(ap *pluginhost.ActivePlugin, ev pluginhost.Event,
 			log.Printf("VOICE: %s sent a final transcript AFTER input_finished on %s — the engine's contract says none follows", source, ev.SessionID)
 		} else {
 			h.work.Add(1)
+			h.heldMu.Lock()
+			ordered := h.heardTail != nil
+			h.heldMu.Unlock()
+			if ordered {
+				// .
+				// .
+				a.admitHeldInOrder(h, &heldFinal{heard: heard})
+				return
+			}
 			go func() {
 				defer h.work.Done()
 				a.handleHeard(context.Background(), heard)
@@ -957,15 +1270,34 @@ func voiceEventFor(ev pluginhost.Event, safe bool) (dashboard.VoiceEvent, bool) 
 		// .
 		body.speakerObservation = speakerObservation{}
 	}
-	ve := dashboard.VoiceEvent{SessionID: ev.SessionID, Sequence: ev.Sequence, Type: ev.Type, Text: body.Text, Speaker: body.Speaker, Final: isFinal,
+	ve := dashboard.VoiceEvent{SessionID: ev.SessionID, Sequence: ev.Sequence, Type: ev.Type, Final: isFinal,
 		Operator: isFinal || ev.Type == "transcript_partial"}
+	// .
+	// .
+	// .
+	if isFinal || ev.Type == "transcript_partial" {
+		ve.Text, ve.Speaker = body.Text, body.Speaker
+	}
 	if ev.Type == "speaker_observation" {
+		ve.Speaker = body.Speaker
 		ve.SpeakerID = body.knownID()
 		ve.RefersTo, ve.Decision, ve.Score, ve.Late = body.RefersTo, body.Decision, body.Score, body.Late
 		// .
 		// .
 		ve.Reason = body.Reason
 		ve.Attribution = body.attribution()
+	}
+	// .
+	// .
+	// .
+	// .
+	if ev.Type == "synthesis_start" || ev.Type == "synthesis_end" || ev.Type == "synthesis_cancelled" {
+		var named struct {
+			OutputStream *int64 `json:"output_stream"`
+		}
+		if json.Unmarshal(ev.Raw, &named) == nil && named.OutputStream != nil && *named.OutputStream > 0 && *named.OutputStream <= math.MaxUint32 {
+			ve.Stream = uint32(*named.OutputStream)
+		}
 	}
 	if ev.Type == "failure" {
 		// .
@@ -978,6 +1310,18 @@ func voiceEventFor(ev pluginhost.Event, safe bool) (dashboard.VoiceEvent, bool) 
 		}
 	}
 	return ve, true
+}
+
+// .
+// .
+// .
+func (a *App) voicePageEvent(ev pluginhost.Event, safe bool) (dashboard.VoiceEvent, bool) {
+	ve, shown := voiceEventFor(ev, safe)
+	if shown && ev.Type == "transcript_partial" && a.speakerPolicyNow().restricted() {
+		a.speakerWithheldPartials.Add(1)
+		return dashboard.VoiceEvent{}, false
+	}
+	return ve, shown
 }
 
 // .

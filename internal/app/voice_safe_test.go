@@ -26,10 +26,17 @@ type fakeEngineSession struct {
 	// .
 	// .
 	// .
-	entered       chan struct{}
-	enteredOnce   sync.Once
-	ackGate       chan struct{}
-	producing     string
+	entered     chan struct{}
+	enteredOnce sync.Once
+	ackGate     chan struct{}
+	// .
+	// .
+	inputClosed chan struct{}
+	inputWhy    string
+	producing   string
+	// .
+	// .
+	streams       map[uint32]string
 	failInterrupt error
 	reports       []pluginhost.PlaybackReport
 }
@@ -81,6 +88,15 @@ func (f *fakeEngineSession) PlaybackReportFor(_ context.Context, sid string, r p
 }
 
 // .
+// .
+// .
+// .
+func (f *fakeEngineSession) SynthesisFor(stream uint32) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.streams[stream]
+}
+
 func (f *fakeEngineSession) producingNow() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -128,6 +144,32 @@ func (f *fakeEngineSession) SynthesizeForEnqueue(_ context.Context, sid, id, tex
 }
 
 func (f *fakeEngineSession) Label() string { return "Listening" }
+
+// .
+// .
+// .
+func (f *fakeEngineSession) InputClosed() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inputClosed
+}
+func (f *fakeEngineSession) InputCompletionReason() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inputWhy
+}
+
+// .
+func (f *fakeEngineSession) endInput(why string) {
+	f.mu.Lock()
+	if f.inputClosed == nil {
+		f.inputClosed = make(chan struct{})
+	}
+	f.inputWhy = why
+	ch := f.inputClosed
+	f.mu.Unlock()
+	close(ch)
+}
 func (f *fakeEngineSession) closes() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

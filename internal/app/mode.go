@@ -88,6 +88,19 @@ func (a *App) enterSafe(reason string) {
 	}
 	log.Printf("SAFE MODE: entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
 	a.applySafeState(reason)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	a.pluginMu.Lock()
+	f := a.facility
+	a.pluginMu.Unlock()
+	if f != nil {
+		f.Hold(safeHoldSentence(reason))
+	}
+	a.pokePluginSweep()
 	a.startSafeBeacon()
 }
 

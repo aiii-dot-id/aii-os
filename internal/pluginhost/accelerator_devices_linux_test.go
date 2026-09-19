@@ -123,7 +123,7 @@ exec vulkaninfo --summary`
 	if err != nil {
 		t.Fatal(err)
 	}
-	argv, wall, err := containArgv([]string{"/bin/sh", "-c", script, "probe", sentinel, network}, profile)
+	argv, wall, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script, "probe", sentinel, network}, profile)
 	if err != nil {
 		t.Fatal(err)
 	}

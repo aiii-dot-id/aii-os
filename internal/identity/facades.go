@@ -18,6 +18,8 @@ import (
 // .
 // .
 // .
+// .
+// .
 
 // .
 // .
@@ -53,6 +55,8 @@ func (e *Engine) workAbsorbed(ctx context.Context, action string, args map[strin
 		default:
 			err = fmt.Errorf("unknown work action %q — the project modes are project.create, project.update, project.close, project.select, project.deselect, project.evidence and project.waive; recall source=projects reads them", action)
 		}
+	case action == "voice.mode":
+		out, err = e.verbVoiceMode(ctx, args)
 	case action == "curiosity":
 		out, err = e.verbCuriosity(ctx, withAction(args, "note"))
 	case action == "curiosity.clear":

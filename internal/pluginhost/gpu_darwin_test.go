@@ -4,6 +4,7 @@ package pluginhost
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,7 +31,7 @@ func TestAContainedChildReachesTheGPU(t *testing.T) {
 	if out, err := exec.Command("xcrun", "swiftc", "-O", "-o", bin, src).CombinedOutput(); err != nil {
 		t.Skipf("the Swift probe does not build here (%v): %s", err, bytes.TrimSpace(out))
 	}
-	argv, _, err := containArgv([]string{bin}, nil)
+	argv, _, err := containArgv(context.Background(), []string{bin}, nil)
 	if err != nil {
 		t.Skipf("this host cannot contain a native child: %v", err)
 	}

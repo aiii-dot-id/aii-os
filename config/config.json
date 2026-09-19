@@ -14,7 +14,8 @@
   },
   "dashboard": {
     "port": 8180,
-    "tls": false
+    "tls": false,
+    "skip_signin_with_valid_token": true
   },
   "speech": {
     "stt": {

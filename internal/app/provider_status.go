@@ -229,6 +229,20 @@ func validEnvName(name string) bool {
 
 // .
 // .
+func (a *App) providerDirectory() dashboard.ProviderDirectory {
+	dir := dashboard.ProviderDirectory{SkipSignInWithValidToken: a.configSnapshot().Dashboard.skipSignInWithValidToken()}
+	reg, err := a.loadProviders()
+	if err != nil {
+		log.Printf("providers: %v", err)
+		return dir
+	}
+	dir.Providers = a.providerInfos(reg)
+	dir.Broken = brokenProviderInfo(reg)
+	return dir
+}
+
+// .
+// .
 // .
 func (a *App) providerDirectoryLive() []dashboard.ProviderInfo {
 	reg, err := a.loadProviders()
@@ -236,6 +250,10 @@ func (a *App) providerDirectoryLive() []dashboard.ProviderInfo {
 		log.Printf("providers: %v", err)
 		return nil
 	}
+	return a.providerInfos(reg)
+}
+
+func (a *App) providerInfos(reg *providerRegistry) []dashboard.ProviderInfo {
 	probes := a.probeProviders(reg)
 	out := make([]dashboard.ProviderInfo, 0, len(reg.Providers))
 	for _, e := range reg.Providers {
@@ -429,15 +447,17 @@ func apiVersionInPath(base string) bool {
 
 // .
 // .
-func (a *App) discoveredMeta(provider, model string) (modelMeta, bool) {
+// .
+// .
+func (a *App) discoveredMeta(provider, model string) (m modelMeta, found bool, listed int) {
 	a.provMu.Lock()
 	defer a.provMu.Unlock()
 	pr, ok := a.provStatus[provider]
 	if !ok || pr.meta == nil {
-		return modelMeta{}, false
+		return modelMeta{}, false, len(pr.models)
 	}
-	m, ok := pr.meta[model]
-	return m, ok
+	m, found = pr.meta[model]
+	return m, found, len(pr.models)
 }
 
 // .

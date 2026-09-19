@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -139,6 +140,19 @@ type providerEntry struct {
 	// .
 	// .
 	Local bool `json:"local,omitempty"`
+	// .
+	// .
+	raw json.RawMessage
+}
+
+// .
+// .
+func (e providerEntry) MarshalJSON() ([]byte, error) {
+	if e.raw != nil {
+		return e.raw, nil
+	}
+	type fields providerEntry
+	return json.Marshal(fields(e))
 }
 
 // .
@@ -216,6 +230,10 @@ type providerRegistry struct {
 	// .
 	// .
 	filledSpeech map[string]bool
+	// .
+	// .
+	// .
+	broken []brokenEntry
 	// .
 	// .
 	// .
@@ -379,10 +397,10 @@ func fillEmbeddedEffortLevels(reg *providerRegistry) {
 }
 
 func fillEmbeddedCredentialOptions(reg *providerRegistry) {
-	var base providerRegistry
-	if err := json.Unmarshal(embeddedProviders, &base); err != nil {
-		return
-	}
+	// .
+	// .
+	// .
+	base := embeddedRegistry()
 	// .
 	// .
 	// .
@@ -555,30 +573,26 @@ func loadProvidersFile(path string) (*providerRegistry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	var reg providerRegistry
+	// .
+	// .
+	// .
+	var file struct {
+		providerRegistry
+		Providers []json.RawMessage `json:"providers"`
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&reg); err != nil {
+	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("%s is invalid: %w", path, err)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("%s is invalid: trailing JSON data", path)
 	}
-	// .
-	// .
-	reg.eff = newEffectiveCaps(&reg)
-	fillEmbeddedCredentialOptions(&reg)
-	fillEmbeddedEffortLevels(&reg)
-	fillEmbeddedCatalogueAuthors(&reg)
-	fillEmbeddedSpeech(&reg)
-	if err := bindOAuth(&reg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-
-	if err := validateEntries(&reg); err != nil {
+	reg, err := admitEntries(file.providerRegistry, file.Providers)
+	if err != nil {
 		return nil, fmt.Errorf("%s is invalid: %w", path, err)
 	}
-	return &reg, nil
+	return reg, nil
 }
 
 // .
@@ -630,7 +644,7 @@ func normalizeProviderAPIType(e *providerEntry) error {
 
 // .
 func saveProvidersFile(path string, reg *providerRegistry) (bool, error) {
-	data, err := json.MarshalIndent(stripEmbeddedFills(reg), "", "  ")
+	data, err := json.MarshalIndent(withBrokenEntries(stripEmbeddedFills(reg)), "", "  ")
 	if err != nil {
 		return false, err
 	}
@@ -720,16 +734,16 @@ func (a *App) setProvider(e providerEntry, keepAPIKey bool) error {
 // .
 func (a *App) deleteProvider(name string) error {
 	return a.changeProviders(name, func(reg *providerRegistry) error {
-		kept := reg.Providers[:0]
-		for _, e := range reg.Providers {
-			if e.Name != name {
-				kept = append(kept, e)
-			}
-		}
-		if len(kept) == len(reg.Providers) {
+		i := slices.IndexFunc(reg.Providers, func(e providerEntry) bool { return e.Name == name })
+		if i < 0 {
 			return fmt.Errorf("no provider named %q", name)
 		}
-		reg.Providers = kept
+		reg.Providers = slices.Delete(reg.Providers, i, i+1)
+		for j := range reg.broken {
+			if reg.broken[j].after > i {
+				reg.broken[j].after--
+			}
+		}
 		return nil
 	})
 }
@@ -748,6 +762,7 @@ func (a *App) deleteProvider(name string) error {
 func candidateRegistry(before *providerRegistry, mutate func(*providerRegistry) error) (*providerRegistry, error) {
 	cp := *before
 	cp.Providers = append([]providerEntry(nil), before.Providers...)
+	cp.broken = slices.Clone(before.broken)
 	cp.OAuth = cloneOAuth(before.OAuth)
 	cp.ModelCapabilities = cloneCapabilities(before.ModelCapabilities)
 	cp.DialectEffortFloor = cloneFloors(before.DialectEffortFloor)
@@ -808,11 +823,16 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		return nil
 	}
 	cfg := *a.cfg
-	if a.llmSwap == nil {
+	// .
+	// .
+	persist := func(reload bool) error {
 		published, persistErr := saveProvidersFile(path, candidate)
 		a.cfgMu.Unlock()
 		if published {
 			a.clearProviderStatus(name)
+			if reload {
+				go a.reloadConfig()
+			}
 		}
 		if persistErr != nil {
 			if published {
@@ -822,12 +842,23 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		}
 		return nil
 	}
+	if a.llmSwap == nil {
+		return persist(false)
+	}
 
 	oldEntry, oldErr := selectProvider(cfg.LLM, before)
 	nextEntry, newErr := selectProvider(cfg.LLM, candidate)
 	if newErr != nil {
-		a.cfgMu.Unlock()
-		return fmt.Errorf("provider change refused: %w; current substrate kept", newErr)
+		if oldErr == nil {
+			a.cfgMu.Unlock()
+			return fmt.Errorf("provider change refused: %w; current substrate kept", newErr)
+		}
+		// .
+		// .
+		// .
+		// .
+		// .
+		return persist(false)
 	}
 	runtimeChanged := oldErr != nil || oldEntry.Name != nextEntry.Name ||
 		!sameProviderRuntime(*oldEntry, *nextEntry, cfg.LLM.Model != "") || !a.providerRuntimeMatches(before)
@@ -852,21 +883,7 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		(!candidate.effective().effortIsShipped(model) || vendorsOwnEntry(*nextEntry)) &&
 		a.providerRuntimeMatchesBarEffort(before)
 	if !runtimeChanged || atTurnBoundary {
-		published, persistErr := saveProvidersFile(path, candidate)
-		a.cfgMu.Unlock()
-		if published {
-			a.clearProviderStatus(name)
-			if atTurnBoundary {
-				go a.reloadConfig()
-			}
-		}
-		if persistErr != nil {
-			if published {
-				return fmt.Errorf("providers were published but directory durability is unconfirmed: %w", persistErr)
-			}
-			return fmt.Errorf("persist providers: %w", persistErr)
-		}
-		return nil
+		return persist(atTurnBoundary)
 	}
 	a.cfgMu.Unlock()
 
@@ -875,7 +892,8 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 	if err != nil {
 		return fmt.Errorf("provider change refused: %w; current substrate kept", err)
 	}
-	client := a.newLLMClient(newCC, promptBudgetFor(resolvedEntry, cfg.Prompt.MaxTokens))
+	candidateBudget, _ := promptBudgetFor(resolvedEntry, cfg.Prompt.MaxTokens)
+	client := a.newLLMClient(newCC, candidateBudget)
 	proved := a.substrateCapabilityRecord()
 	if err := a.probeSubstrate(client, newCC, resolvedEntry, candidate, cfg.LLM.ProbeTimeoutSeconds); err != nil {
 		return err

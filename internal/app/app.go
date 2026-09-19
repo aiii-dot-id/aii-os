@@ -47,6 +47,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
@@ -143,6 +144,14 @@ type App struct {
 	// .
 	// .
 	// .
+	voiceModePub atomic.Pointer[VoiceModeConfig]
+	// .
+	// .
+	// .
+	voiceSpeakOffRev atomic.Uint64
+	// .
+	// .
+	// .
 	// .
 	voicePending sync.Map
 	// .
@@ -174,11 +183,9 @@ type App struct {
 	speechReservedHeard     time.Duration
 	voiceObs                map[*pluginhost.VoiceSession]bool
 	voiceObsMu              sync.Mutex
-	pluginSkips             []pluginSkip
+	pluginLife              map[string]pluginLifecycle
 	pluginMu                sync.Mutex
 	activeMeta              map[string]activePkgMeta
-	pluginVerify            map[string]verifyMemo
-	pluginFinger            string
 	sweepPoke               chan struct{}
 	restartCh               chan struct{}
 	restartOnce             sync.Once
@@ -186,6 +193,11 @@ type App struct {
 	stageOnce               sync.Once
 	stageWhy                string
 	pluginToolReg           *tools.Registry
+	facility                *pluginfacility.Facility
+	facilityOnce            sync.Once
+	policyRev               uint64
+	policyFinger            string
+	trustGen                uint64
 	// .
 	subMu        sync.RWMutex
 	subscribers  map[string]*pluginSubscriber
@@ -197,6 +209,7 @@ type App struct {
 	catalogCache string
 	catalogRoot  *sigenvelope.PublicKeyEnvelope
 	catalogFetch func(ctx context.Context, url string, max int64) ([]byte, error)
+	modelFetch   pluginhost.ModelFetcher
 	catalogPoke  chan struct{}
 	catalogAt    string
 	catalogErr   string
@@ -415,6 +428,10 @@ type App struct {
 	fg *foreground.Holds
 	// .
 	conv *conversation.Loop
+	// .
+	// .
+	// .
+	safeTools *safeToolRecord
 
 	// .
 	// .
@@ -424,6 +441,12 @@ type App struct {
 	// .
 	activeProviderMu sync.RWMutex
 	activeProvider   providerEntry
+	// .
+	// .
+	// .
+	// .
+	activeBudget       int
+	activeBudgetSource budgetSource
 	// .
 	// .
 	// .
@@ -543,13 +566,17 @@ func New(cfg *Config) *App {
 	turnGate := make(chan struct{}, 1)
 	turnGate <- struct{}{}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	return &App{
+	a := &App{
 		fg:        &foreground.Holds{},
 		restartCh: make(chan struct{}),
 		cfg:       cfg, gate: quiesce.NewGate(), turnGate: turnGate,
 		outboxPoke: make(chan struct{}, 1), listening: map[string]*channelListener{},
 		bgCtx: bgCtx, bgCancel: bgCancel,
 	}
+	if cfg != nil {
+		a.publishVoiceMode(cfg.Speech.Mode)
+	}
+	return a
 }
 
 func (a *App) acquireTurn(ctx context.Context) error {
@@ -999,6 +1026,14 @@ func (a *App) closeLiveResources() error {
 		a.timerOwner = nil
 	}
 
+	// .
+	// .
+	// .
+	// .
+	if a.facility != nil {
+		a.facility.Close()
+	}
+
 	a.pluginMu.Lock()
 	plugins := a.plugins
 	sectionActs := a.sectionActs
@@ -1029,7 +1064,7 @@ func (a *App) closeLiveResources() error {
 	}
 	for _, sec := range sectionActs {
 		if a.sections != nil {
-			a.sections.Remove(sec.Decl.ID)
+			a.sections.RemoveOwned(sec)
 		}
 		if err := sec.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close section %s: %w", sec.Decl.ID, err))
@@ -1362,7 +1397,10 @@ func (a *App) startLive() (retErr error) {
 		log.Printf("LLM: no API key on provider %q — expected for a local endpoint; if this provider requires one, chat will fail at call time with the provider's own error (set it in the dashboard, or export %s)", llmEntry.Name, cfg.LLM.APIKeyEnv)
 	}
 	lg.SetModelID(cc.Model)
-	promptBudget := promptBudgetFor(llmEntry, cfg.Prompt.MaxTokens)
+	// .
+	// .
+	promptBudget := a.rememberPromptBudget(llmEntry, cfg.Prompt.MaxTokens)
+	_, budgetSrc := a.currentPromptBudget()
 
 	// .
 	a.llmClient = a.newLLMClient(cc, promptBudget)
@@ -1409,9 +1447,11 @@ func (a *App) startLive() (retErr error) {
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
 
 			ContextBudgetTokens: promptBudget,
-			ThinkingBudget:      llmEntry.ThinkingBudget,
-			TurnTokenBudget:     cfg.Agency.TurnTokenBudget,
-			BreadthNudge:        cfg.Agency.BreadthNudge,
+			// .
+			ContextBudgetFallback: budgetSrc == budgetFallback,
+			ThinkingBudget:        llmEntry.ThinkingBudget,
+			TurnTokenBudget:       cfg.Agency.TurnTokenBudget,
+			BreadthNudge:          cfg.Agency.BreadthNudge,
 			// .
 			// .
 			// .
@@ -1425,6 +1465,7 @@ func (a *App) startLive() (retErr error) {
 			PredictedThisTurn: predictedNow,
 			Calibration:       calibration,
 			IsAct:             a.firstActHook(cfg),
+			ReplaySafe:        replaySafeHook(toolReg),
 		})
 	// .
 	// .
@@ -1493,7 +1534,7 @@ func (a *App) startLive() (retErr error) {
 	// .
 	a.pluginToolReg = toolReg
 	a.pluginOpts = pluginOpts
-	a.convergePlugins(a.bgCtx)
+	a.rescanPlugins(a.bgCtx)
 
 	// .
 	// .
@@ -1523,6 +1564,7 @@ func (a *App) startLive() (retErr error) {
 	}
 	a.projects = project.NewManager(projRoot)
 	a.engine.SetProjects(projectsAdapter{a})
+	a.engine.SetVoice(voiceModeAdapter{a})
 	// .
 	// .
 	// .
@@ -1787,8 +1829,9 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	dreamFac.SetTensions(stAdapt)
 	a.timeFac.RegisterOwner(dreamFac)
 	consolidateFac := cognitive.NewConsolidate(stAdapt, llmAdapt, door, ringWriter, cognitive.ConsolidateConfig{
-		Threshold: 3,
-		Salience:  cfg.Memory.Salience,
+		Threshold:     3,
+		Salience:      cfg.Memory.Salience,
+		Ring3MaxChars: cfg.Prompt.Ring3MaxChars,
 	})
 	consolidateFac.SetAuthority(ringAuthority{a.promptGate, a.store})
 	consolidateFac.SetDecisionLog(a.store)
@@ -1981,6 +2024,7 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		HearUtterance:    a.HearUtterance,
 		VoiceConfigured:  a.VoiceConfigured,
 		VoiceStatus:      a.VoiceStatus,
+		VoiceMode:        a.VoiceMode,
 		AudioPlane:       a.AudioPlane,
 		VoiceEngine:      a.VoiceEngine,
 		VoiceSessionOpen: a.OpenVoiceSession,
@@ -2007,7 +2051,7 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		GetContinuity: a.continuityState,
 		// .
 		// .
-		GetProviders:          a.providerDirectoryLive,
+		GetProviders:          a.providerDirectory,
 		SignInProvider:        a.SignInProvider,
 		CompleteSignIn:        a.CompleteSignIn,
 		CancelSignIn:          a.CancelSignIn,
@@ -2027,6 +2071,8 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		SetProvider:           a.setProviderInfo,
 		SetEffort:             a.setActiveEffort,
 		DeleteProvider:        a.deleteProvider,
+		RepairProvider:        a.repairBrokenProvider,
+		RemoveBrokenProvider:  a.removeBrokenProvider,
 		SetSpeechService:      a.setSpeechService,
 		SpeechLists:           a.speechLists,
 		SpeakMint:             a.speakMint,
@@ -2063,6 +2109,8 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 				return a.InstallFromCatalog(context.Background(), req.ID)
 			case "uninstall":
 				return a.UninstallPlugin(req.ID)
+			case "retry":
+				return a.RetryPlugin(req.ID)
 			case "confirm", "deny":
 				return a.decideAct(context.Background(), req.ID, req.Act, req.Action == "confirm")
 			case "always":
@@ -2233,7 +2281,12 @@ const maxContinuationChain = 8
 // .
 // .
 // .
-func (a *App) noteTurnShape(capped bool) {
+// .
+// .
+// .
+// .
+// .
+func (a *App) noteTurnShape(capped, byPressure bool) {
 	// .
 	// .
 	// .
@@ -2244,7 +2297,7 @@ func (a *App) noteTurnShape(capped bool) {
 	// .
 	// .
 	// .
-	if !a.scheduleContinuation(capped) {
+	if !a.scheduleContinuation(capped, byPressure) {
 		a.sweepDeliveriesAfterTurn()
 	}
 }
@@ -2297,7 +2350,7 @@ func (a *App) sweepDeliveriesAfterTurn() {
 // .
 // .
 // .
-func (a *App) scheduleContinuation(capped bool) bool {
+func (a *App) scheduleContinuation(capped, byPressure bool) bool {
 	if !capped {
 		a.turnMeterMu.Lock()
 		a.contChain = 0
@@ -2322,7 +2375,7 @@ func (a *App) scheduleContinuation(capped bool) bool {
 		return false
 	}
 	sessionID := ws.ID
-	if !a.runBackground(func() { a.continueCappedTurn(sessionID, leg) }) {
+	if !a.runBackground(func() { a.continueCappedTurn(sessionID, leg, byPressure) }) {
 		log.Printf("CONTINUATION not scheduled for %s: runtime stopping", sessionID)
 		return false
 	}
@@ -2425,7 +2478,7 @@ func (a *App) yieldGate() (bool, string) {
 // .
 // .
 // .
-func (a *App) continueCappedTurn(sessionID string, leg int) {
+func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	if err := a.acquireTurn(a.bgCtx); err != nil {
 		log.Printf("CONTINUATION %s: could not take the turn: %v", sessionID, err)
 		return
@@ -2433,7 +2486,24 @@ func (a *App) continueCappedTurn(sessionID string, leg int) {
 	defer a.releaseTurn()
 	turnCtx, cancelTurn := context.WithTimeout(context.Background(), continuationTurnBudget)
 	defer cancelTurn()
-	fact := fmt.Sprintf("[budget checkpoint — continuation %d] Your previous turn ended at its declared tool budget. Work session %s is still active: resume from plan= and next_move= in your working state, and declare steps= for this leg.", leg, sessionID)
+	how := "at its declared tool budget"
+	if byPressure {
+		how = "because its context filled"
+	}
+	fact := fmt.Sprintf("[budget checkpoint — continuation %d] Your previous turn ended %s. Work session %s is still active: resume from plan= and next_move= in your working state, and declare steps= for this leg.", leg, how, sessionID)
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if ws, err := a.store.ActiveWorkSession(); err != nil {
+		log.Printf("CONTINUATION %s: resume card unreadable: %v", sessionID, err)
+	} else if ws != nil {
+		if card := resumeCardFor(ws); card != "" {
+			fact += "\n\n" + card
+		}
+	}
 	spoken, err := a.wake(turnCtx, "system", fact)
 	if err != nil {
 		log.Printf("CONTINUATION turn failed for %s (leg %d): %v", sessionID, leg, err)
@@ -2546,13 +2616,6 @@ func (a *App) warnTempHome(ledgerPath string) {
 
 // .
 // .
-type pluginSkip struct {
-	Dir    string
-	ID     string
-	Tier   string
-	Reason string
-}
-
 // .
 // .
 // .
@@ -2583,13 +2646,9 @@ type activePkgMeta struct {
 	// .
 	hash string
 	kind string
-}
-
-type verifyMemo struct {
-	size  int64
-	mtime int64
-	res   *packagefmt.Result
-	err   error
+	// .
+	// .
+	owner *running
 }
 
 // .
@@ -2802,6 +2861,20 @@ func planningBriefEnabled(cfg Config) bool {
 	return heuristicNudgesOn(cfg.Agency.HeuristicNudges) &&
 		planNudgeEnabled(cfg.Agency.PlanNudge) &&
 		agencyOn(cfg.Agency.PlanningBrief)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func replaySafeHook(reg *tools.Registry) func(llm.ToolCall) bool {
+	if reg == nil {
+		return nil
+	}
+	return func(tc llm.ToolCall) bool { return reg.ReplaySafe(tc.Function.Name) }
 }
 
 // .

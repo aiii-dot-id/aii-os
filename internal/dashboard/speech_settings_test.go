@@ -22,7 +22,7 @@ func TestASpeechServiceAnswersUnderItsRequest(t *testing.T) {
 			gotName, gotKey, gotBase = name, key, base
 			return nil
 		},
-		GetProviders: func() []ProviderInfo { return []ProviderInfo{{Name: "Deepgram"}} },
+		GetProviders: func() ProviderDirectory { return ProviderDirectory{Providers: []ProviderInfo{{Name: "Deepgram"}}} },
 		GetConfig:    func() (*ConfigState, error) { return &ConfigState{}, nil },
 	}
 	s := New("127.0.0.1", 0, h)

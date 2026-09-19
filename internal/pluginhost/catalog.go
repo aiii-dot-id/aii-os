@@ -12,6 +12,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
+	"github.com/aiii-dot-id/aii-os/internal/version"
 )
 
 // .
@@ -64,6 +65,15 @@ type CatalogEntry struct {
 	Homepage  string           `json:"homepage,omitempty"`
 	License   string           `json:"license,omitempty"`
 	Packages  []CatalogPackage `json:"packages"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	AiiosMinVersion          string `json:"aiios_min_version,omitempty"`
+	AiiosMaxExclusiveVersion string `json:"aiios_max_exclusive_version,omitempty"`
 }
 
 // .
@@ -76,6 +86,21 @@ type Catalog struct {
 	Version   int            `json:"catalog_version"`
 	Generated string         `json:"generated"`
 	Plugins   []CatalogEntry `json:"plugins"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	MustUnderstand []string `json:"must_understand,omitempty"`
+}
+
+// .
+var catalogFeatures = map[string]bool{
+	// .
+	// .
+	"compat": true,
 }
 
 // .
@@ -125,11 +150,41 @@ func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyE
 	if err != nil {
 		return nil, err
 	}
-	dec := json.NewDecoder(strings.NewReader(block))
-	dec.DisallowUnknownFields()
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	var cat Catalog
-	if err := dec.Decode(&cat); err != nil {
+	if err := json.Unmarshal([]byte(block), &cat); err != nil {
 		return nil, fmt.Errorf("catalog: index block malformed: %w", err)
+	}
+	// .
+	// .
+	// .
+	var written struct {
+		Plugins []map[string]json.RawMessage `json:"plugins"`
+	}
+	if err := json.Unmarshal([]byte(block), &written); err == nil {
+		for i, entry := range written.Plugins {
+			for _, name := range []string{"aiios_min_version", "aiios_max_exclusive_version"} {
+				if bound, present := entry[name]; present {
+					if err := packagefmt.CheckHostBoundRaw(name, bound); err != nil {
+						id := ""
+						if i < len(cat.Plugins) {
+							id = cat.Plugins[i].ID
+						}
+						return nil, fmt.Errorf("catalog: %s: %w", id, err)
+					}
+				}
+			}
+		}
 	}
 	if err := cat.validate(); err != nil {
 		return nil, err
@@ -161,6 +216,14 @@ func catalogBlock(md []byte) (string, error) {
 }
 
 func (c *Catalog) validate() error {
+	if len(c.MustUnderstand) > 16 {
+		return fmt.Errorf("catalog: must_understand names %d features; at most 16", len(c.MustUnderstand))
+	}
+	for _, f := range c.MustUnderstand {
+		if !catalogFeatures[f] {
+			return fmt.Errorf("catalog: this index requires %q, which this AII OS does not understand — update the host to read it", f)
+		}
+	}
 	seen := map[string]bool{}
 	for _, e := range c.Plugins {
 		if e.ID == "" || e.Version == "" {
@@ -191,6 +254,12 @@ func (c *Catalog) validate() error {
 				}
 			}
 		}
+		// .
+		// .
+		// .
+		if err := packagefmt.CheckHostWindow(e.AiiosMinVersion, e.AiiosMaxExclusiveVersion); err != nil {
+			return fmt.Errorf("catalog: %s: %w", e.ID, err)
+		}
 		for _, p := range e.Packages {
 			if p.Platform == "" || p.Arch == "" || p.URL == "" || p.SHA256 == "" {
 				return fmt.Errorf("catalog: %s has an incomplete package (platform, arch, url, sha256 are required)", e.ID)
@@ -217,12 +286,43 @@ func (c *Catalog) Search(query string) []CatalogEntry {
 // .
 // .
 // .
+// .
+// .
+// .
+func (e CatalogEntry) SupportedBy(hostVersion string) (bool, string) {
+	if e.AiiosMinVersion == "" && e.AiiosMaxExclusiveVersion == "" {
+		return true, ""
+	}
+	if !packagefmt.ValidHostBound(hostVersion) {
+		return false, "this host cannot read its own version, so whether this release runs on it cannot be decided"
+	}
+	if e.AiiosMinVersion != "" && packagefmt.CompareHostBounds(hostVersion, e.AiiosMinVersion) < 0 {
+		return false, "needs AII OS " + e.AiiosMinVersion + " or newer"
+	}
+	if e.AiiosMaxExclusiveVersion != "" && packagefmt.CompareHostBounds(hostVersion, e.AiiosMaxExclusiveVersion) >= 0 {
+		return false, "needs AII OS below " + e.AiiosMaxExclusiveVersion
+	}
+	return true, ""
+}
+
+// .
+// .
+// .
+// .
 func (c *Catalog) SelectFor(id, platform, arch string) (*CatalogEntry, *CatalogPackage, error) {
+	return c.SelectForHost(id, platform, arch, version.Authored())
+}
+
+// .
+func (c *Catalog) SelectForHost(id, platform, arch, hostVersion string) (*CatalogEntry, *CatalogPackage, error) {
 	for i := range c.Plugins {
 		if c.Plugins[i].ID != id {
 			continue
 		}
 		e := &c.Plugins[i]
+		if ok, why := e.SupportedBy(hostVersion); !ok {
+			return e, nil, fmt.Errorf("catalog: %s %s — %s (this host is %s)", id, e.Version, why, hostVersion)
+		}
 		var portable *CatalogPackage
 		for j := range e.Packages {
 			p := &e.Packages[j]
@@ -251,7 +351,25 @@ func (c *Catalog) Select(id string) (*CatalogEntry, *CatalogPackage, error) {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func NewerVersion(candidate, installed string) bool {
+	if c, i := trimV(candidate), trimV(installed); version.Valid(c) && version.Valid(i) {
+		return version.Compare(c, i) > 0
+	}
 	a, preA, okA := versionFields(candidate)
 	b, preB, okB := versionFields(installed)
 	if !okA || !okB {
@@ -272,8 +390,11 @@ func NewerVersion(candidate, installed string) bool {
 	return preB && !preA
 }
 
+// .
+func trimV(v string) string { return strings.TrimPrefix(strings.TrimSpace(v), "v") }
+
 func versionFields(v string) (fields []int, pre bool, ok bool) {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	v = trimV(v)
 	if i := strings.IndexAny(v, "-+"); i >= 0 {
 		pre = v[i] == '-'
 		v = v[:i]

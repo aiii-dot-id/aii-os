@@ -58,10 +58,21 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.SourcePath = loadedFrom
+	if _, err := cfg.Plugins.Runtime.startupCeiling(); err != nil {
+		return nil, fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
+	}
+	if r := cfg.Plugins.Runtime; r.AdmissionMemoryReserveBytes < 0 || r.AdmissionMemoryBudgetBytes < 0 || r.MaxConcurrentStarts < 0 {
+		return nil, fmt.Errorf("plugins.runtime: admission_memory_reserve_bytes, admission_memory_budget_bytes and max_concurrent_starts must not be negative")
+	}
 	for id, resource := range cfg.Plugins.Resources {
 		if _, err := resource.startupTimeout(); err != nil {
 			return nil, fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
 		}
+	}
+	// .
+	// .
+	if err := validateVoiceMode(cfg.Speech.Mode); err != nil {
+		return nil, err
 	}
 	switch {
 	case cfg.Prompt.MaxTokens < 0:
@@ -74,6 +85,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("agency.subagent_max_tool_rounds must be zero (take the default) or positive")
 	case cfg.Prompt.MaxToolResultChars < 0:
 		return nil, fmt.Errorf("prompt.max_tool_result_chars cannot be negative")
+	case cfg.Prompt.Ring3MaxChars < 0:
+		return nil, fmt.Errorf("prompt.ring3_max_chars must be zero (take the default) or positive")
 	case cfg.Prompt.PulseIntervalSeconds < 0:
 		return nil, fmt.Errorf("prompt.pulse_interval_seconds cannot be negative")
 	case cfg.Agency.MaxToolRounds <= 0:
@@ -98,7 +111,14 @@ func (r PluginResources) startupTimeout() (time.Duration, error) {
 	if r.StartupTimeoutMS == nil {
 		return 0, nil
 	}
-	ms := *r.StartupTimeoutMS
+	return positiveMilliseconds(*r.StartupTimeoutMS)
+}
+
+func (r PluginRuntimeConfig) startupCeiling() (time.Duration, error) {
+	return positiveMilliseconds(r.MaxStartupMS)
+}
+
+func positiveMilliseconds(ms int64) (time.Duration, error) {
 	if ms <= 0 || ms > int64((1<<63-1)/time.Millisecond) {
 		return 0, fmt.Errorf("must be a positive, representable duration in milliseconds")
 	}

@@ -178,7 +178,8 @@ func TestPluginAutoloadThresholdAndInvariants(t *testing.T) {
 		t.Fatalf("T0 packages must not load under autoload T1, active: %+v", app.plugins)
 	}
 	var gated bool
-	for _, sk := range app.pluginSkips {
+	skips := app.pluginSkipViews()
+	for _, sk := range skips {
 		if sk.ID == "org.example.gated" {
 			gated = true
 			if sk.Tier != "T0" || sk.Reason == "" {
@@ -187,7 +188,7 @@ func TestPluginAutoloadThresholdAndInvariants(t *testing.T) {
 		}
 	}
 	if !gated {
-		t.Fatalf("the below-threshold package must be SURFACED, skips: %+v", app.pluginSkips)
+		t.Fatalf("the below-threshold package must be SURFACED, skips: %+v", skips)
 	}
 }
 
@@ -368,10 +369,17 @@ func TestPluginUpdatesSideBySide(t *testing.T) {
 
 	// .
 	swapPackage(t, dir, "org.example.up", v1, v2)
-	app.convergePlugins(context.Background())
+	app.rescanPlugins(context.Background())
 
+	// .
+	// .
+	// .
 	if _, ok := app.toolReg.Get(tool); !ok {
 		t.Fatal("the tool name never leaves the registry across a side-by-side update")
+	}
+	awaitPluginVersion(t, app, "org.example.up", "0.2.0")
+	if _, ok := app.toolReg.Get(tool); !ok {
+		t.Fatal("nor after it")
 	}
 	if v, n := activeRelease(app, "org.example.up"); v != "0.2.0" || n != 1 {
 		t.Fatalf("exactly the new release is active after the drain, got %q n=%d", v, n)
@@ -427,7 +435,7 @@ func TestPluginUpdateRefusedKeepsRunning(t *testing.T) {
 	}
 
 	swapPackage(t, dir, "org.example.keep", v1, bad)
-	app.convergePlugins(context.Background())
+	app.rescanPlugins(context.Background())
 
 	if v, n := activeRelease(app, "org.example.keep"); v != "0.1.0" || n != 1 {
 		t.Fatalf("the running release keeps serving after a refused update, got %q n=%d", v, n)
@@ -435,5 +443,121 @@ func TestPluginUpdateRefusedKeepsRunning(t *testing.T) {
 	res, err := app.toolReg.Execute(context.Background(), tool, map[string]interface{}{})
 	if err != nil || res.Error != "" || !strings.Contains(res.Output, `"echoed":true`) {
 		t.Fatalf("the running release still answers after the refused update: %v %+v", err, res)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestTheConvergePassHandsOverAndReturnsWithoutWaiting(t *testing.T) {
+	dir := t.TempDir()
+	result := genesistest.NewRoot(t).Birth(t, genesis.BirthConfig{
+		Name: "PassTest", KeyPath: filepath.Join(dir, "identity.sec"),
+		LedgerPath: filepath.Join(dir, "ledger.jsonl"), DBPath: filepath.Join(dir, "aii.db"),
+	})
+	result.Ledger.Close()
+	ids := []string{"org.example.one", "org.example.two", "org.example.three"}
+	// .
+	// .
+	built := map[string]string{}
+	for _, id := range ids {
+		built[id] = buildResponderPkg(t, dir, id)
+		installPluginDir(t, dir, id, built[id])
+	}
+	t.Chdir(dir)
+
+	cfg := &Config{
+		Identity: IdentityConfig{KeyPath: filepath.Join(dir, "identity.sec"),
+			LedgerPath: filepath.Join(dir, "ledger.jsonl"), DBPath: filepath.Join(dir, "aii.db")},
+		LLM:        withTestProvider(t, dir, "test", "https://127.0.0.1:1", "m", "sk-x"),
+		SourcePath: filepath.Join(dir, "config.json"),
+		Dashboard:  DashboardConfig{Port: 0},
+		Tools:      ToolsConfig{CWD: dir},
+		Plugins:    PluginsConfig{Autoload: "T0"},
+		Agency:     defaultConfig().Agency,
+	}
+	app := New(cfg)
+	if err := startLiveForTest(app); err != nil {
+		t.Fatal(err)
+	}
+	defer app.Stop()
+	awaitPlugins(t, app)
+
+	// .
+	// .
+	for _, id := range ids {
+		if err := os.RemoveAll(filepath.Join(dir, "plugins", id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.rescanPlugins(context.Background())
+	awaitPlugins(t, app)
+	for _, id := range ids {
+		installPluginDir(t, dir, id, built[id])
+	}
+
+	start := time.Now()
+	app.rescanPlugins(context.Background())
+	elapsed := time.Since(start)
+
+	// .
+	// .
+	awaitPlugins(t, app)
+	app.pluginMu.Lock()
+	active := len(app.plugins)
+	app.pluginMu.Unlock()
+	if active != 3 {
+		t.Fatalf("all three must come up behind the pass, got %d", active)
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if elapsed > 5*time.Second {
+		t.Fatalf("the pass did the work itself instead of handing it over: %s", elapsed)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAGrantIsOrphanedOnlyWhenNothingWantsIt(t *testing.T) {
+	wanted := map[string]bool{"org.example.starting": true, "org.example.serving": true}
+	granted := []string{"org.example.serving", "org.example.starting", "org.example.uninstalled", "org.example.below"}
+	got := orphanedGrants(granted, wanted)
+	want := []string{"org.example.below", "org.example.uninstalled"}
+	if len(got) != len(want) {
+		t.Fatalf("orphaned = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("orphaned = %v, want %v", got, want)
+		}
+	}
+	// .
+	// .
+	if all := orphanedGrants(granted, nil); len(all) != 4 || all[0] != "org.example.below" {
+		t.Fatalf("with nothing wanted every grant is orphaned, in order: %v", all)
+	}
+	// .
+	if none := orphanedGrants(nil, wanted); none != nil {
+		t.Fatalf("no grants, no lines: %v", none)
 	}
 }
