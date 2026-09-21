@@ -68,7 +68,7 @@ func Run(args []string) int {
 	memoryMax := fs.Uint64("memory-max", pluginworker.DefaultMemoryMaxBytes,
 		"guest memory ceiling in bytes (default: the 64 MiB envelope)")
 	invokeTimeout := fs.Duration("invoke-timeout", 30*time.Second,
-		"deadline per plugin-invoke; on expiry the guest is killed and the worker exits for restart (DELTA_D1 N-8)")
+		"deadline per plugin-invoke; on expiry the guest is killed and the worker exits for restart")
 	forward := fs.Bool("forward", false,
 		"forward guest-outgoing aiii:bbb/bbb calls upstream as BBB request frames on stdout (the supervised broker channel) instead of the deny-all stub")
 	moduleSHA := fs.String("module-sha256", "",

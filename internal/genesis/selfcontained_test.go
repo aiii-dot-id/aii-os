@@ -2,6 +2,7 @@ package genesis
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,16 @@ func TestVerifySelfContainedRefusesEveryMalformedChain(t *testing.T) {
 			}
 			if n != 0 || fp != "" {
 				t.Fatalf("a refused chain still reported %d events and identity %q", n, fp)
+			}
+			// .
+			// .
+			// .
+			var failure *ledger.VerifyFailure
+			if !errors.As(err, &failure) {
+				t.Fatalf("the refusal is not a *ledger.VerifyFailure: %T", err)
+			}
+			if failure.Proved.Seq != 0 || failure.Traversed.Seq != 0 || !strings.Contains(err.Error(), "nothing was established") {
+				t.Fatalf("a refusal before the walk claims something was established: %v", err)
 			}
 		})
 	}

@@ -19,7 +19,7 @@ func TestRhythmLineRenders(t *testing.T) {
 	defer projection.Close()
 
 	// .
-	ws, err := (&App{store: projection}).buildWorkState()
+	ws, err := (&App{store: projection}).buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestRhythmLineRenders(t *testing.T) {
 	if err := projection.InsertTurnMetric(store.TurnMetric{TsMs: time.Now().UnixMilli(), Calls: 13, ReadOnly: 10, Spawned: 1, Harvested: 2}); err != nil {
 		t.Fatal(err)
 	}
-	ws, err = (&App{store: projection}).buildWorkState()
+	ws, err = (&App{store: projection}).buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}

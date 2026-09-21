@@ -8,12 +8,13 @@ import { spokenAudio } from '../say.js';
 import { sandboxCardHTML, wireSandboxCard } from '../sandbox.js';
 import { pendingSlot } from '../pending.js';
 import { providerModels } from './model-picker.js';
+import { backupsHTML, wireBackups, requestBackups } from './backups.js';
 
 const SECTIONS = [
   ['substrate', 'Substrate'], ['providers', 'Providers'], ['speech', 'Speech'],
-  ['dashboard', 'Dashboard'], ['witness', 'Witness'],
+  ['dashboard', 'Dashboard'], ['backups', 'Backups & Keys'], ['witness', 'Witness'],
   ['prompt', 'Prompt'], ['agency', 'Agency'], ['logs', 'Logs'], ['sandbox', 'Sandbox'], ['tools', 'Tools'],
-  ['updates', 'Updates']];
+  ['storage', 'Storage'], ['updates', 'Updates']];
 let sec = 'substrate';
 let provOpen = null;
 const prov = pendingSlot();
@@ -26,6 +27,22 @@ const speechAdd = pendingSlot();
 
 function cfgField(id, label, value, type) {
   return '<label class="f">' + esc(label) + '</label><input type="' + (type || 'text') + '" id="' + id + '" value="' + esc(value == null ? '' : value) + '">';
+}
+
+function storageHTML(c) {
+  if (!c) return '<div class="card"><div class="empty">loading configuration…</div></div>';
+  const db = c.database || {};
+  const formats = [['', 'Keep current format'], ['sqlite', 'Ordinary SQLite'], ['zstd', 'Compressed SQLite (Zstd)']];
+  return '<div class="card"><h3>DATABASE STORAGE</h3>' +
+    '<p>Active format: <strong id="db-active">' + esc(db.active || 'unavailable') + '</strong></p>' +
+    '<label class="f" for="cfg-db-format">FORMAT AT NEXT NORMAL STARTUP</label><select id="cfg-db-format">' +
+    formats.map(([value, label]) => '<option value="' + value + '"' + ((db.preferred || '') === value ? ' selected' : '') + '>' + label + '</option>').join('') + '</select>' +
+    '<p>Saving does not convert the running database or restart the app. At the next normal startup, the current data is converted and verified before use. Compression is not encryption. Routine maintenance uses the existing maintenance alarm.</p>' +
+    savebarHTML('storage', 'applies at next normal startup') +
+    (db.notice ? '<p role="status">' + esc(db.notice) + '</p>' : '') +
+    ((db.recovery || []).length ? '<p>Conversion working material retained for recovery; never restored automatically:</p><ul>' + db.recovery.map(path => '<li>' + esc(path) + '</li>').join('') + '</ul>' : '') +
+    '<h3>EXPORT A COPY</h3><p>Downloads verified ordinary SQLite without changing the active format. This unencrypted file contains private conversations and runtime data; store it privately. It is not a complete identity backup.</p>' +
+    (db.can_export ? '<form method="post" action="/database/export" style="display:inline"><button class="btn" type="submit" data-export-db>Download SQLite copy</button></form>' : '<button class="btn" disabled>Download SQLite copy unavailable</button>') + '</div>';
 }
 function navHTML() {
   return '<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;padding:10px">' +
@@ -466,7 +483,7 @@ function speechCard(dir, sp) {
       // A SAMPLE IS A SERVICE SPEAKING ONE LINE ON REQUEST. The engine
       // installed on this machine speaks inside a voice session and has
       // no such request to answer, so the control is not offered for it
-      // rather than offered and refused (independent review GO110).
+      // rather than offered and refused.
       dir === 'tts' ? { also: '<button class="btn ghost" id="sp-sample-tts"' + (provider && provider !== OWN_SERVER && !isPlugin ? '' : ' disabled') + '>Play sample</button>' +
         '<span class="savesay" id="sp-sample-state" role="status" aria-live="polite"></span>' } : null) + '</div>';
 }
@@ -513,14 +530,14 @@ export function voiceModeReadback(m) {
 
 // speakersCard is whose words the identity receives: one policy, read back
 // with its revision and what it withheld. Ids are the speech engine's stable
-// enrolled ids; a name is never an id.
+// UUIDs or enrolled ids; a name is never an id.
 function speakersCard(sp) {
   const p = sp.speakers || { mode: 'all', uids: [], unidentified: 'deliver', revision: 0 };
   const mode = p.mode || 'all';
   const opt = (v, label) => '<option value="' + v + '"' + (mode === v ? ' selected' : '') + '>' + label + '</option>';
   const unid = p.unidentified || 'deliver';
   return '<div class="card" id="sp-speakers"><h3>Speakers</h3>' +
-    '<p class="muted">Whose words the identity receives. Listed speakers are named by the stable ids the speech engine enrolled; a name is never an id.</p>' +
+    '<p class="muted">Whose words the identity receives. Use stable speaker UUIDs or enrolled ids from the speech engine\'s speaker list, not display names. Provisional or unresolved speakers do not match an allow-list. Identification does not grant authority.</p>' +
     '<label class="f">HEARD</label><select id="sp-speakers-mode">' + opt('all', 'Everyone') + opt('only', 'Only the speakers listed') + opt('ignore', 'Everyone except the speakers listed') + '</select>' +
     '<div id="sp-speakers-list-row"' + (mode === 'all' ? ' hidden' : '') + '><label class="f">SPEAKER IDS</label>' +
     '<input type="text" id="sp-speakers-uids" value="' + esc((p.uids || []).join(' ')) + '" placeholder="ids from the speaker list, separated by spaces"></div>' +
@@ -1031,6 +1048,9 @@ S.openSettings = (section, focusID) => {
   if (el) el.focus();
 };
 S.renderUpdate = () => { if (S.view === 'settings' && sec === 'updates') renderSettings(); };
+S.renderBackups = () => { if (S.view === 'settings' && sec === 'backups') renderSettings(); };
+// The Identity page's link, and anything else that means "take me there".
+export function openBackups() { sec = 'backups'; requestBackups(); }
 S.openUpdates = () => { sec = 'updates'; provOpen = null; renderSettings(); };
 
 function effortField(id, cur, levels, levelsModel) {
@@ -1323,17 +1343,19 @@ export function renderSettings() {
   else if (sec === 'providers') html += providersHTML();
   else if (sec === 'speech') html += speechHTML(c);
   else if (sec === 'dashboard') html += dashboardHTML(c);
+  else if (sec === 'backups') html += backupsHTML();
   else if (sec === 'witness') html += witnessHTML(c);
   else if (sec === 'prompt') html += promptHTML(c);
   else if (sec === 'agency') html += agencyHTML(c);
   else if (sec === 'logs') html += logsHTML(c);
+  else if (sec === 'storage') html += storageHTML(c);
   else if (sec === 'updates') html += updateCardHTML(S.update || null);
   else if (sec === 'sandbox') html += sandboxCardHTML() || '<div class="card"><div class="empty">loading sandbox…</div></div>';
   else if (sec === 'tools') html += toolsHTML();
   st.innerHTML = html;
 
   st.querySelectorAll('[data-sec]').forEach(btn => {
-    btn.onclick = () => { sec = btn.dataset.sec; provOpen = null; renderSettings(); };
+    btn.onclick = () => { sec = btn.dataset.sec; provOpen = null; if (sec === 'backups') requestBackups(); renderSettings(); };
   });
   st.querySelectorAll('[data-save]').forEach(btn => { btn.onclick = () => { saveSettings(btn.dataset.save); renderSettings(); }; });
   wirePublicName(st);
@@ -1391,6 +1413,7 @@ export function renderSettings() {
     };
   }
   if (sec === 'sandbox') wireSandboxCard(st);
+  if (sec === 'backups') wireBackups(st);
   st.querySelectorAll('[data-tool]').forEach(sw => {
     sw.onchange = () => send({ type: 'tool_toggle', tool: sw.dataset.tool, enabled: sw.checked });
   });
@@ -1398,7 +1421,9 @@ export function renderSettings() {
 function num(v) { const n = parseInt(v, 10); return isNaN(n) ? 0 : n; }
 function saveSettings(section) {
   const ch = {};
-  if (section === 'llm') {
+  if (section === 'storage') {
+    ch['identity.db_format'] = $('cfg-db-format').value;
+  } else if (section === 'llm') {
 
     ch['llm.provider'] = $('cfg-provider').value;
     ch['llm.model'] = $('cfg-model').value.trim();
@@ -1608,6 +1633,7 @@ function configValue(state, path) {
 // every plugin-settings save said "did not come back as saved" while
 // the card showed the saved values).
 function savedValue(state, path) {
+  if (path === 'identity.db_format') return state && state.database && state.database.preferred;
   const plugins = (state && state.plugins && state.plugins.installed) || [];
   const under = prefix => {
     if (!path.startsWith(prefix)) return null;
@@ -1643,6 +1669,7 @@ export function acceptSettingsConfig(requestID) {
 }
 
 export function savedText(section, restartRequired, changes) {
+  if (section === 'storage') return 'Preference saved — evaluated at the next normal startup. The active format has not changed.';
   if (section === 'llm') return 'Active — inference verified.';
   if (section === 'speech_stt' || section === 'speech_tts') {
     const dir = section.slice('speech_'.length), provider = changes && changes['speech.' + dir + '.provider'];

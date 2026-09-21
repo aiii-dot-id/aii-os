@@ -2,7 +2,6 @@ package install
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -19,14 +18,14 @@ func TestConfiguredPortFollowsTheConfigNotTheSlotNumber(t *testing.T) {
 		t.Fatalf("fresh slot reports %d, want %d", got, Port(0))
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	data, err := os.ReadFile(ConfigPathIn(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	moved := []byte(string(data))
 	// .
 	out := replacePort(string(moved), Port(0), 9999)
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(out), 0o600); err != nil {
+	if err := os.WriteFile(ConfigPathIn(dir), []byte(out), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := ConfiguredPort(dir, 0); got != 9999 {
@@ -42,13 +41,13 @@ func TestConfiguredPortFallsBackWhenConfigIsUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(dir, "config.json")); err != nil {
+	if err := os.Remove(ConfigPathIn(dir)); err != nil {
 		t.Fatal(err)
 	}
 	if got := ConfiguredPort(dir, 3); got != Port(3) {
 		t.Fatalf("ConfiguredPort with no config = %d, want the creation port %d", got, Port(3))
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(ConfigPathIn(dir), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := ConfiguredPort(dir, 3); got != Port(3) {

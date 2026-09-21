@@ -2,7 +2,7 @@ package app
 
 import (
 	_ "embed"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 )
@@ -46,7 +46,7 @@ func (a *App) seedMethodDoc() {
 		dir = abs
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[method] seed: mkdir %s: %v", dir, err)
+		logsink.Warn("seed.error", "seed: mkdir %s: %v", dir, err)
 		return
 	}
 	seedDoc(filepath.Join(dir, methodFileName), methodMD, nil, methodShippedSeeds, "[method] seed")

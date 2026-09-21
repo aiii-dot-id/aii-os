@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 
 	"github.com/aiii-dot-id/aii-os/internal/bbb"
 	"github.com/tetratelabs/wazero"
@@ -152,7 +152,7 @@ func hostCall(ctx context.Context, mod api.Module, dispatcher HostDispatcher, me
 		// .
 		// .
 		// .
-		log.Printf("pluginworker: %s dispatch failed: %v (answered -32603)", method, derr)
+		logsink.Warn("plugins.error", "%s dispatch failed: %v (answered -32603)", method, derr)
 		reply = []byte(`{"code":-32603,"message":"host dispatch failed"}`)
 	}
 	// .

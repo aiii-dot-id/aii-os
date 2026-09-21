@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS work_sessions (
     harvested_ms INTEGER,
     -- delivered_at: wall-clock (unix-ms) a delivery landed, incl. the boot
     -- sweep. NULL for pre-repair rows; the measurement window uses it so
-    -- Ring-4 deliveries (created_seq=0) can be dated at all (P5 repair).
+    -- Ring-4 deliveries (created_seq=0) can be dated at all.
     delivered_at INTEGER
 ) STRICT;
 
@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     created_seq  INTEGER REFERENCES ledger(seq),
     delivered_at TEXT,
     created_ms   INTEGER NOT NULL DEFAULT 0,
-    -- The delivery record (REVIEW_CHANNELS_METHOD_2026-09-12, G1/G2):
+    -- The delivery record:
     -- how many times an adapter was asked, what the last one answered
     -- and when, whether the row is parked (asked no more), and the
     -- effect class of the last send — performed once delivered,
@@ -404,7 +404,7 @@ CREATE TABLE IF NOT EXISTS runtime_meta (
     updated_at TEXT NOT NULL
 ) STRICT;
 
--- ─── Memory instruments (R101, DESIGN-MEMORY-INSTRUMENTS.md) ─────────
+-- ─── Memory instruments ─────────────────────────────────────────────
 --
 -- Access is one ephemeral table keyed by store and id: how often a
 -- memory was consciously recalled, when last, and a bounded history of
@@ -421,7 +421,7 @@ CREATE TABLE IF NOT EXISTS memory_access (
     PRIMARY KEY (store, id)
 ) STRICT;
 
--- The meaning layer (R101 phase 2): one quantized unit vector per
+-- The meaning layer: one quantized unit vector per
 -- recallable row under a basis (provider/model), keyed like
 -- memory_access. Ephemeral: only the runtime can reach the provider
 -- that makes a vector, so a replay leaves this table alone; a basis
@@ -440,7 +440,7 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_memory_vectors_basis ON memory_vectors (store, basis);
 
--- The decision log of the unconscious side (R101 phase 3): the salience
+-- The decision log of the unconscious side: the salience
 -- filter's class for every candidate weighed, the rhythm's run, defer
 -- or skip per facility per pass. Linked to the ledger seq a decision
 -- produced (0 when nothing), bounded at write — a record, never a

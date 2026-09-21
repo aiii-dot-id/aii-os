@@ -54,8 +54,8 @@ func NewRoot(t *testing.T) *Root {
 	t.Helper()
 	once.Do(func() { shared, fetchErr = fetchLive() })
 	if fetchErr != nil {
-		t.Fatalf("genesistest: RING0 comes from the real servers and nowhere else "+
-			"(operator ruling 2026-09-19); this test binary could not reach them: %v", fetchErr)
+		t.Fatalf("genesistest: RING0 comes from the real servers and nowhere else; "+
+			"this test binary could not reach them: %v", fetchErr)
 	}
 	return shared
 }

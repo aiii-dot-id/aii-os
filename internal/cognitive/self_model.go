@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -112,7 +112,7 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 	}
 
 	if len(beliefs) == 0 && len(experiences) == 0 && current == nil {
-		log.Printf("SELF_MODEL: nothing to synthesize")
+		logsink.Tick("selfmodel.pass", "passes, nothing to synthesize", 0)
 		return nil
 	}
 
@@ -165,7 +165,7 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 		classes["reflections"] = true
 	}
 	if len(classes) < 4 {
-		log.Printf("SELF_MODEL: only %d source classes available; four required", len(classes))
+		logsink.Warn("selfmodel.refusal", "only %d source classes available; four required", len(classes))
 		return nil
 	}
 
@@ -202,7 +202,7 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 	}
 	aerr2 := s.applyResponse(llm.WithModelID(ctx, resp2.ModelID), resp2, people)
 	if aerr2 == nil {
-		log.Printf("SELF_MODEL: corrective round recovered the pass (first attempt: %v)", aerr)
+		logsink.Info("selfmodel.decision", "corrective round recovered the pass (first attempt: %v)", aerr)
 		return nil
 	}
 	s.mintFailureExperience(aerr, aerr2, resp2.ModelID)
@@ -215,7 +215,7 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 // .
 func (s *SelfModelFacility) mintFailureExperience(first, second error, modelID string) {
 	if s.door == nil {
-		log.Printf("SELF_MODEL: no ledger door — failure not recorded as experience: %v", second)
+		logsink.Warn("selfmodel.refusal", "no ledger door — failure not recorded as experience: %v", second)
 		return
 	}
 	// .
@@ -231,7 +231,7 @@ func (s *SelfModelFacility) mintFailureExperience(first, second error, modelID s
 		"provenance": "system",
 		"raw":        true,
 	}, modelID); err != nil {
-		log.Printf("SELF_MODEL: failure experience refused: %v", err)
+		logsink.Warn("selfmodel.refusal", "failure experience refused: %v", err)
 	}
 }
 
@@ -239,10 +239,17 @@ func (s *SelfModelFacility) applyResponse(ctx context.Context, resp *llm.Respons
 	if resp == nil || len(resp.Choices) == 0 {
 		return fmt.Errorf("self_model output contract: no response choice")
 	}
+	// .
+	// .
+	// .
+	// .
+	if err := llm.Finished(resp.Choices[0]); err != nil {
+		return fmt.Errorf("self_model output contract: %w", err)
+	}
 	message := resp.Choices[0].Message
 	if len(message.ToolCalls) == 0 {
 		if strings.TrimSpace(message.Content) == "NO_CHANGE" {
-			log.Printf("SELF_MODEL: no material change")
+			logsink.Tick("selfmodel.pass", "passes, no material change", 0)
 			return nil
 		}
 		return fmt.Errorf("self_model output contract: expected one commit call or exact NO_CHANGE")
@@ -274,7 +281,7 @@ func (s *SelfModelFacility) applyResponse(ctx context.Context, resp *llm.Respons
 	if err != nil {
 		return fmt.Errorf("self_model: commit: %w", err)
 	}
-	log.Printf("SELF_MODEL: %s", result)
+	logsink.Info("selfmodel.end", "%s", logsink.Preview(result))
 	return nil
 }
 
@@ -284,7 +291,7 @@ func (s *SelfModelFacility) SetAuthority(src AuthoritySource) { s.authority = sr
 // .
 func (s *SelfModelFacility) OnAlarm(ctx context.Context, alarmID string, clock string, deadline int64, payload string) AlarmResult {
 	if err := s.Execute(ctx); err != nil {
-		log.Printf("SELF_MODEL: execute error: %v", err)
+		logsink.Warn("selfmodel.error", "execute error: %v", err)
 		return AlarmResult{Accepted: false}
 	}
 	return AlarmResult{Accepted: true}

@@ -31,6 +31,9 @@ package tools
 // .
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -93,6 +96,9 @@ type Discovery struct {
 	// .
 	// .
 	OperatorConfirms bool
+	// .
+	// .
+	OutputSchema map[string]interface{}
 }
 
 // .
@@ -107,6 +113,22 @@ func FamilyOf(operation string) string {
 		return operation[:i]
 	}
 	return operation
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func familyOf(plugin, operation string) string {
+	if strings.IndexByte(operation, '.') > 0 || plugin == "" {
+		return FamilyOf(operation)
+	}
+	if i := strings.LastIndexByte(plugin, '.'); i >= 0 && i < len(plugin)-1 {
+		return plugin[i+1:]
+	}
+	return plugin
 }
 
 // .
@@ -216,7 +238,7 @@ func discoveryOf(name string, t Tool, origin string) Discovery {
 		d.Operation = name
 	}
 	if d.Family == "" {
-		d.Family = FamilyOf(d.Operation)
+		d.Family = familyOf(d.Plugin, d.Operation)
 	}
 	if d.Summary == "" {
 		d.Summary = t.Description()
@@ -318,6 +340,118 @@ func (r *Registry) Resolve(ref string) (string, error) {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (r *Registry) SetStandingOffer(seats []StandingSeat, persist func([]StandingSeat)) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.persistOffer = persist
+	r.standing = nil
+	for _, s := range seats {
+		s.Name = strings.TrimSpace(s.Name)
+		if _, dup := r.seatIndexLocked(s.Name); s.Name != "" && !dup && len(r.standing) < MaxOffered {
+			r.standing = append(r.standing, s)
+		}
+	}
+	for _, s := range r.standing {
+		r.reseatLocked(s.Name)
+	}
+}
+
+// .
+// .
+type StandingSeat struct {
+	Name  string
+	Print string
+}
+
+// .
+// .
+// .
+// .
+// .
+func Fingerprint(t Tool) string {
+	doc := map[string]interface{}{"name": t.Name(), "parameters": t.Parameters()}
+	if d, ok := t.(Discoverable); ok {
+		disc := d.Discovery()
+		caps := append([]string(nil), disc.Capabilities...)
+		sort.Strings(caps)
+		doc["plugin"], doc["operation"], doc["output"] = disc.Plugin, disc.Operation, disc.OutputSchema
+		doc["effects"], doc["capabilities"] = disc.Effects, caps
+		doc["operator_confirms"], doc["max_result_bytes"] = disc.OperatorConfirms, disc.MaxResultBytes
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:16])
+}
+
+// .
+func (r *Registry) seatIndexLocked(name string) (int, bool) {
+	for i, s := range r.standing {
+		if s.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+// .
+// .
+func (r *Registry) seatMatchesLocked(name string) bool {
+	i, ok := r.seatIndexLocked(name)
+	t, registered := r.tools[name]
+	return ok && registered && r.standing[i].Print != "" && r.standing[i].Print == Fingerprint(t)
+}
+
+// .
+// .
+func (r *Registry) reseatLocked(name string) {
+	if _, standing := r.seatIndexLocked(name); !standing || r.offered[name] || r.hostOnly[name] || len(r.offerOrder) >= MaxOffered {
+		return
+	}
+	if src, ok := r.sources[name]; !ok || src == "builtin" {
+		return
+	}
+	if !r.seatMatchesLocked(name) {
+		return
+	}
+	if r.offered == nil {
+		r.offered = map[string]bool{}
+	}
+	r.offered[name] = true
+	r.offerOrder = append(r.offerOrder, name)
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// .
+// .
+// .
+// .
+// .
 func (r *Registry) Offer(ref string) (string, error) {
 	name, err := r.Resolve(ref)
 	if err != nil {
@@ -343,9 +477,32 @@ func (r *Registry) Offer(ref string) (string, error) {
 	}
 	r.offered[name] = true
 	r.offerOrder = append(r.offerOrder, name)
+	seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
+	if i, standing := r.seatIndexLocked(name); standing {
+		// .
+		// .
+		r.standing[i] = seat
+	} else {
+		// .
+		// .
+		// .
+		if len(r.standing) >= MaxOffered {
+			for i, s := range r.standing {
+				if !r.offered[s.Name] {
+					r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
+					break
+				}
+			}
+		}
+		r.standing = append(r.standing, seat)
+	}
+	delete(r.told, name)
+	r.recordStandingLocked()
 	return name, nil
 }
 
+// .
+// .
 // .
 func (r *Registry) Release(ref string) (string, error) {
 	name, err := r.Resolve(ref)
@@ -354,11 +511,76 @@ func (r *Registry) Release(ref string) (string, error) {
 	}
 	r.regMu.Lock()
 	defer r.regMu.Unlock()
-	if !r.offered[name] {
+	i, standing := r.seatIndexLocked(name)
+	if !r.offered[name] && !standing {
 		return name, fmt.Errorf("%s is not in the offer", name)
 	}
 	r.unofferLocked(name)
+	if standing {
+		r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
+	}
+	delete(r.told, name)
+	r.recordStandingLocked()
 	return name, nil
+}
+
+// .
+// .
+// .
+type OfferNotice struct {
+	Name       string
+	Plugin     string
+	Version    string
+	Operation  string
+	Unrecorded bool
+}
+
+// .
+// .
+// .
+// .
+func (r *Registry) WithheldOffers() []OfferNotice {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	var out []OfferNotice
+	for _, s := range r.standing {
+		t, registered := r.tools[s.Name]
+		if !registered || r.offered[s.Name] || r.told[s.Name] || r.hostOnly[s.Name] || r.sources[s.Name] == "builtin" {
+			continue
+		}
+		if r.seatMatchesLocked(s.Name) {
+			continue
+		}
+		n := OfferNotice{Name: s.Name, Unrecorded: s.Print == ""}
+		if d, ok := t.(Discoverable); ok {
+			disc := d.Discovery()
+			n.Plugin, n.Version, n.Operation = disc.Plugin, disc.Version, disc.Operation
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// .
+// .
+// .
+func (r *Registry) MarkOfferNoticesTold(names []string) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	if r.told == nil {
+		r.told = map[string]bool{}
+	}
+	for _, n := range names {
+		r.told[n] = true
+	}
+}
+
+// .
+// .
+func (r *Registry) recordStandingLocked() {
+	if r.persistOffer != nil {
+		r.persistOffer(append([]StandingSeat(nil), r.standing...))
+	}
 }
 
 // .

@@ -89,7 +89,7 @@ func runPayload(args []string, stdout, stderr *os.File) int {
 func runVerify(args []string, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	kind := fs.String("kind", "release", "release (an update archive) or evidence (a sealed bundle, R91)")
+	kind := fs.String("kind", "release", "release (an update archive) or evidence (a sealed bundle)")
 	artifact := fs.String("artifact", "", "the release archive (required)")
 	sig := fs.String("sig", "", "its detached .platform.sig (required)")
 	rootPath := fs.String("root", "", "pinned platform_release root envelope (default: the shipped root)")

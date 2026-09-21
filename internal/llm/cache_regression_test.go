@@ -121,3 +121,55 @@ func TestCacheAnthropicConfiguredTTLReachesWire(t *testing.T) {
 		t.Fatalf("configured 1h TTL did not reach wire; all %d cache markers use vendor default", cacheReviewCount(got, "cache_control"))
 	}
 }
+
+// .
+// .
+// .
+// .
+func TestCacheAnthropicHistoryBoundaryIsMarked(t *testing.T) {
+	conversation := func() []Message {
+		return []Message{
+			{Role: "system", Content: "stable identity" + strings.Repeat(" x", 50), StableLen: len("stable identity")},
+			{Role: "user", Content: "first question"},
+			{Role: "assistant", Content: "first answer"},
+			{Role: "user", Content: "second question", CacheBefore: true},
+		}
+	}
+	tools := ChatOptions{Tools: []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "inspect"}}}}
+	marked := func(got map[string]any, index int) bool {
+		msgs, _ := got["messages"].([]any)
+		if index >= len(msgs) {
+			t.Fatalf("request has %d messages, wanted index %d", len(msgs), index)
+		}
+		m, _ := msgs[index].(map[string]any)
+		return cacheReviewCount(m, "cache_control") > 0
+	}
+
+	auto := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5"}, conversation(), tools)
+	if !marked(auto, 1) {
+		t.Fatalf("auto mode left the end of the history unmarked: the next turn cannot reuse it\n%v", auto["messages"])
+	}
+	if !marked(auto, 2) {
+		t.Fatal("the tail lost its breakpoint to the history boundary")
+	}
+	if marked(auto, 0) {
+		t.Fatal("a breakpoint landed on the first history message, not the boundary")
+	}
+	if n := cacheReviewCount(auto, "cache_control"); n != 4 {
+		t.Fatalf("auto mode with tools sends %d breakpoints, want 4: tools, stable system, history boundary, tail", n)
+	}
+
+	explicit := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5", Cache: &CachePolicy{Mode: "explicit"}}, conversation(), tools)
+	if marked(explicit, 1) {
+		t.Fatal("explicit mode writes only the stable boundary, yet the history boundary was marked")
+	}
+
+	stacked := []Message{}
+	for i := 0; i < 4; i++ {
+		stacked = append(stacked, Message{Role: "system", Content: "system instruction"})
+	}
+	stacked = append(stacked, Message{Role: "user", Content: "q"}, Message{Role: "assistant", Content: "a"}, Message{Role: "user", Content: "go", CacheBefore: true})
+	if n := cacheReviewCount(cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5"}, stacked, tools), "cache_control"); n > 4 {
+		t.Fatalf("sent %d cache breakpoints with a history boundary among four system messages; maximum 4", n)
+	}
+}

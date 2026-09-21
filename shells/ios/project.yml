@@ -28,7 +28,7 @@ targets:
         NSAppTransportSecurity: { NSAllowsLocalNetworking: true }
         BGTaskSchedulerPermittedIdentifiers: [id.aiii.shell.timewake, id.aiii.shell.grip]
         # Without fetch, BGAppRefreshTask submission fails notPermitted
-        # (Sol P1-2); processing backs the grip task — minutes-scale
+        # processing backs the grip task — minutes-scale
         # opportunistic continuation while work is held.
         UIBackgroundModes: [fetch, processing]
     dependencies:

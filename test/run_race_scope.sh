@@ -254,12 +254,28 @@ if [ "$scope" = "self-test" ]; then
 fi
 
 shards=${AII_TEST_SHARDS:-4}
+# A SHARD'S BUDGET MUST ONLY CATCH A HANG, never a busy machine. Go's default
+# is 10m and nobody chose it; as measured here, the shards of
+# internal/app under -race came in at 421s, 549s and one at 600.316s — which
+# failed the gate with 312 tests already passed and another test still
+# running. Three quarters of the budget spent on the good runs is no
+# budget at all: a build host carries other work too, so the slow end is
+# the normal end.
+#
+# 30 minutes is about three times the slowest run observed. A genuine
+# deadlock still fails — later, and having lost only time — while a loaded
+# host stops producing red gates that mean nothing. Same rule as the browser
+# pages: a fixed duration is a guess about a machine, so leave room where it
+# must remain a duration.
+shard_timeout=${AII_TEST_SHARD_TIMEOUT:-30m}
 validate_shard_count "$shards" || fail "AII_TEST_SHARDS must be a positive integer"
 
 if [ -n "${AII_GO:-}" ]; then
 	go_bin=$AII_GO
-elif [ -x /opt/go1.27.0/go/bin/go ]; then
-	go_bin=/opt/go1.27.0/go/bin/go
+elif [ -x /opt/go-current/bin/go ]; then
+	# The host's one toolchain, resolved once so a
+	# switch mid-run cannot change compilers between shards.
+	go_bin=$(readlink -f /opt/go-current/bin/go 2>/dev/null || echo /opt/go-current/bin/go)
 else
 	go_bin=$(command -v go) || fail "Go toolchain not found"
 fi
@@ -333,14 +349,14 @@ run_sharded_package() {
 	while [ "$i" -lt "$shards" ]; do
 		regex=$(awk 'BEGIN { printf "^(" } { printf "%s%s", separator, $0; separator="|" } END { print ")$" }' "$plan/$i.tests")
 		log="$plan/$i.log"
-		start_job "$log" "$go_bin" test -v -race -count=1 -run "$regex" "$package"
+		start_job "$log" "$go_bin" test -v -race -count=1 -timeout "$shard_timeout" -run "$regex" "$package"
 		echo "$started_pid $log $plan/$i.tests $plan/$i-execution" >> "$jobs"
 		i=$((i + 1))
 	done
 
 	status=0
 	while read -r pid log expected execution; do
-		# Provenance headers (review 3, rec 5): a failure body with no
+		# Provenance headers: a failure body with no
 		# origin made a live triage blind — a terse FAIL line could not
 		# be attributed to shard, validator, or another stage. Every
 		# cat now says exactly what it is printing and why.

@@ -513,7 +513,7 @@ func TestTheConvergePassHandsOverAndReturnsWithoutWaiting(t *testing.T) {
 	active := len(app.plugins)
 	app.pluginMu.Unlock()
 	if active != 3 {
-		t.Fatalf("all three must come up behind the pass, got %d", active)
+		t.Fatalf("all three must come up behind the pass, got %d — %s", active, whyNotActive(app))
 	}
 	// .
 	// .

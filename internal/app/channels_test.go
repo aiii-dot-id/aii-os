@@ -121,7 +121,7 @@ func TestAQueuedMessageLeavesThroughItsAdapter(t *testing.T) {
 	a := liveApp(t)
 	var sent []string
 	installAdapter(t, a, "org.example.telegram", "telegram", "", "", &sent)
-	id := queueFor(t, a, "james", "telegram", "@james", "the build is green")
+	id := queueFor(t, a, "sam", "telegram", "@sam", "the build is green")
 
 	n, err := a.deliverOutbox(context.Background())
 	if err != nil {
@@ -130,7 +130,7 @@ func TestAQueuedMessageLeavesThroughItsAdapter(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("delivered %d, want 1", n)
 	}
-	if len(sent) != 1 || sent[0] != "@james|the build is green" {
+	if len(sent) != 1 || sent[0] != "@sam|the build is green" {
 		t.Fatalf("the adapter was called with %v", sent)
 	}
 	msgs, _ := a.store.UndeliveredFor("peer")
@@ -151,7 +151,7 @@ func TestAQueuedMessageLeavesThroughItsAdapter(t *testing.T) {
 // .
 func TestAMessageWithNoAdapterStaysQueued(t *testing.T) {
 	a := liveApp(t)
-	queueFor(t, a, "james", "signal", "+15550001111", "hello")
+	queueFor(t, a, "sam", "signal", "+15550001111", "hello")
 
 	n, err := a.deliverOutbox(context.Background())
 	if err != nil {
@@ -176,9 +176,9 @@ func TestARefusedPrimaryFallsToTheSecondary(t *testing.T) {
 
 	// .
 	contact(t, a,
-		Contact{Name: "james", Channel: "email", Address: "j@x.test"},
-		Contact{Name: "james", Channel: "telegram", Address: "@james"})
-	if err := a.store.AddOutboxMessage("msg_1", "peer", "james", "are you there?", nil); err != nil {
+		Contact{Name: "sam", Channel: "email", Address: "j@x.test"},
+		Contact{Name: "sam", Channel: "telegram", Address: "@sam"})
+	if err := a.store.AddOutboxMessage("msg_1", "peer", "sam", "are you there?", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,7 +201,7 @@ func TestTwoAdaptersForOneChannelCarryNothing(t *testing.T) {
 	var first, second []string
 	installAdapter(t, a, "org.example.tg1", "telegram", "", "", &first)
 	installAdapter(t, a, "org.example.tg2", "telegram", "", "", &second)
-	queueFor(t, a, "james", "telegram", "@james", "which of you?")
+	queueFor(t, a, "sam", "telegram", "@sam", "which of you?")
 
 	n, _ := a.deliverOutbox(context.Background())
 	if n != 0 {
@@ -233,7 +233,7 @@ func TestOperatorMailIsNotAnAdaptersToCarry(t *testing.T) {
 // .
 func TestAReplayedArrivalIsNotASecondMessage(t *testing.T) {
 	a := liveApp(t)
-	inbox := `[{"id":"42","from":"@james","body":"you up?"}]`
+	inbox := `[{"id":"42","from":"@sam","body":"you up?"}]`
 	installAdapter(t, a, "org.example.telegram", "telegram", "", inbox, nil)
 	route := a.channelRoutes(context.Background())["telegram"]
 
@@ -249,7 +249,7 @@ func TestAReplayedArrivalIsNotASecondMessage(t *testing.T) {
 	if len(unseen) != 1 {
 		t.Fatalf("three reads of the same update recorded %d messages", len(unseen))
 	}
-	if unseen[0].Body != "you up?" || unseen[0].Address != "@james" {
+	if unseen[0].Body != "you up?" || unseen[0].Address != "@sam" {
 		t.Fatalf("the arrival did not survive intact: %+v", unseen[0])
 	}
 }
@@ -258,7 +258,7 @@ func TestAReplayedArrivalIsNotASecondMessage(t *testing.T) {
 // .
 func TestAnArrivalWithNoIdIsDroppedNotRecorded(t *testing.T) {
 	a := liveApp(t)
-	inbox := `[{"id":"","from":"@james","body":"who am i"},{"id":"7","from":"","body":"from nobody"}]`
+	inbox := `[{"id":"","from":"@sam","body":"who am i"},{"id":"7","from":"","body":"from nobody"}]`
 	installAdapter(t, a, "org.example.telegram", "telegram", "", inbox, nil)
 	route := a.channelRoutes(context.Background())["telegram"]
 

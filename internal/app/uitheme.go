@@ -26,7 +26,7 @@ package app
 
 import (
 	"encoding/json"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"sort"
@@ -156,37 +156,37 @@ func (a *App) loadUITheme(quiet bool) bool {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("theme: unreadable, keeping current: %v", err)
+			logsink.Warn("theme.error", "unreadable, keeping current: %v", err)
 			return false
 		}
 		raw = nil
 	}
 	if len(raw) > maxUIThemeBytes {
-		log.Printf("theme: %d bytes exceeds the %d ceiling — keeping current (a theme is a screenful of JSON)", len(raw), maxUIThemeBytes)
+		logsink.Warn("theme.refusal", "%d bytes exceeds the %d ceiling — keeping current (a theme is a screenful of JSON)", len(raw), maxUIThemeBytes)
 		return false
 	}
 	var clean []byte
 	if raw != nil {
 		var shape uiThemeShape
 		if err := json.Unmarshal(raw, &shape); err != nil {
-			log.Printf("theme: invalid JSON, keeping current (mid-edit saves must not repaint the screen): %v", err)
+			logsink.Warn("theme.refusal", "invalid JSON, keeping current (mid-edit saves must not repaint the screen): %v", err)
 			return false
 		}
 		if shape.V != 1 {
-			log.Printf("theme: v must be 1, got %d — keeping current", shape.V)
+			logsink.Warn("theme.refusal", "v must be 1, got %d — keeping current", shape.V)
 			return false
 		}
 		if len(shape.Tokens) > maxUIThemeTokens {
-			log.Printf("theme: %d tokens exceeds the %d ceiling — keeping current", len(shape.Tokens), maxUIThemeTokens)
+			logsink.Warn("theme.refusal", "%d tokens exceeds the %d ceiling — keeping current", len(shape.Tokens), maxUIThemeTokens)
 			return false
 		}
 		for name, val := range shape.Tokens {
 			if !validThemeName(name) {
-				log.Printf("theme: %q is not a CSS custom property (--name) — keeping current", name)
+				logsink.Warn("theme.refusal", "%q is not a CSS custom property (--name) — keeping current", name)
 				return false
 			}
 			if !validThemeValue(val) {
-				log.Printf("theme: value for %s is refused (allowlist: colours, lengths, font names; no url(), no comments, no selectors) — keeping current", name)
+				logsink.Warn("theme.refusal", "value for %s is refused (allowlist: colours, lengths, font names; no url(), no comments, no selectors) — keeping current", name)
 				return false
 			}
 		}
@@ -201,7 +201,7 @@ func (a *App) loadUITheme(quiet bool) bool {
 		// .
 		if !quiet {
 			for _, name := range inertThemeTokens(shape.Tokens) {
-				log.Printf("theme: token %s is kept but INERT in the frame — theme.css declares no such property, so it restyles nothing in the frame (a section may still consume it; otherwise check the spelling against theme.css)", name)
+				logsink.Info("theme.decision", "token %s is kept but INERT in the frame — theme.css declares no such property, so it restyles nothing in the frame (a section may still consume it; otherwise check the spelling against theme.css)", name)
 			}
 		}
 		// .
@@ -210,7 +210,7 @@ func (a *App) loadUITheme(quiet bool) bool {
 		// .
 		clean, err = json.Marshal(uiThemeShape{V: 1, Tokens: shape.Tokens})
 		if err != nil {
-			log.Printf("theme: cannot re-encode validated tokens, keeping current: %v", err)
+			logsink.Warn("theme.error", "cannot re-encode validated tokens, keeping current: %v", err)
 			return false
 		}
 	}
@@ -220,9 +220,9 @@ func (a *App) loadUITheme(quiet bool) bool {
 	a.uiThemeMu.Unlock()
 	if changed && !quiet {
 		if clean == nil {
-			log.Printf("theme: file absent — compiled defaults")
+			logsink.Info("theme.start", "file absent — compiled defaults")
 		} else {
-			log.Printf("theme: loaded %s (%d bytes validated)", path, len(clean))
+			logsink.Info("theme.start", "loaded %s (%d bytes validated)", path, len(clean))
 		}
 	}
 	return changed

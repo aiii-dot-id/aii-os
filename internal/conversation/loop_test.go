@@ -303,8 +303,11 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// .
+	// .
+	const margin = 100
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: essential + 80})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: essential + margin})
 	history := []llm.Message{
 		{Role: "user", Content: strings.Repeat("old question ", 200)},
 		{Role: "assistant", Content: strings.Repeat("old answer ", 200)},
@@ -315,11 +318,20 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := client.requests[0]
-	if countMessage(request, current.Role, current.Content) != 1 {
-		t.Fatal("current operator message must appear exactly once")
+	carried := 0
+	for _, m := range request {
+		if strings.Contains(m.Content, current.Content) {
+			carried++
+		}
 	}
-	if last := request[len(request)-1]; last.Role != current.Role || last.Content != current.Content {
+	if carried != 1 {
+		t.Fatalf("current operator message must appear exactly once, got %d", carried)
+	}
+	if last := request[len(request)-1]; last.Role != current.Role || !strings.HasSuffix(last.Content, current.Content) {
 		t.Fatalf("current operator message is not last: %+v", request)
+	}
+	if request[0].Content != sent.Content {
+		t.Fatalf("the omission receipt was written into the system message: %q", request[0].Content)
 	}
 	// .
 	// .
@@ -335,8 +347,8 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got > essential+80 {
-		t.Fatalf("request uses %d tokens, limit %d", got, essential+80)
+	if got > essential+margin {
+		t.Fatalf("request uses %d tokens, limit %d", got, essential+margin)
 	}
 }
 
@@ -411,16 +423,6 @@ func messagesContain(messages []llm.Message, text string) bool {
 		}
 	}
 	return false
-}
-
-func countMessage(messages []llm.Message, role, content string) int {
-	count := 0
-	for _, message := range messages {
-		if message.Role == role && message.Content == content {
-			count++
-		}
-	}
-	return count
 }
 
 // .
@@ -740,8 +742,9 @@ func TestOldTurnsAreAbridgedBeforeDropped(t *testing.T) {
 	// .
 	// .
 	shrunk := llm.Message{Role: "user", Content: prompt.SummarizeUnits(old.Content, historyRoute)}
-	sentAbridged := llm.Message{Role: "system", Content: sent.Content + historyAbridgedNote(1)}
-	lower, err := llm.EstimateInputTokens([]llm.Message{sentAbridged, shrunk, current}, nil)
+	// .
+	currentAbridged := llm.Message{Role: "user", Content: TurnBlock("", 0, 1, false) + current.Content}
+	lower, err := llm.EstimateInputTokens([]llm.Message{sent, shrunk, currentAbridged}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -768,11 +771,15 @@ func TestOldTurnsAreAbridgedBeforeDropped(t *testing.T) {
 	if !abridged {
 		t.Fatalf("the old turn was dropped whole instead of abridged: %+v", req)
 	}
-	if !strings.Contains(req[0].Content, "shown abridged") {
-		t.Fatalf("abridgement was not declared in the system note: %q", req[0].Content)
+	last := req[len(req)-1]
+	if !strings.HasPrefix(last.Content, TurnOpen) || !strings.Contains(last.Content, "shown abridged") {
+		t.Fatalf("abridgement was not declared in the current message's block: %q", last.Content)
 	}
-	if last := req[len(req)-1]; last.Content != current.Content {
-		t.Fatalf("current operator message is not last: %+v", req)
+	if req[0].Content != sent.Content {
+		t.Fatalf("the abridgement touched the system message: %q", req[0].Content)
+	}
+	if !strings.HasSuffix(last.Content, TurnClose+"\n\n"+current.Content) {
+		t.Fatalf("current operator message is not last, whole, after the block: %+v", req)
 	}
 }
 
@@ -945,12 +952,21 @@ func TestModelIsWarnedBeforeContextPressure(t *testing.T) {
 	if _, err := loop.RunSystem(context.Background(), system, []llm.Message{current}, 0); err != nil {
 		t.Fatal(err)
 	}
-	sys := client.requests[0][0].Content
-	if !strings.Contains(sys, "context for this turn is nearly full") {
-		t.Fatalf("the model was not warned while it could still act: %q", sys)
+	req := client.requests[0]
+	newest := req[len(req)-1].Content
+	if !strings.Contains(newest, "context for this turn is nearly full") {
+		t.Fatalf("the model was not warned while it could still act: %q", newest)
 	}
-	if !strings.Contains(sys, "your tools will be withdrawn") {
-		t.Fatalf("the warning must say what is about to happen: %q", sys)
+	if !strings.Contains(newest, "your tools will be withdrawn") {
+		t.Fatalf("the warning must say what is about to happen: %q", newest)
+	}
+	// .
+	// .
+	if !strings.HasPrefix(newest, TurnOpen) || !strings.HasSuffix(newest, current.Content) {
+		t.Fatalf("the warning is not in the current message's block ahead of the words: %q", newest)
+	}
+	if req[0].Content != sent.Content {
+		t.Fatal("the warning was written into the system message")
 	}
 }
 

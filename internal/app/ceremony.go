@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/url"
 	"sort"
 	"strings"
@@ -25,25 +25,25 @@ import (
 // .
 // .
 func (a *App) fetchFoundingArtifacts(cfg Config) {
-	log.Printf("Fetching RING0 from %s...", cfg.Genesis.ServerURL)
+	logsink.Info("genesis.start", "Fetching RING0 from %s...", cfg.Genesis.ServerURL)
 	ring0Result, err := a.genesisClient.FetchRing0()
 	if err != nil {
-		log.Printf("RING0 fetch failed: %v", err)
+		logsink.Error("genesis.error", "RING0 fetch failed: %v", err)
 		// .
 	} else {
 		a.ring0Content = ring0Result.Content
 		a.ring0Bundle = ring0Result.Bundle
 		a.genesisClient.SetToken(ring0Result.Token)
-		log.Printf("RING0 verified (%d bytes)", len(a.ring0Content))
+		logsink.Info("genesis.end", "RING0 verified (%d bytes)", len(a.ring0Content))
 	}
 
-	log.Printf("Fetching Ring 5 from %s...", cfg.Genesis.FirewallURL)
+	logsink.Info("genesis.start", "Fetching Ring 5 from %s...", cfg.Genesis.FirewallURL)
 	ring5Result, err := a.genesisClient.FetchRing5()
 	if err != nil {
-		log.Printf("Ring 5 fetch failed — dashboard remains available, but birth will refuse: %v", err)
+		logsink.Error("genesis.error", "Ring 5 fetch failed — dashboard remains available, but birth will refuse: %v", err)
 	} else {
 		a.ring5Content = ring5Result.Content
-		log.Printf("Ring 5 verified (%d bytes)", len(a.ring5Content))
+		logsink.Info("genesis.end", "Ring 5 verified (%d bytes)", len(a.ring5Content))
 	}
 
 	// .
@@ -55,22 +55,22 @@ func (a *App) fetchFoundingArtifacts(cfg Config) {
 	// .
 	// .
 	if a.ring0Content == "" {
-		log.Printf("Bootstrap fetch SKIPPED — RING0 did not verify, so no genesis token was minted to present. Birth refuses until the RING0 failure above is resolved.")
+		logsink.Error("genesis.refusal", "Bootstrap fetch SKIPPED — RING0 did not verify, so no genesis token was minted to present. Birth refuses until the RING0 failure above is resolved.")
 		return
 	}
 
-	log.Printf("Fetching bootstrap packet from %s...", cfg.Genesis.BootstrapURL)
+	logsink.Info("genesis.start", "Fetching bootstrap packet from %s...", cfg.Genesis.BootstrapURL)
 	bootstrapResult, err := a.genesisClient.FetchBootstrap()
 	if err != nil {
-		log.Printf("Bootstrap fetch FAILED — birth will refuse until the signed packet verifies (operator law: bootstrap births only): %v", err)
+		logsink.Error("genesis.error", "Bootstrap fetch FAILED — birth will refuse until the signed packet verifies (operator law: bootstrap births only): %v", err)
 		return
 	}
 	a.bootstrapText = bootstrapResult.Content
-	log.Printf("Bootstrap packet verified (%d bytes)", len(a.bootstrapText))
+	logsink.Info("genesis.end", "Bootstrap packet verified (%d bytes)", len(a.bootstrapText))
 }
 
 func (a *App) startFirstboot() error {
-	log.Println("No identity found. Starting FIRSTBOOT flow.")
+	logsink.Info("genesis.start", "no identity found — starting the FIRSTBOOT flow")
 	cfg := a.configSnapshot()
 
 	a.rings = ring.NewManager()
@@ -139,6 +139,9 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 		RepairProvider:       a.repairBrokenProvider,
 		RemoveBrokenProvider: a.removeBrokenProvider,
 		HandleGenesis:        a.handleGenesis,
+		// .
+		// .
+		RestoreNew: &dashboard.RestoreNewHooks{Keys: a.newMachineKeys, Upload: a.newMachineUpload, Restore: a.newMachineRestore},
 		// .
 		// .
 		// .
@@ -350,7 +353,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 
 	// .
 	a.dashboard.SwapHandler(a.buildLiveHandler())
-	log.Printf("Genesis complete: identity=%s, handler swapped, store=%p, engine=%p", name, a.store, a.engine)
+	logsink.Info("genesis.end", "genesis complete: identity=%s, handler swapped", name)
 
 	// .
 	// .

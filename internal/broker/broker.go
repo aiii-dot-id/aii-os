@@ -2123,7 +2123,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 	}
 	if target.URL == "" {
 		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{
-			status: statusDenied, reason: reasonTargetInvalid, detail: p.Operation + " requires target.url (rpc_capability.c:331-338)", method: method})
+			status: statusDenied, reason: reasonTargetInvalid, detail: p.Operation + " requires target.url", method: method})
 	}
 	u, err := url.Parse(target.URL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {

@@ -3,7 +3,7 @@
 package app
 
 import (
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -28,7 +28,7 @@ import (
 func watchStopRequest() <-chan struct{} {
 	dir, err := os.Getwd()
 	if err != nil {
-		log.Printf("stop channel unavailable (cannot resolve working directory): %v", err)
+		logsink.Warn("boot.error", "stop channel unavailable (cannot resolve working directory): %v", err)
 		return nil
 	}
 	var h windows.Handle
@@ -50,7 +50,7 @@ func watchStopRequest() <-chan struct{} {
 	if h == 0 {
 		// .
 		// .
-		log.Printf("WARNING: no stop channel could be opened — `aii stop` will not reach this identity")
+		logsink.Warn("boot.refusal", "no stop channel could be opened — `aii stop` will not reach this identity")
 		return nil
 	}
 	ch := make(chan struct{})

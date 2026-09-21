@@ -14,7 +14,8 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"regexp"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
@@ -30,13 +31,66 @@ const (
 // .
 // .
 type speakerObservation struct {
-	RefersTo  int64    `json:"refers_to"`
-	Speaker   string   `json:"speaker"`
-	SpeakerID string   `json:"speaker_id"`
-	Decision  string   `json:"decision"`
-	Score     *float64 `json:"score"`
-	Late      bool     `json:"late"`
-	Reason    string   `json:"reason"`
+	speakerSegment
+	RefersTo         int64    `json:"refers_to"`
+	Speaker          string   `json:"speaker"`
+	SpeakerID        string   `json:"speaker_id"`
+	Decision         string   `json:"decision"`
+	Score            *float64 `json:"score"`
+	Late             bool     `json:"late"`
+	Reason           string   `json:"reason"`
+	SpeakerUUID      string   `json:"speaker_uuid,omitempty"`
+	RegistryRevision string   `json:"registry_revision,omitempty"`
+	Continuity       string   `json:"continuity,omitempty"`
+	DisplayLabel     string   `json:"display_label,omitempty"`
+	Revision         uint64   `json:"revision,omitempty"`
+}
+
+// .
+// .
+type speakerSegment struct {
+	TrackID     string `json:"track_id,omitempty"`
+	StartSample *int64 `json:"start_sample,omitempty"`
+	EndSample   *int64 `json:"end_sample,omitempty"`
+}
+
+func (s speakerSegment) valid() bool {
+	return s.TrackID != "" && len(s.TrackID) <= 128 && s.StartSample != nil && s.EndSample != nil && *s.StartSample >= 0 && *s.StartSample < *s.EndSample
+}
+func declaresSpeakerTrack(raw json.RawMessage) bool {
+	// .
+	// .
+	// .
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	_, declared := fields["track_id"]
+	return declared
+}
+func (s speakerSegment) same(b speakerSegment) bool {
+	return s.valid() && b.valid() && s.TrackID == b.TrackID && *s.StartSample == *b.StartSample && *s.EndSample == *b.EndSample
+}
+
+var speakerUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var speakerRevisionPattern = regexp.MustCompile(`^[1-9][0-9]{0,63}$`)
+
+func (o speakerObservation) validUUID() bool {
+	return speakerUUIDPattern.MatchString(o.SpeakerUUID) && o.SpeakerUUID != "00000000-0000-0000-0000-000000000000" &&
+		speakerRevisionPattern.MatchString(o.RegistryRevision) && len(o.DisplayLabel) <= 512 && o.speakerSegment.valid() &&
+		(o.Continuity == "matched" || o.Continuity == "new_profile" || o.Continuity == "provisional")
+}
+
+// .
+// .
+func (o speakerObservation) filterID() string {
+	if o.SpeakerUUID != "" {
+		if o.validUUID() && o.Continuity != "provisional" {
+			return o.SpeakerUUID
+		}
+		return ""
+	}
+	return o.knownID()
 }
 
 func (o speakerObservation) knownID() string {
@@ -47,6 +101,13 @@ func (o speakerObservation) knownID() string {
 }
 
 func (o speakerObservation) attribution() string {
+	if o.validUUID() {
+		label := "anonymous speaker"
+		if o.DisplayLabel != "" {
+			label = fmt.Sprintf("speaker label %q", o.DisplayLabel)
+		}
+		return fmt.Sprintf("%s (speaker_uuid=%q; continuity=%s; registry_revision=%s; not authentication)", label, o.SpeakerUUID, o.Continuity, o.RegistryRevision)
+	}
 	label := speakerAttribution(o.Speaker, o.Decision, o.Reason, o.Score)
 	if id := o.knownID(); id != "" {
 		// .
@@ -67,7 +128,7 @@ func (a *App) annotateVoiceTurn(seq uint64, b *voiceBinding) {
 	payload, _ := json.Marshal(map[string]interface{}{"session": b.session, "sequence": b.seq})
 	key := voiceRefKey(b.session, b.seq)
 	if err := a.store.AnnotateTurn(seq, annotationVoice, key, string(payload)); err != nil {
-		log.Printf("VOICE: turn %d not tagged with its voice reference: %v", seq, err)
+		logsink.Warn("voice.error", "turn %d not tagged with its voice reference: %v", seq, err)
 		return
 	}
 	// .
@@ -112,6 +173,14 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 	if id := body.knownID(); id != "" {
 		record["speaker_id"] = id
 	}
+	if body.validUUID() {
+		record["speaker_uuid"], record["registry_revision"] = body.SpeakerUUID, body.RegistryRevision
+		record["continuity"], record["display_label"] = body.Continuity, body.DisplayLabel
+	}
+	if body.speakerSegment.valid() {
+		record["track_id"], record["start_sample"], record["end_sample"] = body.TrackID, *body.StartSample, *body.EndSample
+		record["revision"] = body.Revision
+	}
 	if body.Score != nil {
 		record["score"] = *body.Score
 	}
@@ -132,14 +201,14 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 		// .
 		if _, live := a.voiceSessions.Load(ev.SessionID); live {
 			a.speakerPending.Store(key, string(payload))
-			log.Printf("VOICE: speaker observation for %s arrived before its turn — held", key)
+			logsink.Debug("voice.decision", "speaker observation for %s arrived before its turn — held", key)
 			// .
 			if s2, ok2, e2 := a.store.TurnSeqByAnnotation(annotationVoice, key); e2 == nil && ok2 {
 				a.adoptPendingObservation(s2, key)
 			}
 			return
 		}
-		log.Printf("VOICE: speaker observation for %s names no recorded turn (%v) — shown, not recorded", key, err)
+		logsink.Info("voice.refusal", "speaker observation for %s names no recorded turn (%v) — shown, not recorded", key, err)
 		return
 	}
 	a.recordSpeakerAnnotation(seq, key, string(payload))
@@ -149,10 +218,10 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 // .
 func (a *App) recordSpeakerAnnotation(seq uint64, key, payload string) {
 	if err := a.store.AnnotateTurn(seq, annotationSpeaker, key, payload); err != nil {
-		log.Printf("VOICE: speaker observation not recorded on turn %d: %v", seq, err)
+		logsink.Warn("voice.error", "speaker observation not recorded on turn %d: %v", seq, err)
 		return
 	}
-	log.Printf("VOICE: turn %d (%s) attributed: %s", seq, key, attributionOf(payload))
+	logsink.Info("voice.decision", "turn %d (%s) attributed: %s", seq, key, attributionOf(payload))
 }
 
 // .
@@ -294,7 +363,7 @@ func (a *App) speakerAnnotations(turns []store.ConversationTurn) map[uint64]stri
 	}
 	ann, err := a.store.TurnAnnotations(annotationSpeaker, seqs)
 	if err != nil {
-		log.Printf("VOICE: speaker annotations unavailable: %v", err)
+		logsink.Warn("voice.error", "speaker annotations unavailable: %v", err)
 		return nil
 	}
 	return ann

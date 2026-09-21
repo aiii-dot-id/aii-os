@@ -27,6 +27,30 @@ func (a *App) chooseBoot() (bootChoice, error) {
 	if fileExists(a.cfg.Identity.LedgerPath) {
 		return bootLive, nil
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if journalledRestore(a.configSnapshot()) {
+		return bootLive, nil
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	if restoringOnNewMachine(a.configSnapshot()) {
+		return bootFirstboot, nil
+	}
 	if ev := a.identityEvidence(); ev != "" {
 		return 0, fmt.Errorf("refusing FIRSTBOOT: no ledger at %s but this container holds identity evidence (%s) — an existing identity failed to load; recovery required, not a new birth", a.cfg.Identity.LedgerPath, ev)
 	}
@@ -80,7 +104,12 @@ func aBackupFile(dir string) string {
 		return ""
 	}
 	for _, e := range entries {
-		if backupEvidenceRe.MatchString(e.Name()) {
+		// .
+		// .
+		// .
+		// .
+		// .
+		if backupEvidenceRe.MatchString(e.Name()) || strings.HasPrefix(e.Name(), snapshotWorkPrefix) {
 			return filepath.Join(dir, e.Name())
 		}
 	}

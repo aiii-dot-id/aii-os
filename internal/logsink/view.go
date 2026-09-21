@@ -20,6 +20,9 @@ type File struct {
 
 // .
 func (s *Sink) List() ([]File, error) {
+	if s == nil || s.dir == "" {
+		return nil, nil
+	}
 	var files []File
 	if fi, err := os.Stat(filepath.Join(s.dir, LiveName)); err == nil {
 		files = append(files, File{
@@ -68,6 +71,9 @@ const maxGunzipBytes = 64 << 20
 // .
 // .
 func (s *Sink) Tail(name string, n int) ([]string, error) {
+	if s == nil || s.dir == "" {
+		return nil, fmt.Errorf("logsink: file logging is disabled")
+	}
 	if filepath.Base(name) != name ||
 		(!strings.HasPrefix(name, rotatedPrefix) && name != LiveName) ||
 		(!strings.HasSuffix(name, rotatedExt) && !strings.HasSuffix(name, rotatedExt+gzipExt)) {

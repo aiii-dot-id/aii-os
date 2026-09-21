@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"net/http"
 	"net/url"
@@ -235,14 +235,14 @@ func (a *App) DisconnectProfile(name string) error {
 				if client, cerr := a.authorityClient(tpl.RevokeURL); cerr == nil {
 					ctx, cancel := context.WithTimeout(a.signInBase(), 20*time.Second)
 					if rerr := oauth.Revoke(ctx, client, tpl.RevokeURL, tok, params); rerr != nil {
-						log.Printf("auth profile %s: revocation at the authority failed (the file is removed regardless): %v", name, rerr)
+						logsink.Warn("oauth.error", "%s: revocation at the authority failed (the file is removed regardless): %v", name, rerr)
 					}
 					cancel()
 				}
 			}
 		}
 	}
-	log.Printf("auth profile %s: disconnected", name)
+	logsink.Info("oauth.end", "%s: disconnected", name)
 	a.profileChanged()
 	return nil
 }
@@ -380,7 +380,7 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { m[name] = prof }); err != nil {
 		return err
 	}
-	log.Printf("auth profile %s: %s (%s, %d scope(s), %d host(s))", name, map[bool]string{true: "updated", false: "created"}[existing.Scheme != ""], provider, len(scopes), len(hosts))
+	logsink.Info("oauth.decision", "%s: %s (%s, %d scope(s), %d host(s))", name, map[bool]string{true: "updated", false: "created"}[existing.Scheme != ""], provider, len(scopes), len(hosts))
 	return nil
 }
 
@@ -396,7 +396,7 @@ func (a *App) DeleteAuthProfile(name string) error {
 	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { delete(m, name) }); err != nil {
 		return err
 	}
-	log.Printf("auth profile %s: deleted", name)
+	logsink.Info("oauth.end", "%s: deleted", name)
 	return nil
 }
 

@@ -11,7 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/witness"
@@ -19,24 +19,33 @@ import (
 
 func main() {
 	ledgerPath := flag.String("ledger", "", "path to ledger.jsonl (required)")
+	var cross crossFlag
+	flag.Var(&cross, "cross", "another identity's ledger.jsonl to check this ledger's citations against; may repeat")
 	flag.Parse()
 	if *ledgerPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: verify -ledger ledger.jsonl")
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "usage: verify -ledger ledger.jsonl [-cross other-ledger.jsonl]...")
+		os.Exit(genesis.ExitUsage)
 	}
 	// .
 	// .
 	// .
-	heads, err := witness.LoadHeadVerifier(filepath.Dir(*ledgerPath), genesis.PinnedRoot())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "NOT VERIFIED: witness keys beside the ledger: %v\n", err)
-		os.Exit(1)
-	}
-	n, fp, err := genesis.VerifySelfContainedWith(*ledgerPath, heads)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "NOT VERIFIED: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("VERIFIED: %d events, identity %s — gold envelope, self-contained; %d witness heads verified under %d persisted keys, %d tail heads unverified\n",
-		n, fp, heads.Verified(), heads.Keys(), heads.Unverified())
+	// .
+	// .
+	// .
+	out, errOut, code := genesis.VerifyCommand(*ledgerPath, cross, func(dir string) (genesis.Beside, error) {
+		beside, err := witness.LoadBeside(dir, genesis.PinnedRoot())
+		if err != nil {
+			return nil, err
+		}
+		return beside, nil
+	})
+	fmt.Fprint(os.Stdout, out)
+	fmt.Fprint(os.Stderr, errOut)
+	os.Exit(code)
 }
+
+// .
+type crossFlag []string
+
+func (c *crossFlag) String() string     { return strings.Join(*c, ",") }
+func (c *crossFlag) Set(v string) error { *c = append(*c, v); return nil }

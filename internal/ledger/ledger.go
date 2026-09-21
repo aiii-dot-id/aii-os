@@ -20,11 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +117,11 @@ type Event struct {
 	// .
 	// .
 	sealed bool
+
+	// .
+	// .
+	// .
+	container string
 }
 
 // .
@@ -547,7 +553,7 @@ func (l *Ledger) readChainState(file *os.File) error {
 			if err := os.Truncate(l.path, goodBytes); err != nil {
 				return fmt.Errorf("torn trailing line, truncate failed: %w", err)
 			}
-			log.Printf("ledger: dropped a torn trailing line (%d bytes) — quarantined at %s; if the projection mirror remembers more events than the ledger now holds, this was NOT crash debris", len(piece), sidecar)
+			logsink.Warn("ledger.error", "dropped a torn trailing line (%d bytes) — quarantined at %s; if the projection mirror remembers more events than the ledger now holds, this was NOT crash debris", len(piece), sidecar)
 			return nil
 		}
 		evt, err := decodeEvent(line)
@@ -1015,30 +1021,86 @@ func decodeEvent(raw []byte) (Event, error) {
 // .
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
 func VerifyChain(path string, pubKey []byte, heads HeadVerifier) (int, error) {
+	return VerifyChainVisiting(path, pubKey, heads, nil)
+}
+
+// .
+// .
+type visitStopped struct{ err error }
+
+func (v *visitStopped) Error() string { return v.err.Error() }
+func (v *visitStopped) Unwrap() error { return v.err }
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func VerifyChainVisiting(path string, pubKey []byte, heads HeadVerifier, visit func(*Event) error) (int, error) {
 	var expectedPrev string
 	var expectedSeq uint64
+	var proved, traversed Boundary
 	n := 0
+	refuse := func(evt *Event, requirement, expected, observed string, err error) error {
+		return &VerifyFailure{
+			Requirement: requirement, Seq: evt.Seq, Container: evt.container,
+			Expected: expected, Observed: observed,
+			Proved: proved, Traversed: traversed, Err: err,
+		}
+	}
 	err := Stream(path, func(evt *Event) error {
 		expectedSeq++
 		if evt.Seq != expectedSeq {
-			return fmt.Errorf("event %d: seq mismatch (got %d, want %d)", n, evt.Seq, expectedSeq)
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			err := fmt.Errorf("seq mismatch (got %d, want %d)", evt.Seq, expectedSeq)
+			at := *evt
+			at.Seq = expectedSeq
+			return refuse(&at, "seq mismatch", fmt.Sprintf("record %d", expectedSeq), fmt.Sprintf("a record numbered %d", evt.Seq), err)
 		}
 		if evt.Prev != expectedPrev {
-			return fmt.Errorf("event %d: prev mismatch (got %q, want %q)", n, evt.Prev, expectedPrev)
+			err := fmt.Errorf("prev mismatch (got %q, want %q)", evt.Prev, expectedPrev)
+			return refuse(evt, "prev mismatch — this record does not link to the record before it", expectedPrev, evt.Prev, err)
 		}
-		if crypto.ContentHash(evt.Payload) != evt.Content {
-			return fmt.Errorf("event %d: content mismatch", n)
+		if observed := crypto.ContentHash(evt.Payload); observed != evt.Content {
+			err := fmt.Errorf("content mismatch")
+			return refuse(evt, "content mismatch — the payload is not the payload the entry names", evt.Content, observed, err)
 		}
+		// .
+		// .
+		// .
+		traversed = Boundary{Seq: evt.Seq, Hash: evt.EntryHash()}
 		if evt.sealed && heads == nil {
-			return fmt.Errorf("event %d: %w", n, ErrSealedWithoutWitness)
+			return refuse(evt, ErrSealedWithoutWitness.Error(), "", "", ErrSealedWithoutWitness)
 		}
 		if evt.Sig != "" {
 			if err := verifyEventSignature(evt, pubKey); err != nil {
-				return fmt.Errorf("event %d: %w", n, err)
+				return refuse(evt, err.Error(), "", "", err)
 			}
+			proved = traversed
 		} else if !evt.sealed {
-			return fmt.Errorf("event %d: %w", n, ErrUnsignedRecord)
+			return refuse(evt, ErrUnsignedRecord.Error(), "", "", ErrUnsignedRecord)
 		}
 		if evt.Type == EventSystemWitnessed && heads != nil {
 			if err := heads.VerifyHead(evt); err != nil {
@@ -1046,8 +1108,15 @@ func VerifyChain(path string, pubKey []byte, heads HeadVerifier) (int, error) {
 					// .
 					// .
 				} else {
-					return fmt.Errorf("event %d: witness head: %w", n, err)
+					// .
+					said := strings.TrimPrefix(err.Error(), fmt.Sprintf("record %d: ", evt.Seq))
+					return refuse(evt, "witness head: "+said, "", "", err)
 				}
+			}
+		}
+		if visit != nil {
+			if err := visit(evt); err != nil {
+				return &visitStopped{err}
 			}
 		}
 		expectedPrev = evt.EntryHash()
@@ -1055,7 +1124,19 @@ func VerifyChain(path string, pubKey []byte, heads HeadVerifier) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		var stopped *visitStopped
+		if errors.As(err, &stopped) {
+			return 0, stopped.err
+		}
+		var failure *VerifyFailure
+		if errors.As(err, &failure) {
+			return 0, failure
+		}
+		// .
+		return 0, &VerifyFailure{
+			Requirement: err.Error(), NextSeq: expectedSeq + 1,
+			Proved: proved, Traversed: traversed, Err: err,
+		}
 	}
 	return n, nil
 }

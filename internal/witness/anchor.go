@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"path/filepath"
 	"sync"
 
@@ -176,7 +176,7 @@ func (a *Anchorer) recordIntegrityConflict(ce *ConflictError) {
 	if already {
 		return
 	}
-	log.Printf("WITNESS: INTEGRITY CONFLICT (ROLLBACK/FORK) — anchoring latched off until operator review: %v", ce)
+	logsink.Error("witness.refusal", "INTEGRITY CONFLICT (ROLLBACK/FORK) — anchoring latched off until operator review: %v", ce)
 	if fn != nil {
 		fn(ce)
 	}
@@ -199,7 +199,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 	latched := a.conflict
 	a.mu.Unlock()
 	if latched != nil {
-		log.Printf("WITNESS: anchoring remains latched off by an unresolved ROLLBACK/FORK conflict: %v", latched)
+		logsink.Warn("witness.refusal", "anchoring remains latched off by an unresolved ROLLBACK/FORK conflict: %v", latched)
 		return fmt.Errorf("anchoring latched off: %w", latched)
 	}
 
@@ -213,7 +213,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 		a.mu.Lock()
 		if !a.floorLogged {
 			a.floorLogged = true
-			log.Printf("WITNESS: server minimum periodic cadence %d events overrides configured interval %d — anchors follow the floor", st.MinPeriodicCadence, needed)
+			logsink.Info("witness.decision", "server minimum periodic cadence %d events overrides configured interval %d — anchors follow the floor", st.MinPeriodicCadence, needed)
 		}
 		a.mu.Unlock()
 		needed = st.MinPeriodicCadence
@@ -242,7 +242,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 	if a.platformPubkeyPath != "" || a.client.HasGenesisURL() {
 		manifestRaw, err := a.client.VerifyManifest(witnessKey, a.platformPubkeyPath)
 		if err != nil {
-			log.Printf("WITNESS: manifest verification failed — anchoring refused this pass: %v", err)
+			logsink.Error("witness.refusal", "manifest verification failed — anchoring refused this pass: %v", err)
 			return fmt.Errorf("witness manifest: %w", err)
 		}
 		// .
@@ -254,7 +254,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 			return fmt.Errorf("witness key: %w", err)
 		}
 		if err := persistWitnessKey(filepath.Dir(a.ledger.Path()), witnessKey.KeyID, manifestRaw, keyCanonical); err != nil {
-			log.Printf("WITNESS: could not persist the verified witness key beside the ledger — anchoring refused this pass: %v", err)
+			logsink.Warn("witness.error", "could not persist the verified witness key beside the ledger — anchoring refused this pass: %v", err)
 			return fmt.Errorf("persist witness key: %w", err)
 		}
 		manifestVerified = true
@@ -262,7 +262,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 		// .
 		// .
 		// .
-		log.Printf("WITNESS: NO platform key source — witness key is SELF-vouched (no manifest verification possible)")
+		logsink.Warn("witness.refusal", "NO platform key source — witness key is SELF-vouched (no manifest verification possible)")
 	}
 	// .
 	// .
@@ -295,7 +295,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 				// .
 				// .
 				// .
-				log.Printf("WITNESS: anchor paced off by server cadence (not an integrity signal): %v", ce)
+				logsink.Info("witness.decision", "anchor paced off by server cadence (not an integrity signal): %v", ce)
 				return fmt.Errorf("anchor refused by cadence gate: %w", ce)
 			}
 			// .
@@ -310,7 +310,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 	}
 
 	if err := VerifyReceipt(result.Receipt, req, witnessKey); err != nil {
-		log.Printf("WITNESS: receipt FAILED verification — discarded, not persisted, anchor point not advanced: %v", err)
+		logsink.Error("witness.refusal", "receipt FAILED verification — discarded, not persisted, anchor point not advanced: %v", err)
 		return fmt.Errorf("receipt verification: %w", err)
 	}
 
@@ -337,7 +337,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 	if a.minter != nil {
 		head, err := a.minter.MintWitnessed(result.Receipt, witnessKey.KeyID)
 		if err != nil {
-			log.Printf("WITNESS: system.witnessed mint failed — receipt verified but NOT in the chain, anchor point not advanced: %v", err)
+			logsink.Error("witness.error", "system.witnessed mint failed — receipt verified but NOT in the chain, anchor point not advanced: %v", err)
 			return fmt.Errorf("mint system.witnessed: %w", err)
 		}
 		// .
@@ -347,7 +347,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 		// .
 		if a.sealer != nil && manifestVerified && head != nil {
 			if err := a.sealer.Seal(head.Seq); err != nil {
-				log.Printf("WITNESS: sealing through record %d failed — records stay in the tail with their proofs; the next head seals them: %v", head.Seq, err)
+				logsink.Warn("witness.error", "sealing through record %d failed — records stay in the tail with their proofs; the next head seals them: %v", head.Seq, err)
 			}
 		}
 	}
@@ -375,10 +375,10 @@ func (a *Anchorer) CheckAndAnchor() error {
 		WitnessedAt:           result.Receipt.WitnessedAt,
 		WitnessKeyFingerprint: fp,
 	}); err != nil {
-		log.Printf("WITNESS: witness-tail.json write failed (boot truncation check will lag one anchor): %v", err)
+		logsink.Warn("witness.error", "witness-tail.json write failed (boot truncation check will lag one anchor): %v", err)
 	}
 
-	log.Printf("WITNESS: anchored at seq %d (first=%v, witnessed %s) — receipt in ledger",
+	logsink.Info("witness.end", "anchored at seq %d (first=%v, witnessed %s) — receipt in ledger",
 		result.Receipt.LedgerOrdinal, result.First, result.Receipt.WitnessedAt)
 	return nil
 }

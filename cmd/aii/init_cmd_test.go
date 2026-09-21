@@ -42,7 +42,7 @@ func TestInitCreatesTheFirstSlot(t *testing.T) {
 		t.Fatalf("the first slot was not created: %v", err)
 	}
 	// .
-	if _, err := os.Stat(filepath.Join(slot, "config.json")); err != nil {
+	if _, err := os.Stat(install.ConfigPathIn(slot)); err != nil {
 		t.Fatalf("the slot carries no config: %v", err)
 	}
 }

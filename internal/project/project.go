@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -103,7 +103,7 @@ var contractKeys = map[string]string{
 func warnAuthorityInAttributes(id string, attributes map[string]interface{}) {
 	for k := range attributes {
 		if field, bad := contractKeys[strings.ToLower(strings.TrimSpace(k))]; bad {
-			log.Printf("project %s: attribute %q duplicates the typed field %s — the typed field is the authority; clear the attribute to remove the ambiguity", id, k, field)
+			logsink.Warn("project.refusal", "%s: attribute %q duplicates the typed field %s — the typed field is the authority; clear the attribute to remove the ambiguity", id, k, field)
 		}
 	}
 }
@@ -394,7 +394,7 @@ func (m *Manager) List() ([]*Project, error) {
 			// .
 			// .
 			// .
-			log.Printf("projects: skipping %q — %v; repair its %s or remove the directory",
+			logsink.Warn("project.refusal", "skipping %q — %v; repair its %s or remove the directory",
 				e.Name(), err, manifestName)
 			continue
 		}

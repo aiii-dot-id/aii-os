@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync/atomic"
 	"time"
 
@@ -317,7 +317,7 @@ func (h pluginRuntime) Stop(ctx context.Context, r pluginfacility.Running) (plug
 	if err := stop(dctx); err != nil {
 		return pluginfacility.Retirement{Established: false, Residue: []string{err.Error()}}, nil
 	}
-	log.Printf("plugin %s stopped", act.id)
+	logsink.Info("plugins.end", "plugin %s stopped", act.id)
 	return pluginfacility.Retirement{Established: true}, nil
 }
 
@@ -358,9 +358,9 @@ func (a *App) adoptPlugin(next *running, prev *pluginhost.ActivePlugin) {
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
 	if prev != nil {
-		log.Printf("plugin %s: updated %s -> %s side by side; draining the predecessor", next.id, prev.Version, next.version)
+		logsink.Info("plugins.decision", "plugin %s: updated %s -> %s side by side; draining the predecessor", next.id, prev.Version, next.version)
 	} else {
-		log.Printf("plugin %s activated (%s, %s, variant %s): tools %v", next.ap.ID, next.ap.Tier, next.ap.Mode, next.ap.VariantID, next.ap.Tools())
+		logsink.Info("plugins.start", "plugin %s activated (%s, %s, variant %s): tools %v", next.ap.ID, next.ap.Tier, next.ap.Mode, next.ap.VariantID, next.ap.Tools())
 	}
 }
 
@@ -382,7 +382,7 @@ func (a *App) adoptSection(next *running, prev *running) {
 	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, hash: next.hash, kind: "section", owner: next}
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
-	log.Printf("section %s activated (slot %s): commands %v topics %v", next.sec.PackageID, next.sec.Decl.Slot, next.sec.Decl.Commands, next.sec.Decl.Topics)
+	logsink.Info("plugins.start", "section %s activated (slot %s): commands %v topics %v", next.sec.PackageID, next.sec.Decl.Slot, next.sec.Decl.Commands, next.sec.Decl.Topics)
 }
 
 // .
@@ -394,7 +394,7 @@ func (a *App) adoptAsset(next *running) {
 	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, hash: next.hash, kind: "asset", owner: next}
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
-	log.Printf("plugin %s: kind=asset without section.json — nothing activates for it yet", next.pkg)
+	logsink.Info("plugins.refusal", "plugin %s: kind=asset without section.json — nothing activates for it yet", next.pkg)
 }
 
 // .
@@ -433,7 +433,7 @@ func (a *App) releaseActivation(act *running) {
 // .
 func (a *App) watchPinnedPredecessor(act *running) {
 	ap := act.ap
-	log.Printf("plugin %s: %s holds an open session — pinned until it closes or its process exits", act.id, ap.Version)
+	logsink.Info("plugins.decision", "plugin %s: %s holds an open session — pinned until it closes or its process exits", act.id, ap.Version)
 	a.retire(ap)
 	go func() {
 		released := ap.PinReleased()
@@ -446,10 +446,10 @@ func (a *App) watchPinnedPredecessor(act *running) {
 				}
 				cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				if cerr := ap.CloseQuiet(cctx); cerr != nil {
-					log.Printf("plugin %s: pinned predecessor %s stop: %v", act.id, ap.Version, cerr)
+					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s stop: %v", act.id, ap.Version, cerr)
 				}
 				cancel()
-				log.Printf("plugin %s: pinned predecessor %s released and stopped", act.id, ap.Version)
+				logsink.Info("plugins.end", "plugin %s: pinned predecessor %s released and stopped", act.id, ap.Version)
 				// .
 				// .
 				a.pluginFacility().Settle(act.id)
@@ -462,10 +462,10 @@ func (a *App) watchPinnedPredecessor(act *running) {
 				// .
 				// .
 				untrusted = nil
-				log.Printf("plugin %s: pinned predecessor %s: session untrusted (%s) — asking the engine to abort", act.id, ap.Version, ap.Voice.FaultReason())
+				logsink.Warn("plugins.refusal", "plugin %s: pinned predecessor %s: session untrusted (%s) — asking the engine to abort", act.id, ap.Version, ap.Voice.FaultReason())
 				actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
 				if cerr := ap.Voice.Close(actx, "abort", "host fault: "+ap.Voice.FaultReason()); cerr != nil {
-					log.Printf("plugin %s: pinned predecessor %s: abort not admitted (%v); waiting for the reap", act.id, ap.Version, cerr)
+					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s: abort not admitted (%v); waiting for the reap", act.id, ap.Version, cerr)
 				}
 				acancel()
 			}
@@ -491,7 +491,9 @@ func (a *App) pluginFacility() *pluginfacility.Facility {
 			Capacity: hostCapacity{},
 			Discover: a.discoverPlugins,
 			Spawn:    a.runBackground,
-			Log:      log.Printf,
+			Log: func(format string, args ...any) {
+				logsink.Info("plugins.decision", format, args...)
+			},
 		})
 	})
 	return a.facility

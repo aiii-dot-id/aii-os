@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"time"
 )
 
@@ -52,10 +52,10 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		wakeID := fmt.Sprintf("wake_subagent_%s_%d_safe", sessionID, time.Now().UTC().UnixNano())
 		if a.dashboard != nil {
 			if n := a.dashboard.PushTransient(wakeID, notice+" Goal: "+goal); n == 0 {
-				log.Printf("HARVEST WAKE (SAFE): nobody connected — notice was transient-only: %s", notice)
+				logsink.Info("harvest.decision", "(SAFE): nobody connected — notice was transient-only: %s", notice)
 			}
 		} else {
-			log.Printf("HARVEST WAKE (SAFE, no dashboard): %s %s", notice, goal)
+			logsink.Info("harvest.decision", "(SAFE, no dashboard): %s %s", notice, goal)
 		}
 		return
 	}
@@ -72,7 +72,7 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 	// .
 	// .
 	if err := a.acquireTurn(ctx); err != nil {
-		log.Printf("HARVEST_WAKE %s: gate unavailable (mid-turn or coalesced): %v", sessionID, err)
+		logsink.Info("harvest.refusal", "%s: gate unavailable (mid-turn or coalesced): %v", sessionID, err)
 		return
 	}
 	defer a.releaseTurn()
@@ -84,9 +84,9 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 	// .
 	// .
 	if unharvested, err := a.store.UnharvestedDeliveries(1); err != nil {
-		log.Printf("HARVEST_WAKE %s: emptiness check failed (proceeding to harvest): %v", sessionID, err)
+		logsink.Warn("harvest.error", "%s: emptiness check failed (proceeding to harvest): %v", sessionID, err)
 	} else if len(unharvested) == 0 {
-		log.Printf("HARVEST_WAKE %s: coalesced — set already swept, standing down", sessionID)
+		logsink.Info("harvest.refusal", "%s: coalesced — set already swept, standing down", sessionID)
 		return
 	}
 	// .
@@ -102,14 +102,14 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		// .
 		// .
 		// .
-		log.Printf("HARVEST_WAKE %s: wake turn failed (outcome stays unharvested, resurfaces next turn): %v", sessionID, err)
+		logsink.Warn("harvest.error", "%s: wake turn failed (outcome stays unharvested, resurfaces next turn): %v", sessionID, err)
 	}
 	if spoken == "" {
 		return
 	}
 	wakeID := fmt.Sprintf("wake_subagent_%s_%d", sessionID, time.Now().UTC().UnixNano())
 	if err := a.store.AddOutboxMessage(wakeID, "operator", "", spoken, nil); err != nil {
-		log.Printf("HARVEST_WAKE outbox write failed: %v", err)
+		logsink.Warn("harvest.error", "outbox write failed: %v", err)
 	}
-	log.Printf("HARVEST_WAKE %s: woke and spoke (%d chars)", sessionID, len(spoken))
+	logsink.Info("harvest.end", "%s: woke and spoke (%d chars)", sessionID, len(spoken))
 }

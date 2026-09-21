@@ -6,16 +6,16 @@ package llm
 // .
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 func f64(v float64) *float64 { return &v }
@@ -243,17 +243,14 @@ func TestFailedCallIsRecorded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(old) })
+	buf := logsink.CaptureForTest(t)
 
 	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err == nil {
 		t.Fatal("a 400 must be an error")
 	}
 	got := buf.String()
-	if !strings.Contains(got, "LLM call FAILED") {
+	if !strings.Contains(got, "call FAILED") || !strings.Contains(got, "llm.error") {
 		t.Fatalf("a failed call left no record: %q", got)
 	}
 	// .
@@ -271,10 +268,7 @@ func TestSuccessfulCallIsSilent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(old) })
+	buf := logsink.CaptureForTest(t)
 
 	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
@@ -309,17 +303,14 @@ func TestUnattendedCallCostIsRecorded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(old) })
+	buf := logsink.CaptureForTest(t)
 
 	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
 	if _, _, err := c.ChatSimple(context.Background(), "system", "user"); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
-	if !strings.Contains(got, "Unattended call cost") {
+	if !strings.Contains(got, "unattended call cost") || !strings.Contains(got, "llm.budget") {
 		t.Fatalf("a facility pass left no cost record: %q", got)
 	}
 	// .
@@ -341,10 +332,7 @@ func TestUnattendedCostSilentWhenUnreported(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(old) })
+	buf := logsink.CaptureForTest(t)
 
 	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
 	if _, _, err := c.ChatSimple(context.Background(), "system", "user"); err != nil {

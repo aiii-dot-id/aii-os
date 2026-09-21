@@ -92,7 +92,7 @@ func TestCarryAcrossKeepsEveryEphemeralRowAndRebuildsTheDerived(t *testing.T) {
 	// .
 	st0, err := New(dbPath)
 	if err != nil {
-		t.Fatalf("fixture: the runtime refused a mirror at an earlier shape — R102 rebuilds it from the record: %v", err)
+		t.Fatalf("fixture: the runtime refused a mirror at an earlier shape — the runtime rebuilds it from the record: %v", err)
 	}
 	if head, err := st0.MaxLedgerSeq(); err != nil || head != 1 {
 		t.Fatalf("the acknowledged head must survive the mirror's rebuild: %d %v", head, err)

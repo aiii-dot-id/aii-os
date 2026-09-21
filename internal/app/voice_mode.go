@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -203,9 +203,9 @@ func (a *App) voiceModeCommitted(prev, next VoiceModeConfig) {
 	})
 	for _, t := range targets {
 		if err := t.h.fenceBounded(t.id, why); err != nil {
-			log.Printf("VOICE: speak turned off; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", t.id, t.h.id, err)
+			logsink.Warn("voice.refusal", "speak turned off; the engine did NOT fence synthesis %s on %s (%v) — the page's own silence is the remaining guard", t.id, t.h.id, err)
 		} else {
-			log.Printf("VOICE: speak turned off; synthesis %s on %s was fenced", t.id, t.h.id)
+			logsink.Info("voice.decision", "speak turned off; synthesis %s on %s was fenced", t.id, t.h.id)
 			t.h.replyOutcome.Store(replyNotSpokenOutcome)
 		}
 	}

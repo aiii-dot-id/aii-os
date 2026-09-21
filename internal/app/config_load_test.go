@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigRejectsNegativePromptLimit(t *testing.T) {
@@ -181,6 +182,61 @@ func TestLoadConfigRefusesANegativeRing3Bound(t *testing.T) {
 
 // .
 // .
+// .
+func TestLoadConfigRefusesANegativeSurfacingBound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20,"surfacing_max_chars":-1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "prompt.surfacing_max_chars") {
+		t.Fatalf("got %v, want prompt.surfacing_max_chars refusal", err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20,"surfacing_max_chars":1800}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(set)
+	if err != nil || cfg.Prompt.SurfacingMaxChars != 1800 {
+		t.Fatalf("surfacing_max_chars 1800: cfg=%v err=%v", cfg.Prompt.SurfacingMaxChars, err)
+	}
+	// .
+	// .
+	if got := dreamConfig(*cfg); got.MaxChars != 1800 || got.Threshold != 1 {
+		t.Fatalf("the operator's bound did not reach DREAM: %+v", got)
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestLoadConfigRefusesANegativeTensionsBound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20,"tensions_max_chars":-1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "prompt.tensions_max_chars") {
+		t.Fatalf("got %v, want prompt.tensions_max_chars refusal", err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20,"tensions_max_chars":1500,"ring3_max_chars":9000,"surfacing_max_chars":1800}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dreamConfig(*cfg); got.TensionsMaxChars != 1500 || got.MaxChars != 1800 || got.Threshold != 1 {
+		t.Fatalf("the operator's numbers did not reach DREAM: %+v", got)
+	}
+	if got := consolidateConfig(*cfg); got.TensionsMaxChars != 1500 || got.Ring3MaxChars != 9000 || got.Threshold != 3 ||
+		got.Salience != cfg.Memory.Salience {
+		t.Fatalf("the operator's numbers did not reach CONSOLIDATE: %+v", got)
+	}
+}
+
+// .
+// .
 func TestLoadConfigAcceptsAUTF8ByteOrderMark(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -194,5 +250,97 @@ func TestLoadConfigAcceptsAUTF8ByteOrderMark(t *testing.T) {
 	}
 	if cfg.Prompt.RecentTurns != 7 {
 		t.Fatalf("the file behind the mark was not read: recent_turns=%d", cfg.Prompt.RecentTurns)
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestLoadConfigRefusesANegativeOutcomeWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20},"agency":{"outcome_window":-1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "agency.outcome_window") {
+		t.Fatalf("got %v, want agency.outcome_window refusal", err)
+	}
+	unset := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(unset, []byte(`{"prompt":{"recent_turns":20}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(unset)
+	if err != nil || cfg.Agency.OutcomeWindow != 512 {
+		t.Fatalf("unset outcome_window: cfg=%v err=%v, want 512", cfg, err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20,"surfacing_max_chars":1800},"agency":{"outcome_window":64}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := consolidateConfig(*cfg); got.OutcomeWindow != 64 || got.ObservationMaxChars != 1800 {
+		t.Fatalf("the operator's numbers did not reach the outcome intake: %+v", got)
+	}
+}
+
+// .
+// .
+// .
+// .
+func TestLoadConfigRefusesANegativeConversationBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20,"dream_conversation_max_chars":-1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "prompt.dream_conversation_max_chars") {
+		t.Fatalf("got %v, want prompt.dream_conversation_max_chars refusal", err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20,"dream_conversation_max_chars":24000}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := dreamConfig(*cfg)
+	if got.ConversationMaxChars != 24000 {
+		t.Fatalf("the operator's number did not reach DREAM: %+v", got)
+	}
+	if got.RoomNotePrefix != voiceMarker+voiceRoomNote || got.RoomNotePrefix == "" {
+		t.Fatalf("DREAM was handed the room note %q, want the voice host's own %q", got.RoomNotePrefix, voiceMarker+voiceRoomNote)
+	}
+}
+
+// .
+// .
+// .
+func TestLoadConfigHoldsTheOnDemandSpacingToItsBounds(t *testing.T) {
+	for _, bad := range []string{`-1`, `86401`} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20},"maintenance":{"on_demand_spacing_seconds":`+bad+`}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "maintenance.on_demand_spacing_seconds") {
+			t.Errorf("%s: got %v, want a refusal naming the key", bad, err)
+		}
+	}
+	unset := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(unset, []byte(`{"prompt":{"recent_turns":20}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(unset)
+	if err != nil || onDemandSpacing(*cfg) != defaultOnDemandSpacing {
+		t.Fatalf("unset: %v %v, want the default", cfg, err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20},"maintenance":{"on_demand_spacing_seconds":90}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = LoadConfig(set); err != nil || onDemandSpacing(*cfg) != 90*time.Second {
+		t.Fatalf("set to 90: %v %v", cfg, err)
 	}
 }

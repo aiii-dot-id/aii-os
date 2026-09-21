@@ -72,7 +72,7 @@ func TestPublishReplacesWholeOrNothing(t *testing.T) {
 	}
 
 	// .
-	second := []byte(`{"gen":2,"speakers":["james"]}`)
+	second := []byte(`{"gen":2,"speakers":["sam"]}`)
 	m = dispatch(t, b, fsParams("fs.publish", "private", "uid/snapshot.json", `{"data_b64":"`+base64.StdEncoding.EncodeToString(second)+`","expected_sha256":"`+hexSum(first)+`"}`))
 	wantResult(t, m, statusSucceeded, "")
 	if or := opResult(t, m); or["replaced"] != true || or["sha256"] != hexSum(second) {

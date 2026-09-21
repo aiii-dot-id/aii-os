@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
@@ -142,7 +142,7 @@ func operationList(v interface{}) ([]string, error) {
 // .
 func (a *App) publishGrants(cfg Config) {
 	a.replacePolicy(cfg)
-	log.Printf("Config: plugin grants applied live -> %d grant(s)", len(cfg.Plugins.Grants))
+	logsink.Info("config.decision", "plugin grants applied live -> %d grant(s)", len(cfg.Plugins.Grants))
 }
 
 // .

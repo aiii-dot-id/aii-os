@@ -96,7 +96,7 @@ func TestEveryFrameElementIsReachableOrDeclaredInert(t *testing.T) {
 		t.Fatalf("these elements ship but no module reaches them: %s\n"+
 			"Either wire them, delete them, or mark the element data-inert=\"why\" — "+
 			"a control that does nothing and does not say so is machinery the "+
-			"operator has to learn to discount (NOTES.md 1.4).",
+			"operator has to learn to discount.",
 			strings.Join(unreachable, ", "))
 	}
 }

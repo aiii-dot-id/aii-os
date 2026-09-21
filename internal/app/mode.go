@@ -1,7 +1,7 @@
 package app
 
 import (
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync"
 	"time"
 
@@ -86,7 +86,7 @@ func (a *App) enterSafe(reason string) {
 	if a.ledger != nil {
 		a.ledger.SetFrozen(reason)
 	}
-	log.Printf("SAFE MODE: entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
+	logsink.Error("safe.start", "entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
 	a.applySafeState(reason)
 	// .
 	// .
@@ -140,7 +140,7 @@ func (a *App) witnessAttempt(ok bool) {
 	}
 	if ok {
 		if a.mode.mode == ModeDegradedWitness {
-			log.Printf("DEGRADED→NORMAL: witness reachable again (was dark since %s)", a.mode.witnessSince.Format("15:04:05 MST"))
+			logsink.Info("safe.end", "DEGRADED→NORMAL: witness reachable again (was dark since %s)", a.mode.witnessSince.Format("15:04:05 MST"))
 			a.mode.mode = ModeNormal
 		}
 		a.mode.witnessFails = 0
@@ -153,7 +153,7 @@ func (a *App) witnessAttempt(ok bool) {
 	if a.mode.witnessFails >= 3 && a.mode.mode != ModeDegradedWitness {
 		a.mode.mode = ModeDegradedWitness
 		a.mode.since = time.Now().UTC()
-		log.Printf("DEGRADED (witness): unreachable since %s (%d attempts) — anchoring paused; everything else normal; auto-recovers on success.",
+		logsink.Warn("safe.decision", "DEGRADED (witness): unreachable since %s (%d attempts) — anchoring paused; everything else normal; auto-recovers on success.",
 			a.mode.witnessSince.Format("15:04:05 MST"), a.mode.witnessFails)
 	}
 }
@@ -230,7 +230,7 @@ func (a *App) startSafeBeacon() {
 			if !still {
 				return
 			}
-			log.Printf("SAFE MODE BEACON: writes denied for %s — reason: %s. Conversation is read-only; queue frozen (forensic snapshot preserved); operator intervention required.",
+			logsink.Error("safe.decision", "BEACON: writes denied for %s — reason: %s. Conversation is read-only; queue frozen (forensic snapshot preserved); operator intervention required.",
 				time.Since(since).Round(time.Second), reason)
 			select {
 			case <-t.C:

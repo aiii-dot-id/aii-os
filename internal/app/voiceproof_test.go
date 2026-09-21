@@ -545,6 +545,9 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	if err != nil {
 		t.Fatalf("open a voice session: %v", err)
 	}
+	if got := vh.ID(); !strings.HasPrefix(got, "vs-") || len(got) != 35 {
+		t.Fatalf("durable voice reference must not be a process-local counter: %q", got)
+	}
 	if in, out := ap3.Voice.EngineFormats(); in != mono16k || out != mono16k {
 		t.Fatalf("the SDK-built engine answered the open with the formats it speaks: %s / %s", in, out)
 	}
@@ -684,9 +687,15 @@ func TestSDKBuiltVoiceEngineSurvivesUpdateDrainSaturationLossAndShutdown(t *test
 	}
 
 	// .
+	// .
+	// .
+	app.voiceSeq.Store(0)
 	vh2, err := app.OpenVoiceSession(ctx, "mic", "spk", "meeting")
 	if err != nil {
 		t.Fatalf("open a second voice session: %v", err)
+	}
+	if vh2.ID() == vh.ID() {
+		t.Fatal("reset ordinal reused a durable voice reference")
 	}
 	if !ap3.Pinned() {
 		t.Fatal("an open session pins the running release")

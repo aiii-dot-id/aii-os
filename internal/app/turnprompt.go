@@ -6,7 +6,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
 
@@ -17,12 +17,9 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
-// .
-// .
-// .
-// .
 // .
 // .
 // .
@@ -50,7 +47,7 @@ const planningBriefText = "### Before you act\n" +
 	"`work update plan=` with what you examined and what it IS, traced to paths and rows, not what " +
 	"it should be; the falsifier in falsifier=, the result that would show the step wrong; the " +
 	"simplest route that is sufficient; `steps=` as the count the traced plan implies, read against " +
-	"the rhythm line above; `independent=` for what can run apart. Declaring buys the budget; an " +
+	"the rhythm line in this turn's substrate block; `independent=` for what can run apart. Declaring buys the budget; an " +
 	"undeclared turn gets the floor. Then act: call the tool rather than describe it. At a checkpoint " +
 	"say which: done, with its scope; continue, with the exact resume point; stop, with why. The " +
 	"practice is METHOD.md at your root."
@@ -74,68 +71,14 @@ func resumeCardFor(ws *store.WorkSession) string {
 	})
 }
 
+// .
+// .
+// .
+// .
+// .
+// .
 func (a *App) buildWorkState() (string, error) {
 	var parts []string
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if len(a.bootInterrupted) > 0 {
-		parts = append(parts, "### Interrupted at last shutdown\n"+store.InterruptedNote(a.bootInterrupted))
-		a.composedInterrupted = true
-	}
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if a.store != nil {
-		if turns, calls, roPct, spawns, harvests, batchCenti, err := a.store.RhythmStats(48 * time.Hour); err != nil {
-			// .
-			// .
-			// .
-			log.Printf("Warning: rhythm stats unreadable this turn: %v", err)
-		} else if turns > 0 {
-			line := fmt.Sprintf("### Rhythm — last 48h: %d turns, %d calls, %d%% read-only, %d spawns, %d harvests", turns, calls, roPct, spawns, harvests)
-			// .
-			// .
-			// .
-			if batchCenti > 0 {
-				line += fmt.Sprintf(", %d.%02d calls per model round", batchCenti/100, batchCenti%100)
-			}
-			// .
-			// .
-			// .
-			// .
-			// .
-			// .
-			if plans, predicted, actual, cerr := a.store.PlanCalibration(48 * time.Hour); cerr != nil {
-				// .
-				// .
-				// .
-				log.Printf("Warning: plan calibration unreadable this turn: %v", cerr)
-			} else if plans > 0 {
-				line += fmt.Sprintf("\nOf those, %d turn(s) stated a plan of %d calls in advance and took %d.", plans, predicted, actual)
-			}
-			// .
-			// .
-			// .
-			// .
-			if done, failedN, truncN, terr := a.store.ToolEventStats(48 * time.Hour); terr != nil {
-				// .
-				// .
-				// .
-				log.Printf("Warning: tool event stats unreadable this turn: %v", terr)
-			} else if done > 0 && (failedN > 0 || truncN > 0) {
-				line += fmt.Sprintf("\nOf the last %d tool calls, %d failed and %d were truncated.", done, failedN, truncN)
-			}
-			parts = append(parts, line)
-		}
-	}
 	// .
 	// .
 	// .
@@ -233,7 +176,7 @@ func (a *App) buildWorkState() (string, error) {
 		// .
 		// .
 		// .
-		log.Printf("Warning: standing state unreadable this turn: %v", serr)
+		logsink.Warn("prompt.error", "standing state unreadable this turn: %v", serr)
 		parts = append(parts, "### Standing state\n(unavailable this turn — the store could not be read. That is NOT the same as having none; do not re-author on the strength of this.)")
 	} else if strings.TrimSpace(standing) != "" {
 		parts = append(parts, "### Standing state (yours — re-author when it stops being true)\n"+standing)
@@ -245,7 +188,7 @@ func (a *App) buildWorkState() (string, error) {
 			// .
 			// .
 			// .
-			log.Printf("Warning: recent plan unreadable this turn: %v", rperr)
+			logsink.Warn("prompt.error", "recent plan unreadable this turn: %v", rperr)
 			parts = append(parts, "### Standing plan\n(unavailable this turn — the store could not be read. That is NOT the same as having none.)")
 		} else if ok && (ws == nil || rp.ID != ws.ID) {
 			var spb strings.Builder
@@ -270,6 +213,102 @@ func (a *App) buildWorkState() (string, error) {
 	if line := a.voiceWorkStateLine(); line != "" {
 		parts = append(parts, line)
 	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) buildTurnFacts(events bool) (string, error) {
+	var parts []string
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if len(a.bootInterrupted) > 0 {
+		parts = append(parts, "### Interrupted at last shutdown\n"+store.InterruptedNote(a.bootInterrupted))
+		a.composedInterrupted = true
+	}
+	// .
+	// .
+	// .
+	// .
+	a.composedWithheld = nil
+	if a.toolReg != nil {
+		if held := a.toolReg.WithheldOffers(); len(held) > 0 {
+			parts = append(parts, withheldOffersNote(held))
+			for _, h := range held {
+				a.composedWithheld = append(a.composedWithheld, h.Name)
+			}
+		}
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if a.store != nil {
+		if turns, calls, roPct, spawns, harvests, batchCenti, err := a.store.RhythmStats(48 * time.Hour); err != nil {
+			// .
+			// .
+			// .
+			logsink.Warn("prompt.error", "rhythm stats unreadable this turn: %v", err)
+		} else if turns > 0 {
+			line := fmt.Sprintf("### Rhythm — last 48h: %d turns, %d calls, %d%% read-only, %d spawns, %d harvests", turns, calls, roPct, spawns, harvests)
+			// .
+			// .
+			// .
+			if batchCenti > 0 {
+				line += fmt.Sprintf(", %d.%02d calls per model round", batchCenti/100, batchCenti%100)
+			}
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			if plans, predicted, actual, cerr := a.store.PlanCalibration(48 * time.Hour); cerr != nil {
+				// .
+				// .
+				// .
+				logsink.Warn("prompt.error", "plan calibration unreadable this turn: %v", cerr)
+			} else if plans > 0 {
+				line += fmt.Sprintf("\nOf those, %d turn(s) stated a plan of %d calls in advance and took %d.", plans, predicted, actual)
+			}
+			// .
+			// .
+			// .
+			// .
+			if done, failedN, truncN, terr := a.store.ToolEventStats(48 * time.Hour); terr != nil {
+				// .
+				// .
+				// .
+				logsink.Warn("prompt.error", "tool event stats unreadable this turn: %v", terr)
+			} else if done > 0 && (failedN > 0 || truncN > 0) {
+				line += fmt.Sprintf("\nOf the last %d tool calls, %d failed and %d were truncated.", done, failedN, truncN)
+			}
+			parts = append(parts, line)
+		}
+	}
+	ws, err := a.store.ActiveWorkSession()
+	if err != nil {
+		return "", fmt.Errorf("load active work: %w", err)
+	}
 	// .
 	// .
 	// .
@@ -280,7 +319,7 @@ func (a *App) buildWorkState() (string, error) {
 		// .
 		// .
 		// .
-		log.Printf("Warning: live sub-agent rows unreadable this turn: %v", lerr)
+		logsink.Warn("prompt.error", "live sub-agent rows unreadable this turn: %v", lerr)
 		parts = append(parts, "### Sub-agents running now\n(unavailable this turn — the store could not be read. Do NOT conclude that nothing is running.)")
 	} else if len(live) > 0 {
 		// .
@@ -288,7 +327,7 @@ func (a *App) buildWorkState() (string, error) {
 		// .
 		states, serr := a.store.SubagentQueueStates(identity.SubagentWorkKind)
 		if serr != nil {
-			log.Printf("Warning: sub-agent queue states unreadable this turn: %v", serr)
+			logsink.Warn("prompt.error", "sub-agent queue states unreadable this turn: %v", serr)
 			states = nil
 		}
 		queued := 0
@@ -371,12 +410,76 @@ func (a *App) buildWorkState() (string, error) {
 	// .
 	if !attentionUrgent(ws, subs) && a.store != nil {
 		if items, err := memory.New(a.store).Attention(context.Background(), time.Now()); err != nil {
-			log.Printf("attention: unreadable this turn, the prompt goes without it: %v", err)
+			logsink.Warn("prompt.error", "attention: unreadable this turn, the prompt goes without it: %v", err)
 		} else if medium := memory.OfCost(items, memory.CostMedium); len(medium) > 0 {
 			parts = append(parts, "### Attention — one thing the record is holding\n"+medium[0].Text+"\nIt closes nothing by itself; resolve it or hold it knowingly.")
 		}
 	}
+	if events {
+		if err := a.appendEventsSince(&parts); err != nil {
+			return "", err
+		}
+	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func (a *App) appendEventsSince(parts *[]string) error {
+	lastResident, err := a.store.LastTurnAtMs("resident")
+	if err != nil {
+		return fmt.Errorf("load last resident turn: %w", err)
+	}
+	if firings, err := a.store.TimerFiringsSince(lastResident); err != nil {
+		return fmt.Errorf("load timer firings: %w", err)
+	} else if len(firings) > 0 {
+		var lines []string
+		for _, f := range firings {
+			lines = append(lines, "- "+f.Content)
+		}
+		*parts = append(*parts, "## Your timers fired since your last turn\n"+
+			strings.Join(lines, "\n")+
+			"\n(These are facts delivered by the time system.)")
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if arrivals, err := a.store.InboundSince(lastResident); err != nil {
+		return fmt.Errorf("load arrivals: %w", err)
+	} else if len(arrivals) > 0 {
+		var lines []string
+		for _, m := range arrivals {
+			// .
+			// .
+			// .
+			lines = append(lines, "- "+a.frameStoredArrival(m))
+		}
+		*parts = append(*parts, "## Messages that arrived since your last turn\n"+
+			strings.Join(lines, "\n")+
+			"\n(Answer any that deserve it with send, or leave them.)")
+	}
+	// .
+	// .
+	// .
+	if outcomes, err := a.store.OutboxOutcomesSince(lastResident); err != nil {
+		return fmt.Errorf("load delivery outcomes: %w", err)
+	} else if len(outcomes) > 0 {
+		*parts = append(*parts, "## What became of the messages you sent\n"+
+			deliveryOutcomeLines(outcomes)+
+			"\n(Delivered: an adapter took it. Response lost: it may have arrived — do not resend blindly. Parked: no more attempts; your operator can see it.)")
+	}
+	return nil
 }
 
 // .
@@ -429,6 +532,25 @@ func attentionUrgent(ws *store.WorkSession, subs []store.WorkSession) bool {
 
 // .
 // .
+func withheldOffersNote(held []tools.OfferNotice) string {
+	var b strings.Builder
+	b.WriteString("### Offers withheld\nAn operation you offered is not offered now: it came back declaring something other than what you offered.\n")
+	for _, h := range held {
+		fmt.Fprintf(&b, "- `%s`", h.Name)
+		if h.Operation != "" {
+			fmt.Fprintf(&b, " — %s in %s %s", h.Operation, h.Plugin, h.Version)
+		}
+		if h.Unrecorded {
+			b.WriteString(" (offered before offers recorded what they promised)")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("`tools action=show name=…` shows it as it is now; `tools action=offer name=…` offers it again; `tools action=release name=…` lets it go.")
+	return b.String()
+}
+
+// .
+// .
 // .
 // .
 // .
@@ -443,6 +565,10 @@ func (a *App) markComposedHarvests() {
 		a.bootInterrupted = nil
 		a.composedInterrupted = false
 	}
+	if len(a.composedWithheld) > 0 && a.toolReg != nil {
+		a.toolReg.MarkOfferNoticesTold(a.composedWithheld)
+		a.composedWithheld = nil
+	}
 	if len(a.composedUnharvested) == 0 {
 		return
 	}
@@ -454,7 +580,7 @@ func (a *App) markComposedHarvests() {
 			// .
 			// .
 			// .
-			log.Printf("HARVEST: mark %s failed: %v", id, err)
+			logsink.Warn("harvest.error", "mark %s failed: %v", id, err)
 			continue
 		}
 		swept++
@@ -467,7 +593,7 @@ func (a *App) markComposedHarvests() {
 	a.turnMeterMu.Lock()
 	a.turnHarvested += swept
 	a.turnMeterMu.Unlock()
-	log.Printf("HARVEST_SWEEP swept=%d of=%d", swept, len(a.composedUnharvested))
+	logsink.Info("harvest.end", "swept=%d of=%d", swept, len(a.composedUnharvested))
 	a.composedUnharvested = nil
 }
 
@@ -487,10 +613,11 @@ func (a *App) promptReserve(current llm.Message, omitted int) (int, error) {
 	if omitted < 0 {
 		omitted = 0
 	}
-	return llm.EstimateInputTokens(
-		[]llm.Message{{Role: "system", Content: conversation.HistoryOmissionNote(omitted)}, current},
-		a.buildToolDefinitions(),
-	)
+	// .
+	// .
+	// .
+	sent := llm.Message{Role: current.Role, Content: conversation.TurnBlock("", omitted, 0, false) + current.Content}
+	return llm.EstimateInputTokens([]llm.Message{sent}, a.buildToolDefinitions())
 }
 
 // .
@@ -500,7 +627,11 @@ func (a *App) buildHistory() ([]llm.Message, int, error) {
 	if recentTurns <= 0 {
 		recentTurns = 20
 	}
-	turns, err := a.store.RecentTurns(recentTurns)
+	// .
+	// .
+	// .
+	// .
+	turns, total, err := a.store.ConversationWindow(recentTurns)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load conversation history: %w", err)
 	}
@@ -542,10 +673,6 @@ func (a *App) buildHistory() ([]llm.Message, int, error) {
 	// .
 	// .
 	// .
-	total, err := a.store.ConversationTurnCount()
-	if err != nil {
-		return nil, 0, fmt.Errorf("count conversation history: %w", err)
-	}
 	omitted := total - len(turns)
 	if omitted < 0 {
 		omitted = 0

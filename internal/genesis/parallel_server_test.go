@@ -30,7 +30,7 @@ func TestParallelServerAttackRefused(t *testing.T) {
 	// .
 	live, err := genesislive.Fetch()
 	if err != nil {
-		t.Fatalf("RING0 comes from the real servers (operator ruling 2026-09-19): %v", err)
+		t.Fatalf("RING0 comes from the real servers: %v", err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

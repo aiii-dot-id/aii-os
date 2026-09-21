@@ -1,17 +1,17 @@
 package app
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 func TestEnsureDashboardTokenPersistsOneOriginalInConfig(t *testing.T) {
@@ -25,9 +25,7 @@ func TestEnsureDashboardTokenPersistsOneOriginalInConfig(t *testing.T) {
 		t.Fatal("a token was minted without require_token")
 	}
 
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	logs := logsink.CaptureForTest(t)
 	cfg.Dashboard.RequireToken = true
 	if err := a.ensureDashboardToken(); err != nil {
 		t.Fatal(err)

@@ -33,7 +33,7 @@ var embeddedCitation = regexp.MustCompile(strings.Join([]string{
 	`§\s?\d+`,
 	`\d{4}-\d{2}-\d{2}`,
 	`/home/user`, `/opt/(?:go|tinygo)`, `/root/`,
-	`\bbatch \d+`, `\bexternal review\b`,
+	`\bbatch \d+`, `\bexternal review\b`, `\bGO\d{2,3}\b`,
 	`\bV-[A-Za-z]+\d+\b`, `\bhandoff req \d+\b`,
 	`\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
 	`PLUGIN_SDK|SECURE_CONTEXT|RULINGS|IDENTITY_SEMANTICS|UI_FRAME|THREAT_MODEL|PLUGIN_REVOCATION|BETA1|GO_CANON`,

@@ -261,7 +261,7 @@ func TestComposeRendersRunningWorkerTruth(t *testing.T) {
 		t.Fatalf("enqueue: %v %v", enq, err)
 	}
 
-	state, err := a.buildWorkState()
+	state, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}

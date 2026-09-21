@@ -15,7 +15,7 @@ func TestOutboxDeliveryRecord(t *testing.T) {
 	}
 	defer s.Close()
 	for _, id := range []string{"msg_a", "msg_b", "msg_c"} {
-		if err := s.AddOutboxMessage(id, "peer", "james", "hello from "+id, nil); err != nil {
+		if err := s.AddOutboxMessage(id, "peer", "sam", "hello from "+id, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -72,7 +72,7 @@ func TestOutboxDeliveryRecord(t *testing.T) {
 		t.Fatalf("msg_a: %+v", a)
 	}
 	// .
-	if err := s.AddOutboxMessage("msg_d", "peer", "james", "one more", nil); err != nil {
+	if err := s.AddOutboxMessage("msg_d", "peer", "sam", "one more", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkDelivered("msg_d", "org.example.telegram"); err != nil {

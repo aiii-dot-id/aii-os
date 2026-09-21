@@ -183,6 +183,21 @@ func TestLocalForkLatches(t *testing.T) {
 
 // .
 
+// .
+// .
+// .
+func heldToTail(dir, ledgerPath string, pubKey []byte) error {
+	tail, err := ReadLocalTail(dir)
+	if err != nil {
+		return err
+	}
+	check := NewTailCheck(tail)
+	if _, err := ledger.VerifyChainVisiting(ledgerPath, pubKey, nil, check.Visit); err != nil {
+		return err
+	}
+	return check.Held()
+}
+
 func TestLocalTailWriteReadback(t *testing.T) {
 	dir := t.TempDir()
 	want := LocalTail{LedgerOrdinal: 7, LedgerHash: "sha256:" + strings.Repeat("b", 64),
@@ -246,14 +261,14 @@ func TestAnchorWritesLocalTail(t *testing.T) {
 		t.Fatal("tail must record witnessed_at")
 	}
 	// .
-	if err := CheckLocalTail(filepath.Dir(lg.Path()), lg); err != nil {
-		t.Fatalf("intact ledger must pass CheckLocalTail: %v", err)
+	if err := heldToTail(filepath.Dir(lg.Path()), lg.Path(), kp.PublicKeyBytes()); err != nil {
+		t.Fatalf("intact ledger must hold the tail its own anchor wrote: %v", err)
 	}
 }
 
 func TestCheckLocalTailAbsentIsOK(t *testing.T) {
-	lg, _ := testLedger(t, 2)
-	if err := CheckLocalTail(t.TempDir(), lg); err != nil {
+	lg, kp := testLedger(t, 2)
+	if err := heldToTail(t.TempDir(), lg.Path(), kp.PublicKeyBytes()); err != nil {
 		t.Fatalf("absent tail file is first-boot, must pass: %v", err)
 	}
 }
@@ -289,14 +304,15 @@ func TestCheckLocalTailDetectsTruncation(t *testing.T) {
 	if _, err := ledger.VerifyChain(lg.Path(), kp.PublicKeyBytes(), nil); err != nil {
 		t.Fatalf("the truncated chain must still be internally valid (that is the attack): %v", err)
 	}
-	err = CheckLocalTail(dir, reopened)
-	if err == nil || !strings.Contains(err.Error(), "TRUNCATION") {
-		t.Fatalf("truncation must be detected, got %v", err)
+	err = heldToTail(dir, lg.Path(), kp.PublicKeyBytes())
+	var refusal *TailRefusal
+	if !errors.As(err, &refusal) || !refusal.Truncation || refusal.LastSeq != 4 || !strings.Contains(err.Error(), "TRUNCATION") {
+		t.Fatalf("truncation must be detected and typed, got %v", err)
 	}
 }
 
 func TestCheckLocalTailDetectsFork(t *testing.T) {
-	lg, _ := testLedger(t, 4)
+	lg, kp := testLedger(t, 4)
 	dir := filepath.Dir(lg.Path())
 	// .
 	if err := writeLocalTail(dir, LocalTail{
@@ -304,9 +320,10 @@ func TestCheckLocalTailDetectsFork(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err := CheckLocalTail(dir, lg)
-	if err == nil || !strings.Contains(err.Error(), "FORK") {
-		t.Fatalf("fork must be detected, got %v", err)
+	err := heldToTail(dir, lg.Path(), kp.PublicKeyBytes())
+	var refusal *TailRefusal
+	if !errors.As(err, &refusal) || refusal.Truncation || refusal.Observed == "" || !strings.Contains(err.Error(), "FORK") {
+		t.Fatalf("fork must be detected and typed, got %v", err)
 	}
 }
 
@@ -314,19 +331,19 @@ func TestCheckLocalTailTornTempInvisible(t *testing.T) {
 	// .
 	// .
 	// .
-	lg, _ := testLedger(t, 2)
+	lg, kp := testLedger(t, 2)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, TailFileName+".tmp-123"), []byte(`{"ledger_ordinal":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckLocalTail(dir, lg); err != nil {
+	if err := heldToTail(dir, lg.Path(), kp.PublicKeyBytes()); err != nil {
 		t.Fatalf("a stranded temp file must not become authority: %v", err)
 	}
 	// .
 	if err := os.WriteFile(filepath.Join(dir, TailFileName), []byte(`{"ledger_ordinal":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckLocalTail(dir, lg); err == nil {
+	if err := heldToTail(dir, lg.Path(), kp.PublicKeyBytes()); err == nil {
 		t.Fatal("a corrupt present tail file must not soft-pass as absent")
 	}
 }

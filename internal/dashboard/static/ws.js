@@ -10,6 +10,8 @@ import { renderWorkPill } from './views/work.js';
 import { renderProjPill, renderProjects, rejectCreate, rejectFocusSave, rejectContractSave, acceptCreate, acceptFocusSave, acceptContractSave, projectsConnectionLost } from './views/projects.js';
 import { renderMemory } from './views/memory.js';
 import { renderIdentity } from './views/identity.js';
+import { applyBackups, backupsReconnected } from './views/backups.js';
+import { applyRestoreNew } from './firstboot-restore.js';
 import { renderPlugins } from './views/plugins.js';
 import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptDashboardToken, settingsConnectionLost } from './views/settings.js';
 import { renderProviderOptions, setModelOptions, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
@@ -45,6 +47,7 @@ export function connect() {
     S.connected = true;
     reconnectDelay = 1000;
     S.wsEverOpened = true;
+    backupsReconnected();
     if (S.reconnectTimer) { clearTimeout(S.reconnectTimer); S.reconnectTimer = null; }
     $('send-btn').disabled = false;
     renderVoice();
@@ -187,6 +190,7 @@ function onMessage(e) {
       // way a typed message looks. The marker names the channel.
       if (ve.type === 'transcript_final' && ve.operator && (ve.text || '').trim()) {
         addMsg('operator', '[voice] ' + ve.text.trim(), '', ve.session_id && ve.sequence ? ve.session_id + '/' + ve.sequence : ''); setThinking(true);
+        if (ve.attribution && ve.session_id && ve.sequence) attachSpeaker(ve.session_id + '/' + ve.sequence, ve.attribution);
       }
       // A speaker observation amends the bubble of the final it names
       // (seam 3); one the page never showed is passed over.
@@ -273,6 +277,8 @@ function onMessage(e) {
     case 'providers': S.providers = msg.providers || []; S.brokenProviders = msg.broken_providers || []; S.skipSignInWithValidToken = msg.skip_signin_with_valid_token !== false; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
     case 'provider_signin': case 'profile_signin': acceptSignIn(msg); break;
     case 'profile_device': if (S.onProfileDevice) { S.onProfileDevice(msg.device); } break;
+    case 'backups': applyBackups(msg.backups); break;
+    case 'restore_new': applyRestoreNew(msg.restore_new); break;
     case 'update_check': S.update = msg.update || null; if (S.renderUpdate) S.renderUpdate(); if (S.renderUpdateChip) S.renderUpdateChip(); break;
     case 'restart': sysLine('restarting to run the update \u2014 this page reconnects when the identity is back'); break;
     case 'public_name': if (S.renderPublicName) S.renderPublicName(msg.public_name || null); break;

@@ -21,7 +21,7 @@ func TestWorkPlanRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	focus := "land CS-4 plan surface"
+	focus := "land the plan surface"
 	next := "write render test"
 	plan := "## Plan\n- [ ] schema columns → store → verb\n- cite ws_ IDs in subgoal lines"
 	if err := s.UpdateWorkPlan("ws_plan", &focus, &next, &plan, nil, nil, nil); err != nil {

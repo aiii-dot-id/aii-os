@@ -21,7 +21,8 @@ The ledger format (GOLD) and its invariants are shared with the AIII
 tooling that signs and verifies release and plugin artifacts, so an
 identity's history is not tied to this implementation.
 
-**Status: Beta 1 (v0.1.4), under active development.** Expect churn.
+**Status: beta, under active development.** The current version is on
+the [releases](https://github.com/aiii-dot-id/aii-os/releases) page. Expect churn.
 The design discipline is honesty-first: refusals are typed, omissions
 are declared, and nothing is claimed beyond its proof.
 

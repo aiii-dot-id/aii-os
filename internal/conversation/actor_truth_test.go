@@ -1,14 +1,14 @@
 package conversation
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -80,10 +80,7 @@ func TestOldestHistoryYieldsBeforeThisTurnsEvidence(t *testing.T) {
 // .
 // .
 func TestAPayingFoldGoesFirstAndTheWallFoldsAnything(t *testing.T) {
-	var logged bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logged)
-	defer log.SetOutput(prev)
+	logged := logsink.CaptureForTest(t)
 
 	small, big := strings.Repeat("x", 300), strings.Repeat("y", 3000)
 	msgs := []llm.Message{
@@ -241,7 +238,7 @@ func TestAContextFilledTurnContinuesLikeACappedOne(t *testing.T) {
 	// .
 	// .
 	// .
-	system := strings.Repeat("s", 1000)
+	system := strings.Repeat("s", 670)
 	small := strings.Repeat("r", 150)
 	defs := &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{
 		Name: "bash", Description: strings.Repeat("d", 900), Parameters: map[string]interface{}{"type": "object"}}}}}

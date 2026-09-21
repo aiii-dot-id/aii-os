@@ -1,17 +1,17 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
@@ -205,10 +205,7 @@ func TestARefusedLoginIsSlowedAndLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Shutdown(context.Background())
-	var lines bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&lines)
-	defer log.SetOutput(prev)
+	lines := logsink.CaptureForTest(t)
 	began := time.Now()
 	resp, err := testClient.Post("https://"+addr+"/auth/token", "text/plain", strings.NewReader("a-wrong-guess"))
 	if err != nil {

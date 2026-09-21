@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,7 +77,7 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	a.trustFinger = trustFingerprint(trustDir)
 	opts.Roots.Revocation = packagefmt.LoadRevocationStatus(trustDir, opts.Roots, a.trustGuard)
 	for _, line := range opts.Roots.Revocation.Describe() {
-		log.Printf("plugins: %s", line)
+		logsink.Info("plugins.decision", "%s", line)
 	}
 	a.catalogDir = cfg.Plugins.CatalogDir
 	a.catalogCache = filepath.Join(filepath.Dir(cfg.Identity.LedgerPath), "plugins-catalog")
@@ -98,9 +98,9 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	// .
 	// .
 	if opts.WorkerBinary == "" {
-		log.Printf("plugins: lane in-process (no supervised worker on this platform)")
+		logsink.Info("plugins.start", "lane in-process (no supervised worker on this platform)")
 	} else {
-		log.Printf("plugins: lane supervised: %s", strings.Join(append([]string{opts.WorkerBinary}, opts.WorkerArgs...), " "))
+		logsink.Info("plugins.start", "lane supervised: %s", strings.Join(append([]string{opts.WorkerBinary}, opts.WorkerArgs...), " "))
 	}
 	// .
 	opts.Settings = a.pluginSettingsSource
@@ -267,7 +267,7 @@ func (a *App) startPluginSweep(ctx context.Context) {
 	// .
 	// .
 	if err := os.MkdirAll("plugins", 0o750); err != nil {
-		log.Printf("plugins: cannot create plugins/ (%v) — drop-ins wait for the heartbeat", err)
+		logsink.Warn("plugins.error", "cannot create plugins/ (%v) — drop-ins wait for the heartbeat", err)
 	}
 	w := fsdir.New(ctx, a.gate, "plugins", fsdir.Options{Depth: 1})
 	// .
@@ -340,7 +340,7 @@ func (a *App) rescanPlugins(ctx context.Context) {
 	autoload := cfg.Plugins.Autoload
 	minTier, _, tierOK := autoloadTier(autoload)
 	if !tierOK {
-		log.Printf("plugins: autoload %q is not a level (none, T0..T3) — using T1", autoload)
+		logsink.Warn("plugins.refusal", "autoload %q is not a level (none, T0..T3) — using T1", autoload)
 		minTier = packagefmt.TierT1
 	}
 
@@ -357,7 +357,7 @@ func (a *App) rescanPlugins(ctx context.Context) {
 			a.trustFinger = tf
 			a.pluginOpts.Roots.Revocation = packagefmt.LoadRevocationStatus(a.trustDir, a.pluginOpts.Roots, a.trustGuard)
 			for _, line := range a.pluginOpts.Roots.Revocation.Describe() {
-				log.Printf("plugins: trust directory changed — %s", line)
+				logsink.Info("plugins.decision", "trust directory changed — %s", line)
 			}
 			trustChanged = true
 		}
@@ -392,7 +392,7 @@ func (a *App) rescanPlugins(ctx context.Context) {
 		granted = append(granted, gid)
 	}
 	for _, gid := range orphanedGrants(granted, wanted) {
-		log.Printf("plugins: grant for %q references no package this host wants — orphaned or below-threshold policy (harmless)", gid)
+		logsink.Info("plugins.refusal", "grant for %q references no package this host wants — orphaned or below-threshold policy (harmless)", gid)
 	}
 	// .
 	// .
@@ -484,7 +484,7 @@ func (a *App) replacePolicy(cfg Config) {
 	// .
 	catalog, err := a.oauthContracts()
 	if err != nil {
-		log.Printf("OAuth configuration: %v", err)
+		logsink.Warn("plugins.refusal", "OAuth configuration: %v", err)
 	}
 	a.pluginOpts.Broker.ReplacePolicy(cfg.Plugins.Grants, cfg.Plugins.AuthProfiles, catalog)
 }
@@ -717,7 +717,7 @@ func (a *App) RetryPlugin(id string) error {
 	// .
 	// .
 	a.rerunPluginSweep()
-	log.Printf("plugins: retrying %s at the operator's word", id)
+	logsink.Info("plugins.decision", "retrying %s at the operator's word", id)
 	return nil
 }
 

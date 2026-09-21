@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -269,6 +270,53 @@ func (l *ledgerAdapter) Append(eventType ledger.EventType, ring int, payload int
 }
 
 // .
+// .
+// .
+// .
+type statePinner interface {
+	PinAt(ctx context.Context, seq uint64, hash string) (*store.Pin, error)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (l *ledgerAdapter) capture(ctx context.Context, tailDst string) (ledger.Capture, *store.Pin, error) {
+	if l == nil || l.Ledger == nil {
+		return ledger.Capture{}, nil, fmt.Errorf("no ledger is open — there is no record to capture")
+	}
+	pinner, ok := l.st.(statePinner)
+	if !ok {
+		return ledger.Capture{}, nil, fmt.Errorf("the projection cannot be pinned — there is no state to capture")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, err := l.Ledger.Capture(tailDst)
+	if err != nil {
+		return ledger.Capture{}, nil, err
+	}
+	snapshotStep("tail-copied")
+	pin, err := pinner.PinAt(ctx, c.LastSeq, c.LastHash)
+	if err != nil {
+		os.Remove(tailDst)
+		return ledger.Capture{}, nil, err
+	}
+	return c, pin, nil
+}
+
+// .
 
 // .
 // .
@@ -361,6 +409,23 @@ func (t toolDiscovererAdapter) Discover(depth int) []identity.ToolInfo {
 		out = append(out, identity.ToolInfo{Name: i.Name, Description: i.Description})
 	}
 	return out
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func pluginOperations(reg *tools.Registry) func() prompt.PluginOperations {
+	return func() prompt.PluginOperations {
+		b := reg.Brief()
+		out := prompt.PluginOperations{MoreFamilies: b.MoreFamilies}
+		for _, f := range b.Families {
+			out.Families = append(out.Families, prompt.PluginFamily{Name: f.Name, Count: f.Count, Names: append([]string(nil), f.Names...), More: f.More})
+		}
+		return out
+	}
 }
 
 // .

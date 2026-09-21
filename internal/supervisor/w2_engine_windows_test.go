@@ -36,7 +36,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 		if os.Getenv("AII_REQUIRED_WINDOWS_QUALIFICATION") == "1" {
 			t.Fatal("required Windows qualification inputs missing")
 		}
-		t.Skip("set AII_WALL_ENGINE and AII_WALL_MODELS (the voice side's prepared copies) to run W2a")
+		t.Skip("set AII_WALL_ENGINE and AII_WALL_MODELS (prepared copies) to run this test")
 	}
 	root := filepath.Dir(carrier)
 	readyTimeout := DefaultReadyTimeout
@@ -62,7 +62,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 			}
 		}
 		if err := os.MkdirAll(evidence, 0o755); err != nil {
-			t.Errorf("W2a: evidence dir %s: %v", evidence, err)
+			t.Errorf("wall: evidence dir %s: %v", evidence, err)
 		}
 		rec["passed"] = !t.Failed()
 		raw, _ := json.MarshalIndent(rec, "", "  ")
@@ -73,9 +73,9 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 			err = errors.Join(err, file.Close())
 		}
 		if err != nil {
-			t.Errorf("W2a: evidence file %s: %v", path, err)
+			t.Errorf("wall: evidence file %s: %v", path, err)
 		} else {
-			t.Logf("W2a: evidence written to %s", path)
+			t.Logf("wall: evidence written to %s", path)
 		}
 	}()
 	capture, lg := newCapture()
@@ -95,7 +95,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 	if err != nil {
 		rec["start_error"] = err.Error()
 		rec["spawn_to_failure_seconds"] = time.Since(spawnAt).Seconds()
-		t.Fatalf("W2a: the frozen carrier did not reach readiness under the wall: %v\n--- host log ---\n%s", err, capture.String())
+		t.Fatalf("wall: the frozen carrier did not reach readiness under the wall: %v\n--- host log ---\n%s", err, capture.String())
 	}
 	readyIn := time.Since(spawnAt)
 	t.Cleanup(func() {
@@ -109,7 +109,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 	rec["pid"] = pid
 	rec["spawn_to_ready_seconds"] = readyIn.Seconds()
 	rec["ready_line"] = s.ReadyLine()
-	t.Logf("W2a: ready after %s (pid %d); ready line %d bytes", readyIn, pid, len(s.ReadyLine()))
+	t.Logf("wall: ready after %s (pid %d); ready line %d bytes", readyIn, pid, len(s.ReadyLine()))
 	if !strings.Contains(capture.String(), "AppContainer S-1-15-2-") {
 		t.Errorf("the activation log must name the wall:\n%s", capture.String())
 	}
@@ -142,7 +142,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 			row["token_error"] = terr.Error()
 		}
 		procs = append(procs, row)
-		t.Logf("W2a: process %d (%s, parent %d): appcontainer=%v err=%v", p.PID, p.Name, p.Parent, in, terr)
+		t.Logf("wall: process %d (%s, parent %d): appcontainer=%v err=%v", p.PID, p.Name, p.Parent, in, terr)
 		if terr != nil || !in {
 			t.Errorf("descendant %d (%s) runs outside the container", p.PID, p.Name)
 		}
@@ -176,7 +176,7 @@ func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 	if len(survivors) > 0 {
 		t.Errorf("the out-of-band kill left processes alive: %v", survivors)
 	}
-	t.Logf("W2a: close took %s; %d descendants; survivors %v", time.Since(closeAt), len(tree), survivors)
+	t.Logf("wall: close took %s; %d descendants; survivors %v", time.Since(closeAt), len(tree), survivors)
 }
 
 type processRow struct {

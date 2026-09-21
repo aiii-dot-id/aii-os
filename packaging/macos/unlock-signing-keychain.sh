@@ -6,7 +6,7 @@
 #
 # Discovered rather than assumed, because the name is not stable: macOS
 # renames the login keychain on some upgrades and restarts and puts a
-# fresh EMPTY one in its place. Measured on the Mac Studio —
+# fresh EMPTY one in its place. Measured on a build Mac —
 # login_renamed_1.keychain-db held five identities including the
 # Developer ID, while login.keychain-db held none and was minutes old.
 # Unlocking by the assumed name then SUCCEEDS against the wrong

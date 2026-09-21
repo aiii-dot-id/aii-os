@@ -1,15 +1,15 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -29,15 +29,12 @@ func TestCanceledContextIsNotRetried(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer func() { log.SetOutput(osStderr) }()
+	buf := logsink.CaptureForTest(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "key", Model: "m", Retries: 4})
 	_, err := c.Chat(ctx, []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
-	log.SetOutput(osStderr)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)

@@ -81,6 +81,9 @@ type Snapshot struct {
 	// .
 	// .
 	InputCompletion *InputCompletion `json:"input_completion"`
+	// .
+	// .
+	Attributions []json.RawMessage `json:"attributions,omitempty"`
 }
 
 // .
@@ -233,7 +236,7 @@ type VoiceSession struct {
 	// .
 	// .
 	// .
-	reconciled                           chan []byte
+	reconciled                           chan [][]byte
 	wireCompletion, reconciledCompletion bool
 	terminated                           bool
 	faultCh                              chan struct{}
@@ -270,7 +273,7 @@ func NewVoiceSession(c *supervisor.SessionClient) *VoiceSession {
 		terminalCh: make(chan struct{}), inputClosedCh: make(chan struct{}),
 		faultCh: make(chan struct{}), endedCh: make(chan struct{}),
 		observer: make(chan Event, observerBuffer), telemetry: make(chan Event, telemetryBuffer),
-		reconciled: make(chan []byte, 4)}
+		reconciled: make(chan [][]byte, 4)}
 	go v.consume()
 	return v
 }
@@ -339,6 +342,7 @@ func (v *VoiceSession) Untrusted() <-chan struct{} {
 // .
 func (v *VoiceSession) consume() {
 	wire := v.c.Events()
+	var pending [][]byte
 	for {
 		// .
 		// .
@@ -349,9 +353,14 @@ func (v *VoiceSession) consume() {
 		select {
 		case raw, ok = <-wire:
 		default:
-			select {
-			case raw, ok = <-wire:
-			case raw = <-v.reconciled:
+			if len(pending) == 0 {
+				select {
+				case raw, ok = <-wire:
+				case pending = <-v.reconciled:
+				}
+			}
+			if len(pending) != 0 && raw == nil {
+				raw, pending = pending[0], pending[1:]
 				ok, reconciled = true, true
 			}
 		}
@@ -747,7 +756,7 @@ func (v *VoiceSession) queueReconciledCompletionLocked(c InputCompletion) {
 		return
 	}
 	select {
-	case v.reconciled <- raw:
+	case v.reconciled <- [][]byte{raw}:
 	default:
 		v.markFaultLocked("the reconciled input completion could not be queued for the observer")
 	}
@@ -1194,8 +1203,15 @@ func (v *VoiceSession) Status(ctx context.Context) (Snapshot, error) {
 	if v.inst != inst {
 		return Snapshot{}, ErrStaleReply
 	}
+	if snap.SessionID != v.sessionID {
+		return Snapshot{}, fmt.Errorf("voicesession: status names a different session")
+	}
 	if snap.StateSequence >= v.lastSnapshot.StateSequence {
+		if err := v.queueReconciledAttributionsLocked(snap); err != nil {
+			return Snapshot{}, err
+		}
 		v.lastSnapshot = snap
+		v.lastSnapshot.Attributions = copyAttributions(snap.Attributions)
 		// .
 		// .
 		// .
@@ -1224,6 +1240,7 @@ func (v *VoiceSession) Status(ctx context.Context) (Snapshot, error) {
 	} else {
 		snap = v.lastSnapshot
 	}
+	snap.Attributions = copyAttributions(snap.Attributions)
 	return snap, nil
 }
 

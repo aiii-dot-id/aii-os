@@ -62,13 +62,60 @@ func TestCacheFoldingDoesNotRetainInvalidatedThinking(t *testing.T) {
 	}
 }
 
+// .
+// .
+// .
 func TestCacheWarningSurvivesHistoryCompaction(t *testing.T) {
-	messages := []llm.Message{{Role: "system", Content: "stable" + contextTightNote, StableLen: 6}, {Role: "user", Content: strings.Repeat("old evidence ", 1000)}, {Role: "assistant", Content: "old answer"}, {Role: "user", Content: "current"}}
-	st := fitState{current: 3, warned: true}
+	messages := []llm.Message{{Role: "system", Content: "stable", StableLen: 6}, {Role: "user", Content: strings.Repeat("old evidence ", 1000)}, {Role: "assistant", Content: "old answer"}, {Role: "user", Content: "current"}}
+	st := fitState{current: 3, warned: true, tight: true}
 	if err := fitRequest(&messages, &st, "stable", nil, 300, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(messages[0].Content, contextTightNote) {
-		t.Fatal("compaction removed the persistent pressure warning")
+	if st.omitted == 0 {
+		t.Fatal("fixture did not compact the history")
+	}
+	current := messages[st.current].Content
+	if !strings.Contains(current, strings.TrimSpace(contextTightNote)) || !strings.HasSuffix(current, "current") {
+		t.Fatalf("compaction removed the persistent pressure warning: %q", current)
+	}
+	if messages[0].Content != "stable" {
+		t.Fatalf("the warning moved onto the system message: %q", messages[0].Content)
+	}
+}
+
+// .
+// .
+func TestCacheWarningRidesTheNewestResultAndSurvivesItsFold(t *testing.T) {
+	big := strings.Repeat("tool evidence line ", 400)
+	msgs := []llm.Message{
+		{Role: "system", Content: "stable", StableLen: 6},
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{toolCall("c1", "read", "{}")}},
+		{Role: "tool", ToolCallID: "c1", Content: big},
+	}
+	used, err := llm.EstimateInputTokens(msgs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := fitState{current: 1}
+	if err := fitRequest(&msgs, &st, "stable", nil, used+used/10, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !st.warned || !strings.Contains(msgs[3].Content, contextTightNote) {
+		t.Fatalf("the warning did not ride the newest result: warned=%v", st.warned)
+	}
+	if msgs[0].Content != "stable" || msgs[1].Content != "go" {
+		t.Fatalf("the warning touched the system or the current message: %q / %q", msgs[0].Content, msgs[1].Content)
+	}
+	msgs = append(msgs, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{toolCall("c2", "read", "{}")}},
+		llm.Message{Role: "tool", ToolCallID: "c2", Content: big})
+	if err := fitRequest(&msgs, &st, "stable", nil, used+used/10, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st.folded == 0 {
+		t.Fatal("fixture did not fold")
+	}
+	if !strings.HasPrefix(msgs[3].Content, foldNoticePrefix) || !strings.Contains(msgs[3].Content, contextTightNote) {
+		t.Fatalf("the fold dropped the warning the result carried: %q", msgs[3].Content)
 	}
 }

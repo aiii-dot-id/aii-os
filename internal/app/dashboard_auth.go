@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"os"
 	"path/filepath"
@@ -42,7 +42,7 @@ func (a *App) ensureDashboardToken() error {
 	// .
 	// .
 	if !cfg.Dashboard.RequireToken && !loopbackBind(cfg.Dashboard.Host) {
-		log.Printf("dashboard: bind %q is not loopback and require_token was false — REQUIRING a token, because Host and Origin gates bind a browser and not a direct client", dashboardBindName(cfg.Dashboard.Host))
+		logsink.Warn("dashboard.decision", "bind %q is not loopback and require_token was false — REQUIRING a token, because Host and Origin gates bind a browser and not a direct client", dashboardBindName(cfg.Dashboard.Host))
 		cfg.Dashboard.RequireToken = true
 		changed = true
 	}
@@ -55,7 +55,7 @@ func (a *App) ensureDashboardToken() error {
 	// .
 	if cfg.Dashboard.LegacyAuthTokenSHA256 != "" {
 		if cfg.Dashboard.AccessToken == "" && cfg.Dashboard.RequireToken {
-			log.Printf("dashboard: the access token from the previous format is retired — it was printed on every boot — and a new one is minted; read it with `aii dashboard-token`")
+			logsink.Warn("dashboard.decision", "the access token from the previous format is retired — it was printed on every boot — and a new one is minted; read it with `aii dashboard-token`")
 		}
 		cfg.Dashboard.LegacyAuthTokenSHA256 = ""
 		changed = true
@@ -78,7 +78,7 @@ func (a *App) ensureDashboardToken() error {
 		// .
 		// .
 		if n := len(cfg.Dashboard.AccessToken); n < shortAccessToken && !loopbackBind(cfg.Dashboard.Host) {
-			log.Printf("dashboard: the access token in %s is %d bytes long on a network bind; clear dashboard.access_token to mint a strong one", cfg.SourcePath, n)
+			logsink.Warn("dashboard.refusal", "the access token in %s is %d bytes long on a network bind; clear dashboard.access_token to mint a strong one", cfg.SourcePath, n)
 		}
 		if len(cfg.Dashboard.AccessToken) > dashboard.AccessTokenMaxBytes {
 			return fmt.Errorf("dashboard access token in %s exceeds %d bytes; clear dashboard.access_token to mint a new one", cfg.SourcePath, dashboard.AccessTokenMaxBytes)
@@ -104,14 +104,14 @@ func (a *App) ensureDashboardToken() error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			// .
 			// .
-			log.Printf("dashboard: the retired token file %s could not be removed (%v); it grants nothing and can be deleted by hand", path, err)
+			logsink.Warn("dashboard.error", "the retired token file %s could not be removed (%v); it grants nothing and can be deleted by hand", path, err)
 		}
 	}
 	if minted != "" {
 		a.mintedTokenMu.Lock()
 		a.mintedToken = minted
 		a.mintedTokenMu.Unlock()
-		log.Printf("dashboard: access token minted and stored in config.json")
+		logsink.Info("dashboard.decision", "access token minted and stored in config.json")
 	}
 	return nil
 }
@@ -218,17 +218,17 @@ func (a *App) rearmDashboardToken(d DashboardConfig) {
 	bind := a.dashboard.BindHost()
 	required := d.RequireToken || !loopbackBind(bind)
 	if required && strings.TrimSpace(d.AccessToken) == "" {
-		log.Printf("dashboard: config reload found no access token where one is required — keeping the running one; clear it only by restarting")
+		logsink.Warn("dashboard.refusal", "config reload found no access token where one is required — keeping the running one; clear it only by restarting")
 		return
 	}
 	a.dashboard.SetAccessToken(required, d.AccessToken)
 	if a.dashboard.AccessTokenRequired() {
 		a.setDashboardToken(d.AccessToken)
-		log.Printf("dashboard: access token rotated — every signed-in browser signs in again with the new one (aii dashboard-token)")
+		logsink.Info("dashboard.decision", "access token rotated — every signed-in browser signs in again with the new one (aii dashboard-token)")
 		return
 	}
 	a.setDashboardToken("")
-	log.Printf("dashboard: access token no longer required on %s", dashboardBindName(bind))
+	logsink.Warn("dashboard.decision", "access token no longer required on %s", dashboardBindName(bind))
 }
 
 // .

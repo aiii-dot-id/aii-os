@@ -9,10 +9,13 @@ package tools
 
 import (
 	"context"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -188,4 +191,150 @@ func TestShellStatusSeamHasNoStrayCR(t *testing.T) {
 	if !strings.Contains(res.Output, "tail\n[exit status 7]") {
 		t.Fatalf("status seam is not flush (stray CR?): %q", res.Output)
 	}
+}
+
+// .
+// .
+// .
+func TestShellLaunchHidesConsoleWindow(t *testing.T) {
+	cmd := exec.Command("powershell.exe")
+	prepareTree(cmd)
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow {
+		t.Fatal("shell launch does not hide its console window")
+	}
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NEW_CONSOLE == 0 {
+		t.Fatalf("shell launch does not create a hidden console for child inheritance: %#x", cmd.SysProcAttr.CreationFlags)
+	}
+	if cmd.SysProcAttr.CreationFlags&windows.CREATE_NO_WINDOW != 0 {
+		t.Fatalf("shell launch must not combine CREATE_NEW_CONSOLE with CREATE_NO_WINDOW: %#x", cmd.SysProcAttr.CreationFlags)
+	}
+}
+
+// .
+// .
+// .
+func TestShellNestedConsoleCommandDoesNotOpenWindow(t *testing.T) {
+	requireWindowProbeWorks(t)
+
+	st := &ShellTool{timeout: 30 * time.Second, sandbox: t.TempDir()}
+	title := "aii-shell-nested-console-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	resultCh := make(chan struct {
+		result Result
+		err    error
+	}, 1)
+	go func() {
+		result, err := st.Execute(context.Background(), map[string]interface{}{
+			"command": `cmd.exe /c "title ` + title + ` & echo cmd child-process test: OK & ver & ping.exe -n 5 127.0.0.1 >nul"`,
+		})
+		resultCh <- struct {
+			result Result
+			err    error
+		}{result: result, err: err}
+	}()
+
+	visible := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hasVisibleWindowTitle(title) {
+			visible = true
+		}
+		select {
+		case outcome := <-resultCh:
+			checkNestedOutcome(t, outcome.result, outcome.err)
+			if visible {
+				t.Fatalf("nested cmd.exe opened a visible console window")
+			}
+			return
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	outcome := <-resultCh
+	checkNestedOutcome(t, outcome.result, outcome.err)
+	if visible || hasVisibleWindowTitle(title) {
+		t.Fatalf("nested cmd.exe opened a visible console window")
+	}
+}
+
+// .
+// .
+func checkNestedOutcome(t *testing.T, result Result, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Error != "" {
+		t.Fatalf("nested command failed: %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "cmd child-process test: OK") || !strings.Contains(result.Output, "Microsoft Windows") {
+		t.Fatalf("nested command output was not captured: %q", result.Output)
+	}
+}
+
+var getWindowTextW = windows.NewLazySystemDLL("user32.dll").NewProc("GetWindowTextW")
+
+// .
+// .
+type windowTitleQuery struct {
+	title string
+	found bool
+}
+
+var windowTitleCallback = windows.NewCallback(func(hwnd uintptr, query *windowTitleQuery) uintptr {
+	if !windows.IsWindowVisible(windows.HWND(hwnd)) {
+		return 1
+	}
+	var text [256]uint16
+	length, _, _ := getWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)))
+	// .
+	// .
+	// .
+	// .
+	// .
+	if strings.TrimSpace(syscall.UTF16ToString(text[:length])) == query.title {
+		query.found = true
+		return 0
+	}
+	return 1
+})
+
+func hasVisibleWindowTitle(title string) bool {
+	query := windowTitleQuery{title: title}
+	// .
+	// .
+	_ = windows.EnumWindows(windowTitleCallback, unsafe.Pointer(&query))
+	return query.found
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func requireWindowProbeWorks(t *testing.T) {
+	t.Helper()
+	title := "aii-shell-probe-control-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	cmd := exec.Command("cmd.exe", "/c", "title "+title+" & ping.exe -n 6 127.0.0.1 >nul")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE}
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot open a control window: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if hasVisibleWindowTitle(title) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Skip("this session cannot see windows on the operator desktop (session 0?) — the check below would pass without testing anything")
 }

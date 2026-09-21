@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"sync"
 
@@ -241,7 +241,7 @@ func (a *App) steerWith(role, text string, voice *voiceBinding) (bool, error) {
 		return false, errSteerQueueFull
 	}
 	a.steers = append(a.steers, steerEntry{role: role, content: text, voice: voice})
-	log.Printf("steering: operator spoke mid-turn (%d char(s), %d pending)", len(text), len(a.steers))
+	logsink.Info("steering.decision", "operator spoke mid-turn (%d char(s), %d pending)", len(text), len(a.steers))
 	return true, nil
 }
 
@@ -286,8 +286,8 @@ func (a *App) DrainSteering() []string {
 	for _, e := range room {
 		e.voice.release("recorded as the room's: a meeting began while the words waited for the turn")
 		a.noteReplyOutcome(e.voice.session, "recorded (meeting), no reply")
-		if err := a.recordRoomWords(strings.TrimPrefix(e.content, voiceMarker)); err != nil {
-			log.Printf("steering: the room's words were not recorded: %v", err)
+		if err := a.recordRoomWords(strings.TrimPrefix(e.content, voiceMarker), e.voice); err != nil {
+			logsink.Warn("steering.error", "the room's words were not recorded: %v", err)
 		}
 	}
 
@@ -306,7 +306,7 @@ func (a *App) DrainSteering() []string {
 			if err != nil {
 				// .
 				// .
-				log.Printf("steering: operator turn not recorded: %v", err)
+				logsink.Warn("steering.error", "operator turn not recorded: %v", err)
 				continue
 			}
 			a.annotateVoiceTurn(seq, said[i].voice)
@@ -315,7 +315,7 @@ func (a *App) DrainSteering() []string {
 			said[i].content = a.attributeSpoken(seq, said[i].content)
 		}
 	}
-	log.Printf("steering: delivered %d message(s) at a tool boundary", len(said))
+	logsink.Info("steering.decision", "delivered %d message(s) at a tool boundary", len(said))
 	// .
 	// .
 	if a.dashboard != nil {
@@ -364,7 +364,7 @@ func (a *App) CancelTurn() bool {
 	if cancel == nil {
 		return false
 	}
-	log.Printf("steering: operator cancelled the running turn")
+	logsink.Info("steering.decision", "operator cancelled the running turn")
 	cancel()
 	return true
 }

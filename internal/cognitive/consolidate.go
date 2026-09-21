@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"unicode"
 
+	"github.com/aiii-dot-id/aii-os/internal/cognitive/landing"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
@@ -27,6 +28,17 @@ type ConsolidateConfig struct {
 	// .
 	// .
 	Ring3MaxChars int
+	// .
+	// .
+	TensionsMaxChars int
+	// .
+	// .
+	OutcomeWindow int
+	// .
+	// .
+	// .
+	// .
+	ObservationMaxChars int
 }
 
 // .
@@ -63,6 +75,12 @@ type ConsolidateFacility struct {
 	ringWriter RingWriter
 	config     ConsolidateConfig
 	authority  AuthoritySource
+	tensions   TensionsSource
+	// .
+	// .
+	outcomes      outcomeReader
+	outcomeCursor func(store.OutcomeBatch) landing.Cursor
+	intake        *landing.Lander
 }
 
 // .
@@ -128,10 +146,21 @@ func NewConsolidate(store ConsolidateStore, llm LLMCaller, lg ConsolidateLedger,
 	if cfg.Ring3MaxChars <= 0 {
 		cfg.Ring3MaxChars = defaultRing3MaxChars
 	}
+	if cfg.OutcomeWindow <= 0 {
+		cfg.OutcomeWindow = defaultOutcomeWindow
+	}
+	if cfg.ObservationMaxChars <= 0 {
+		cfg.ObservationMaxChars = defaultSurfacingMaxChars
+	}
+	var door landing.Door
+	if lg != nil {
+		door = lg
+	}
 	return &ConsolidateFacility{
 		store:      store,
 		llm:        llm,
 		ledger:     lg,
+		intake:     landing.New(door),
 		ringWriter: ringWriter,
 		config:     cfg,
 	}
@@ -147,7 +176,28 @@ func (c *ConsolidateFacility) Predicate(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return count >= c.config.Threshold
+	if count >= c.config.Threshold {
+		return true
+	}
+	if count == 0 {
+		return false
+	}
+	// .
+	// .
+	// .
+	experiences, err := c.store.ListRawExperiences(c.config.Threshold)
+	return err == nil && reservedWaiting(experiences)
+}
+
+// .
+// .
+func reservedWaiting(experiences []store.Experience) bool {
+	for _, e := range experiences {
+		if strings.HasPrefix(e.ID, store.OutcomeObservationPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // .
@@ -183,7 +233,7 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		expIDs = append(expIDs, e.ID)
 	}
 
-	if len(expTexts) >= c.config.Threshold {
+	if len(expTexts) >= c.config.Threshold || reservedWaiting(experiences) {
 		userMsg := c.buildEvidenceBlock(expTexts)
 		callCtx, systemPrompt, err := withPreamble(ctx, c.authority, consolidateSystemPrompt)
 		if err != nil {
@@ -197,10 +247,10 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		// .
 		output, modelID, viaTool, err := c.llm.ChatStructured(callCtx, systemPrompt, userMsg, consolidationTool())
 		if viaTool {
-			log.Printf("CONSOLIDATE: envelope arrived as a native tool call")
+			logsink.Debug("consolidate.decision", "envelope arrived as a native tool call")
 		}
 		if err != nil {
-			log.Printf("CONSOLIDATE: LLM call failed: %v — experiences remain unprocessed (nothing landed, nothing consumed)", err)
+			logsink.Warn("consolidate.error", "LLM call failed: %v — experiences remain unprocessed (nothing landed, nothing consumed)", err)
 			c.writeRing3Deterministic()
 			return nil
 		}
@@ -210,7 +260,7 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 			// .
 			// .
 			// .
-			log.Printf("CONSOLIDATE: envelope rejected: %v — nothing minted, nothing consumed (retry next pass)", perr)
+			logsink.Warn("consolidate.refusal", "envelope rejected: %v — nothing minted, nothing consumed (retry next pass)", perr)
 			return nil
 		}
 
@@ -227,7 +277,7 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 			// .
 			// .
 			// .
-			log.Printf("CONSOLIDATE: %d upsert(s) cited no evidence and nothing else minted — nothing consumed; the experiences wait for a pass that says where its beliefs come from", unevidenced)
+			logsink.Warn("consolidate.refusal", "%d upsert(s) cited no evidence and nothing else minted — nothing consumed; the experiences wait for a pass that says where its beliefs come from", unevidenced)
 			return nil
 		}
 
@@ -238,12 +288,12 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		// .
 		// .
 		if c.ledger == nil {
-			log.Printf("CONSOLIDATE: no ledger door — %d operation(s) and consumption skipped", len(env.Operations))
+			logsink.Warn("consolidate.refusal", "no ledger door — %d operation(s) and consumption skipped", len(env.Operations))
 		} else if _, err := c.ledger.Append(ledger.EventConsolidationRun, 3,
 			store.FacilityRunPayload{Inputs: expIDs, Outputs: outputs, Confirmed: c.confirmedCrossings()}, modelID); err != nil {
-			log.Printf("CONSOLIDATE: run marker refused: %v — nothing consumed, pass will re-run", err)
+			logsink.Warn("consolidate.refusal", "run marker refused: %v — nothing consumed, pass will re-run", err)
 		} else {
-			log.Printf("CONSOLIDATE: consumed %d experiences into %d ledger event(s)", len(expIDs), len(outputs))
+			logsink.Info("consolidate.end", "consumed %d experiences into %d ledger event(s)", len(expIDs), len(outputs))
 		}
 
 		// .
@@ -279,10 +329,10 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 				break
 			}
 			c.ringWriter.SetRingSection(ring.Ring3, "working_truth", env.Ring3View)
-			log.Printf("CONSOLIDATE: wrote %d chars to Ring 3 (working_truth)", len(env.Ring3View))
+			logsink.Info("consolidate.end", "wrote %d chars to Ring 3 (working_truth, from the pass)", len(env.Ring3View))
 		case len(outputs) == 0:
 			if env.Ring3View != "" {
-				log.Printf("CONSOLIDATE: the pass minted nothing — its %d-char view is not backed by any belief and was not kept; rendering Ring 3 from the store instead",
+				logsink.Info("consolidate.decision", "the pass minted nothing — its %d-char view is not backed by any belief and was not kept; rendering Ring 3 from the store instead",
 					len(env.Ring3View))
 			}
 			c.writeRing3Deterministic()
@@ -297,9 +347,9 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 			switch {
 			case len(outputs) > 0 && c.ringWriter != nil:
 				c.ringWriter.SetRingSection(ring.Ring3, "operator", operator)
-				log.Printf("CONSOLIDATE: wrote %d chars to Ring 3 (operator)", len(operator))
+				logsink.Info("consolidate.end", "wrote %d chars to Ring 3 (operator)", len(operator))
 			case len(outputs) == 0:
-				log.Printf("CONSOLIDATE: the pass minted nothing — its %d-char operator model is not backed by any belief and was not kept", len(operator))
+				logsink.Info("consolidate.decision", "the pass minted nothing — its %d-char operator model is not backed by any belief and was not kept", len(operator))
 			}
 		}
 	}
@@ -390,7 +440,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 	}
 	unevidenced := 0
 	if len(ops) > c.config.MaxOps {
-		log.Printf("CONSOLIDATE: %d operations clamped to %d (runaway guard)", len(ops), c.config.MaxOps)
+		logsink.Warn("consolidate.budget", "%d operations clamped to %d (runaway guard)", len(ops), c.config.MaxOps)
 		ops = ops[:c.config.MaxOps]
 	}
 
@@ -420,7 +470,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 		case "upsert":
 			stmt := strings.TrimSpace(op.Statement)
 			if stmt == "" {
-				log.Printf("CONSOLIDATE: op %d (upsert) dropped — empty statement", i)
+				logsink.Debug("consolidate.refusal", "op %d (upsert) dropped — empty statement", i)
 				continue
 			}
 			conf := 0.5
@@ -454,7 +504,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				id = engineID
 			}
 			if r, exists := known[id]; exists && r != 3 {
-				log.Printf("CONSOLIDATE: op %d (upsert) dropped — belief %q is ring %d, not working truth", i, id, r)
+				logsink.Debug("consolidate.refusal", "op %d (upsert) dropped — belief %q is ring %d, not working truth", i, id, r)
 				continue
 			}
 			var evidence []string
@@ -468,14 +518,14 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 					continue
 				}
 				if _, exists := known[ev]; !exists && !onTable[ev] && !minted[ev] {
-					log.Printf("CONSOLIDATE: op %d (upsert %q) cites %q, which is neither on the table nor a belief — citation dropped", i, id, ev)
+					logsink.Debug("consolidate.refusal", "op %d (upsert %q) cites %q, which is neither on the table nor a belief — citation dropped", i, id, ev)
 					continue
 				}
 				seen[ev] = true
 				evidence = append(evidence, ev)
 			}
 			if len(evidence) == 0 {
-				log.Printf("CONSOLIDATE: op %d (upsert %q) dropped — a belief comes from experiences or other beliefs, and none were cited (evidence: %v)", i, id, op.Evidence)
+				logsink.Debug("consolidate.refusal", "op %d (upsert %q) dropped — a belief comes from experiences or other beliefs, and none were cited (evidence: %v)", i, id, op.Evidence)
 				unevidenced++
 				continue
 			}
@@ -487,7 +537,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 			// .
 			decision := c.salienceFor(id, stmt, conf, evidence, inputs, statements)
 			if decision.Class == memory.SalienceMemo {
-				log.Printf("CONSOLIDATE: op %d (upsert %q) kept as a memo by salience (score %.2f; %s)", i, id, decision.Score, strings.Join(decision.Explanations, "; "))
+				logsink.Debug("consolidate.refusal", "op %d (upsert %q) kept as a memo by salience (score %.2f; %s)", i, id, decision.Score, strings.Join(decision.Explanations, "; "))
 				c.logDecision(decision, stmt, 0)
 				continue
 			}
@@ -495,7 +545,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				"id": id, "statement": stmt, "ring": 3, "confidence": conf,
 			}, modelID)
 			if err != nil {
-				log.Printf("CONSOLIDATE: op %d (upsert %q) refused before append: %v — dropped", i, id, err)
+				logsink.Debug("consolidate.refusal", "op %d (upsert %q) refused before append: %v — dropped", i, id, err)
 				continue
 			}
 			outputs = append(outputs, evt.Seq)
@@ -509,7 +559,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 					"edge_type": "DERIVED_FROM",
 				}, modelID)
 				if err != nil {
-					log.Printf("CONSOLIDATE: evidence edge %s → %s refused: %v", ev, id, err)
+					logsink.Debug("consolidate.refusal", "evidence edge %s → %s refused: %v", ev, id, err)
 					continue
 				}
 				outputs = append(outputs, edge.Seq)
@@ -521,30 +571,45 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				newID = resolved
 			}
 			if r, ok := known[oldID]; !ok {
-				log.Printf("CONSOLIDATE: op %d (supersede) dropped — old_id %q names no belief", i, oldID)
+				logsink.Debug("consolidate.refusal", "op %d (supersede) dropped — old_id %q names no belief", i, oldID)
 				continue
 			} else if r != 3 {
-				log.Printf("CONSOLIDATE: op %d (supersede) dropped — belief %q is ring %d, not working truth", i, oldID, r)
+				logsink.Debug("consolidate.refusal", "op %d (supersede) dropped — belief %q is ring %d, not working truth", i, oldID, r)
 				continue
 			}
 			if _, ok := known[newID]; !ok && !minted[newID] {
-				log.Printf("CONSOLIDATE: op %d (supersede) dropped — new_id %q names no belief (existing or upserted this pass)", i, newID)
+				logsink.Debug("consolidate.refusal", "op %d (supersede) dropped — new_id %q names no belief (existing or upserted this pass)", i, newID)
 				continue
 			}
 			if oldID == newID {
-				log.Printf("CONSOLIDATE: op %d (supersede) dropped — a belief cannot supersede itself (%q)", i, oldID)
+				logsink.Debug("consolidate.refusal", "op %d (supersede) dropped — a belief cannot supersede itself (%q)", i, oldID)
+				continue
+			}
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			// .
+			if standing, err := c.store.StandingFor(oldID); err != nil {
+				logsink.Debug("consolidate.refusal", "op %d (supersede %q) dropped — its standing cannot be derived (%v), so it cannot be shown uncontested", i, oldID, err)
+				continue
+			} else if standing == "suspect" {
+				logsink.Warn("consolidate.refusal", "op %d (supersede %q→%q) dropped — %q is CONTESTED: retiring it would drop an unresolved contradiction from working truth; that is the identity's to settle, not consolidation's", i, oldID, newID, oldID)
 				continue
 			}
 			evt, err := c.ledger.Append(ledger.EventBeliefSupersede, 3, map[string]interface{}{
 				"old_id": oldID, "new_id": newID, "reason": strings.TrimSpace(op.Reason),
 			}, modelID)
 			if err != nil {
-				log.Printf("CONSOLIDATE: op %d (supersede %q→%q) refused before append: %v — dropped", i, oldID, newID, err)
+				logsink.Debug("consolidate.refusal", "op %d (supersede %q→%q) refused before append: %v — dropped", i, oldID, newID, err)
 				continue
 			}
 			outputs = append(outputs, evt.Seq)
 		default:
-			log.Printf("CONSOLIDATE: op %d dropped — unknown op %q (sanctioned: upsert, supersede)", i, op.Op)
+			logsink.Debug("consolidate.refusal", "op %d dropped — unknown op %q (sanctioned: upsert, supersede)", i, op.Op)
 		}
 	}
 	return outputs, unevidenced
@@ -557,6 +622,9 @@ func (c *ConsolidateFacility) buildEvidenceBlock(expTexts []string) string {
 	parts = append(parts, "Experiences to consolidate (cite their ids as evidence):")
 	parts = append(parts, joinLines(expTexts))
 
+	// .
+	// .
+	listed := map[string]bool{}
 	if beliefs, err := c.store.ListBeliefs(); err == nil && len(beliefs) > 0 {
 		var ring3 []store.Belief
 		for _, b := range beliefs {
@@ -568,9 +636,12 @@ func (c *ConsolidateFacility) buildEvidenceBlock(expTexts []string) string {
 			parts = append(parts, "Current beliefs (for merge/supersede decisions):")
 			for _, b := range ring3 {
 				parts = append(parts, fmt.Sprintf("  [%s, %s] %s", b.ID, standingOrUnavailable(c.store, b.ID), b.Statement))
+				listed[b.ID] = true
 			}
 		}
 	}
+
+	parts = append(parts, c.tensionsBlock(listed)...)
 
 	if intentions, err := c.store.ListIntentions(); err == nil && len(intentions) > 0 {
 		var active []store.Intention
@@ -599,6 +670,29 @@ func (c *ConsolidateFacility) buildEvidenceBlock(expTexts []string) string {
 
 	return strings.Join(parts, "\n")
 }
+
+// .
+// .
+// .
+// .
+// .
+func (c *ConsolidateFacility) tensionsBlock(listed map[string]bool) []string {
+	view, err := renderTensions(c.tensions, listed, c.config.TensionsMaxChars)
+	if err != nil {
+		logsink.Warn("consolidate.error", "%v — the pass runs without the contradiction view", err)
+		return nil
+	}
+	if view == "" {
+		return nil
+	}
+	return []string{
+		"Contradictions standing in the record (what each CONTESTED belief stands against — context to render, not a list to settle):",
+		view,
+	}
+}
+
+// .
+func (c *ConsolidateFacility) SetTensions(ts TensionsSource) { c.tensions = ts }
 
 // .
 // .
@@ -634,6 +728,10 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 			}
 		}
 	}
+
+	// .
+	// .
+	parts = append(parts, c.tensionsBlock(nil)...)
 
 	if len(experiences) > 0 {
 		var salient []store.Experience
@@ -675,13 +773,13 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	// .
 	callCtx, systemPrompt, err := withPreamble(ctx, c.authority, consolidateViewSystemPrompt)
 	if err != nil {
-		log.Printf("CONSOLIDATE: authority context unavailable: %v", err)
+		logsink.Warn("consolidate.error", "authority context unavailable: %v", err)
 		c.writeRing3Deterministic()
 		return
 	}
 	output, _, err := c.llm.ChatSimple(callCtx, systemPrompt, userMsg)
 	if err != nil {
-		log.Printf("CONSOLIDATE: LLM call for Ring 3 failed: %v", err)
+		logsink.Warn("consolidate.error", "LLM call for Ring 3 failed: %v", err)
 		// .
 		c.writeRing3Deterministic()
 		return
@@ -692,7 +790,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	// .
 	if env, perr := parseConsolidationEnvelope(output); perr == nil {
 		if len(env.Operations) > 0 {
-			log.Printf("CONSOLIDATE: render-only pass returned %d operation(s) — dropped, nothing mints outside the metabolism pass", len(env.Operations))
+			logsink.Warn("consolidate.refusal", "render-only pass returned %d operation(s) — dropped, nothing mints outside the metabolism pass", len(env.Operations))
 		}
 		output = env.Ring3View
 	}
@@ -705,7 +803,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 		// .
 		// .
 		c.ringWriter.SetRingSection(ring.Ring3, "working_truth", output)
-		log.Printf("CONSOLIDATE: wrote %d chars to Ring 3 (working_truth)", len(output))
+		logsink.Info("consolidate.end", "wrote %d chars to Ring 3 (working_truth, rendered from the store)", len(output))
 	}
 }
 
@@ -730,7 +828,7 @@ func (c *ConsolidateFacility) ring3ViewFits(view string) bool {
 	if len(view) <= c.config.Ring3MaxChars {
 		return true
 	}
-	log.Printf("CONSOLIDATE: Ring 3 view REFUSED — %d chars over the %d-char bound (prompt.ring3_max_chars); "+
+	logsink.Warn("consolidate.refusal", "Ring 3 view REFUSED — %d chars over the %d-char bound (prompt.ring3_max_chars); "+
 		"rendering working truth from the store instead (the beliefs are in the ledger)",
 		len(view), c.config.Ring3MaxChars)
 	return false
@@ -836,7 +934,7 @@ func (c *ConsolidateFacility) writeRing3Deterministic() {
 		render := sb.String()
 		bounded := boundRing3Render(render, c.config.Ring3MaxChars)
 		if bounded != render {
-			log.Printf("CONSOLIDATE: deterministic Ring 3 render bounded — %d chars over the %d-char bound "+
+			logsink.Warn("consolidate.budget", "deterministic Ring 3 render bounded — %d chars over the %d-char bound "+
 				"(prompt.ring3_max_chars); whole trailing lines dropped, declared in the render",
 				len(render), c.config.Ring3MaxChars)
 		}
@@ -857,7 +955,7 @@ func (c *ConsolidateFacility) confirmedCrossings() []store.ConfirmedCrossing {
 	}
 	beliefs, err := c.store.ListBeliefs()
 	if err != nil {
-		log.Printf("CONSOLIDATE: beliefs cannot be listed — no crossing observed this pass: %v", err)
+		logsink.Warn("consolidate.error", "beliefs cannot be listed — no crossing observed this pass: %v", err)
 		return nil
 	}
 	ticks, _ := c.store.LifetimeTicks()
@@ -871,7 +969,7 @@ func (c *ConsolidateFacility) confirmedCrossings() []store.ConfirmedCrossing {
 		}
 		standing, err := c.store.StandingFor(b.ID)
 		if err != nil {
-			log.Printf("CONSOLIDATE: standing of %s cannot be proven — not anchoring it: %v", b.ID, err)
+			logsink.Debug("consolidate.refusal", "standing of %s cannot be proven — not anchoring it: %v", b.ID, err)
 			continue
 		}
 		if standing == "confirmed" {
@@ -887,7 +985,7 @@ func (c *ConsolidateFacility) SetAuthority(src AuthoritySource) { c.authority = 
 // .
 func (c *ConsolidateFacility) OnAlarm(ctx context.Context, alarmID string, clock string, deadline int64, payload string) AlarmResult {
 	if err := c.Execute(ctx); err != nil {
-		log.Printf("CONSOLIDATE: execute error: %v", err)
+		logsink.Warn("consolidate.error", "execute error: %v", err)
 		return AlarmResult{Accepted: false}
 	}
 	return AlarmResult{Accepted: true}
@@ -1040,6 +1138,6 @@ func (c *ConsolidateFacility) logDecision(d memory.SalienceDecision, stmt string
 			"policy": d.Policy, "audit_hash": d.AuditHash, "ttl_days": d.TTLDays, "review_after": d.ReviewAfter,
 		},
 	}); err != nil {
-		log.Printf("CONSOLIDATE: salience decision not logged: %v", err)
+		logsink.Warn("consolidate.error", "salience decision not logged: %v", err)
 	}
 }

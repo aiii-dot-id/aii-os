@@ -18,7 +18,7 @@ set -e
 # does not solve that by recording which units were running; it solves it
 # by NOT STOPPING THEM. The process keeps its old inode across the
 # unpack, and the restart in postinst is what moves it onto the new
-# binary (external review).
+# binary.
 #
 # deb-systemd-invoke rather than `runuser -u ... systemctl --user`: it
 # asks policy-rc.d first, enumerates the user@ instances itself, and — in

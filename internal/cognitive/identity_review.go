@@ -3,10 +3,11 @@ package cognitive
 import (
 	"context"
 	"fmt"
-	"log"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -98,9 +99,18 @@ func (r *IdentityReviewFacility) Execute(ctx context.Context) error {
 	var issues []string
 
 	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	standingCounts := make(map[string]int)
 	for _, b := range beliefs {
-		standingCounts[standingOrUnavailable(r.store, b.ID)]++
+		standing, err := r.store.StandingFor(b.ID)
+		if err != nil {
+			return fmt.Errorf("identity_review: standing of %s: %w", b.ID, err)
+		}
+		standingCounts[standing]++
 	}
 	if len(beliefs) > 0 && len(standingCounts) == 1 {
 		if _, allNew := standingCounts["new"]; allNew && len(beliefs) > 5 {
@@ -111,20 +121,28 @@ func (r *IdentityReviewFacility) Execute(ctx context.Context) error {
 	// .
 	// .
 	// .
-	if pairs, err := r.store.TensionsView(); err == nil && len(pairs) > 0 {
+	pairs, err := r.store.TensionsView()
+	if err != nil {
+		return fmt.Errorf("identity_review: tensions view: %w", err)
+	}
+	if len(pairs) > 0 {
 		ids := make([]string, 0, len(pairs)*2)
 		for _, p := range pairs {
 			ids = append(ids, p.LeftID, p.RightID)
 		}
-		stmts, _ := r.store.StatementsFor(ids)
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		ends, err := r.store.TensionEnds(ids)
+		if err != nil {
+			return fmt.Errorf("identity_review: the ends of %d standing contradictions: %w", len(pairs), err)
+		}
 		for _, pr := range pairs {
-			l, lok := stmts[pr.LeftID]
-			rr, rok := stmts[pr.RightID]
-			if lok && rok {
-				issues = append(issues, fmt.Sprintf("standing contradiction: %q vs %q — consider resolving (edge.archive) or superseding", l, rr))
-			} else {
-				issues = append(issues, fmt.Sprintf("standing contradiction: %s vs %s", pr.LeftID, pr.RightID))
-			}
+			issues = append(issues, fmt.Sprintf("standing contradiction: %s vs %s — consider resolving (edge.archive) or superseding",
+				describeTensionEnd(ends[pr.LeftID], pr.LeftID, nil), describeTensionEnd(ends[pr.RightID], pr.RightID, nil)))
 		}
 	}
 
@@ -145,12 +163,11 @@ func (r *IdentityReviewFacility) Execute(ctx context.Context) error {
 	}
 
 	if len(issues) > 0 {
-		for _, issue := range issues {
-			log.Printf("IDENTITY_REVIEW: %s", issue)
-		}
+		logsink.Info("review.decision", "%d to look at: %s", len(issues), strings.Join(issues, "; "))
 	} else {
-		log.Printf("IDENTITY_REVIEW: all clear (%d beliefs, %d intentions, %d unprocessed)",
-			len(beliefs), activeCount, unprocessed)
+		// .
+		// .
+		logsink.Tick("review.pass", "passes, all clear", 0)
 	}
 
 	// .
@@ -181,7 +198,7 @@ func (r *IdentityReviewFacility) LastReview() ReviewSnapshot {
 // .
 func (r *IdentityReviewFacility) OnAlarm(ctx context.Context, alarmID string, clock string, deadline int64, payload string) AlarmResult {
 	if err := r.Execute(ctx); err != nil {
-		log.Printf("IDENTITY_REVIEW: execute error: %v", err)
+		logsink.Warn("review.error", "execute error: %v", err)
 		return AlarmResult{Accepted: false}
 	}
 	return AlarmResult{Accepted: true}

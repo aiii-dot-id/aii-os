@@ -16,7 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"regexp"
 	"sort"
 	"sync"
@@ -166,14 +166,21 @@ func (p speakerPolicy) restricted() bool { return p.mode != speakerModeAll }
 // .
 // .
 func (p speakerPolicy) decide(decision, speakerID string) (bool, string) {
-	known := decision == "known" && speakerID != ""
+	if decision != "known" {
+		speakerID = ""
+	}
+	return p.decideIdentity(speakerID)
+}
+
+func (p speakerPolicy) decideIdentity(speakerID string) (bool, string) {
+	known := speakerID != ""
 	switch p.mode {
 	case speakerModeOnly:
 		if known && p.uids[speakerID] {
 			return true, ""
 		}
 		if known {
-			return false, "only the listed speakers are heard; this voice is enrolled but not listed"
+			return false, "only the listed speakers are heard; this speaker identifier is not listed"
 		}
 		return false, "only the listed speakers are heard; this voice was not identified"
 	case speakerModeIgnore:
@@ -261,7 +268,7 @@ func (a *App) decideHeld(h *voiceHandle, seq int64, decision, speakerID string, 
 	f.timer.Stop()
 	f.resolved, f.revision, f.observation = true, p.revision, observation
 	f.decision, f.speakerID = decision, speakerID
-	f.deliver, f.reason = p.decide(decision, speakerID)
+	f.deliver, f.reason = p.decideIdentity(speakerID)
 	if timedOut && !f.deliver {
 		f.reason += " (no observation within the bound)"
 	}
@@ -299,7 +306,7 @@ func (a *App) drainHeld(h *voiceHandle) {
 		// .
 		if f.deliver {
 			p := a.speakerPolicyNow()
-			if deliver, reason := p.decide(f.decision, f.speakerID); !deliver {
+			if deliver, reason := p.decideIdentity(f.speakerID); !deliver {
 				f.deliver, f.reason, f.revision = false, reason, p.revision
 			}
 		}
@@ -308,10 +315,22 @@ func (a *App) drainHeld(h *voiceHandle) {
 			f.deliver, f.reason = false, "SAFE or the session's end withheld the held words"
 		}
 		if f.deliver {
+			if f.observation == nil && f.ve.TrackID != "" {
+				// .
+				// .
+				// .
+				payload, _ := json.Marshal(map[string]any{"session": h.id, "sequence": seq,
+					"decision": "uncertain", "reason": "host_attribution_wait_expired", "source": "host"})
+				a.speakerPending.Store(voiceRefKey(h.id, seq), string(payload))
+				f.ve.Attribution = attributionOf(string(payload))
+			}
 			if f.shown {
 				f.enqueue(f.ve)
 			}
-			a.rememberFinal(h.id, seq, f.heard.Text)
+			a.rememberFinal(h.id, seq, f.heard.Text, f.ve)
+			if f.observation != nil {
+				a.rememberSpeakerRevision(h, *f.observation)
+			}
 		} else {
 			a.withhold(h, seq, f.reason, f.revision)
 		}
@@ -375,7 +394,7 @@ func (a *App) withhold(h *voiceHandle, seq int64, reason string, revision uint64
 	}
 	h.withheld[seq] = true
 	h.heldMu.Unlock()
-	log.Printf("VOICE: final %d on %s withheld by the speaker policy (revision %d): %s", seq, h.id, revision, reason)
+	logsink.Info("voice.refusal", "final %d on %s withheld by the speaker policy (revision %d): %s", seq, h.id, revision, reason)
 	a.fanVoiceEvent(dashboard.VoiceEvent{SessionID: h.id, Sequence: seq, Type: "transcript_withheld", Reason: reason, Revision: revision})
 	a.noteReplyOutcome(h.id, "withheld by the speaker policy, no reply")
 }
@@ -416,7 +435,7 @@ func (a *App) observationForHeld(ev pluginhost.Event) bool {
 	withheld := h.withheld[body.RefersTo]
 	h.heldMu.Unlock()
 	if held {
-		a.decideHeld(h, body.RefersTo, body.Decision, body.knownID(), false, &ev)
+		a.decideHeld(h, body.RefersTo, body.Decision, body.filterID(), false, &ev)
 	}
 	return held || withheld
 }

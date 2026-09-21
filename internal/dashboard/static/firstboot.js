@@ -3,6 +3,7 @@ import { startSignIn, signInProgress, signInWanted, wireSignInCompletion } from 
 import { S } from './state.js';
 import { $, esc } from './util.js';
 import { send, query } from './ws.js';
+import { renderRestoreDoor } from './firstboot-restore.js';
 
 let discoverRequestID = '';
 let selectedProvider = '';
@@ -10,6 +11,7 @@ let userSelected = false;
 let connectedSignIn = '';
 
 export function renderProviderOptions() {
+  renderRestoreDoor();
   const sel = $('fb-provider');
   if (!sel || S.identityExists) return;
   sel.innerHTML = '<option value="">choose a provider…</option>' +

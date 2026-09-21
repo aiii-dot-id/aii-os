@@ -74,12 +74,23 @@ func auditNewAudioHarness(t *testing.T) *auditAudioHarness {
 				return
 			}
 			var req struct {
-				ID json.RawMessage `json:"id"`
+				ID     json.RawMessage `json:"id"`
+				Params struct {
+					Operation string `json:"operation"`
+					Args      struct {
+						SessionID string `json:"session_id"`
+					} `json:"arguments"`
+				} `json:"params"`
 			}
 			if json.Unmarshal(raw, &req) != nil {
 				return
 			}
 			reply := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"accepted":true,"audio":{"input":{"rate":16000,"channels":1},"output":{"rate":16000,"channels":1}}}}`, req.ID))
+			if req.Params.Operation == "speech.session.status" {
+				// .
+				// .
+				reply = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"session_id":%q,"state_sequence":1,"lifecycle":"open"}}`, req.ID, req.Params.Args.SessionID))
+			}
 			select {
 			case frames <- reply:
 			case <-ctx.Done():

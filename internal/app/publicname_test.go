@@ -72,6 +72,10 @@ func (p *stubNamePublisher) ReadRecords(_ context.Context, name string, _ time.D
 		return certs.RecordSet{}, p.fail
 	}
 	if set, ok := p.records[name]; ok {
+		// .
+		// .
+		// .
+		set.Delivered = false
 		return set, nil
 	}
 	return certs.RecordSet{HTTPStatus: 200}, nil

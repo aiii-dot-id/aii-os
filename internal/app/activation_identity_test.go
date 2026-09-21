@@ -1,8 +1,6 @@
 package app
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +9,8 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -73,9 +73,7 @@ func TestTouchingAPackageDoesNotTearItDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
+	buf := logsink.CaptureForTest(t)
 	app.rescanPlugins(t.Context())
 
 	if out := buf.String(); strings.Contains(out, "deactivated") {

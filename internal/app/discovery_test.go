@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 func TestDiscoverModelsRejectsOversizeResponse(t *testing.T) {
@@ -321,10 +322,7 @@ func TestTheWindowIsFoundUnderTheNameTheServerCallsCanonical(t *testing.T) {
 // .
 // .
 func TestAnUnlistedModelIsNamedAsUnlisted(t *testing.T) {
-	var lines []string
-	old := log.Writer()
-	log.SetOutput(writerFunc(func(p []byte) (int, error) { lines = append(lines, string(p)); return len(p), nil }))
-	defer log.SetOutput(old)
+	lines := logsink.CaptureForTest(t)
 
 	dir := t.TempDir()
 	entry := providerEntry{Name: "Local", APIType: "openai", URL: "https://provider.example/v1", APIKey: "k", DefaultModel: "typed-by-hand"}
@@ -339,18 +337,18 @@ func TestAnUnlistedModelIsNamedAsUnlisted(t *testing.T) {
 	if _, resolved, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
 		t.Fatalf("an unlisted name has no window to resolve: %d %v", resolved.ContextLength, err)
 	}
-	joined := strings.Join(lines, "")
+	joined := lines.String()
 	if !strings.Contains(joined, `lists 2 model(s) and none is named "typed-by-hand"`) {
 		t.Fatalf("the miss must name the list and the name, got: %q", joined)
 	}
 
 	// .
-	lines = nil
+	lines.Reset()
 	a.provStatus = nil
 	if _, _, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil {
 		t.Fatal(err)
 	}
-	if joined := strings.Join(lines, ""); strings.Contains(joined, "none is named") {
+	if joined := lines.String(); strings.Contains(joined, "none is named") {
 		t.Fatalf("a provider that listed nothing must not be reported as listing: %q", joined)
 	}
 }

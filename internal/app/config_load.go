@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 func LoadConfig(path string) (*Config, error) {
@@ -28,9 +29,9 @@ func LoadConfig(path string) (*Config, error) {
 		// .
 		// .
 		if path == "" {
-			loadedFrom = "config.json"
+			loadedFrom = DefaultConfigPath()
 		}
-		log.Println("No config found. Creating default config — FIRSTBOOT.")
+		logsink.Info("config.start", "no config found — creating the default, FIRSTBOOT")
 		cfg := defaultConfig()
 		cfg.SourcePath = loadedFrom
 		if _, err := saveConfig(cfg); err != nil {
@@ -58,6 +59,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.SourcePath = loadedFrom
+	if !store.ValidDatabaseFormat(cfg.Identity.DBFormat) {
+		return nil, fmt.Errorf("identity.db_format must be empty, sqlite, or zstd")
+	}
 	if _, err := cfg.Plugins.Runtime.startupCeiling(); err != nil {
 		return nil, fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
 	}
@@ -87,6 +91,14 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("prompt.max_tool_result_chars cannot be negative")
 	case cfg.Prompt.Ring3MaxChars < 0:
 		return nil, fmt.Errorf("prompt.ring3_max_chars must be zero (take the default) or positive")
+	case cfg.Prompt.SurfacingMaxChars < 0:
+		return nil, fmt.Errorf("prompt.surfacing_max_chars must be zero (take the default) or positive")
+	case cfg.Prompt.DreamConversationMaxChars < 0:
+		return nil, fmt.Errorf("prompt.dream_conversation_max_chars must be zero (take the default) or positive")
+	case cfg.Maintenance.OnDemandSpacingSeconds < 0 || cfg.Maintenance.OnDemandSpacingSeconds > 86400:
+		return nil, fmt.Errorf("maintenance.on_demand_spacing_seconds must be zero (take the default, 600) or between 1 and 86400")
+	case cfg.Prompt.TensionsMaxChars < 0:
+		return nil, fmt.Errorf("prompt.tensions_max_chars must be zero (take the default) or positive")
 	case cfg.Prompt.PulseIntervalSeconds < 0:
 		return nil, fmt.Errorf("prompt.pulse_interval_seconds cannot be negative")
 	case cfg.Agency.MaxToolRounds <= 0:
@@ -103,6 +115,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("agency.subagent_max_mints must be positive")
 	case cfg.Agency.RhythmSeconds <= 0:
 		return nil, fmt.Errorf("agency.rhythm_seconds must be positive")
+	case cfg.Agency.OutcomeWindow <= 0:
+		return nil, fmt.Errorf("agency.outcome_window must be positive")
 	}
 	return &cfg, nil
 }
@@ -160,7 +174,7 @@ func saveConfig(cfg *Config) (bool, error) {
 	}
 	path := cfg.SourcePath
 	if path == "" {
-		path = "config.json"
+		path = DefaultConfigPath()
 	}
 	return writeFileAtomic(path, data)
 }

@@ -92,11 +92,11 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
     static let shared = TimeWakeScheduler()
 
     // ONE static identifier — BGTaskSchedulerPermittedIdentifiers is a
-    // build-time plist list, per-timer ids are impossible (M21). Must
+    // build-time plist list, per-timer ids are impossible. Must
     // match Info.plist / project.yml exactly.
     static let taskID = "id.aiii.shell.timewake"
     // The grip task: minutes-scale opportunistic continuation while the
-    // Go foreground registry holds work (BGProcessingTask; a reviewer:
+    // Go foreground registry holds work (BGProcessingTask:
     // extended execution is ~30s, processing may run for minutes — both
     // remain interruptible, and TIME's catch-up stays the floor).
     static let gripTaskID = "id.aiii.shell.grip"
@@ -190,7 +190,7 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
     // expiration by completing early and exactly once — iOS tunes the
     // budget from completion honesty, and a handler that keeps running
     // past expiration is killed.
-    // Mid-dispatch kill stays safe (M16): TIME's transitions commit
+    // Mid-dispatch kill stays safe: TIME's transitions commit
     // after owner completion; an expired task only means the next wake
     // repeats the catch-up.
     private func handleWake(_ task: BGTask, resubmitRefresh: Bool) {
@@ -203,11 +203,11 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
         task.expirationHandler = { complete(false) }
         // Serialize cold-start: refresh and grip can be launched for
         // the same dead process; two MobileStarts would race the port
-        // (Method review). startLock held across Start is fine here —
+        // startLock held across Start is fine here —
         // handlers run on background queues.
         startLock.lock(); defer { startLock.unlock() }
         lock.lock(); var runtime = rt; let t = target; lock.unlock()
-        // COLD START IS THE POINT (Sol P1-2): when iOS launched a dead
+        // COLD START IS THE POINT: when iOS launched a dead
         // process for this task, the wake itself is the reason the
         // runtime must start — "a wake before Start is meaningless" was
         // exactly backwards for a process the wake created. Same paths

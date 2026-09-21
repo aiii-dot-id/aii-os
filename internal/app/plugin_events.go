@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,7 +74,7 @@ func (a *App) startSubscriber(ap *pluginhost.ActivePlugin) {
 		return
 	}
 	go a.deliverEvents(ctx, s)
-	log.Printf("plugin %s: subscribed to %d event topic(s)", ap.ID, len(s.subs))
+	logsink.Info("plugins.start", "plugin %s: subscribed to %d event topic(s)", ap.ID, len(s.subs))
 }
 
 // .
@@ -155,7 +155,7 @@ func (a *App) emitPluginEvent(topic string, payload map[string]interface{}) {
 			default:
 			}
 			if n := s.dropped.Add(1); n == 1 || n%100 == 0 {
-				log.Printf("plugin %s: event queue full — %d event(s) dropped so far (the subscriber is falling behind)", s.id, n)
+				logsink.Warn("plugins.budget", "plugin %s: event queue full — %d event(s) dropped so far (the subscriber is falling behind)", s.id, n)
 			}
 		}
 	}
@@ -178,7 +178,7 @@ func (a *App) deliverEvents(ctx context.Context, s *pluginSubscriber) {
 				})
 				cancel()
 				if err != nil || res.Error != "" {
-					log.Printf("plugin %s: %s delivery of %s failed (%v %s)", s.id, d.Operation, ev.Topic, err, res.Error)
+					logsink.Warn("plugins.error", "plugin %s: %s delivery of %s failed (%v %s)", s.id, d.Operation, ev.Topic, err, res.Error)
 				}
 			}
 		}

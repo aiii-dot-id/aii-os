@@ -24,12 +24,12 @@ run(() => {
   assert(el && el.dataset.voiceRef === 'vs-1/7' && el.querySelector('.who').textContent === 'you', 'a spoken bubble carries its voice reference: ' + (el && el.outerHTML));
   assert(attachSpeaker('vs-1/7', 'Sam') && el.querySelector('.who').textContent === 'you · Sam', 'an observation attaches to the bubble it names: ' + el.querySelector('.who').textContent);
   const other = addMsg('operator', '[voice] another person', '', 'vs-1/9');
-  attachSpeaker('vs-1/7', 'Sam (speaker_id="james-one")');
-  attachSpeaker('vs-1/9', 'Sam (speaker_id="james-two")');
-  assert(el.querySelector('.who').textContent === 'you · Sam (speaker_id="james-one")' &&
-    other.querySelector('.who').textContent === 'you · Sam (speaker_id="james-two")', 'same-name speakers retain distinct IDs on their own bubbles');
-  attachSpeaker('vs-1/7', 'Jim (speaker_id="james-one")');
-  assert(el.querySelector('.who').textContent === 'you · Jim (speaker_id="james-one")', 'changing the label retains the ID');
+  attachSpeaker('vs-1/7', 'Sam (speaker_id="sam-one")');
+  attachSpeaker('vs-1/9', 'Sam (speaker_id="sam-two")');
+  assert(el.querySelector('.who').textContent === 'you · Sam (speaker_id="sam-one")' &&
+    other.querySelector('.who').textContent === 'you · Sam (speaker_id="sam-two")', 'same-name speakers retain distinct IDs on their own bubbles');
+  attachSpeaker('vs-1/7', 'Jim (speaker_id="sam-one")');
+  assert(el.querySelector('.who').textContent === 'you · Jim (speaker_id="sam-one")', 'changing the label retains the ID');
   assert(attachSpeaker('vs-1/7', 'uncertain: Sam 0.60') && el.querySelector('.who').textContent === 'you · uncertain: Sam 0.60', 'a late result amends the same bubble');
   assert(!el.querySelector('.who').textContent.includes('speaker_id='), 'uncertain replacement removes the previous known ID');
   assert(el.querySelectorAll('.speaker').length === 1, 'one attribution per bubble');
@@ -58,4 +58,32 @@ run(() => {
 	modules["/views/model-picker.js"] = []byte(`export function fillModelPicker() {}`)
 	modules["/pending.js"] = []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; }`)
 	runPageInEngines(t, page, modules)
+}
+
+// .
+// .
+func TestSpeakerTimeoutAttributionTravelsWithTheFinal(t *testing.T) {
+	ws, err := staticFS.ReadFile("static/ws.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := wsPageModules(ws, []byte(`export const S = { connected:false,identityExists:false,view:'home' };`))
+	chat := string(modules["/views/chat.js"])
+	chat = strings.Replace(chat, `export const addMsg = () => null;`, `export const addMsg = (...a) => window.calls.push(['add',...a]);`, 1)
+	chat = strings.Replace(chat, `export const attachSpeaker = () => false;`, `export const attachSpeaker = (...a) => window.calls.push(['attribute',...a]);`, 1)
+	modules["/views/chat.js"] = []byte(chat)
+	runPageInEngines(t, `<!doctype html><button id="send-btn"></button><button id="mic"></button>
+<script type="module">
+import { assert, report } from './__harness.js';
+try {
+ window.calls=[];
+ let socket;
+ window.WebSocket=class {constructor(){socket=this;} send(){} };
+ const {connect}=await import('./ws.js'); connect();
+ socket.onmessage({data:JSON.stringify({type:'voice_event',voice_event:{type:'transcript_final',operator:true,session_id:'s',sequence:7,text:'words',attribution:'uncertain: host attribution wait expired'}})});
+ assert(window.calls.length===2 && window.calls[0][0]==='add' && window.calls[1][0]==='attribute','word then attribution');
+ assert(window.calls[1][1]==='s/7' && window.calls[1][2]==='uncertain: host attribution wait expired','exact final reference and reason');
+ report('OK');
+} catch(e) {report('FAIL: '+e.message);}
+</script>`, modules)
 }

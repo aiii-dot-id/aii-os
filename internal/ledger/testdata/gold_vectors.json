@@ -1,5 +1,5 @@
 {
-  "_comment": "Gold ledger-format interop vectors (one format, one record; the record ruling of 2026-09-03). Every suite consumes THESE values; regenerate only together with the Go constants in gold_vector_test.go, never one without the other.",
+  "_comment": "Gold ledger-format interop vectors (one format, one record). Every suite consumes THESE values; regenerate only together with the Go constants in internal/ledger/gold_vector_test.go, never one without the other.",
   "payload_as_given": "{\"n\":9007199254740993,\"id\":\"exp_vector_1\",\"content\":\"gold vector — café ✓\",\"nested\":{\"z\":1,\"a\":[true,null,1.5]}}",
   "payload": "{\"content\":\"gold vector — café ✓\",\"id\":\"exp_vector_1\",\"n\":9007199254740993,\"nested\":{\"a\":[true,null,1.5],\"z\":1}}",
   "content": "a2385272909d5729b3b320ad6548f1bfd96144c9de0731277dedfa3a08055967",

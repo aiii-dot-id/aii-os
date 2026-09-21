@@ -56,6 +56,26 @@ type anthCache struct {
 	TTL  string `json:"ttl,omitempty"`
 }
 
+// .
+// .
+// .
+// .
+func markLastBlock(msgs []anthMessage, mark func() *anthCache) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		blocks := msgs[i].Content
+		for j := len(blocks) - 1; j >= 0; j-- {
+			block := &blocks[j]
+			if block.Type == "text" && block.Text == "" {
+				continue
+			}
+			if block.Type == "text" || block.Type == "tool_result" || block.Type == "tool_use" {
+				block.CacheControl = mark()
+				return
+			}
+		}
+	}
+}
+
 type anthMessage struct {
 	Role    string        `json:"role"`
 	Content []anthContent `json:"content"`
@@ -276,7 +296,20 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 	// .
 	// .
 	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	for _, m := range messages {
+		if m.CacheBefore && policy.Mode != "explicit" && m.Role == "user" {
+			markLastBlock(req.Messages, func() *anthCache { return marker(policy.TTL) })
+		}
 		switch m.Role {
 		case "system":
 			if systemOnly {
@@ -343,21 +376,7 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 		if ttl == "" {
 			ttl = policy.TTL
 		}
-		marked := false
-		for i := len(req.Messages) - 1; i >= 0 && !marked; i-- {
-			blocks := req.Messages[i].Content
-			for j := len(blocks) - 1; j >= 0; j-- {
-				block := &blocks[j]
-				if block.Type == "text" && block.Text == "" {
-					continue
-				}
-				if block.Type == "text" || block.Type == "tool_result" || block.Type == "tool_use" {
-					block.CacheControl = marker(ttl)
-					marked = true
-					break
-				}
-			}
-		}
+		markLastBlock(req.Messages, func() *anthCache { return marker(ttl) })
 	}
 
 	body, err := json.Marshal(req)

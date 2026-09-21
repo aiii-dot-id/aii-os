@@ -17,6 +17,8 @@ func TestBuildHistoryKeepsCurrentOnceAndReportsOlderTurns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	for _, turn := range []struct{ role, content string }{
+		{"operator", "oldest question"},
+		{"resident", "oldest answer"},
 		{"operator", "old question"},
 		{"resident", "old answer"},
 		{"operator", "current question"},
@@ -26,19 +28,34 @@ func TestBuildHistoryKeepsCurrentOnceAndReportsOlderTurns(t *testing.T) {
 		}
 	}
 
+	// .
+	// .
 	a := &App{store: s, cfg: &Config{Prompt: PromptConfig{RecentTurns: 2}}}
 	history, omitted, err := a.buildHistory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if omitted != 1 {
-		t.Fatalf("omitted = %d, want 1", omitted)
+	if omitted != 2 {
+		t.Fatalf("omitted = %d, want 2", omitted)
 	}
-	if len(history) != 2 || history[0].Role != "assistant" || history[1].Role != "user" {
+	if len(history) != 3 || history[0].Role != "user" || history[1].Role != "assistant" || history[2].Role != "user" {
 		t.Fatalf("history roles = %+v", history)
 	}
-	if history[1].Content != "current question" {
-		t.Fatalf("current turn = %q", history[1].Content)
+	if history[0].Content != "old question" || history[2].Content != "current question" {
+		t.Fatalf("window = %q .. %q", history[0].Content, history[2].Content)
+	}
+	// .
+	for _, turn := range []struct{ role, content string }{{"resident", "answer"}, {"operator", "next question"}} {
+		if err := s.AddConversationTurn(turn.role, turn.content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history, omitted, err = a.buildHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omitted != 4 || len(history) != 3 || history[0].Content != "current question" {
+		t.Fatalf("after the window moved: omitted=%d first=%q", omitted, history[0].Content)
 	}
 }
 

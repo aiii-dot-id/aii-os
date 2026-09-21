@@ -49,8 +49,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -257,7 +257,7 @@ func (c *Checker) resolveRepo() string {
 	}
 	if !validRepo(r) {
 		c.badRepoOnce.Do(func() {
-			log.Printf("updates: config updates.repo %q is not owner/name — using %s", r, DefaultRepo)
+			logsink.Warn("updates.refusal", "config updates.repo %q is not owner/name — using %s", r, DefaultRepo)
 		})
 		return DefaultRepo
 	}
@@ -272,10 +272,13 @@ type Checker struct {
 	automatic    func() bool
 	// .
 	// .
-	isSafe        func() bool
-	isMobile      func() bool
-	armed         atomic.Bool
-	inFlight      bool
+	isSafe   func() bool
+	isMobile func() bool
+	armed    atomic.Bool
+	inFlight bool
+	// .
+	// .
+	runner        func(work func()) bool
 	repo          func() string
 	gate          *quiesce.Gate
 	dataDir       string
@@ -361,7 +364,7 @@ func (c *Checker) Check(ctx context.Context) string {
 		// .
 		reason := fmt.Sprintf("%s: %v (HTTP 404)", c.resolveRepo(), errNoRelease)
 		c.noReleaseOnce.Do(func() {
-			log.Printf("updates: %s — checking continues; this is logged once, not every hour", reason)
+			logsink.Warn("updates.error", "%s — checking continues; this is logged once, not every hour", reason)
 		})
 		c.state.SetAvailable("")
 		c.state.MarkChecked()
@@ -369,7 +372,7 @@ func (c *Checker) Check(ctx context.Context) string {
 		return ""
 	}
 	if err != nil {
-		log.Printf("updates: check failed: %v", err)
+		logsink.Warn("updates.error", "check failed: %v", err)
 		c.state.SetLastError(err.Error())
 		return ""
 	}
@@ -391,7 +394,7 @@ func (c *Checker) Check(ctx context.Context) string {
 	// .
 	if !version.Valid(latestVer) || !version.Valid(currentVer) {
 		err := fmt.Errorf("invalid semantic version: running %q, latest %q", currentVer, latestVer)
-		log.Printf("updates: check failed: %v", err)
+		logsink.Warn("updates.refusal", "check failed: %v", err)
 		c.state.SetLastError(err.Error())
 		return ""
 	}
@@ -401,13 +404,13 @@ func (c *Checker) Check(ctx context.Context) string {
 		// .
 		c.state.SetAvailable("")
 		c.state.MarkChecked()
-		log.Printf("updates: running %s, latest %s — current", currentVer, latestVer)
+		logsink.Info("updates.end", "running %s, latest %s — current", currentVer, latestVer)
 		return ""
 	}
 
 	c.state.SetAvailable(latestVer)
 	c.state.MarkChecked()
-	log.Printf("updates: running %s, latest %s — update available", currentVer, latestVer)
+	logsink.Info("updates.end", "running %s, latest %s — update available", currentVer, latestVer)
 	return latestVer
 }
 
@@ -530,11 +533,25 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 		return fmt.Errorf("release REFUSED: %w", err)
 	}
 
-	log.Printf("updates: signature verified for %s (hash %s)", assetName, archiveHash[:12])
+	logsink.Info("updates.decision", "signature verified for %s (hash %s)", assetName, archiveHash[:12])
 
 	// .
 	// .
 	// .
+	// .
+	// .
+	// .
+	// .
+	afterVerified()
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("update not installed: %w", err)
+	}
 	handled, err := applyIfBundle(exePath, archiveBytes)
 	if err != nil {
 		return fmt.Errorf("bundle update: %w", err)
@@ -553,7 +570,7 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	}
 
 	c.state.SetInstalled(available)
-	log.Printf("updates: installed %s — restart to apply", available)
+	logsink.Info("updates.end", "installed %s — restart to apply", available)
 	return nil
 }
 
@@ -575,7 +592,7 @@ func (c *Checker) Run(ctx context.Context, isSafe func() bool, isMobile func() b
 	// .
 	// .
 	if cur := c.currentVer(); !version.Valid(cur) {
-		log.Printf("updates: this build carries no release version (%q) — update checking is off for the life of this process; a released build carries one and checks normally", cur)
+		logsink.Info("updates.refusal", "this build carries no release version (%q) — update checking is off for the life of this process; a released build carries one and checks normally", cur)
 		return
 	}
 	c.arm(isSafe, isMobile)
@@ -637,9 +654,9 @@ func (c *Checker) tick(ctx context.Context) {
 
 	if mobile || !automatic || !staged {
 		if !staged {
-			log.Printf("updates: %s available — inform only (%s)", available, stageWhy)
+			logsink.Info("updates.decision", "%s available — inform only (%s)", available, stageWhy)
 		} else {
-			log.Printf("updates: %s available — inform only (mobile=%v, automatic=%v)", available, mobile, automatic)
+			logsink.Info("updates.decision", "%s available — inform only (mobile=%v, automatic=%v)", available, mobile, automatic)
 		}
 		return
 	}
@@ -654,9 +671,9 @@ func (c *Checker) tick(ctx context.Context) {
 	// .
 	// .
 	if err := c.Apply(ctx); errors.Is(err, ErrUpdatePending) {
-		log.Printf("updates: %s staged but not applied — %v", available, err)
+		logsink.Warn("updates.refusal", "%s staged but not applied — %v", available, err)
 	} else if err != nil {
-		log.Printf("updates: apply failed: %v", err)
+		logsink.Warn("updates.error", "apply failed: %v", err)
 		c.state.SetLastError(err.Error())
 	}
 }
@@ -698,7 +715,7 @@ func (c *Checker) CheckNow(ctx context.Context, done func()) error {
 	c.inFlight = true
 	c.mu.Unlock()
 	c.state.SetChecking(true)
-	go func() {
+	work := func() {
 		defer func() {
 			c.state.SetChecking(false)
 			c.mu.Lock()
@@ -711,8 +728,52 @@ func (c *Checker) CheckNow(ctx context.Context, done func()) error {
 		cctx, cancel := context.WithTimeout(ctx, checkNowTimeout)
 		defer cancel()
 		c.tick(cctx)
-	}()
+	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if !c.run(work) {
+		c.state.SetChecking(false)
+		c.mu.Lock()
+		c.inFlight = false
+		c.mu.Unlock()
+		return ErrStopping
+	}
 	return nil
+}
+
+// .
+// .
+// .
+// .
+var afterVerified = func() {}
+
+// .
+var ErrStopping = errors.New("this identity is stopping")
+
+// .
+// .
+// .
+// .
+func (c *Checker) SetRunner(run func(work func()) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.runner = run
+}
+
+func (c *Checker) run(work func()) bool {
+	c.mu.Lock()
+	runner := c.runner
+	c.mu.Unlock()
+	if runner == nil {
+		go work()
+		return true
+	}
+	return runner(work)
 }
 
 // .
@@ -1401,7 +1462,7 @@ func WriteBootMarker(dataDir string) {
 		// .
 		// .
 		// .
-		log.Printf("updates: could not write boot marker: %v", err)
+		logsink.Warn("updates.error", "could not write boot marker: %v", err)
 		return
 	}
 	os.Remove(filepath.Join(dataDir, pendingFile))
@@ -1416,7 +1477,7 @@ func WriteBootMarker(dataDir string) {
 func CheckRollback(dataDir string) string {
 	exePath, err := os.Executable()
 	if err != nil {
-		log.Printf("updates: rollback check skipped — cannot locate running binary: %v", err)
+		logsink.Warn("updates.refusal", "rollback check skipped — cannot locate running binary: %v", err)
 		return ""
 	}
 	return checkRollbackAt(dataDir, exePath)
@@ -1443,7 +1504,7 @@ func checkRollbackAt(dataDir, exePath string) string {
 			// .
 			// .
 			// .
-			log.Printf("updates: rollback check cannot stat %s: %v — leaving update state untouched", prevPath, refusal)
+			logsink.Warn("updates.refusal", "rollback check cannot stat %s: %v — leaving update state untouched", prevPath, refusal)
 			return ""
 		}
 		os.Remove(pendPath)
@@ -1462,7 +1523,7 @@ func checkRollbackAt(dataDir, exePath string) string {
 		// .
 		// .
 		// .
-		log.Printf("updates: rollback check cannot stat %s: %v — leaving update state untouched", markerPath, refusal)
+		logsink.Warn("updates.refusal", "rollback check cannot stat %s: %v — leaving update state untouched", markerPath, refusal)
 		return ""
 	}
 
@@ -1476,7 +1537,7 @@ func checkRollbackAt(dataDir, exePath string) string {
 		// .
 		prevBytes, err := os.ReadFile(prevPath)
 		if err != nil {
-			log.Printf("updates: unreadable backup with no tombstone — retiring it: %v", err)
+			logsink.Warn("updates.decision", "unreadable backup with no tombstone — retiring it: %v", err)
 			os.Remove(prevPath)
 			return ""
 		}
@@ -1484,7 +1545,7 @@ func checkRollbackAt(dataDir, exePath string) string {
 			Attempts:     1,
 			BackupSHA256: sha256hex(prevBytes),
 		}); err != nil {
-			log.Printf("updates: could not adopt legacy update state: %v", err)
+			logsink.Warn("updates.error", "could not adopt legacy update state: %v", err)
 		}
 		return ""
 	}
@@ -1496,7 +1557,7 @@ func checkRollbackAt(dataDir, exePath string) string {
 		// .
 		pend.Attempts = 1
 		if err := writePending(dataDir, pend); err != nil {
-			log.Printf("updates: could not record first boot attempt: %v", err)
+			logsink.Warn("updates.error", "could not record first boot attempt: %v", err)
 		}
 		return ""
 	}
@@ -1517,12 +1578,12 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	// .
 	// .
 	if ok, why := canStageBesideAt(exePath); !ok {
-		log.Printf("updates: ROLLBACK DEFERRED \u2014 %s; the previous binary is kept at %s (restore it with your package manager, or from data/backups/)", why, prevPath)
+		logsink.Warn("updates.refusal", "ROLLBACK DEFERRED \u2014 %s; the previous binary is kept at %s (restore it with your package manager, or from data/backups/)", why, prevPath)
 		return ""
 	}
 	prevBytes, err := os.ReadFile(prevPath)
 	if err != nil {
-		log.Printf("updates: ROLLBACK FAILED — cannot read backup binary: %v", err)
+		logsink.Error("updates.error", "ROLLBACK FAILED — cannot read backup binary: %v", err)
 		return ""
 	}
 	// .
@@ -1530,7 +1591,7 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	// .
 	// .
 	if pend.BackupSHA256 != "" && sha256hex(prevBytes) != pend.BackupSHA256 {
-		log.Printf("updates: ROLLBACK REFUSED — backup hashes to %.12s, swap recorded %.12s; the backup is not a backup, and the current binary stays",
+		logsink.Error("updates.refusal", "ROLLBACK REFUSED — backup hashes to %.12s, swap recorded %.12s; the backup is not a backup, and the current binary stays",
 			sha256hex(prevBytes), pend.BackupSHA256)
 		return ""
 	}
@@ -1540,7 +1601,7 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	// .
 	if pend.NewSHA256 != "" {
 		if cur, err := os.ReadFile(exePath); err == nil && sha256hex(cur) != pend.NewSHA256 {
-			log.Printf("updates: rollback skipped — the binary changed since the update (operator repair); retiring update state")
+			logsink.Info("updates.decision", "rollback skipped — the binary changed since the update (operator repair); retiring update state")
 			os.Remove(prevPath)
 			os.Remove(filepath.Join(dataDir, pendingFile))
 			return ""
@@ -1554,13 +1615,13 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	// .
 	tmpRestore, err := stageFileDurably(exePath, prevBytes, 0o755)
 	if err != nil {
-		log.Printf("updates: ROLLBACK FAILED — cannot stage previous binary: %v", err)
+		logsink.Error("updates.error", "ROLLBACK FAILED — cannot stage previous binary: %v", err)
 		return ""
 	}
 	restored, rerr := atomicfile.ReplaceExecutable(tmpRestore, exePath)
 	if rerr != nil && !restored {
 		os.Remove(tmpRestore)
-		log.Printf("updates: ROLLBACK FAILED — cannot restore previous binary: %v", rerr)
+		logsink.Error("updates.error", "ROLLBACK FAILED — cannot restore previous binary: %v", rerr)
 		return ""
 	}
 	if rerr != nil {
@@ -1569,12 +1630,12 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 		// .
 		// .
 		// .
-		log.Printf("updates: ROLLBACK restored the previous binary but could not make the directory entry durable — keeping the backup: %v", rerr)
+		logsink.Error("updates.error", "ROLLBACK restored the previous binary but could not make the directory entry durable — keeping the backup: %v", rerr)
 		return prevPath
 	}
 	os.Remove(prevPath)
 	os.Remove(filepath.Join(dataDir, pendingFile))
-	log.Printf("updates: ROLLBACK — restored previous binary (update failed to boot)")
+	logsink.Warn("updates.end", "ROLLBACK — restored previous binary (update failed to boot)")
 	return prevPath
 }
 

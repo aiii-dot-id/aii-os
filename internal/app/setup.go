@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"reflect"
 	"slices"
 	"sort"
@@ -14,6 +14,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 // .
@@ -109,6 +110,7 @@ func (a *App) configState() *dashboard.ConfigState {
 		llmSt.ThinkingApplies = dialect == llm.DialectAnthropic
 	}
 	return &dashboard.ConfigState{
+		Database:        a.databaseState(),
 		LLM:             llmSt,
 		Speech:          speechSt,
 		Dashboard:       dashboard.DashboardState{Host: c.Dashboard.Host, Port: c.Dashboard.Port, TLS: c.Dashboard.TLS, Origin: a.advertisedOrigin(), RequireToken: requireToken},
@@ -224,6 +226,16 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			continue
 		}
 		switch key {
+		case "identity.db_format":
+			format, err := str(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if !store.ValidDatabaseFormat(format) {
+				return nil, fmt.Errorf("identity.db_format must be empty, sqlite, or zstd")
+			}
+			cfg.Identity.DBFormat = format
+			restart = append(restart, key)
 		// .
 		// .
 		// .
@@ -338,6 +350,32 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			}
 			cfg.Logs.Dir = s
 			restart = append(restart, key)
+		case "maintenance.enabled":
+			// .
+			// .
+			b, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Errorf("maintenance.enabled: must be a boolean")
+			}
+			cfg.Maintenance.Enabled = &b
+		case "maintenance.backup_keep":
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n < 1 || n > 365 {
+				return nil, fmt.Errorf("maintenance.backup_keep: between 1 and 365 daily snapshots (each holds the whole database)")
+			}
+			cfg.Maintenance.BackupKeep = n
+		case "maintenance.on_demand_spacing_seconds":
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n < 0 || n > 86400 {
+				return nil, fmt.Errorf("maintenance.on_demand_spacing_seconds: 0 takes the default (600); at most 86400")
+			}
+			cfg.Maintenance.OnDemandSpacingSeconds = n
 		case "logs.max_backups":
 			n, err := integer(key, v)
 			if err != nil {
@@ -357,6 +395,16 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 				return nil, fmt.Errorf("logs.compress_days: -1 never compresses, 0 uses the default (7), a positive number is the age in days")
 			}
 			cfg.Logs.CompressDays = n
+			restart = append(restart, key)
+		case "logs.max_days":
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n < -1 {
+				return nil, fmt.Errorf("logs.max_days: -1 turns the day floor off (the count decides alone), 0 uses the default (30), a positive number is the age in days")
+			}
+			cfg.Logs.MaxDays = n
 			restart = append(restart, key)
 		case "plugins.autoload":
 			s, err := str(key, v)
@@ -856,7 +904,7 @@ func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry prov
 	})
 	accepted = true
 	if tool.note != "" {
-		log.Printf("SUBSTRATE: %s", tool.note)
+		logsink.Info("boot.decision", "%s", tool.note)
 	}
 	return nil
 }

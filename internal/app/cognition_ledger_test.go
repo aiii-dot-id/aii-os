@@ -322,6 +322,147 @@ func TestDreamConsumedSurvivesReplay(t *testing.T) {
 // .
 // .
 // .
+// .
+func TestAnEmptyDreamPassConsumesThroughTheRealDoorAndSurvivesReplay(t *testing.T) {
+	b := newCognitionBench(t)
+	b.mintExperiences(t, "exp_a", "exp_b")
+	before := b.lg.LastSeq()
+
+	d := cognitive.NewDream(b.st, envelopeLLM{out: "NOTHING SURFACED"}, b.door, nil,
+		cognitive.DreamConfig{Threshold: 1})
+	if err := d.Execute(context.Background()); err != nil {
+		t.Fatalf("dream execute: %v", err)
+	}
+	if got := b.lg.LastSeq(); got != before+1 {
+		t.Fatalf("an empty pass appended %d record(s), want the marker alone", got-before)
+	}
+	check := func(when string) {
+		t.Helper()
+		n, err := b.st.UnprocessedExperienceCount()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("%s: %d experiences are raw again — the empty pass will be repeated forever", when, n)
+		}
+		var dreams int
+		if err := b.st.DB().QueryRow(`SELECT COUNT(*) FROM experiences WHERE provenance = 'dream'`).Scan(&dreams); err != nil {
+			t.Fatal(err)
+		}
+		if dreams != 0 {
+			t.Fatalf("%s: an empty pass minted %d dream note(s)", when, dreams)
+		}
+	}
+	check("live")
+	if err := b.st.ReplayFromFile(b.ledgerP); err != nil {
+		t.Fatalf("replay of a marker with no outputs: %v", err)
+	}
+	check("after replay")
+}
+
+// .
+func TestAnOversizedDreamReplyAppendsNothing(t *testing.T) {
+	b := newCognitionBench(t)
+	b.mintExperiences(t, "exp_a")
+	before := b.lg.LastSeq()
+	d := cognitive.NewDream(b.st, envelopeLLM{out: strings.Repeat("Let me think about this. ", 200)}, b.door, nil,
+		cognitive.DreamConfig{Threshold: 1})
+	if err := d.Execute(context.Background()); err != nil {
+		t.Fatalf("dream execute: %v", err)
+	}
+	if got := b.lg.LastSeq(); got != before {
+		t.Fatalf("a refused note still appended %d record(s)", got-before)
+	}
+	if n, _ := b.st.UnprocessedExperienceCount(); n != 1 {
+		t.Fatalf("a refused pass consumed its material: %d raw, want 1", n)
+	}
+}
+
+// .
+type capturingLLM struct {
+	out  string
+	user *string
+}
+
+func (c capturingLLM) ChatSimple(ctx context.Context, systemPrompt, userMessage string) (string, string, error) {
+	*c.user = userMessage
+	return c.out, "test-model", nil
+}
+
+func (c capturingLLM) ChatStructured(ctx context.Context, systemPrompt, userMessage string, tool llm.ToolDefinition) (string, string, bool, error) {
+	*c.user = userMessage
+	return c.out, "test-model", false, nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestAContestedBeliefThroughTheRealStore(t *testing.T) {
+	const sealed = "THE SEALED WORDS nobody but the identity may read"
+	b := newCognitionBench(t)
+	mint := func(et ledger.EventType, payload map[string]interface{}) {
+		t.Helper()
+		if _, err := b.door.Append(et, 3, payload, ""); err != nil {
+			t.Fatalf("mint %s: %v", et, err)
+		}
+	}
+	b.mintExperiences(t, "exp_seed")
+	mint(ledger.EventBeliefUpsert, map[string]interface{}{"id": "b_old", "statement": "The operator ships in the morning", "ring": 3, "confidence": 0.5})
+	mint(ledger.EventExperienceCreate, map[string]interface{}{
+		"id": "exp_sealed", "content": sealed, "category": "reflection", "provenance": "self", "private": true, "raw": false,
+	})
+	mint(ledger.EventEdgeCreate, map[string]interface{}{"id": "edge_t1", "from_id": "exp_sealed", "to_id": "b_old", "edge_type": "CONTRADICTS"})
+	b.mintExperiences(t, "exp_a", "exp_b", "exp_c")
+
+	var shown string
+	c := cognitive.NewConsolidate(b.st, capturingLLM{out: consolidateEnvelope, user: &shown}, b.door, nil,
+		cognitive.ConsolidateConfig{Threshold: 3})
+	c.SetTensions(b.st)
+	if err := c.Execute(context.Background()); err != nil {
+		t.Fatalf("consolidate execute: %v", err)
+	}
+
+	if strings.Contains(shown, sealed) {
+		t.Fatal("A PRIVATE NOTE'S WORDS REACHED CONSOLIDATE THROUGH THE REAL STORE")
+	}
+	for _, want := range []string{"[b_old, suspect]", "[exp_sealed] a private note (sealed: its content is not shown) stands against [b_old]"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("the pass was not shown %q:\n%s", want, shown)
+		}
+	}
+	if got := b.eventsOfType(t, ledger.EventBeliefSupersede); len(got) != 0 {
+		t.Fatalf("A CONTESTED BELIEF WAS RETIRED BY CONSOLIDATION: %d supersede(s) in the record", len(got))
+	}
+	// .
+	// .
+	var minted bool
+	for _, e := range b.eventsOfType(t, ledger.EventBeliefUpsert) {
+		if strings.Contains(string(e.Payload), "The operator ships at midnight") {
+			minted = true
+		}
+	}
+	if !minted {
+		t.Fatal("the refused supersede took the rest of the envelope with it: the upsert was not minted")
+	}
+	// .
+	pairs, err := b.st.TensionsView()
+	if err != nil || len(pairs) != 1 {
+		t.Fatalf("the contradiction did not survive the pass: %d %v", len(pairs), err)
+	}
+	if standing, err := b.st.StandingFor("b_old"); err != nil || standing != "suspect" {
+		t.Fatalf("b_old reads %q (%v), want suspect", standing, err)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
 func TestConsolidateStandsDownWhenLedgerFrozen(t *testing.T) {
 	b := newCognitionBench(t)
 	b.mintExperiences(t, "exp_a", "exp_b", "exp_c")

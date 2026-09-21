@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strconv"
 	"strings"
 	"sync"
@@ -339,7 +339,7 @@ func (o *TimerDeliveryOwner) OnAlarm(ctx context.Context, alarmID, clock string,
 		return cognitive.AlarmResult{}
 	}
 	if !added {
-		log.Printf("TIMER: duplicate dispatch of %s@%d suppressed — the durable floor already exists", alarmID, deadline)
+		logsink.Debug("timer.refusal", "duplicate dispatch of %s@%d suppressed — the durable floor already exists", alarmID, deadline)
 		return cognitive.AlarmResult{Accepted: true}
 	}
 	if o.OnWake != nil {
@@ -356,7 +356,7 @@ func (o *TimerDeliveryOwner) OnAlarm(ctx context.Context, alarmID, clock string,
 			defer o.wakeWG.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("TIMER WAKE %s PANICKED (contained): %v", id, r)
+					logsink.Error("timer.error", "wake %s PANICKED (contained): %v", id, r)
 				}
 			}()
 			wake(ctx, id, tg, msg)

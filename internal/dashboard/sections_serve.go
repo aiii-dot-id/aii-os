@@ -20,8 +20,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -321,7 +321,7 @@ func (s *Server) reportOverlay(p, outcome string) {
 		DecidedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	s.secMu.Unlock()
-	log.Printf("dashboard: frame overlay %s: %s", p, outcome)
+	logsink.Info("dashboard.decision", "frame overlay %s: %s", p, outcome)
 	// .
 	// .
 	// .
@@ -533,7 +533,11 @@ const uiCSP = "default-src 'none'; " +
 	"frame-src 'self'; " +
 	"frame-ancestors 'none'; " +
 	"base-uri 'none'; " +
-	"form-action 'none'; " +
+	// .
+	// .
+	// .
+	// .
+	"form-action 'self'; " +
 	"object-src 'none'"
 
 func sectionCSP(scheme, host, id string) string {
@@ -583,7 +587,7 @@ func (s *Server) handleSectionFile(w http.ResponseWriter, r *http.Request) {
 			// .
 			// .
 			// .
-			log.Printf("dashboard: dev section %q refused under SAFE (%s)", id, reason)
+			logsink.Warn("dashboard.refusal", "dev section %q refused under SAFE (%s)", id, reason)
 			http.NotFound(w, r)
 			return
 		}

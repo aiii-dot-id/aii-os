@@ -37,7 +37,7 @@ func TestDeriveName(t *testing.T) {
 		{"I am here to help you today.", "Unnamed"},
 		{"I'm glad you're here. My name is Nova.", "Nova"},
 		{"I'm ready. I'm Nova.", "Nova"},
-		{"NAME: dawn", "dawn"},
+		{"NAME: nova", "nova"},
 	}
 	for _, c := range cases {
 		if got := deriveName(c.in); got != c.want {

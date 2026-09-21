@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +21,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 const testEnvelopeHost = "api.example.test"
@@ -541,10 +542,7 @@ func TestSecretRidesRequestButNeverPluginVisibleBytes(t *testing.T) {
 
 	t.Setenv("AII_TEST_BROKER_SECRET", secret)
 
-	var logBuf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(prev)
+	logBuf := logsink.CaptureForTest(t)
 
 	st := newStore(t)
 	h := newHost(t, st, Config{

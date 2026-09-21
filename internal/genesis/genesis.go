@@ -271,7 +271,44 @@ func VerifySelfContained(ledgerPath string) (int, string, error) {
 
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+func VerifiedReport(events int, fingerprint, witness string) string {
+	return fmt.Sprintf("VERIFIED: %d events, identity %s — gold envelope, self-contained; %s\n", events, fingerprint, witness)
+}
+
+// .
+// .
+func RefusedReport(err error, witness string) string {
+	if witness == "" {
+		return fmt.Sprintf("NOT VERIFIED: %v\n", err)
+	}
+	return fmt.Sprintf("NOT VERIFIED: %v\nwitness: %s\n", err, witness)
+}
+
+// .
+// .
 func VerifySelfContainedWith(ledgerPath string, heads ledger.HeadVerifier) (int, string, error) {
+	return VerifySelfContainedVisiting(ledgerPath, heads, nil)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func VerifySelfContainedVisiting(ledgerPath string, heads ledger.HeadVerifier, visitFor func(fingerprint string) func(*ledger.Event) error) (int, string, error) {
+	// .
+	// .
+	// .
+	refuse := func(err error) (int, string, error) {
+		return 0, "", &ledger.VerifyFailure{Requirement: err.Error(), Err: err}
+	}
 	// .
 	var first *ledger.Event
 	if err := ledger.Stream(ledgerPath, func(evt *ledger.Event) error {
@@ -279,31 +316,35 @@ func VerifySelfContainedWith(ledgerPath string, heads ledger.HeadVerifier) (int,
 		first = &e
 		return ledger.ErrStop
 	}); err != nil {
-		return 0, "", fmt.Errorf("read ledger: %w", err)
+		return refuse(fmt.Errorf("read ledger: %w", err))
 	}
 	if first == nil {
-		return 0, "", fmt.Errorf("empty ledger")
+		return refuse(fmt.Errorf("empty ledger"))
 	}
 
 	var payload BirthAttestationPayload
 	if first.Type != ledger.EventRing0Genesis {
-		return 0, "", fmt.Errorf("first event is %s, not ring0.genesis — not a birth-headed chain", first.Type)
+		return refuse(fmt.Errorf("first event is %s, not ring0.genesis — not a birth-headed chain", first.Type))
 	}
 	if err := json.Unmarshal(first.Payload, &payload); err != nil {
-		return 0, "", fmt.Errorf("parse birth attestation: %w", err)
+		return refuse(fmt.Errorf("parse birth attestation: %w", err))
 	}
 	if payload.PublicKey == "" {
-		return 0, "", fmt.Errorf("genesis carries no public key — chain is not self-contained")
+		return refuse(fmt.Errorf("genesis carries no public key — chain is not self-contained"))
 	}
 	pub, err := base64.StdEncoding.DecodeString(payload.PublicKey)
 	if err != nil {
-		return 0, "", fmt.Errorf("genesis public key: %w", err)
+		return refuse(fmt.Errorf("genesis public key: %w", err))
 	}
 	if !crypto.VerifyFingerprint(pub, payload.Fingerprint) {
-		return 0, "", fmt.Errorf("genesis public key does not match its claimed fingerprint %s", payload.Fingerprint)
+		return refuse(fmt.Errorf("genesis public key does not match its claimed fingerprint %s", payload.Fingerprint))
 	}
 
-	n, err := ledger.VerifyChain(ledgerPath, pub, heads)
+	var visit func(*ledger.Event) error
+	if visitFor != nil {
+		visit = visitFor(payload.Fingerprint)
+	}
+	n, err := ledger.VerifyChainVisiting(ledgerPath, pub, heads, visit)
 	if err != nil {
 		return 0, "", err
 	}

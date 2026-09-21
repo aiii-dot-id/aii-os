@@ -178,7 +178,7 @@ func TestSidecarsAreCataloguedWithTheirBases(t *testing.T) {
 		t.Fatalf("schema.sql holds %d virtual tables, the catalog %d sidecars", virtual, len(Sidecars))
 	}
 	if len(Sidecars) != 18 {
-		t.Fatalf("sidecars=%d; the count changed — say so in R88 and SCHEMA.md", len(Sidecars))
+		t.Fatalf("sidecars=%d; the count changed — say so in the schema docs", len(Sidecars))
 	}
 	declared := parseDeclarations(text)
 	for name, e := range Sidecars {

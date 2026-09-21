@@ -97,7 +97,7 @@ func RenderGraphAudit(a GraphAudit) string {
 		return " (e.g. " + strings.Join(ids, ", ") + ")"
 	}
 	return fmt.Sprintf("Record audit — the graph read against its own rules (observational):\n"+
-		"  ungrounded beliefs: %d — current beliefs no evidence edge touches; new ones are refused (R99), so these predate it or lost their evidence%s\n"+
+		"  ungrounded beliefs: %d — current beliefs no evidence edge touches; new ones are refused, so these predate it or lost their evidence%s\n"+
 		"  orphan edges: %d — live edges with an endpoint no entity holds; never counted for standing%s\n"+
 		"  open tensions: %d — live CONTRADICTS edges, the record's tension registry",
 		a.Ungrounded, sample(a.UngroundedSample), a.Orphans, sample(a.OrphansSample), a.Tensions)

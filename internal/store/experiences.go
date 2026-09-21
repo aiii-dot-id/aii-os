@@ -137,6 +137,34 @@ func (s *Store) ListRawExperiences(n int) ([]Experience, error) {
 // .
 // .
 // .
+// .
+// .
+// .
+const OutcomeObservationPrefix = "exp_outcome_"
+
+// .
+// .
+// .
+// .
+// .
+func (s *Store) ListRawExperiencesExcept(n int, idPrefix string) ([]Experience, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		`SELECT id, content, category, raw, private, provenance, created_seq, created_at
+		 FROM experiences WHERE raw = 1 AND substr(id, 1, ?) != ? ORDER BY created_seq ASC LIMIT ?`,
+		len(idPrefix), idPrefix, n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanExperiences(rows)
+}
+
+// .
+// .
+// .
 func (s *Store) ListExperiencesBefore(n int, beforeSeq uint64) ([]Experience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

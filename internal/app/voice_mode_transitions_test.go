@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
+	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 )
 
@@ -68,7 +69,7 @@ func TestAHeldFinalReleasedAfterAMeetingCommitIsTheRooms(t *testing.T) {
 		t.Fatal("the restricted policy did not hold the final")
 	}
 	voiceModeDoor(t, a, listenMeeting, speakOff)
-	a.voiceEngineEvent(nil, observationRaw(h.id, 21, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "james", "decision": "known"}), page.enqueue)
+	a.voiceEngineEvent(nil, observationRaw(h.id, 21, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "sam", "decision": "known"}), page.enqueue)
 	a.voiceInputFinished(h.id)
 	awaitDrained(t, h)
 	if n := wakes.Load(); n != 0 {
@@ -228,6 +229,7 @@ func TestSpeakOffCommittedWhileTheAcknowledgementIsPendingFencesTheSynthesis(t *
 	if p := f.producingNow(); p == "" {
 		t.Fatal("the fixture engine is not producing the enqueued synthesis")
 	}
+	awaitInflight(t, h)
 	voiceModeDoor(t, a, listenInteractive, speakOff)
 	// .
 	if p := f.producingNow(); p != "" {
@@ -768,5 +770,81 @@ func TestAnOlderOffDoesNotFenceAReplyAdmittedAfterANewerOn(t *testing.T) {
 	}
 	if engines[first].producingNow() != "" {
 		t.Fatalf("the older off did not fence the reply admitted before it on %s: ops=%v", first, engines[first].opsSeen())
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func awaitInflight(t *testing.T, h *voiceHandle) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.loadInflight().id != "" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the synthesis was never recorded in flight")
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestWordsFromARoomNeverReachADreamRequest(t *testing.T) {
+	a := newVoiceApp(t)
+	var wakes atomic.Int32
+	stubWake(t, func() (string, error) { wakes.Add(1); return "", nil })
+	page := &pageLog{}
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if err := a.engine.RecordConversationTurn(roleOperator, voiceMarker+"can you hear me clearly"); err != nil {
+		t.Fatal(err)
+	}
+
+	// .
+	// .
+	voiceModeDoor(t, a, listenMeeting, speakOff)
+	room, _ := newTrackedSession(a, "vs-room", true)
+	a.voiceEngineEvent(nil, finalRaw(room.id, 1, "we should cut the budget before friday"), page.enqueue)
+	awaitWork(t, room)
+
+	model := &scriptedLLM{replies: []string{aNoticing}}
+	dream := cognitive.NewDream(a.store, model, nil, nil, dreamConfig(a.configSnapshot()))
+	dream.SetConversation(a.store)
+	if err := dream.Execute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.shown) != 1 {
+		t.Fatalf("DREAM made %d requests over a transcript holding words spoken to the identity, want 1", len(model.shown))
+	}
+	if strings.Contains(model.shown[0], "cut the budget") {
+		t.Fatalf("WORDS FROM A ROOM REACHED DREAM:\n%s", model.shown[0])
+	}
+	if !strings.Contains(model.shown[0], "can you hear me clearly") {
+		t.Fatalf("words spoken TO the identity on the same path were not shown:\n%s", model.shown[0])
 	}
 }

@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
 
@@ -64,7 +64,7 @@ func (a *App) meterSpeech(provider, direction string, characters int, heard time
 	}); err != nil {
 		// .
 		// .
-		log.Printf("VOICE: the speech meter could not record %s: %v", provider, err)
+		logsink.Warn("voice.error", "the speech meter could not record %s: %v", provider, err)
 	}
 }
 

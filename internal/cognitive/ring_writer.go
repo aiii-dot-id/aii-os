@@ -1,8 +1,7 @@
 package cognitive
 
 import (
-	"log"
-
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 )
 
@@ -105,5 +104,5 @@ func (r *ringWriterAdapter) SetBrief(content string) {
 }
 
 func persistLog(format string, args ...interface{}) {
-	log.Printf("RINGWRITER: "+format, args...)
+	logsink.Warn("ring.error", format, args...)
 }

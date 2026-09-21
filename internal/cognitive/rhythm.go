@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/store"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -49,7 +50,41 @@ type Rhythm struct {
 	review      AlarmOwner
 
 	lastConsolidate time.Time
+
+	outcomes          OutcomeIntake
+	lastOutcomeIntake time.Time
+
+	conversation ConversationProbe
 }
+
+// .
+// .
+// .
+type OutcomeIntake interface {
+	OutcomesPending() bool
+	ObserveOutcomes(ctx context.Context) error
+}
+
+// .
+// .
+func (r *Rhythm) SetOutcomes(o OutcomeIntake) { r.outcomes = o }
+
+// .
+// .
+func (r *Rhythm) OutcomesWired() bool { return r.outcomes != nil }
+
+// .
+// .
+type ConversationProbe interface {
+	ConversationPending() bool
+}
+
+// .
+// .
+func (r *Rhythm) SetConversation(p ConversationProbe) { r.conversation = p }
+
+// .
+func (r *Rhythm) ConversationWired() bool { return r.conversation != nil }
 
 // .
 // .
@@ -150,7 +185,7 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 	// .
 	if r.turn != nil {
 		if !r.turn.TryBeginTurn() {
-			log.Printf("RHYTHM: the identity is in a turn — metabolism deferred to the next pass")
+			logsink.Info("rhythm.refusal", "the identity is in a turn — metabolism deferred to the next pass")
 			r.decision("metabolism", "defer", "the identity is in a turn")
 			return AlarmResult{}
 		}
@@ -170,7 +205,7 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 		}
 		res := owner.OnAlarm(ctx, "rhythm:"+name, "wall", deadline, "")
 		if res.Accepted {
-			log.Printf("RHYTHM: %s ran (capacity)", name)
+			logsink.Info("rhythm.pass", "%s ran (capacity)", name)
 			r.decision(name, "run", "capacity")
 		} else {
 			r.decision(name, "skip", "the facility declined")
@@ -198,8 +233,28 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 	// .
 	// .
 	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	ranAny := false
-	if hasRaw {
+	if r.outcomes != nil && now.Sub(r.lastOutcomeIntake) >= consolidateSpacing && r.outcomes.OutcomesPending() {
+		r.lastOutcomeIntake = now
+		if err := r.outcomes.ObserveOutcomes(ctx); err != nil {
+			logsink.Warn("rhythm.refusal", "%v", err)
+			r.decision("outcomes", "skip", err.Error())
+		} else {
+			logsink.Info("rhythm.pass", "outcome intake ran (capacity)")
+			r.decision("outcomes", "run", "an outcome stood unobserved")
+			ranAny = true
+		}
+	} else if hasRaw {
 		if now.Sub(r.lastConsolidate) >= consolidateSpacing {
 			if run("consolidate", r.consolidate) {
 				ranAny = true
@@ -210,12 +265,23 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 				ranAny = true
 			}
 		}
+	} else if r.conversation != nil && r.conversation.ConversationPending() {
+		// .
+		// .
+		// .
+		// .
+		if run("dream", r.dream) {
+			ranAny = true
+		}
 	}
 	if !ranAny {
 		// .
 		// .
 		// .
-		log.Printf("RHYTHM: pass complete — no facility was due")
+		// .
+		// .
+		// .
+		logsink.Tick("rhythm.pass", "passes, none due", 0)
 		r.decision("metabolism", "skip", "no facility was due")
 	}
 
@@ -241,7 +307,7 @@ func (r *Rhythm) onReflect(ctx context.Context, alarmID string, deadline int64) 
 	case ReflectIdentityReviewAlarm:
 		owner, name = r.review, "identity_review"
 	default:
-		log.Printf("RHYTHM: unknown reflective alarm %q — ignored", alarmID)
+		logsink.Warn("rhythm.refusal", "unknown reflective alarm %q — ignored", alarmID)
 		return AlarmResult{Accepted: true}
 	}
 	if owner == nil {
@@ -250,14 +316,14 @@ func (r *Rhythm) onReflect(ctx context.Context, alarmID string, deadline int64) 
 	if r.turn != nil {
 		if !r.turn.TryBeginTurn() {
 			next := deadline + 1
-			log.Printf("RHYTHM: %s owed at pulse %d — the identity is in a turn; deferred to the next pulse", name, deadline)
+			logsink.Info("rhythm.refusal", "%s owed at pulse %d — the identity is in a turn; deferred to the next pulse", name, deadline)
 			r.decision(name, "defer", "the identity is in a turn")
 			return AlarmResult{Accepted: false, NextDeadline: &next}
 		}
 		defer r.turn.EndTurn()
 	}
 	res := owner.OnAlarm(ctx, alarmID, "life", deadline, "")
-	log.Printf("RHYTHM: %s ran on lived time (pulse %d, accepted=%v)", name, deadline, res.Accepted)
+	logsink.Info("rhythm.pass", "%s ran on lived time (pulse %d, accepted=%v)", name, deadline, res.Accepted)
 	r.decision(name, "run", "lived time")
 	if alarmID == ReflectIdentityReviewAlarm && res.Accepted {
 		// .
@@ -289,7 +355,7 @@ func (r *Rhythm) nominateProbe() {
 	}
 	sb, ok, err := r.stagSrc.OldestStaleBelief(probeBeliefGap)
 	if err != nil {
-		log.Printf("RHYTHM: probe read failed: %v", err)
+		logsink.Warn("rhythm.error", "probe read failed: %v", err)
 		return
 	}
 	if !ok {
@@ -308,11 +374,11 @@ func (r *Rhythm) nominateProbe() {
 		"provenance": "system",
 		"raw":        true,
 	}, ""); err != nil {
-		log.Printf("RHYTHM: probe nomination refused: %v", err)
+		logsink.Warn("rhythm.refusal", "probe nomination refused: %v", err)
 		return
 	}
 	r.lastProbeID = id
-	log.Printf("RHYTHM: probe nominated — %s (gap %d)", sb.ID, sb.Gap)
+	logsink.Info("rhythm.decision", "probe nominated — %s (gap %d)", sb.ID, sb.Gap)
 }
 
 // .
@@ -341,7 +407,7 @@ func (r *Rhythm) checkStagnation() {
 	// .
 	served, partial, unserved, verr := r.stagSrc.VerdictCounts()
 	if verr != nil {
-		log.Printf("RHYTHM: verdict counts read failed: %v", verr)
+		logsink.Warn("rhythm.error", "verdict counts read failed: %v", verr)
 	} else if r.attnOutbox != nil && served+partial+unserved >= efficacyReadyAt {
 		r.attnOutbox("efficacy_data_ready", fmt.Sprintf(
 			"efficacy: %d completion verdicts have accumulated (served %d · partial %d · unserved %d) — enough to read honestly. These are the identity's own CLAIMS, not verified results; the peer record puts self-reported wins at 73.8%% proxy. A pass over which claims held — and which did not — is now worth a conversation.",
@@ -350,7 +416,7 @@ func (r *Rhythm) checkStagnation() {
 
 	stale, err := r.stagSrc.StaleActiveIntentions(stagnationBriefGap)
 	if err != nil {
-		log.Printf("RHYTHM: stagnation read failed: %v", err)
+		logsink.Warn("rhythm.error", "stagnation read failed: %v", err)
 		return
 	}
 	if len(stale) == 0 {
@@ -368,7 +434,7 @@ func (r *Rhythm) checkStagnation() {
 	}
 	id := "exp_attention_" + outputHash(key)
 	if exists, err := r.stagSrc.EntityExists(id); err != nil {
-		log.Printf("RHYTHM: attention brief lookup failed: %v — nothing minted", err)
+		logsink.Warn("rhythm.error", "attention brief lookup failed: %v — nothing minted", err)
 		return
 	} else if exists {
 		return
@@ -386,10 +452,10 @@ func (r *Rhythm) checkStagnation() {
 		"provenance": "system",
 		"raw":        true,
 	}, ""); err != nil {
-		log.Printf("RHYTHM: attention brief refused: %v", err)
+		logsink.Warn("rhythm.refusal", "attention brief refused: %v", err)
 		return
 	}
-	log.Printf("RHYTHM: attention brief minted (%d stale intention(s), worst gap %d)", len(stale), worst)
+	logsink.Info("rhythm.end", "attention brief minted (%d stale intention(s), worst gap %d)", len(stale), worst)
 	if r.attnOutbox != nil && worst >= stagnationOperatorGap {
 		r.attnOutbox("attention_"+time.Now().UTC().Format("20060102"),
 			fmt.Sprintf("[attention] %d intention(s) unattended for %d+ events — the identity has been briefed; a conversation may help.", len(stale), stagnationOperatorGap))

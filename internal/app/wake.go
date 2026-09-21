@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm"
@@ -91,21 +91,34 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("working state: %w", err)
 	}
+	facts, err := a.buildTurnFacts(false)
+	if err != nil {
+		return "", fmt.Errorf("turn facts: %w", err)
+	}
 	conv, omitted, err := a.buildHistory()
 	if err != nil {
 		return "", fmt.Errorf("history: %w", err)
 	}
 	current := llm.Message{Role: "user", Content: fact}
-	reserve, err := a.promptReserve(current, omitted+len(conv))
+	// .
+	// .
+	// .
+	// .
+	// .
+	history := conv
+	if n := len(conv); n == 0 || conv[n-1].Role != "user" || conv[n-1].Content != fact {
+		history = append(conv, current)
+	}
+	reserve, err := a.promptReserve(current, omitted+len(history)-1)
 	if err != nil {
 		return "", fmt.Errorf("request estimate: %w", err)
 	}
-	p, err := a.composer.Compose(workState, reserve)
+	p, err := a.composer.ComposeTurn(workState, facts, reserve)
 	if err != nil {
 		return "", fmt.Errorf("compose: %w", err)
 	}
 
-	result, err := a.conv.RunSystem(ctx, a.gatedSystem(p), append(conv, current), omitted)
+	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), history, omitted, p.Turn)
 	if err != nil {
 		a.recordInterruptedTurn(result)
 		return "", err
@@ -129,7 +142,7 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 		return "", nil
 	}
 	if err := a.engine.RecordConversationTurn("resident", spoken); err != nil {
-		log.Printf("FAILED to record wake speech: %v — the transcript is missing what was said", err)
+		logsink.Warn("wake.error", "FAILED to record wake speech: %v — the transcript is missing what was said", err)
 	}
 	return spoken, nil
 }

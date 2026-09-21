@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sort"
 	"strings"
 	"sync"
@@ -143,9 +143,9 @@ func (a *App) proposeAsk(session, text string, choices []string, connector strin
 		// .
 		// .
 		// .
-		log.Printf("ASK: %s superseded %s (session %s)", ask.ID, superseded.ID, session)
+		logsink.Info("ask.decision", "%s superseded %s (session %s)", ask.ID, superseded.ID, session)
 	}
-	log.Printf("ASK: %s asks the operator (%s, session %s): %s", ask.ID, kind, session, clip(text, 120))
+	logsink.Info("ask.start", "%s asks the operator (%s, session %s): %s", ask.ID, kind, session, clip(text, 120))
 	a.broadcastAsks()
 	return nil
 }
@@ -166,7 +166,7 @@ func (a *App) withdrawAsk(session, why string) {
 		return
 	}
 	a.sayOnPage(fmt.Sprintf("The identity's question (%s) is withdrawn: %s.", clip(gone.Text, 80), why))
-	log.Printf("ASK: %s withdrawn (session %s): %s", gone.ID, session, why)
+	logsink.Info("ask.end", "%s withdrawn (session %s): %s", gone.ID, session, why)
 	a.broadcastAsks()
 }
 
@@ -220,7 +220,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (string, error) {
 		}
 		empty := ""
 		if err := a.store.UpdateWorkPlan(ask.Session, nil, nil, nil, nil, nil, &empty); err != nil {
-			log.Printf("ASK: %s answered but the session's decision could not be cleared: %v", ask.ID, err)
+			logsink.Warn("ask.error", "%s answered but the session's decision could not be cleared: %v", ask.ID, err)
 		}
 	}
 	marker := "[ask " + ask.ID + "] "
@@ -262,7 +262,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (string, error) {
 		// .
 		if a.pluginInstalled(ask.Connector) {
 			if _, gerr := a.applyConfigChange(map[string]interface{}{"plugins.grants." + ask.Connector + ".read_only": req.Scope != "modify"}); gerr != nil {
-				log.Printf("ASK: %s connect: the read_only grant for %s was not written: %v", ask.ID, ask.Connector, gerr)
+				logsink.Warn("ask.error", "%s connect: the read_only grant for %s was not written: %v", ask.ID, ask.Connector, gerr)
 			}
 		}
 		clear()

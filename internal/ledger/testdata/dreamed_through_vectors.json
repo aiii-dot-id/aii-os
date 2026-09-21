@@ -1,0 +1,21 @@
+{
+ "about": "The grammar of the dreamed_through payload member (docs/ENTITY_TYPES.md; internal/ledger/dreamed_through.go). Every implementation that WRITES a record holds the member to this grammar at admission; none applies it on replay. payload is the event payload; valid says whether a writer admits it; present says whether it carries the member.",
+ "vectors": [
+  {"name": "no member", "payload": {"id": "e", "content": "x"}, "valid": true, "present": false},
+  {"name": "null reads as absent", "payload": {"id": "e", "dreamed_through": null}, "valid": true, "present": false},
+  {"name": "a turn and a position", "payload": {"id": "e", "dreamed_through": {"turn": "turn_0b0a6c1e-51f4-4b5e-9d63-2f8d5a1c7e90", "position": 5883}}, "valid": true, "present": true},
+  {"name": "position zero is a position", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a", "position": 0}}, "valid": true, "present": true},
+  {"name": "no position", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a"}}, "valid": false},
+  {"name": "no turn", "payload": {"id": "e", "dreamed_through": {"position": 3}}, "valid": false},
+  {"name": "a third member", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a", "position": 3, "said": "the operator was tired"}}, "valid": false},
+  {"name": "a negative position", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a", "position": -1}}, "valid": false},
+  {"name": "a fractional position", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a", "position": 1.5}}, "valid": false},
+  {"name": "a position in a string", "payload": {"id": "e", "dreamed_through": {"turn": "turn_a", "position": "3"}}, "valid": false},
+  {"name": "an empty turn", "payload": {"id": "e", "dreamed_through": {"turn": "", "position": 3}}, "valid": false},
+  {"name": "a turn that carries text", "payload": {"id": "e", "dreamed_through": {"turn": "the turn where he said goodbye", "position": 3}}, "valid": false},
+  {"name": "a turn of sixty-five characters", "payload": {"id": "e", "dreamed_through": {"turn": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "position": 3}}, "valid": false},
+  {"name": "a turn of sixty-four characters", "payload": {"id": "e", "dreamed_through": {"turn": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "position": 3}}, "valid": true, "present": true},
+  {"name": "an array", "payload": {"id": "e", "dreamed_through": [{"turn": "turn_a", "position": 3}]}, "valid": false},
+  {"name": "a bare string", "payload": {"id": "e", "dreamed_through": "turn_a"}, "valid": false}
+ ]
+}

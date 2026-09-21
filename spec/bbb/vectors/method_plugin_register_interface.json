@@ -2,7 +2,7 @@
   "suite": "method",
   "method": "plugin.register_interface",
   "description": "Registration must restate the signed manifest exactly: plugin_id, interface, capabilities[] (within the manifest envelope), operations[] each matching a manifest descriptor byte-for-byte; top-level description is ignored by the daemon",
-  "source": "BBB_V2_AUDIT.md section 6.2; plugin_host.c:2900-3105; rpc.c:2384-2428; bbb.go:129-143, 278-290; bbb_test.go:142-225",
+  "source": "the AII OS BBB conformance vectors",
   "checked_by": "framing round-trip now; admission semantics land with the Go host plugin manager",
   "vectors": [
     {
@@ -11,8 +11,8 @@
       "direction": "plugin_to_daemon",
       "judgement": "valid",
       "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"plugin.register_interface\",\"params\":{\"plugin_id\":\"com.aiii.web-evidence\",\"interface\":\"evidence.web@1\",\"description\":\"Fetch bounded web evidence.\",\"capabilities\":[\"net.outbound:example.com:443\"],\"operations\":[{\"operation_id\":\"web.fetch\",\"interface\":\"evidence.web@1\",\"method\":\"web.fetch\",\"description\":\"Fetch bounded web evidence.\",\"capability_tags\":[\"web\",\"evidence\"]}]}}",
-      "note": "shape from the Go SDK's own registration test; every operation field must equal the signed manifest descriptor, capability_tags in count AND order (plugin_host.c:2933-2946)",
-      "cite": "bbb_test.go:173-187; bbb.go:129-143"
+      "note": "shape from the Go SDK's own registration test; every operation field must equal the signed manifest descriptor, capability_tags in count AND order",
+      "cite": ""
     },
     {
       "name": "request_capability_free_sends_empty_array",
@@ -20,8 +20,8 @@
       "direction": "plugin_to_daemon",
       "judgement": "valid",
       "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"plugin.register_interface\",\"params\":{\"plugin_id\":\"com.aiii.example.echo\",\"interface\":\"tool_bridge@1\",\"capabilities\":[],\"operations\":[{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"description\":\"\",\"capability_tags\":[]}]}}",
-      "note": "capabilities is wire-required; a missing or non-array field is PARAMS_INVALID (plugin_host.c:2900-2906); the Go SDK normalizes nil to [] (bbb.go:285-287)",
-      "cite": "bbb_test.go:196-225"
+      "note": "capabilities is wire-required; a missing or non-array field is PARAMS_INVALID; the Go SDK normalizes nil to []",
+      "cite": ""
     },
     {
       "name": "response_result",
@@ -29,7 +29,7 @@
       "direction": "daemon_to_plugin",
       "judgement": "valid",
       "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"success\":true,\"plugin_id\":\"com.aiii.web-evidence\",\"interface\":\"evidence.web@1\",\"operation_count\":1}}",
-      "cite": "rpc.c:2402-2427"
+      "cite": ""
     },
     {
       "name": "invalid_operations_missing",
@@ -38,8 +38,8 @@
       "judgement": "invalid",
       "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"plugin.register_interface\",\"params\":{\"plugin_id\":\"com.aiii.example.echo\",\"interface\":\"tool_bridge@1\",\"capabilities\":[]}}",
       "expect": { "code": -32602 },
-      "note": "operations must be a non-empty array (EMPTY_OPERATION_SET / PARAMS_INVALID reasons travel as the error message, rpc.c:2396-2399; exact reason strings live in plugin_host_internal.h and are not restated here unverified)",
-      "cite": "plugin_host.c:2998-3010"
+      "note": "operations must be a non-empty array (EMPTY_OPERATION_SET / PARAMS_INVALID reasons travel as the error message; exact reason strings live in and are not restated here unverified)",
+      "cite": ""
     },
     {
       "name": "invalid_plugin_id_missing",
@@ -48,7 +48,7 @@
       "judgement": "invalid",
       "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"plugin.register_interface\",\"params\":{\"interface\":\"tool_bridge@1\",\"capabilities\":[],\"operations\":[{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"description\":\"\",\"capability_tags\":[]}]}}",
       "expect": { "code": -32602 },
-      "cite": "plugin_host.c:3077-3082 (plugin_id and interface must be strings)"
+      "cite": "(plugin_id and interface must be strings)"
     }
   ]
 }

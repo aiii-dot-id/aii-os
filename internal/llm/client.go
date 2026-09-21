@@ -14,8 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"slices"
 	"strconv"
@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // .
@@ -145,9 +146,35 @@ func authOwnsHeader(name string) bool {
 // .
 // .
 func (c *Client) sendAuthed(ctx context.Context, build func(context.Context) (*http.Request, error)) (*http.Response, error) {
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	promptOn := logsink.TapEnabled("llm.prompt")
+	returnOn := logsink.TapEnabled("llm.return")
+	if promptOn {
+		inner := build
+		build = func(ctx context.Context) (*http.Request, error) {
+			req, berr := inner(ctx)
+			if berr == nil {
+				tapRequest(ctx, c.model, req, true)
+			}
+			return req, berr
+		}
+	}
 	var used atomic.Uint64
 	ctx = context.WithValue(ctx, genKey{}, &used)
 	resp, err := c.doWithRetry(ctx, build)
+	if resp != nil {
+		resp.Body = tapResponse(ctx, c.model, resp.Body, returnOn)
+	}
 	if err != nil || c.creds == nil {
 		return resp, err
 	}
@@ -183,8 +210,12 @@ func (c *Client) sendAuthed(ctx context.Context, build func(context.Context) (*h
 	if rerr := c.creds.Stale(ctx, gen); rerr != nil {
 		return nil, fmt.Errorf("credential rejected (%d) and its source could not advance: %w", rejectedStatus, rerr)
 	}
-	log.Printf("LLM: credential rejected (%d) — source advanced, replaying once", rejectedStatus)
-	return c.doWithRetry(ctx, build)
+	logsink.Warn("llm.refusal", "credential rejected (%d) — source advanced, replaying once", rejectedStatus)
+	resp, err = c.doWithRetry(ctx, build)
+	if resp != nil {
+		resp.Body = tapResponse(ctx, c.model, resp.Body, returnOn)
+	}
+	return resp, err
 }
 
 // .
@@ -293,7 +324,7 @@ func (c *Client) doWithRetry(ctx context.Context, build func(context.Context) (*
 			if wait > 0 {
 				pause = wait
 			}
-			log.Printf("LLM retry %d/%d in %s after: %v", attempt-1, c.retries, pause, lastErr)
+			logsink.Warn("llm.error", "retry %d/%d in %s after: %v", attempt-1, c.retries, pause, lastErr)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -444,13 +475,13 @@ func (c *Client) mergeExtra(body []byte) ([]byte, error) {
 	for k, v := range c.extra {
 		if (k == "max_tokens" && c.maxCompletionTokens) || (k == "max_completion_tokens" && !c.maxCompletionTokens) {
 			if _, warned := c.extraWarned.LoadOrStore(k, true); !warned {
-				log.Printf("LLM: extra key %q cannot override the configured output allocation", k)
+				logsink.Warn("llm.refusal", "extra key %q cannot override the configured output allocation", k)
 			}
 			continue
 		}
 		if _, taken := m[k]; taken {
 			if _, warned := c.extraWarned.LoadOrStore(k, true); !warned {
-				log.Printf("LLM: extra key %q collides with a typed request field — the typed value wins", k)
+				logsink.Warn("llm.refusal", "extra key %q collides with a typed request field — the typed value wins", k)
 			}
 			continue
 		}
@@ -493,6 +524,11 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	StableLen  int        `json:"-"`
+	// .
+	// .
+	// .
+	// .
+	CacheBefore bool `json:"-"`
 	// .
 	// .
 	// .
@@ -552,11 +588,15 @@ type Choice struct {
 
 // .
 type Response struct {
-	Choices     []Choice        `json:"choices"`
-	Usage       Usage           `json:"usage"`
-	ModelID     string          `json:"-"`
-	ID          string          `json:"id,omitempty"`
-	RequestID   string          `json:"-"`
+	Choices   []Choice `json:"choices"`
+	Usage     Usage    `json:"usage"`
+	ModelID   string   `json:"-"`
+	ID        string   `json:"id,omitempty"`
+	RequestID string   `json:"-"`
+	// .
+	// .
+	// .
+	CallID      string          `json:"-"`
 	Diagnostics json.RawMessage `json:"-"`
 	Duration    time.Duration   `json:"-"`
 }
@@ -655,7 +695,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 	started := time.Now()
 	attempts := &attemptRecord{}
 	ctx = context.WithValue(ctx, attemptKey{}, attempts)
+	admittedAt := 0
 	defer func() {
+		c.warnIfUnderCounted(admittedAt, resp)
 		if resp != nil {
 			resp.Duration = time.Since(started)
 			resp.Usage.UnknownAttempts += attempts.unknown
@@ -663,7 +705,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 				err = &UsageError{}
 			}
 			if (c.cache != nil && c.cache.Diagnostics) || resp.Usage.Problem == UsageInvalid {
-				log.Printf("LLM cache receipt: model=%q request_id=%q response_id=%q elapsed_ms=%d input=%d read=%d write=%d usage_reported=%t problem=%q diagnostics=%q", c.model, resp.RequestID, resp.ID, resp.Duration.Milliseconds(), resp.Usage.PromptTokens, resp.Usage.CachedPromptTokens, resp.Usage.CacheWriteTokens, resp.Usage.Reported, resp.Usage.Problem, cacheDiagnosticState(resp.Diagnostics, opts.PreviousResponseID))
+				logsink.Debug("llm.return", "cache receipt: model=%q request_id=%q response_id=%q elapsed_ms=%d input=%d read=%d write=%d usage_reported=%t problem=%q diagnostics=%q", c.model, resp.RequestID, resp.ID, resp.Duration.Milliseconds(), resp.Usage.PromptTokens, resp.Usage.CachedPromptTokens, resp.Usage.CacheWriteTokens, resp.Usage.Reported, resp.Usage.Problem, cacheDiagnosticState(resp.Diagnostics, opts.PreviousResponseID))
 			}
 		}
 		if err != nil {
@@ -696,10 +738,10 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 			// .
 			// .
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-				log.Printf("LLM call abandoned (caller ended it): %v", ctxErr)
+				logsink.Info("llm.refusal", "call abandoned (caller ended it): %v", ctxErr)
 				return
 			}
-			log.Printf("LLM call FAILED (%s %s): %s", providerLabel(c.provider), c.model, clip(err.Error(), 500))
+			logsink.Error("llm.error", "call FAILED (%s %s): %s", providerLabel(c.provider), c.model, clip(err.Error(), 500))
 		}
 	}()
 	tools, thinkingBudget := opts.Tools, opts.ThinkingBudget
@@ -716,20 +758,28 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 	if opts.RequireTool && len(tools) == 0 {
 		return nil, fmt.Errorf("RequireTool needs at least one tool to choose from")
 	}
-	admissionMessages := messages
-	if c.provider == "anthropic" && c.creds != nil && c.oauthBillingText != "" {
-		admissionMessages = make([]Message, 1, len(messages)+1)
-		admissionMessages[0] = Message{Role: "system", Content: c.oauthBillingText}
-		admissionMessages = append(admissionMessages, messages...)
-	}
-	if err := ValidateInput(admissionMessages, tools, c.maxInputTokens); err != nil {
+	admittedAt, err = c.admit(messages, tools)
+	if err != nil {
 		return nil, err
 	}
+	// .
+	// .
+	// .
+	callID := newCallID()
+	ctx = withCallID(ctx, callID)
 	if c.provider == "chatgpt" {
-		return c.chatGPTResponses(ctx, messages, opts)
+		r, rerr := c.chatGPTResponses(ctx, messages, opts)
+		if r != nil {
+			r.CallID = callID
+		}
+		return r, rerr
 	}
 	if c.provider == "anthropic" {
-		return c.chatAnthropic(ctx, messages, opts)
+		r, rerr := c.chatAnthropic(ctx, messages, opts)
+		if r != nil {
+			r.CallID = callID
+		}
+		return r, rerr
 	}
 	toolChoice := ""
 	if opts.DisableTools {
@@ -779,6 +829,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 	for c.streams() {
 		resp, fallback, serr := c.chatOpenAIStream(ctx, body)
 		if !fallback {
+			if resp != nil {
+				resp.CallID = callID
+			}
 			return resp, serr
 		}
 	}
@@ -820,6 +873,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 		return nil, err
 	}
 	response.RequestID = httpResp.Header.Get("x-request-id")
+	response.CallID = callID
 	return response, nil
 }
 
@@ -857,6 +911,9 @@ func (c *Client) ChatStructured(ctx context.Context, systemPrompt, userMessage s
 	if len(resp.Choices) == 0 {
 		return "", "", false, fmt.Errorf("no choices in response")
 	}
+	if err := Finished(resp.Choices[0]); err != nil {
+		return "", "", false, err
+	}
 	msg := resp.Choices[0].Message
 	for _, tc := range msg.ToolCalls {
 		if tc.Function.Name == tool.Function.Name && strings.TrimSpace(tc.Function.Arguments) != "" {
@@ -866,11 +923,109 @@ func (c *Client) ChatStructured(ctx context.Context, systemPrompt, userMessage s
 	return msg.Content, resp.ModelID, false, nil
 }
 
-func (c *Client) ChatSimple(ctx context.Context, systemPrompt, userMessage string) (string, string, error) {
-	messages := []Message{
+// .
+// .
+// .
+// .
+// .
+type IncompleteResponseError struct {
+	Reason string
+	Got    int
+}
+
+func (e *IncompleteResponseError) Error() string {
+	why := "the provider ended it with " + strconv.Quote(e.Reason)
+	switch e.Reason {
+	case "length":
+		why = "it was cut off at the output limit"
+	case "refusal":
+		why = "the provider declined the request"
+	}
+	return fmt.Sprintf("the model did not finish its reply — %s (%d characters had arrived): an unfinished reply is not a product", why, e.Got)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func Finished(c Choice) error {
+	switch c.FinishReason {
+	case "", "stop":
+		return nil
+	case "tool_calls":
+		if len(c.Message.ToolCalls) > 0 {
+			return nil
+		}
+	}
+	return &IncompleteResponseError{Reason: c.FinishReason, Got: utf8.RuneCountInString(c.Message.Content)}
+}
+
+// .
+// .
+// .
+// .
+// .
+func (c *Client) admit(messages []Message, tools []ToolDefinition) (required int, err error) {
+	admissionMessages := messages
+	if c.provider == "anthropic" && c.creds != nil && c.oauthBillingText != "" {
+		admissionMessages = make([]Message, 1, len(messages)+1)
+		admissionMessages[0] = Message{Role: "system", Content: c.oauthBillingText}
+		admissionMessages = append(admissionMessages, messages...)
+	}
+	return AdmitInput(admissionMessages, tools, c.maxInputTokens)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (c *Client) warnIfUnderCounted(admittedAt int, resp *Response) {
+	if admittedAt <= 0 || resp == nil || !resp.Usage.Reported || resp.Usage.PromptTokens <= admittedAt {
+		return
+	}
+	logsink.Warn("llm.budget", "the provider counted %d input tokens for a request admitted at an estimate of %d (%s %s): the tokenizer-free estimate UNDER-counts for this model, so the input ceiling of %d is not protecting it — lower the model's input ceiling in config by at least that ratio",
+		resp.Usage.PromptTokens, admittedAt, providerLabel(c.provider), c.model, c.maxInputTokens)
+}
+
+// .
+func simpleMessages(ctx context.Context, systemPrompt, userMessage string) []Message {
+	return []Message{
 		{Role: "system", Content: systemPrompt, StableLen: StablePrefix(ctx)},
 		{Role: "user", Content: userMessage},
 	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func (c *Client) CheckSimple(ctx context.Context, systemPrompt, userMessage string) error {
+	_, err := c.admit(simpleMessages(ctx, systemPrompt, userMessage), nil)
+	return err
+}
+
+func (c *Client) ChatSimple(ctx context.Context, systemPrompt, userMessage string) (string, string, error) {
+	messages := simpleMessages(ctx, systemPrompt, userMessage)
 
 	resp, err := c.Chat(ctx, messages, ChatOptions{})
 	if err != nil {
@@ -896,6 +1051,9 @@ func (c *Client) ChatSimple(ctx context.Context, systemPrompt, userMessage strin
 
 	if len(resp.Choices) == 0 {
 		return "", "", fmt.Errorf("no choices in response")
+	}
+	if err := Finished(resp.Choices[0]); err != nil {
+		return "", "", err
 	}
 
 	return resp.Choices[0].Message.Content, resp.ModelID, nil
@@ -1033,7 +1191,7 @@ func (c *Client) logUnattendedCost(resp *Response) {
 	if resp.Usage.CachedPromptTokens > 0 {
 		cached = fmt.Sprintf(", %d cached", resp.Usage.CachedPromptTokens)
 	}
-	log.Printf("Unattended call cost: %d tokens (in %d, out %d%s) on %s",
+	logsink.Info("llm.budget", "unattended call cost: %d tokens (in %d, out %d%s) on %s",
 		resp.Usage.TotalTokens, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, cached, c.model)
 }
 

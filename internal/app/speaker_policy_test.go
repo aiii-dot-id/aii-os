@@ -29,13 +29,13 @@ func TestTheSpeakerPolicyDecides(t *testing.T) {
 		mode, unid, decision, id string
 		deliver                  bool
 	}{
-		{"all", "", "known", "james", true}, {"all", "", "unknown", "", true}, {"all", "withhold", "uncertain", "", true},
-		{"only", "", "known", "james", true}, {"only", "", "known", "ada", false}, {"only", "", "unknown", "", false},
-		{"only", "", "uncertain", "james", false}, {"only", "deliver", "unknown", "", false}, {"only", "", "known", "", false},
-		{"ignore", "", "known", "james", false}, {"ignore", "", "known", "ada", true}, {"ignore", "", "unknown", "", true},
-		{"ignore", "withhold", "unknown", "", false}, {"ignore", "withhold", "uncertain", "james", false}, {"ignore", "withhold", "known", "ada", true},
+		{"all", "", "known", "sam", true}, {"all", "", "unknown", "", true}, {"all", "withhold", "uncertain", "", true},
+		{"only", "", "known", "sam", true}, {"only", "", "known", "ada", false}, {"only", "", "unknown", "", false},
+		{"only", "", "uncertain", "sam", false}, {"only", "deliver", "unknown", "", false}, {"only", "", "known", "", false},
+		{"ignore", "", "known", "sam", false}, {"ignore", "", "known", "ada", true}, {"ignore", "", "unknown", "", true},
+		{"ignore", "withhold", "unknown", "", false}, {"ignore", "withhold", "uncertain", "sam", false}, {"ignore", "withhold", "known", "ada", true},
 	} {
-		p := policyFrom(SpeakerPolicyConfig{Mode: c.mode, UIDs: []string{"james"}, Unidentified: c.unid})
+		p := policyFrom(SpeakerPolicyConfig{Mode: c.mode, UIDs: []string{"sam"}, Unidentified: c.unid})
 		if c.mode == "all" {
 			p = policyFrom(SpeakerPolicyConfig{Mode: c.mode, Unidentified: c.unid})
 		}
@@ -60,11 +60,11 @@ func TestASpeakerPolicyIsAcceptedWholeOrNotAtAll(t *testing.T) {
 	persist := func(*Config) (bool, error) { return true, nil }
 	for _, bad := range []interface{}{
 		map[string]any{"mode": "some"},
-		map[string]any{"mode": "only", "uids": []any{"james", "james"}},
-		map[string]any{"mode": "only", "uids": []any{"Sam Ewing"}},
+		map[string]any{"mode": "only", "uids": []any{"sam", "sam"}},
+		map[string]any{"mode": "only", "uids": []any{"Sam Rivera"}},
 		map[string]any{"mode": "ignore", "unidentified": "maybe"},
-		map[string]any{"mode": "all", "uids": []any{"james"}},
-		map[string]any{"mode": "only", "uids": []any{"james"}, "labels": []any{"x"}},
+		map[string]any{"mode": "all", "uids": []any{"sam"}},
+		map[string]any{"mode": "only", "uids": []any{"sam"}, "labels": []any{"x"}},
 		"only",
 	} {
 		if _, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": bad}, persist); err == nil {
@@ -74,7 +74,7 @@ func TestASpeakerPolicyIsAcceptedWholeOrNotAtAll(t *testing.T) {
 			t.Fatalf("a refusal changed the policy: %+v", got)
 		}
 	}
-	if _, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": map[string]any{"mode": "only", "uids": []any{"james-one", "ada.2"}, "unidentified": "withhold"}}, persist); err != nil {
+	if _, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": map[string]any{"mode": "only", "uids": []any{"sam-one", "ada.2"}, "unidentified": "withhold"}}, persist); err != nil {
 		t.Fatal(err)
 	}
 	got := a.configSnapshot().Speech.Speakers
@@ -146,7 +146,7 @@ func holdWait(t *testing.T, what string, cond func() bool) {
 // .
 func TestARestrictedPolicyHoldsAFinalUntilItsObservation(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james-one"}, Revision: 3}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam-one"}, Revision: 3}
 	h, _ := newTrackedSession(a, "vs-only", true)
 	page, fanned := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fanned.enqueue
@@ -160,7 +160,7 @@ func TestARestrictedPolicyHoldsAFinalUntilItsObservation(t *testing.T) {
 	if _, remembered := a.finalText(h.id, 7); remembered {
 		t.Fatal("a held final was remembered before its decision")
 	}
-	a.voiceEngineEvent(nil, observationRaw(h.id, 12, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "james-one", "decision": "known", "score": 0.93}), page.enqueue)
+	a.voiceEngineEvent(nil, observationRaw(h.id, 12, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "sam-one", "decision": "known", "score": 0.93}), page.enqueue)
 	holdWait(t, "the delivered final to wake the model", func() bool { return woke.Load() == 1 })
 	if got := page.types(); len(got) < 2 || got[0] != "transcript_final" || got[1] != "speaker_observation" {
 		t.Fatalf("the words must precede their attribution on the page: %v", got)
@@ -209,8 +209,8 @@ func TestAnIgnorePolicyWithholdsTheListedSpeaker(t *testing.T) {
 			stubWake(t, func() (string, error) { woke.Add(1); return "an answer", nil })
 			a.voiceEngineEvent(nil, finalRaw(h.id, 1, "from the visitor"), page.enqueue)
 			a.voiceEngineEvent(nil, observationRaw(h.id, 2, map[string]any{"refers_to": 1, "speaker": "Visitor", "speaker_id": "visitor", "decision": "known"}), page.enqueue)
-			a.voiceEngineEvent(nil, finalRaw(h.id, 3, "from james"), page.enqueue)
-			a.voiceEngineEvent(nil, observationRaw(h.id, 4, map[string]any{"refers_to": 3, "speaker": "Sam", "speaker_id": "james-one", "decision": "known"}), page.enqueue)
+			a.voiceEngineEvent(nil, finalRaw(h.id, 3, "from sam"), page.enqueue)
+			a.voiceEngineEvent(nil, observationRaw(h.id, 4, map[string]any{"refers_to": 3, "speaker": "Sam", "speaker_id": "sam-one", "decision": "known"}), page.enqueue)
 			a.voiceEngineEvent(nil, finalRaw(h.id, 5, "from nobody known"), page.enqueue)
 			a.voiceEngineEvent(nil, observationRaw(h.id, 6, map[string]any{"refers_to": 5, "decision": "uncertain", "reason": "enrollment_unavailable"}), page.enqueue)
 			wantWoke := int32(1)
@@ -239,7 +239,7 @@ func TestTheDecisionBoundSettlesAFinalNoObservationNames(t *testing.T) {
 	speakerDecisionBound = 40 * time.Millisecond
 	t.Cleanup(func() { speakerDecisionBound = prev })
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james-one"}, Revision: 2}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam-one"}, Revision: 2}
 	h, _ := newTrackedSession(a, "vs-bound", true)
 	page, fanned := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fanned.enqueue
@@ -250,7 +250,7 @@ func TestTheDecisionBoundSettlesAFinalNoObservationNames(t *testing.T) {
 		t.Fatalf("the reason does not name the bound: %q", w.Reason)
 	}
 	// .
-	a.voiceEngineEvent(nil, observationRaw(h.id, 10, map[string]any{"refers_to": 9, "speaker": "Sam", "speaker_id": "james-one", "decision": "known"}), page.enqueue)
+	a.voiceEngineEvent(nil, observationRaw(h.id, 10, map[string]any{"refers_to": 9, "speaker": "Sam", "speaker_id": "sam-one", "decision": "known"}), page.enqueue)
 	if page.find("transcript_final", 9) != nil {
 		t.Fatal("a late observation replayed withheld words")
 	}
@@ -268,7 +268,7 @@ func TestPartialsAreWithheldUnderARestriction(t *testing.T) {
 	if page.find("transcript_partial", 1) == nil {
 		t.Fatal("under all, a partial reaches the page")
 	}
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james-one"}}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam-one"}}
 	a.voiceEngineEvent(nil, partialRaw(h.id, 2, "hello"), page.enqueue)
 	if page.find("transcript_partial", 2) != nil || a.speakerWithheldPartials.Load() != 1 {
 		t.Fatalf("under only, a partial must be withheld and counted: %v %d", page.types(), a.speakerWithheldPartials.Load())
@@ -279,7 +279,7 @@ func TestPartialsAreWithheldUnderARestriction(t *testing.T) {
 // .
 func TestASessionsEndWithholdsWhatIsHeld(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james-one"}, Revision: 5}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam-one"}, Revision: 5}
 	h, _ := newTrackedSession(a, "vs-ending", true)
 	page, fanned := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fanned.enqueue
@@ -307,7 +307,7 @@ func TestASessionsEndWithholdsWhatIsHeld(t *testing.T) {
 // .
 func TestAPolicyChangeAppliesToWhatIsStillHeld(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james-one"}, Revision: 1}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam-one"}, Revision: 1}
 	h, _ := newTrackedSession(a, "vs-change", true)
 	page, fanned := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fanned.enqueue

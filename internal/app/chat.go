@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
@@ -130,60 +130,17 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	if err != nil {
 		return "", err
 	}
-	lastResident, err := a.store.LastTurnAtMs("resident")
+	// .
+	// .
+	facts, err := a.buildTurnFacts(true)
 	if err != nil {
-		return "", fmt.Errorf("load last resident turn: %w", err)
-	}
-	if firings, err := a.store.TimerFiringsSince(lastResident); err != nil {
-		return "", fmt.Errorf("load timer firings: %w", err)
-	} else if len(firings) > 0 {
-		var lines []string
-		for _, f := range firings {
-			lines = append(lines, "- "+f.Content)
-		}
-		workState = strings.TrimSpace(workState + "\n\n## Your timers fired since your last turn\n" +
-			strings.Join(lines, "\n") +
-			"\n(These are facts delivered by the time system.)")
-	}
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	// .
-	if arrivals, err := a.store.InboundSince(lastResident); err != nil {
-		return "", fmt.Errorf("load arrivals: %w", err)
-	} else if len(arrivals) > 0 {
-		var lines []string
-		for _, m := range arrivals {
-			// .
-			// .
-			// .
-			lines = append(lines, "- "+a.frameStoredArrival(m))
-		}
-		workState = strings.TrimSpace(workState + "\n\n## Messages that arrived since your last turn\n" +
-			strings.Join(lines, "\n") +
-			"\n(Answer any that deserve it with send, or leave them.)")
-	}
-	// .
-	// .
-	// .
-	if outcomes, err := a.store.OutboxOutcomesSince(lastResident); err != nil {
-		return "", fmt.Errorf("load delivery outcomes: %w", err)
-	} else if len(outcomes) > 0 {
-		workState = strings.TrimSpace(workState + "\n\n## What became of the messages you sent\n" +
-			deliveryOutcomeLines(outcomes) +
-			"\n(Delivered: an adapter took it. Response lost: it may have arrived — do not resend blindly. Parked: no more attempts; your operator can see it.)")
+		return "", err
 	}
 	reserve, err := a.promptReserve(current, omitted+len(conv)-1)
 	if err != nil {
 		return "", err
 	}
-	p, err := a.composer.Compose(workState, reserve)
+	p, err := a.composer.ComposeTurn(workState, facts, reserve)
 	if err != nil {
 		return "", fmt.Errorf("prompt compose: %w", err)
 	}
@@ -193,7 +150,7 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	// .
 	// .
 	// .
-	result, err := a.conv.RunSystem(ctx, a.gatedSystem(p), conv, omitted)
+	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), conv, omitted, p.Turn)
 	if err != nil {
 		// .
 		// .
@@ -274,11 +231,11 @@ func (a *App) recordInterruptedTurn(result conversation.Result) {
 		return
 	}
 	if err := a.engine.RecordConversationTurn("resident", result.Spoken); err != nil {
-		log.Printf("Warning: interrupted turn not recorded: %v", err)
+		logsink.Warn("turn.error", "interrupted turn not recorded: %v", err)
 		return
 	}
 	if err := a.engine.RecordConversationTurn("system",
 		"[the reply above is incomplete — "+result.Interrupted+"]"); err != nil {
-		log.Printf("Warning: interruption marker not recorded: %v", err)
+		logsink.Warn("turn.error", "interruption marker not recorded: %v", err)
 	}
 }

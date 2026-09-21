@@ -24,7 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sort"
 	"strings"
 	"sync"
@@ -99,7 +99,7 @@ func (a *App) standingConfirmation(plugin, operation string) (pluginhost.Operato
 	if !ok || !hasOperation(g.AutoConfirm, operation) {
 		return pluginhost.OperatorAct{}, false
 	}
-	log.Printf("ACT: %s runs %s under the operator's standing confirmation (auto)", plugin, operation)
+	logsink.Info("act.start", "%s runs %s under the operator's standing confirmation (auto)", plugin, operation)
 	return pluginhost.OperatorAct{ID: "auto", ConfirmedAt: time.Now()}, true
 }
 
@@ -245,7 +245,7 @@ func (a *App) proposeAct(prop pluginhost.ActProposal) (string, error) {
 		Proposed: now, Expires: now.Add(actTTL)}
 	r.acts[act.ID] = act
 	r.mu.Unlock()
-	log.Printf("ACT: %s proposes %s (%s) — awaiting the operator on the Plugins page (%d bytes of arguments, sha256 %s)", prop.Plugin, prop.Operation, act.ID, len(raw), digest[:12])
+	logsink.Info("act.decision", "%s proposes %s (%s) — awaiting the operator on the Plugins page (%d bytes of arguments, sha256 %s)", prop.Plugin, prop.Operation, act.ID, len(raw), digest[:12])
 	if a.dashboard != nil {
 		a.dashboard.BroadcastConfig()
 		a.dashboard.BroadcastAsks()
@@ -313,7 +313,7 @@ func (a *App) decideAct(ctx context.Context, pluginID, actID string, confirm boo
 	}
 	defer a.broadcastActs()
 	if !confirm {
-		log.Printf("ACT: the operator DENIED %s of %s (%s)", act.Operation, act.Plugin, act.ID)
+		logsink.Info("act.refusal", "the operator DENIED %s of %s (%s)", act.Operation, act.Plugin, act.ID)
 		a.recordActOutcome(act, "denied", "")
 		return nil
 	}
@@ -338,14 +338,14 @@ func (a *App) alwaysAct(ctx context.Context, pluginID, actID string) error {
 	}
 	_, werr := a.applyConfigChange(map[string]interface{}{"plugins.grants." + pluginID + ".auto_confirm": standing})
 	if werr != nil {
-		log.Printf("ACT: the operator's ALWAYS for %s of %s was not written: %v", act.Operation, act.Plugin, werr)
+		logsink.Warn("act.error", "the operator's ALWAYS for %s of %s was not written: %v", act.Operation, act.Plugin, werr)
 		rerr := a.runAct(ctx, act, "confirmed — the standing confirmation was NOT written ("+werr.Error()+"), so the next call asks again")
 		if rerr != nil {
 			return fmt.Errorf("%v; and the standing confirmation was not written: %v", rerr, werr)
 		}
 		return fmt.Errorf("the act ran, but the standing confirmation was not written: %v", werr)
 	}
-	log.Printf("ACT: the operator said ALWAYS to %s of %s — it runs without asking until revoked on the Plugins page", act.Operation, act.Plugin)
+	logsink.Info("act.decision", "the operator said ALWAYS to %s of %s — it runs without asking until revoked on the Plugins page", act.Operation, act.Plugin)
 	return a.runAct(ctx, act, "confirmed, and always from now on (until revoked on the Plugins page):")
 }
 
@@ -384,15 +384,15 @@ func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 	a.emitPluginEvent(pluginhost.TopicToolCalled, map[string]interface{}{"tool": act.Tool, "failed": failed, "duration_ms": time.Since(started).Milliseconds(), "actor": "operator", "session": "", "act": act.ID})
 	switch {
 	case err != nil:
-		log.Printf("ACT: the operator CONFIRMED %s of %s (%s) — the dispatch failed: %v", act.Operation, act.Plugin, act.ID, err)
+		logsink.Warn("act.error", "the operator CONFIRMED %s of %s (%s) — the dispatch failed: %v", act.Operation, act.Plugin, act.ID, err)
 		a.recordActOutcome(act, word+", and the operation failed", err.Error())
 		return fmt.Errorf("act %s ran and failed: %v", act.ID, err)
 	case res.Error != "":
-		log.Printf("ACT: the operator CONFIRMED %s of %s (%s) — the operation refused: %s", act.Operation, act.Plugin, act.ID, res.Error)
+		logsink.Warn("act.refusal", "the operator CONFIRMED %s of %s (%s) — the operation refused: %s", act.Operation, act.Plugin, act.ID, res.Error)
 		a.recordActOutcome(act, word+", and the operation refused", res.Error)
 		return fmt.Errorf("act %s ran and was refused: %s", act.ID, res.Error)
 	default:
-		log.Printf("ACT: the operator CONFIRMED %s of %s (%s) — ran once (%d bytes)", act.Operation, act.Plugin, act.ID, len(res.Text()))
+		logsink.Info("act.end", "the operator CONFIRMED %s of %s (%s) — ran once (%d bytes)", act.Operation, act.Plugin, act.ID, len(res.Text()))
 		a.recordActOutcome(act, word, res.Text())
 		return nil
 	}
@@ -415,6 +415,6 @@ func (a *App) recordActOutcome(act *pendingAct, outcome, detail string) {
 		text += " — " + detail
 	}
 	if err := a.engine.RecordConversationTurn(roleOperator, text); err != nil {
-		log.Printf("ACT: outcome not recorded: %v", err)
+		logsink.Warn("act.error", "outcome not recorded: %v", err)
 	}
 }

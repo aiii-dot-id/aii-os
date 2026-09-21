@@ -57,6 +57,12 @@ func (e *Engine) workAbsorbed(ctx context.Context, action string, args map[strin
 		}
 	case action == "voice.mode":
 		out, err = e.verbVoiceMode(ctx, args)
+	case action == "backup.take":
+		out, err = e.verbContinuity(ctx, withAction(args, continuityTake))
+	case action == "backup.verify":
+		out, err = e.verbContinuity(ctx, withAction(args, continuityVerify))
+	case strings.HasPrefix(action, "backup."):
+		err = fmt.Errorf("unknown work action %q — a snapshot of you is taken with backup.take and proved with backup.verify; recall source=continuity reads what you have. A restore, and the escrow of your keys, are your operator's to do", action)
 	case action == "curiosity":
 		out, err = e.verbCuriosity(ctx, withAction(args, "note"))
 	case action == "curiosity.clear":
@@ -83,6 +89,8 @@ func (e *Engine) recallStanding(ctx context.Context, source, query string) (stri
 		return e.verbSkill(ctx, map[string]interface{}{"action": "list", "query": query})
 	case "curiosity":
 		return e.verbCuriosity(ctx, map[string]interface{}{"action": "show"})
+	case "continuity":
+		return e.verbContinuity(ctx, map[string]interface{}{"action": continuityRead, "query": query})
 	}
 	return "", fmt.Errorf("recall source %q is not a standing source", source)
 }

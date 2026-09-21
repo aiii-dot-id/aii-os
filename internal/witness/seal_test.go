@@ -3,6 +3,7 @@ package witness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
@@ -103,5 +104,43 @@ func TestASelfVouchedWitnessMintsHeadsButSealsNothing(t *testing.T) {
 	hv := NewHeadVerifier(nil)
 	if n, err := ledger.VerifyChain(lg.Path(), kp.PublicKeyBytes(), hv); err != nil || n != 4 || hv.Unverified() != 1 {
 		t.Fatalf("tail head under an unknown key: n=%d unverified=%d err=%v", n, hv.Unverified(), err)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestARefusedSealedHeadIsNotCountedAsATailHead(t *testing.T) {
+	p := synthPlatform(t)
+	fw := newFakeWitness(t)
+	fw.manifest = buildManifest(t, p, fw.witnessEnv, false)
+	lg, kp := testLedger(t, 5)
+	defer lg.Close()
+
+	a := NewAnchorer(New(fw.server.URL, ""), lg, AsIdentityKey(kp), &memEnvelopeStore{}, &memReceiptStore{}, testMinter{lg, kp}, 5, p.writeEnv(t))
+	a.SetSealer(lg)
+	if err := a.CheckAndAnchor(); err != nil {
+		t.Fatalf("anchor: %v", err)
+	}
+	if lg.SealedSeq() != 6 || lg.LastSeq() != 6 {
+		t.Fatalf("this case needs everything sealed and an empty tail: sealed=%d last=%d", lg.SealedSeq(), lg.LastSeq())
+	}
+
+	hv := NewHeadVerifier(nil)
+	if _, err := ledger.VerifyChain(lg.Path(), kp.PublicKeyBytes(), hv); err == nil {
+		t.Fatal("a sealed head under an unheld witness key verified")
+	}
+	if hv.Unverified() != 0 {
+		t.Errorf("the refused sealed head was counted among the heads accepted without a key: unverified=%d", hv.Unverified())
+	}
+	if got := hv.Summary(); !strings.Contains(got, "0 tail heads unverified") {
+		t.Errorf("the summary names a tail head where the tail is empty: %s", got)
 	}
 }

@@ -20,6 +20,9 @@ type IdentityConfig struct {
 	LedgerPath string `json:"ledger_path"`
 	DBPath     string `json:"db_path"`
 	KeyPath    string `json:"key_path"`
+	// .
+	// .
+	DBFormat string `json:"db_format,omitempty"`
 }
 
 // .
@@ -395,7 +398,12 @@ type PromptConfig struct {
 	// .
 	// .
 	PulseIntervalSeconds int `json:"pulse_interval_seconds,omitempty"`
-	RecentTurns          int `json:"recent_turns"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	RecentTurns int `json:"recent_turns"`
 	// .
 	// .
 	// .
@@ -413,6 +421,57 @@ type PromptConfig struct {
 	// .
 	// .
 	Ring3MaxChars int `json:"ring3_max_chars,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	SurfacingMaxChars int `json:"surfacing_max_chars,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	DreamConversationMaxChars int `json:"dream_conversation_max_chars,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	TensionsMaxChars int `json:"tensions_max_chars,omitempty"`
 }
 
 // .
@@ -476,6 +535,15 @@ type AgencyConfig struct {
 	// .
 	SpawnQueue    *bool `json:"spawn_queue,omitempty"`
 	RhythmSeconds int   `json:"rhythm_seconds"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	OutcomeWindow int `json:"outcome_window,omitempty"`
 	// .
 	// .
 	// .
@@ -694,10 +762,50 @@ type UpdatesConfig struct {
 // .
 // .
 // .
+// .
+// .
+// .
+type TapSetting struct {
+	Until string `json:"until,omitempty"`
+}
+
 type LogsConfig struct {
 	Dir          string `json:"dir"`
 	MaxBackups   int    `json:"max_backups"`
 	CompressDays int    `json:"compress_days"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	MaxDays int `json:"max_days,omitempty"`
+
+	// .
+	// .
+	// .
+	Detail map[string]string `json:"detail,omitempty"`
+
+	// .
+	// .
+	// .
+	// .
+	Taps map[string]TapSetting `json:"taps,omitempty"`
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	Group map[string][]string `json:"group,omitempty"`
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	Level string `json:"level,omitempty"`
 
 	// .
 	// .
@@ -761,6 +869,13 @@ type MaintenanceConfig struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// .
 	BackupKeep int `json:"backup_keep,omitempty"`
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	OnDemandSpacingSeconds int `json:"on_demand_spacing_seconds,omitempty"`
 }
 
 type Config struct {
@@ -987,6 +1102,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Agency.RhythmSeconds == 0 {
 		cfg.Agency.RhythmSeconds = 600
+	}
+	if cfg.Agency.OutcomeWindow == 0 {
+		cfg.Agency.OutcomeWindow = 512
 	}
 
 	// .

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
 
@@ -141,6 +141,13 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if err := p.Validate(); err != nil {
 		return fmt.Errorf("subagent payload: %w", err)
 	}
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ctx = logsink.WithWorker(ctx, "sa-"+shortSession(p.SessionID))
 
 	// .
 	// .
@@ -172,7 +179,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	// .
 	// .
 	if leg > 1 && h.sessionDelivered(p.SessionID) {
-		log.Printf("SUBAGENT %s: leg %d not run — the session was delivered in an earlier leg", p.SessionID, leg)
+		logsink.InfoCtx(ctx, "subagent.refusal", "%s: leg %d not run — the session was delivered in an earlier leg", p.SessionID, leg)
 		return nil
 	}
 	thinking := limit
@@ -206,7 +213,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if leg > 1 {
 		ws, werr := h.a.store.WorkSessionByID(p.SessionID)
 		if werr != nil {
-			log.Printf("SUBAGENT %s: leg %d could not read its session: %v", p.SessionID, leg, werr)
+			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d could not read its session: %v", p.SessionID, leg, werr)
 		}
 		goalText += "\n\n" + continuationPreface(leg, maxLegs, ws)
 	}
@@ -294,9 +301,9 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	// .
 	// .
 	if delivered, ok := h.deliveredResult(p.SessionID); ok {
-		log.Printf("SUBAGENT %s: leg %d delivered by the child itself after %d calls — chain closed", p.SessionID, leg, result.ToolCallsUsed)
+		logsink.InfoCtx(ctx, "subagent.end", "%s: leg %d delivered by the child itself after %d calls — chain closed", p.SessionID, leg, result.ToolCallsUsed)
 		if err != nil {
-			log.Printf("SUBAGENT %s: run ended in error after its own delivery (the delivered result stands): %v", p.SessionID, err)
+			logsink.WarnCtx(ctx, "subagent.error", "%s: run ended in error after its own delivery (the delivered result stands): %v", p.SessionID, err)
 		}
 		h.closeChild(p, leg, accCalls, accTokens, accWall, modelIDOf(result, target), err, delivered, fmt.Sprintf("delivered by the child (leg %d)", leg))
 		return nil
@@ -316,20 +323,20 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			Calls: accCalls, Tokens: accTokens, WallMs: accWall, Failed: false,
 			Role: p.Role, Model: modelIDOf(result, target), Legs: leg,
 		}); merr != nil {
-			log.Printf("SUBAGENT %s: leg %d metric not recorded: %v", p.SessionID, leg, merr)
+			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d metric not recorded: %v", p.SessionID, leg, merr)
 		}
 		next := p
 		next.Leg, next.AccCalls, next.AccTokens, next.AccWallMs = leg+1, accCalls, accTokens, accWall
 		next.WallSeconds = wallSeconds
 		payload, perr := json.Marshal(next)
 		if perr != nil {
-			log.Printf("SUBAGENT %s: leg %d could not encode its continuation: %v — delivering unfinished", p.SessionID, leg, perr)
+			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d could not encode its continuation: %v — delivering unfinished", p.SessionID, leg, perr)
 		} else if _, qerr := h.a.store.EnqueueWork(&store.WorkItem{
 			Kind: identity.SubagentWorkKind, Payload: string(payload),
 			DedupKey: fmt.Sprintf("%s#%d", p.SessionID, leg+1), Source: "identity",
 			LeaseMs: int64(wallSeconds+60) * 1000,
 		}); qerr != nil {
-			log.Printf("SUBAGENT %s: leg %d could not enqueue leg %d: %v — delivering unfinished", p.SessionID, leg, leg+1, qerr)
+			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d could not enqueue leg %d: %v — delivering unfinished", p.SessionID, leg, leg+1, qerr)
 		} else {
 			why := "declared budget"
 			switch {
@@ -338,7 +345,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			case result.ExhaustedBudget:
 				why = "round ceiling"
 			}
-			log.Printf("SUBAGENT %s: leg %d of %d ended at its %s after %d calls — leg %d enqueued", p.SessionID, leg, maxLegs, why, result.ToolCallsUsed, leg+1)
+			logsink.InfoCtx(ctx, "subagent.end", "%s: leg %d of %d ended at its %s after %d calls — leg %d enqueued", p.SessionID, leg, maxLegs, why, result.ToolCallsUsed, leg+1)
 			h.a.emitToolEvent("subagent", "continue", fmt.Sprintf("%s: leg %d → %d (%s)", p.SessionID, leg, leg+1, why))
 			if h.a.dashboard != nil {
 				h.a.dashboard.BroadcastWork()
@@ -419,11 +426,11 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		// .
 		// .
 		// .
-		log.Printf("SUBAGENT %s: outcome could not be delivered (run err: %v): %v — item completed to prevent trajectory replay", p.SessionID, err, deliveryErr)
+		logsink.ErrorCtx(ctx, "subagent.error", "%s: outcome could not be delivered (run err: %v): %v — item completed to prevent trajectory replay", p.SessionID, err, deliveryErr)
 		return nil
 	}
 	if err != nil {
-		log.Printf("SUBAGENT %s: run failed after execution began (delivered as FAILED, not retried): %v", p.SessionID, err)
+		logsink.WarnCtx(ctx, "subagent.error", "%s: run failed after execution began (delivered as FAILED, not retried): %v", p.SessionID, err)
 	}
 	h.closeChild(p, leg, accCalls, accTokens, accWall, modelID, err, outcome, compactText(outcome, 120))
 	return nil
@@ -621,16 +628,16 @@ func (a *App) resolveRunTarget(role string) runTarget {
 	// .
 	if route, ok := cfg.Agency.Roles[role]; ok {
 		if regErr != nil {
-			log.Printf("subagent role %q: providers unavailable (%v) — using the active model", role, regErr)
+			logsink.Warn("subagent.decision", "role %q: providers unavailable (%v) — using the active model", role, regErr)
 			return a.activeRunTarget(true, "providers-unavailable")
 		}
 		cc, entry, err := a.resolveLLMConfig(LLMConfig{Provider: route.Provider, Model: route.Model, APIKeyEnv: cfg.LLM.APIKeyEnv}, reg)
 		if err != nil {
-			log.Printf("subagent role %q: route %s/%s did not resolve (%v) — using the active model", role, route.Provider, route.Model, err)
+			logsink.Warn("subagent.decision", "role %q: route %s/%s did not resolve (%v) — using the active model", role, route.Provider, route.Model, err)
 			return a.activeRunTarget(true, "route-down")
 		}
 		budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
-		log.Printf("subagent role %q routed: provider %q model %q (prompt budget %d)", role, entry.Name, cc.Model, budget)
+		logsink.Info("subagent.decision", "role %q routed: provider %q model %q (prompt budget %d)", role, entry.Name, cc.Model, budget)
 		return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, budgetGuess: src == budgetFallback}
 	}
 
@@ -640,14 +647,14 @@ func (a *App) resolveRunTarget(role string) runTarget {
 			cc, entry, err := a.resolveLLMConfig(LLMConfig{Provider: local.Name, APIKeyEnv: cfg.LLM.APIKeyEnv}, reg)
 			if err == nil {
 				budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
-				log.Printf("subagent role %q → local model %q on %q (checkbox; prompt budget %d)", role, cc.Model, entry.Name, budget)
+				logsink.Info("subagent.decision", "role %q → local model %q on %q (checkbox; prompt budget %d)", role, cc.Model, entry.Name, budget)
 				return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, budgetGuess: src == budgetFallback}
 			}
-			log.Printf("subagent role %q: local entry %q did not resolve (%v) — using the active model", role, local.Name, err)
+			logsink.Warn("subagent.decision", "role %q: local entry %q did not resolve (%v) — using the active model", role, local.Name, err)
 		}
 	}
 
-	log.Printf("subagent role %q: no route — using the active model", role)
+	logsink.Info("subagent.decision", "role %q: no route — using the active model", role)
 	return a.activeRunTarget(true, "no-route")
 }
 
@@ -692,7 +699,7 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 		WallMs: wallMs, Failed: runErr != nil,
 		Role: p.Role, Model: modelID, Legs: leg,
 	}); merr != nil {
-		log.Printf("SUBAGENT %s: child metric not recorded: %v", p.SessionID, merr)
+		logsink.Warn("subagent.error", "%s: child metric not recorded: %v", p.SessionID, merr)
 	}
 	h.a.emitToolEvent("subagent", "done", fmt.Sprintf("%s: %s", p.SessionID, event))
 	if h.a.dashboard != nil {
@@ -735,7 +742,7 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 	// .
 	if oerr := h.a.store.AddOutboxMessage("subagent_"+p.SessionID, "operator", "",
 		subagentNotice(p.Goal, outcome), nil); oerr != nil {
-		log.Printf("SUBAGENT %s: outbox notice failed: %v", p.SessionID, oerr)
+		logsink.Warn("subagent.error", "%s: outbox notice failed: %v", p.SessionID, oerr)
 	}
 	// .
 	// .
@@ -764,4 +771,14 @@ func (h *subagentHandler) deliveredResult(id string) (string, bool) {
 func (h *subagentHandler) sessionDelivered(id string) bool {
 	_, ok := h.deliveredResult(id)
 	return ok
+}
+
+// .
+// .
+// .
+func shortSession(id string) string {
+	if len(id) > 6 {
+		return id[:6]
+	}
+	return id
 }

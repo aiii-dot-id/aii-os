@@ -19,14 +19,14 @@ func TestVoiceReleasePolicyRejectsNullInsteadOfUnrestricting(t *testing.T) {
 
 func TestVoiceReleasePolicyNullCannotReplaceLiveRestriction(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james"}, Revision: 3}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam"}, Revision: 3}
 	persisted := false
 	_, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": nil}, func(*Config) (bool, error) {
 		persisted = true
 		return true, nil
 	})
 	got := a.configSnapshot().Speech.Speakers
-	if err == nil || persisted || got.Mode != "only" || got.Revision != 3 || !reflect.DeepEqual(got.UIDs, []string{"james"}) {
+	if err == nil || persisted || got.Mode != "only" || got.Revision != 3 || !reflect.DeepEqual(got.UIDs, []string{"sam"}) {
 		t.Fatalf("null must refuse without publishing: err=%v persisted=%v resulting policy=%+v", err, persisted, got)
 	}
 }
@@ -39,11 +39,11 @@ func TestVoiceReleasePolicyRejectsNullFieldsAndInactiveTypos(t *testing.T) {
 		{"mode": "only", "unidentified": "typo"},
 	} {
 		a := newVoiceApp(t)
-		a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james"}, Revision: 3}
+		a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam"}, Revision: 3}
 		persisted := false
 		_, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": change}, func(*Config) (bool, error) { persisted = true; return true, nil })
 		got := a.configSnapshot().Speech.Speakers
-		if err == nil || persisted || got.Mode != "only" || got.Revision != 3 || !reflect.DeepEqual(got.UIDs, []string{"james"}) {
+		if err == nil || persisted || got.Mode != "only" || got.Revision != 3 || !reflect.DeepEqual(got.UIDs, []string{"sam"}) {
 			t.Errorf("malformed policy fields changed the restriction: change=%v got=%+v persisted=%v err=%v", change, got, persisted, err)
 		}
 	}
@@ -62,7 +62,7 @@ func TestVoiceReleasePolicyKeepsHeldFinalOrder(t *testing.T) {
 	if page.find("transcript_final", 8) != nil || page.find("speaker_observation", 20) != nil {
 		t.Fatal("later final/observation reached the page before earlier final 7 was decided")
 	}
-	a.voiceEngineEvent(nil, observationRaw(h.id, 21, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "james", "decision": "known"}), page.enqueue)
+	a.voiceEngineEvent(nil, observationRaw(h.id, 21, map[string]any{"refers_to": 7, "speaker": "Sam", "speaker_id": "sam", "decision": "known"}), page.enqueue)
 	a.voiceInputFinished(h.id)
 	awaitDrained(t, h)
 	page.mu.Lock()
@@ -130,13 +130,13 @@ func TestHeldSpeechAdmitsInOrderWithoutWaitingForInference(t *testing.T) {
 
 func TestHeldOrderTimeoutReleasesLaterDecision(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james"}}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam"}}
 	h, _ := newTrackedSession(a, "timeout-order", false)
 	page, fan := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fan.enqueue
 	a.voiceEngineEvent(nil, finalRaw(h.id, 7, "unattributed words"), page.enqueue)
 	a.voiceEngineEvent(nil, finalRaw(h.id, 8, "later known words"), page.enqueue)
-	a.voiceEngineEvent(nil, observationRaw(h.id, 20, map[string]any{"refers_to": 8, "speaker_id": "james", "decision": "known"}), page.enqueue)
+	a.voiceEngineEvent(nil, observationRaw(h.id, 20, map[string]any{"refers_to": 8, "speaker_id": "sam", "decision": "known"}), page.enqueue)
 	a.decideHeld(h, 7, "", "", true, nil)
 	a.voiceInputFinished(h.id)
 	awaitDrained(t, h)
@@ -147,7 +147,7 @@ func TestHeldOrderTimeoutReleasesLaterDecision(t *testing.T) {
 
 func TestHeldOrderRelaxationCannotOvertakeExistingWords(t *testing.T) {
 	a := newVoiceApp(t)
-	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"james"}}
+	a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: "only", UIDs: []string{"sam"}}
 	h, _ := newTrackedSession(a, "relax-order", false)
 	page := &pageLog{}
 	a.voiceEngineEvent(nil, finalRaw(h.id, 7, "older held words"), page.enqueue)
@@ -180,7 +180,7 @@ func TestHeldOrderTighteningAppliesToApprovedButUndeliveredWords(t *testing.T) {
 	a.voiceEngineEvent(nil, finalRaw(h.id, 7, "earlier undecided words"), page.enqueue)
 	a.voiceEngineEvent(nil, finalRaw(h.id, 8, "visitor words approved before tightening"), page.enqueue)
 	a.voiceEngineEvent(nil, observationRaw(h.id, 20, map[string]any{"refers_to": 8, "speaker_id": "visitor", "decision": "known"}), page.enqueue)
-	_, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": map[string]any{"mode": "only", "uids": []string{"james"}}}, func(*Config) (bool, error) { return true, nil })
+	_, err := a.applyConfigChangeWith(map[string]interface{}{"speech.speakers": map[string]any{"mode": "only", "uids": []string{"sam"}}}, func(*Config) (bool, error) { return true, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,7 +46,7 @@ func TestFetchRing5RequiresSignedCurrentManifest(t *testing.T) {
 	// .
 	live, err := genesislive.Fetch()
 	if err != nil {
-		t.Fatalf("Ring 5 comes from the real servers (operator ruling 2026-09-19): %v", err)
+		t.Fatalf("Ring 5 comes from the real servers: %v", err)
 	}
 	var serveManifest atomic.Bool
 	serveManifest.Store(true)

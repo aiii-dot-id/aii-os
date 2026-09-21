@@ -14,7 +14,7 @@ func runDashboardToken(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("dashboard-token", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", "", "Identity install directory")
-	config := fs.String("config", "config.json", "Path to config file")
+	config := fs.String("config", "", "Path to config file (default: config/config.json)")
 	rotate := fs.Bool("rotate", false, "Mint a fresh access token into the config file and print it; the running identity applies it on its next configuration reload, and every signed-in browser must sign in again")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -24,7 +24,10 @@ func runDashboardToken(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	path := *config
-	if *dir != "" && !filepath.IsAbs(path) {
+	switch {
+	case path == "":
+		path = app.ConfigPathIn(*dir)
+	case *dir != "" && !filepath.IsAbs(path):
 		path = filepath.Join(*dir, path)
 	}
 	if _, err := os.Stat(path); err != nil {

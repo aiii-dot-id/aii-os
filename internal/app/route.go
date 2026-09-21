@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"sort"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/certs"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -165,7 +166,7 @@ func (a *App) startRouteOwner() bool {
 			if err != nil {
 				// .
 				if err.Error() != last {
-					log.Printf("route: %v", err)
+					logsink.Warn("route.error", "%v", err)
 					last = err.Error()
 				}
 				if next <= 0 {
@@ -370,15 +371,35 @@ func (a *App) reconcileRoute(ctx context.Context) (time.Duration, error) {
 		return routeRetry, fmt.Errorf("the route could not be published: %w", err)
 	}
 
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
 	a.observeRoute(mode, set)
 	what := "withdrawn"
 	if len(desired) > 0 {
 		what = routeSummary(desired)
 	}
-	if set.Delivered {
-		log.Printf("route: %s is %s (generation %d)", name, what, set.Generation)
-	} else {
-		log.Printf("route: %s is %s at generation %d — committed, and the service has not finished delivering it; it reconciles that itself", name, what, set.Generation)
+	told := fmt.Sprintf("%s|%s|%t", mode, what, set.Delivered)
+	a.pn.mu.Lock()
+	changed := a.pn.routeTold != told
+	if changed {
+		a.pn.routeTold = told
+	}
+	a.pn.mu.Unlock()
+	if !changed {
+		// .
+		// .
+		logsink.Tick("route.renewal", "renewals unchanged", 0)
+	}
+	if changed {
+		if set.Delivered {
+			logsink.Info("route.start", "%s is %s (generation %d)", name, what, set.Generation)
+		} else {
+			logsink.Info("route.decision", "%s is %s at generation %d — committed, and the service has not finished delivering it; it reconciles that itself", name, what, set.Generation)
+		}
 	}
 	a.afterRoute(cfg, mode, name, set, st, rev)
 	return routeSettleDelay(set, lease), nil
@@ -757,6 +778,8 @@ func (a *App) observeRoute(mode string, set certs.RecordSet) {
 func (a *App) setRouteError(msg string) {
 	a.pn.mu.Lock()
 	a.pn.route.LastError = msg
+	// .
+	a.pn.routeTold = ""
 	a.pn.lastError = "route: " + msg
 	a.pn.mu.Unlock()
 }

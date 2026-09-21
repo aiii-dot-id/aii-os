@@ -71,7 +71,7 @@ func (e *Engine) verbTools(_ context.Context, args map[string]interface{}) (stri
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Offered: %s is callable from your next turn as `%s`. Release it with tools action=release when the work is done; the offer holds eight.", name, resolved), nil
+		return fmt.Sprintf("Offered: %s is callable from your next turn as `%s`, and stays offered — across restarts too — until you release it (tools action=release) or it changes what it declares; the offer holds eight.", name, resolved), nil
 	case "release":
 		name := strings.TrimSpace(stringArg(args, "name"))
 		if name == "" {

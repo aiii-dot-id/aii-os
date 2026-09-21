@@ -43,8 +43,8 @@
 # amd64, arm64 — exactly as internal/updates/contract.go (SupportedTargets,
 # AssetName) spells it, taken straight from matrix.goarch. An archive
 # named any other way is one the updater never finds: a mapping step
-# here once emitted x86_64 for amd64 (remediation, commit 7;
-# test/release_workflow_names_test.go pins the vocabulary). This file is
+# here once emitted x86_64 for amd64 (test/release_workflow_names_test.go
+# pins the vocabulary). This file is
 # on-demand compile-and-archive EVIDENCE — its names conform to the
 # updater's release contract so a leg proves the real artifact builds —
 # and it is not publication authority; that stays with packaging/
@@ -55,16 +55,14 @@
 # of the platform self-update surface. Mobile archives contain the
 # gomobile binding for the shell app to embed. No manifest.json — the
 # GitHub Releases API is the manifest: asset names + download URLs +
-# tag_name are sufficient, and a second source of truth would only drift
-# .
+# tag_name are sufficient, and a second source of truth would only drift.
 
 name: Release
 
 # MANUAL ONLY. This used to trigger on a pushed v* tag and publish
 # unsigned archives with contents: write, attaching signatures
-# afterwards — the exact unsigned public interval BETA1_CONTRACT
-# forbids, and a second release authority competing with
-# packaging/release.sh.
+# afterwards — an unsigned public interval no release may have, and a
+# second release authority competing with packaging/release.sh.
 #
 # A tag can no longer publish anything. The signed candidate is
 # assembled and verified by packaging/release.sh on the build hosts,
@@ -91,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.1"
       - name: Read version
         id: version
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
@@ -157,15 +155,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.1"
       - name: Read version
         id: version
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
       - name: Install gomobile
         run: |
-          # PINNED to the module's own x/mobile (P1:
-          # @latest made releases non-reproducible and could drift from
-          # the gobind the tool directive pins).
+          # PINNED to the module's own x/mobile: @latest made releases
+          # non-reproducible and could drift from the gobind the tool
+          # directive pins.
           go install golang.org/x/mobile/cmd/gomobile
           go install golang.org/x/mobile/cmd/gobind
           gomobile init
@@ -179,8 +177,8 @@ jobs:
           # The archive is the .aar the Android shell embeds.
           archive="aii-os_${{ steps.version.outputs.version }}_android_arm64.aar"
           # -buildvcs=false: gomobile's internal gobind cgo build fails
-          # VCS stamping under the NDK toolchain (proven on the build host,
-          # — the fix that turned the failure into a 13.5MB
+          # VCS stamping under the NDK toolchain (proven on the build
+          # host — the fix that turned the failure into a 13.5MB
           # .aar); the artifact carries its version via -ldflags, not a
           # VCS stamp.
           GOFLAGS=-buildvcs=false gomobile bind -target=android/arm64 \

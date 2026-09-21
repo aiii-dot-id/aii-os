@@ -174,8 +174,7 @@ if [ "$NOTARIZE" = "1" ]; then
   # NO `|| true`. This is the final admission check — the exact question
   # Gatekeeper asks when a person opens the image. Swallowing it meant a
   # disk image Gatekeeper REFUSES still produced a successful build,
-  # which is the one outcome this step exists to prevent (external
-  # review).
+  # which is the one outcome this step exists to prevent.
   spctl -a -vv -t open --context context:primary-signature "$dmg"
   xcrun stapler validate "$dmg"
 fi

@@ -2,7 +2,7 @@ package prompt
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sort"
 	"strings"
 )
@@ -20,8 +20,13 @@ func newBudgetEnforcer(maxTokens int) *budgetEnforcer {
 // .
 // .
 // .
-func foldOrder() [4]string {
-	return [4]string{"brief", "ring4", "ring3", "ring2"}
+// .
+// .
+// .
+// .
+// .
+func foldOrder() [5]string {
+	return [5]string{"brief", "turn", "ring4", "ring3", "ring2"}
 }
 
 // .
@@ -33,8 +38,8 @@ func foldOrder() [4]string {
 // .
 // .
 // .
-func omitOrder() [3]string {
-	return [3]string{"brief", "ring4", "ring3"}
+func omitOrder() [4]string {
+	return [4]string{"brief", "turn", "ring4", "ring3"}
 }
 
 const budgetRoute = "ask your operator to raise the prompt budget"
@@ -53,6 +58,8 @@ func sectionRoute(source string) string {
 		return "recall (source=experiences) reaches what was surfaced and recorded, recall (source=ledger) reaches your beliefs"
 	case "ring4":
 		return "work status lists your live sessions"
+	case "turn":
+		return "work status lists your running and delivered sub-agents, recall (source=alarms) the alarms that fired"
 	case "brief":
 		return "recall (source=experiences) reaches the day"
 	}
@@ -406,7 +413,7 @@ func observeFold(budget, before, after int, sections []Section, omissions []Omis
 	for _, o := range omissions {
 		dropped = append(dropped, o.Source)
 	}
-	log.Printf("accordion: budget=%d in=%d out=%d folded=[%s] omitted=[%s]",
+	logsink.Info("prompt.budget", "budget=%d in=%d out=%d folded=[%s] omitted=[%s]",
 		budget, before, after,
 		strings.Join(folded, " "), strings.Join(dropped, " "))
 }

@@ -166,17 +166,69 @@ func (s *Store) TensionsView() ([]TensionPair, error) {
 
 // .
 // .
-func (s *Store) StatementsFor(ids []string) (map[string]string, error) {
+// .
+// .
+type TensionEnd struct {
+	ID string
+	// .
+	// .
+	Kind string
+	// .
+	// .
+	Text string
+	// .
+	// .
+	Retired bool
+	// .
+	// .
+	// .
+	Sealed bool
+	// .
+	Provenance string
+}
+
+// .
+// .
+// .
+func (s *Store) TensionEnds(ids []string) (map[string]TensionEnd, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]string, len(ids))
+	out := make(map[string]TensionEnd, len(ids))
 	for _, id := range ids {
+		if _, done := out[id]; done {
+			continue
+		}
+		end := TensionEnd{ID: id}
 		var stmt string
-		err := s.db.QueryRow(`SELECT statement FROM beliefs WHERE id = ? AND archived = 0`, id).Scan(&stmt)
-		if err == nil {
-			out[id] = stmt
+		var archived, superseded int
+		err := s.db.QueryRow(
+			`SELECT statement, archived, superseded_by IS NOT NULL FROM beliefs WHERE id = ?`, id,
+		).Scan(&stmt, &archived, &superseded)
+		switch {
+		case err == nil:
+			end.Kind, end.Text, end.Retired = "belief", stmt, archived == 1 || superseded == 1
+			out[id] = end
+			continue
+		case !errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("tension end %s: %w", id, err)
 		}
 		// .
+		// .
+		var private int
+		var provenance string
+		var content sql.NullString
+		err = s.db.QueryRow(
+			`SELECT private, provenance, CASE WHEN private = 0 THEN content END FROM experiences WHERE id = ?`, id,
+		).Scan(&private, &provenance, &content)
+		switch {
+		case err == nil:
+			// .
+			// .
+			end.Kind, end.Provenance, end.Sealed, end.Text = "experience", provenance, private == 1, content.String
+		case !errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("tension end %s: %w", id, err)
+		}
+		out[id] = end
 	}
 	return out, nil
 }

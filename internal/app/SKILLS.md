@@ -207,10 +207,9 @@ kit is a sibling repo (`work/aii-plugin-sdk`) WHERE your operator
 granted it — check your granted roots before assuming the path —
 independent of the runtime: the seam is the wire and the
 package format, so a plugin built there runs on any conforming host.
-Its canonical home will be
-`https://github.com/aiii-dot-id/aii-plugin-sdk` — populated when the
-Plugin SDK is completed, before beta release. Check that it is live
-before relying on it; a URL in a doc is a claim, not evidence.
+Its public home is `https://github.com/aiii-dot-id/aii-plugin-sdk`.
+Check that it is reachable before relying on it; a URL in a doc is a
+claim, not evidence.
 
 The loop, end to end — every command real:
 
@@ -235,10 +234,8 @@ Kit-specific craft:
   `aii-plugin-worker`) turn "it builds" into "the host verifies and
   runs it" — the acceptance lane exists precisely because a package
   you cannot prove is a package you did not finish.
-- `examples/memory-skel` is the golden path; a live sibling
-  (`work/ring4-memory`) is the plugin behind this platform's own
-  memory tools — a worked example of the whole arc from handler to
-  `pl_`-prefixed tool.
+- `examples/memory-skel` is the golden path — a worked example of the
+  whole arc from handler to `pl_`-prefixed tool.
 
 Activation remains your operator's act: you can author, build, prove,
 and hand over — installation and grants are theirs.
@@ -283,8 +280,8 @@ not a bug; write around it, don't fight it.
 FULL RE-FORM (a file named `app.js` in `data/ui/` replaces the frame's own
 `app.js`) is powerful and sharp-edged — when
 you replace frame bytes, upgrades no longer reach your replaced file.
-Deleted files now reach the browser (path union diff, since build
-`7f7c20d`). CSS hot-swaps (~150ms–2s); JS/HTML trigger draft-safe reload.
+Deleted files reach the browser too (a union diff of the paths).
+CSS hot-swaps (~150ms–2s); JS/HTML trigger draft-safe reload.
 Containment CSP: no external fetches from the frame — `self` only.
 
 ## 3. The UI, live-editable
@@ -299,8 +296,8 @@ filesystem event (inotify/kqueue/ReadDirectoryChangesW) fires within
 milliseconds, debounced 100–200ms so one editor save (Create+Write+Chmod
 storm) collapses to one change event. The event is a *trigger*; the
 snapshot diff remains the record — the watcher re-reads the directory and
-computes what actually changed, including deletions (union diff since
-`7f7c20d`). One `overlay_changed {token, paths}` broadcast; CSS
+computes what actually changed, including deletions (a union diff).
+One `overlay_changed {token, paths}` broadcast; CSS
 hot-swaps in ~150ms; JS/HTML reload with draft preserved. A 30–60s
 heartbeat remains as drift insurance for network filesystems and dropped
 events — skepticism as infrastructure, not paranoia. Parked means silent
@@ -390,10 +387,6 @@ verify before believing anyone (including a previous you) who does.
   under a candidate doctrine and compares outcome, cost and latency
   before promotion. Designed, not built; `commit skill.propose` proposals carry
   `verified=none` until it exists, and that label is the honesty.
-- **Plugin SDK public release** — the SDK you author plugins in is local
-  today (`work/aii-plugin-sdk`); its canonical GitHub home is declared
-  but not yet populated. Milestone: completed and public **before beta
-  release**. Until then the local kit is the SDK.
 
 If a future build adds any of these, this section shrinks — and that
 shrink is the doc's own honesty mechanism working.

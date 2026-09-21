@@ -8,7 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"math/big"
 	"net"
 	"os"
@@ -182,9 +182,9 @@ func loadOrMintCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKe
 						// .
 						// .
 						// .
-						log.Printf("dashboard: TLS root cert and key do not correspond — reminting the root; install the new %s once", certPath)
+						logsink.Warn("dashboard.decision", "TLS root cert and key do not correspond — reminting the root; install the new %s once", certPath)
 					case time.Now().Add(30 * 24 * time.Hour).After(c.NotAfter):
-						log.Printf("dashboard: TLS root is expiring — reminting; install the new %s once", certPath)
+						logsink.Warn("dashboard.decision", "TLS root is expiring — reminting; install the new %s once", certPath)
 					default:
 						// .
 						// .
@@ -201,7 +201,7 @@ func loadOrMintCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKe
 	if _, serr := os.Stat(certPath); serr == nil {
 		aside := certPath + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
 		if rerr := os.Rename(certPath, aside); rerr == nil {
-			log.Printf("dashboard: previous TLS root set aside as %s", filepath.Base(aside))
+			logsink.Info("dashboard.decision", "previous TLS root set aside as %s", filepath.Base(aside))
 		}
 	}
 

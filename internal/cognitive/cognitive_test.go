@@ -31,6 +31,11 @@ type mockStore struct {
 	standings      map[string]string
 	stamped        map[string]int64
 	tensions       []store.TensionPair
+	tensionNotes   []store.Experience
+	retired        []store.Belief
+	tensionsErr    error
+	tensionEndsErr error
+	standingErr    map[string]error
 }
 
 // .
@@ -83,17 +88,38 @@ func (m *mockStore) ListExperiences(n int) ([]store.Experience, error) {
 
 // .
 func (m *mockStore) TensionsView() ([]store.TensionPair, error) {
+	if m.tensionsErr != nil {
+		return nil, m.tensionsErr
+	}
 	return m.tensions, nil
 }
 
-func (m *mockStore) StatementsFor(ids []string) (map[string]string, error) {
-	out := map[string]string{}
+func (m *mockStore) TensionEnds(ids []string) (map[string]store.TensionEnd, error) {
+	if m.tensionEndsErr != nil {
+		return nil, m.tensionEndsErr
+	}
+	out := map[string]store.TensionEnd{}
 	for _, id := range ids {
+		end := store.TensionEnd{ID: id}
 		for _, b := range m.beliefs {
 			if b.ID == id {
-				out[id] = b.Statement
+				end.Kind, end.Text = "belief", b.Statement
 			}
 		}
+		for _, r := range m.retired {
+			if r.ID == id {
+				end.Kind, end.Text, end.Retired = "belief", r.Statement, true
+			}
+		}
+		for _, e := range m.tensionNotes {
+			if e.ID == id {
+				end.Kind, end.Provenance, end.Sealed = "experience", e.Provenance, e.Private == 1
+				if !end.Sealed {
+					end.Text = e.Content
+				}
+			}
+		}
+		out[id] = end
 	}
 	return out, nil
 }
@@ -102,6 +128,9 @@ func (m *mockStore) StatementsFor(ids []string) (map[string]string, error) {
 // .
 // .
 func (m *mockStore) StandingFor(id string) (string, error) {
+	if err := m.standingErr[id]; err != nil {
+		return "", err
+	}
 	if m.standings == nil {
 		return "new", nil
 	}
@@ -134,6 +163,17 @@ func (m *mockStore) ListRawExperiences(n int) ([]store.Experience, error) {
 		n = len(raw)
 	}
 	return raw[:n], nil
+}
+
+func (m *mockStore) ListRawExperiencesExcept(n int, idPrefix string) ([]store.Experience, error) {
+	all, _ := m.ListRawExperiences(len(m.experiences))
+	var raw []store.Experience
+	for _, e := range all {
+		if !strings.HasPrefix(e.ID, idPrefix) && len(raw) < n {
+			raw = append(raw, e)
+		}
+	}
+	return raw, nil
 }
 
 func (m *mockStore) MarkExperiencesProcessed(ids []string) error {

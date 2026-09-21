@@ -50,7 +50,7 @@ func TestPublishNewGivesAPreparedFileItsName(t *testing.T) {
 // .
 // .
 // .
-func TestPublishNewSaysNothingWasPublishedWhenTheLinkFails(t *testing.T) {
+func TestPublishNewSaysNothingWasPublishedWhenDestinationExists(t *testing.T) {
 	dir := t.TempDir()
 	tmp := filepath.Join(dir, "prepared")
 	final := filepath.Join(dir, "final")

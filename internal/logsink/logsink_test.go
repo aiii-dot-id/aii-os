@@ -59,13 +59,20 @@ func TestConfigResolution(t *testing.T) {
 		cfg                    Config
 		wantEnabled            bool
 		wantMax, wantCompressD int
+		wantMaxDays            int
 	}{
-		{"empty dir disables", Config{}, false, 9, 7},
-		{"dir enables", Config{Dir: "log"}, true, 9, 7},
-		{"explicit backup cap", Config{Dir: "log", MaxBackups: 3}, true, 3, 7},
-		{"keep-all sentinel", Config{Dir: "log", MaxBackups: -1}, true, -1, 7},
-		{"explicit compress age", Config{Dir: "log", CompressDays: 2}, true, 9, 2},
-		{"never-compress sentinel", Config{Dir: "log", CompressDays: -1}, true, 9, 0},
+		{"empty dir disables", Config{}, false, 9, 7, 30},
+		{"dir enables", Config{Dir: "log"}, true, 9, 7, 30},
+		{"explicit backup cap", Config{Dir: "log", MaxBackups: 3}, true, 3, 7, 30},
+		{"keep-all sentinel", Config{Dir: "log", MaxBackups: -1}, true, -1, 7, 30},
+		{"explicit compress age", Config{Dir: "log", CompressDays: 2}, true, 9, 2, 30},
+		{"never-compress sentinel", Config{Dir: "log", CompressDays: -1}, true, 9, 0, 30},
+		// .
+		// .
+		// .
+		// .
+		{"explicit day floor", Config{Dir: "log", MaxDays: 5}, true, 9, 7, 5},
+		{"no-floor sentinel", Config{Dir: "log", MaxDays: -1}, true, 9, 7, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,14 +85,25 @@ func TestConfigResolution(t *testing.T) {
 			if got := tt.cfg.compressDays(); got != tt.wantCompressD {
 				t.Errorf("compressDays() = %d, want %d", got, tt.wantCompressD)
 			}
+			if got := tt.cfg.maxDays(); got != tt.wantMaxDays {
+				t.Errorf("maxDays() = %d, want %d", got, tt.wantMaxDays)
+			}
+
 		})
 	}
 }
 
-func TestInstallDisabledReturnsNil(t *testing.T) {
+func TestInstallWithoutFilesOwnsConsoleLifecycle(t *testing.T) {
 	s, err := Install(Config{})
-	if s != nil || err != nil {
-		t.Fatalf("Install(disabled) = (%v, %v), want (nil, nil)", s, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s == nil {
+		t.Fatal("console filtering and digest need a lifecycle owner")
+	}
+	defer s.Close()
+	if s.Dir() != "" || s.file != nil || s.stop == nil {
+		t.Fatalf("incorrect console-only sink: %#v", s)
 	}
 }
 
@@ -384,5 +402,81 @@ func TestTailMissingFile(t *testing.T) {
 	s := newTestSink(t, Config{})
 	if _, err := s.Tail("aii-20990101-000000.log", 10); err == nil {
 		t.Error("Tail(missing) must error")
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestPruneKeepsWhatIsYoungerThanTheDayFloor(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := func(daysAgo int) string {
+		return rotatedPrefix + time.Now().AddDate(0, 0, -daysAgo).Format("20060102-150405") + rotatedExt
+	}
+	for d := 400; d > 395; d-- {
+		write(name(d))
+	}
+	var young []string
+	for d := 5; d >= 1; d-- {
+		n := name(d)
+		young = append(young, n)
+		write(n)
+	}
+
+	s := &Sink{cfg: Config{MaxBackups: 2, MaxDays: 7}, dir: dir}
+	removed, err := s.Prune()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 5 {
+		t.Errorf("removed %d, want the five outside the floor", removed)
+	}
+	names := rotatedNames(t, dir)
+	if len(names) != len(young) {
+		t.Fatalf("survivors = %v, want the five inside the floor", names)
+	}
+	for i, n := range young {
+		if names[i] != n {
+			t.Errorf("survivor %d = %s, want %s", i, names[i], n)
+		}
+	}
+
+	// .
+	// .
+	if _, err := (&Sink{cfg: Config{MaxBackups: 2, MaxDays: -1}, dir: dir}).Prune(); err != nil {
+		t.Fatal(err)
+	}
+	if got := rotatedNames(t, dir); len(got) != 2 {
+		t.Errorf("with no floor the cap decides alone, got %v", got)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func TestTheRetentionDefaultsDoNotCancelEachOther(t *testing.T) {
+	d := Config{Dir: "log"}
+	if d.maxDays() <= d.compressDays() {
+		t.Errorf("the default day floor (%d) is not longer than the default compress age (%d): compression would be dead code",
+			d.maxDays(), d.compressDays())
+	}
+	if d.maxDays() <= CaptureDays {
+		t.Errorf("the default day floor (%d) does not outlast a capture (%d days): a payload would outlive the record it belongs to",
+			d.maxDays(), CaptureDays)
 	}
 }

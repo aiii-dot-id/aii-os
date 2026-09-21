@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -992,7 +992,8 @@ type UpdateState struct {
 }
 
 type ConfigState struct {
-	LLM LLMConfigState `json:"llm"`
+	Database DatabaseState  `json:"database"`
+	LLM      LLMConfigState `json:"llm"`
 	// .
 	Speech    SpeechConfigState `json:"speech"`
 	Dashboard DashboardState    `json:"dashboard"`
@@ -1046,6 +1047,7 @@ type ContinuityState struct {
 // .
 // .
 type WSHandler struct {
+	DatabaseExport func(context.Context) (io.ReadCloser, int64, error)
 	// .
 	// .
 	// .
@@ -1206,6 +1208,12 @@ type WSHandler struct {
 	// .
 	// .
 	UpdateCheck func() (*UpdateState, error)
+	// .
+	// .
+	Continuity *ContinuityHooks
+	// .
+	// .
+	RestoreNew *RestoreNewHooks
 	// .
 	Restart func() error
 	// .
@@ -1559,6 +1567,8 @@ type ClientMessage struct {
 	Input       string                 `json:"input,omitempty"`
 	Effort      string                 `json:"effort,omitempty"`
 	Voice       *VoiceRequest          `json:"voice,omitempty"`
+	Backups     *ContinuityRequest     `json:"backups,omitempty"`
+	RestoreNew  *RestoreNewRequest     `json:"restore_new,omitempty"`
 }
 
 // .
@@ -1615,6 +1625,8 @@ type ServerMessage struct {
 	BrokenProviders          []BrokenProviderInfo `json:"broken_providers,omitempty"`
 	SkipSignInWithValidToken *bool                `json:"skip_signin_with_valid_token,omitempty"`
 	SignInURL                string               `json:"signin_url,omitempty"`
+	Backups                  *ContinuityReply     `json:"backups,omitempty"`
+	RestoreNew               *RestoreNewReply     `json:"restore_new,omitempty"`
 	Update                   *UpdateState         `json:"update,omitempty"`
 	Provider                 string               `json:"provider,omitempty"`
 	ModelList                []string             `json:"model_list,omitempty"`
@@ -1930,7 +1942,12 @@ func New(host string, port int, handler *WSHandler) *Server {
 	// .
 	// .
 	// .
+	mux.HandleFunc("POST /restore/upload", s.handleRestoreUpload)
 	mux.HandleFunc("POST /speech/say", s.handleSpeechSay)
+	// .
+	// .
+	// .
+	mux.HandleFunc("POST /database/export", s.handleDatabaseExport)
 	mux.HandleFunc("GET /speech/say/{id}", s.handleSpeechPlay)
 
 	mux.HandleFunc("GET /auth/token", s.handleAccessToken)
@@ -2071,7 +2088,7 @@ func (s *Server) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 func (s *Server) hostGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.hostAllowed(r.Host) {
-			log.Printf("dashboard: refused request with foreign Host %q", r.Host)
+			logsink.Warn("dashboard.refusal", "refused request with foreign Host %q", r.Host)
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
@@ -2132,7 +2149,7 @@ func (s *Server) handleAccessToken(w http.ResponseWriter, r *http.Request) {
 		// .
 		// .
 		// .
-		log.Printf("dashboard: access token refused from %s", clientHost(r))
+		logsink.Warn("dashboard.refusal", "access token refused from %s", clientHost(r))
 		time.Sleep(refusedLoginDelay)
 		http.Error(w, "dashboard access token refused", http.StatusUnauthorized)
 		return
@@ -2314,7 +2331,7 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	}
 	s.hostsMu.Unlock()
 	if isWildcard(actualHost) {
-		log.Printf("dashboard: bound to %s — reachable from the whole network; the Host gate matches the port only", actualAddr)
+		logsink.Warn("dashboard.decision", "bound to %s — reachable from the whole network; the Host gate matches the port only", actualAddr)
 	}
 	// .
 	// .
@@ -2330,7 +2347,7 @@ func (s *Server) Start(tlsDir string) (string, error) {
 				lln, lerr = net.Listen("tcp", la)
 			}
 			if lerr != nil {
-				log.Printf("dashboard: loopback %s not served (%v)", la, lerr)
+				logsink.Warn("dashboard.error", "loopback %s not served (%v)", la, lerr)
 				continue
 			}
 			loopbacks = append(loopbacks, newLimitListener(lln, maxConcurrentConns))
@@ -2364,7 +2381,7 @@ func (s *Server) Start(tlsDir string) (string, error) {
 		for _, lln := range loopbacks {
 			go func(l net.Listener) {
 				if err := s.loopServer.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Printf("dashboard loopback server error: %v", err)
+					logsink.Error("dashboard.error", "dashboard loopback server error: %v", err)
 				}
 			}(lln)
 		}
@@ -2385,13 +2402,13 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	if s.tlsDir == "" {
 		s.tls = false
 		if !IsLoopback(actualHost) {
-			log.Printf("dashboard: serving PLAIN HTTP on %s — every word between this identity and its operator crosses the network in the clear, and the browser will refuse the microphone. Settings → Dashboard → HTTPS.", actualAddr)
+			logsink.Warn("dashboard.decision", "serving PLAIN HTTP on %s — every word between this identity and its operator crosses the network in the clear, and the browser will refuse the microphone. Settings → Dashboard → HTTPS.", actualAddr)
 		}
 		s.startTurnLifecycles()
 		serveLoopbacks()
 		go func() {
 			if err := s.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("dashboard server error: %v", err)
+				logsink.Error("dashboard.error", "dashboard server error: %v", err)
 			}
 		}()
 		return actualAddr, nil
@@ -2441,7 +2458,7 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	go func() {
 		// .
 		if err := s.server.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("dashboard server error: %v", err)
+			logsink.Error("dashboard.error", "dashboard server error: %v", err)
 		}
 	}()
 
@@ -2806,7 +2823,7 @@ func (s *Server) SetAccessToken(required bool, token string) {
 	old := s.auth.Swap(p)
 	if old != nil && cutsOff(old, p) {
 		if n := s.closeAdmitted(); n > 0 {
-			log.Printf("dashboard: access policy changed — %d open session(s) closed; each signs in again", n)
+			logsink.Info("dashboard.decision", "access policy changed — %d open session(s) closed; each signs in again", n)
 		}
 	}
 }
@@ -2866,7 +2883,7 @@ func (s *Server) BindHost() string { return s.host }
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	admitted := s.auth.Load()
 	if !s.wsAuthorizedUnder(admitted, r) {
-		log.Printf("WS refused: origin %q host %q failed auth", r.Header.Get("Origin"), r.Host)
+		logsink.Warn("dashboard.refusal", "refused: origin %q host %q failed auth", r.Header.Get("Origin"), r.Host)
 		http.Error(w, "unauthorized", http.StatusForbidden)
 		return
 	}
@@ -2877,7 +2894,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
-		log.Printf("WS accept error: %v", err)
+		logsink.Warn("dashboard.error", "accept error: %v", err)
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
@@ -2905,7 +2922,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.wsMu.Lock()
 	if cutsOff(admitted, s.auth.Load()) {
 		s.wsMu.Unlock()
-		log.Printf("WS refused: the access policy changed while the session was being admitted")
+		logsink.Info("dashboard.refusal", "refused: the access policy changed while the session was being admitted")
 		conn.CloseNow()
 		return
 	}
@@ -3457,6 +3474,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "public_name", PublicName: &st})
 
+		case "restore_new":
+			s.answerRestoreNew(ctx, msg, r.TLS != nil || remoteIsLoopback(r.RemoteAddr),
+				func(rep RestoreNewReply) {
+					s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "restore_new", RestoreNew: &rep})
+				},
+				func(text string) { s.sendErrorFor(ctx, conn, msg.RequestID, text) })
+
+		case "backups":
+			s.handleBackups(ctx, conn, msg, r.TLS != nil || remoteIsLoopback(r.RemoteAddr))
+
 		case "update_check":
 			// .
 			// .
@@ -3711,7 +3738,7 @@ func (s *Server) runOperatorMessage(ctx context.Context, conn *websocket.Conn, h
 				}
 				s.handleChat(turnCtx, conn, qtext, h)
 				s.sendStatus(ctx, conn, h)
-				log.Printf("dashboard: queued turn finished (%d chars in)", len(qtext))
+				logsink.Info("dashboard.end", "queued turn finished (%d chars in)", len(qtext))
 			}()
 			return
 		case err != nil:
@@ -3741,7 +3768,7 @@ func (s *Server) runOperatorMessage(ctx context.Context, conn *websocket.Conn, h
 	go func() {
 		s.handleChat(turnCtx, conn, text, h)
 		s.sendStatus(ctx, conn, h)
-		log.Printf("dashboard: turn finished (%d chars in)", len(text))
+		logsink.Info("dashboard.end", "turn finished (%d chars in)", len(text))
 	}()
 }
 
@@ -4195,7 +4222,7 @@ func (s *Server) sendMsg(ctx context.Context, conn *websocket.Conn, msg ServerMe
 		// .
 		// .
 		// .
-		log.Printf("WS write failed (%v) — dropping client", err)
+		logsink.Warn("dashboard.error", "write failed (%v) — dropping client", err)
 		s.dropConn(conn)
 	}
 	return err

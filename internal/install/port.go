@@ -3,7 +3,6 @@ package install
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 )
 
 // .
@@ -16,7 +15,7 @@ import (
 // .
 // .
 func ConfiguredPort(slotDir string, n int) int {
-	data, err := os.ReadFile(filepath.Join(slotDir, "config.json"))
+	data, err := os.ReadFile(ConfigPathIn(slotDir))
 	if err != nil {
 		return Port(n)
 	}

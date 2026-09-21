@@ -1,25 +1,18 @@
 package prompt
 
 import (
-	"bytes"
-	"log"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
 // .
-func captureLog(t *testing.T) *bytes.Buffer {
+func captureLog(t *testing.T) *logsink.Capture {
 	t.Helper()
-	var buf bytes.Buffer
-	writer, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(writer)
-		log.SetFlags(flags)
-	})
-	return &buf
+	buf := logsink.CaptureForTest(t)
+	return buf
 }
 
 // .
@@ -34,7 +27,7 @@ func TestFoldTelemetryIsSilentWithoutPressure(t *testing.T) {
 	}
 	newBudgetEnforcer(budgetTokens(sections, nil) + 1000).FoldAndTrim(sections)
 
-	if buf.Len() != 0 {
+	if len(buf.String()) != 0 {
 		t.Fatalf("a prompt that fits emitted telemetry: %q", buf.String())
 	}
 }
@@ -57,7 +50,7 @@ func TestFoldTelemetryNamesWhatYielded(t *testing.T) {
 	newBudgetEnforcer(budgetTokens(want, nil)).FoldAndTrim(sections)
 
 	line := buf.String()
-	if !strings.HasPrefix(line, "accordion: ") {
+	if !strings.Contains(line, "prompt.budget") {
 		t.Fatalf("telemetry is not greppable by subsystem: %q", line)
 	}
 	for _, field := range []string{"budget=", "in=", "out=", "folded=[", "omitted=["} {
@@ -122,12 +115,12 @@ func TestFoldTelemetryDoesNotAlterTheFold(t *testing.T) {
 
 	buf := captureLog(t)
 	observed, observedOmissions := newBudgetEnforcer(budget).FoldAndTrim(build())
-	if buf.Len() == 0 {
+	if len(buf.String()) == 0 {
 		t.Fatal("test is vacuous: this budget did not produce pressure")
 	}
 
 	// .
-	log.SetOutput(discard{})
+	// .
 	silent, silentOmissions := newBudgetEnforcer(budget).FoldAndTrim(build())
 
 	if len(observed) != len(silent) {
@@ -142,7 +135,3 @@ func TestFoldTelemetryDoesNotAlterTheFold(t *testing.T) {
 		t.Fatalf("omissions diverged: %v observed, %v silent", observedOmissions, silentOmissions)
 	}
 }
-
-type discard struct{}
-
-func (discard) Write(p []byte) (int, error) { return len(p), nil }

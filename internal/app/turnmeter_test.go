@@ -484,7 +484,7 @@ func TestCrashDisclosureSurvivesFailedTurns(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	a := &App{store: st, bootInterrupted: []string{"write", "shell"}}
-	first, err := a.buildWorkState()
+	first, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestCrashDisclosureSurvivesFailedTurns(t *testing.T) {
 	// .
 	// .
 	// .
-	second, err := a.buildWorkState()
+	second, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestCrashDisclosureSurvivesFailedTurns(t *testing.T) {
 	}
 	// .
 	a.markComposedHarvests()
-	third, err := a.buildWorkState()
+	third, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestRhythmReportsToolFailuresOnlyWhenTheyExist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clean, err := a.buildWorkState()
+	clean, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestRhythmReportsToolFailuresOnlyWhenTheyExist(t *testing.T) {
 	if err := st.RecordToolDone("t", 1, "shell", `{}`, "Error: denied", true, false); err != nil {
 		t.Fatal(err)
 	}
-	dirty, err := a.buildWorkState()
+	dirty, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}

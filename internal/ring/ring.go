@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync"
 )
 
@@ -174,7 +174,7 @@ func (m *Manager) SetSection(level RingLevel, name, content string) {
 	if level == Ring0 {
 		// .
 		// .
-		log.Printf("RING 0 SECTION WRITE REFUSED (%q): %v", name, ErrRing0Immutable)
+		logsink.Error("ring.refusal", "RING 0 SECTION WRITE REFUSED (%q): %v", name, ErrRing0Immutable)
 		return
 	}
 	m.mu.Lock()
@@ -231,7 +231,7 @@ func (m *Manager) Set(level RingLevel, rc *RingContent) {
 	if level == Ring0 {
 		// .
 		// .
-		log.Printf("RING 0 WRITE REFUSED: %v (use SealConstitution or SealSafePosture)", ErrRing0Immutable)
+		logsink.Error("ring.refusal", "RING 0 WRITE REFUSED: %v (use SealConstitution or SealSafePosture)", ErrRing0Immutable)
 		return
 	}
 	m.mu.Lock()

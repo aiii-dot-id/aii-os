@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
 
@@ -148,7 +148,7 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 	// .
 	// .
 	// .
-	log.Printf("VOICE: %s proposes an utterance (%d bytes, speaker label %q)",
+	logsink.Info("voice.decision", "%s proposes an utterance (%d bytes, speaker label %q)",
 		o.Source, len(o.Text), o.Speaker)
 	text := strings.TrimSpace(o.Text)
 	speaker := o.Speaker
@@ -216,7 +216,7 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 		defer a.releaseTurn()
 		reply, werr := voiceWake(a, ctx, "participant", framed)
 		if werr != nil {
-			log.Printf("VOICE: could not answer what was heard: %v", werr)
+			logsink.Warn("voice.error", "could not answer what was heard: %v", werr)
 			return werr
 		}
 		// .
@@ -231,7 +231,7 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 		return nil
 	}
 	if rerr := a.engine.RecordConversationTurn("participant", framed); rerr != nil {
-		log.Printf("VOICE: could not record what was heard: %v", rerr)
+		logsink.Warn("voice.error", "could not record what was heard: %v", rerr)
 		return rerr
 	}
 	return nil
@@ -244,13 +244,15 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 // .
 // .
 // .
-func (a *App) recordRoomWords(text string) error {
+func (a *App) recordRoomWords(text string, binding *voiceBinding) error {
 	if a.engine == nil {
 		return nil
 	}
-	if err := a.engine.RecordConversationTurn(roleOperator, voiceMarker+voiceRoomNote+text); err != nil {
+	seq, err := a.engine.RecordConversationTurnSeq(roleOperator, voiceMarker+voiceRoomNote+text)
+	if err != nil {
 		return fmt.Errorf("record what the operator said: %w", err)
 	}
+	a.annotateVoiceTurn(seq, binding)
 	return nil
 }
 
@@ -284,7 +286,7 @@ var voiceWake = (*App).wake
 // .
 func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtterance) error {
 	if !o.Answer {
-		return a.recordRoomWords(text)
+		return a.recordRoomWords(text, &voiceBinding{session: o.SessionID, seq: o.Sequence})
 	}
 	// .
 	// .
@@ -303,7 +305,7 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 		// .
 		// .
 		// .
-		log.Printf("VOICE: an internal pass holds the identity's turn; the operator's words wait for it")
+		logsink.Info("voice.refusal", "an internal pass holds the identity's turn; the operator's words wait for it")
 		if a.awaitTurnGate(ctx, binding) {
 			err = nil
 		} else {
@@ -345,7 +347,7 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 			o.admitted()
 		}
 		a.noteReplyOutcome(o.SessionID, "recorded (meeting), no reply")
-		return a.recordRoomWords(text)
+		return a.recordRoomWords(text, binding)
 	}
 	if binding != nil {
 		a.holdVoice(binding)
@@ -359,7 +361,7 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 	// .
 	a.settleVoice(ctx, reply)
 	if err != nil {
-		log.Printf("VOICE: could not answer the operator: %v", err)
+		logsink.Warn("voice.error", "could not answer the operator: %v", err)
 		return err
 	}
 	if !a.voiceReplyShown.Swap(false) && a.dashboard != nil && strings.TrimSpace(reply) != "" {

@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
@@ -69,10 +69,10 @@ func (o memoryOwner) OnAlarm(ctx context.Context, _ string, _ string, _ int64, _
 	rep, err := o.a.engine.Instruments().Backfill(ctx, memory.BackfillBudget)
 	switch {
 	case err != nil:
-		log.Printf("MEMORY: meaning backfill stopped — %v (what landed stays; the next pass continues)", err)
+		logsink.Warn("memory.refusal", "meaning backfill stopped — %v (what landed stays; the next pass continues)", err)
 	case rep.Unavailable != "":
 	case rep.Embedded > 0 || rep.Dropped > 0 || rep.Pruned > 0:
-		log.Printf("MEMORY: %s", rep.Line())
+		logsink.Info("memory.end", "%s", logsink.Preview(rep.Line()))
 	}
 	return cognitive.AlarmResult{Accepted: true}
 }

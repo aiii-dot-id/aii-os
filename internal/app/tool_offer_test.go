@@ -115,8 +115,10 @@ func TestPromptToolDefinitionsHoldUnderTheCeilingWithTenPlugins(t *testing.T) {
 	if !app.toolReg.HasDynamic() {
 		t.Fatal("the posture condition must hold with plugins installed")
 	}
-	if p, err := app.composer.Compose("", 0); err != nil || !strings.Contains(p.Text, "Plugins installed beside you") {
-		t.Fatalf("the prompt must carry the posture: %v", err)
+	// .
+	// .
+	if p, err := app.composer.Compose("", 0); err != nil || !strings.Contains(p.Text, "Plugin operations installed beside you") || !strings.Contains(p.Text, "  probe — 40: probe.explain, probe.list, probe.ping, probe.status") {
+		t.Fatalf("the prompt must name the installed operations: %v", err)
 	}
 
 	// .

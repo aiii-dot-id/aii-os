@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,7 +159,7 @@ func (a *App) setSandboxRoots(roots []string) error {
 		*a.cfg = candidate
 		a.toolReg.SetExtraRoots(normalized)
 		a.loadRing5()
-		log.Printf("Ring 5: extra sandbox roots -> %v (operator setting, floor updated live)", normalized)
+		logsink.Info("ring.decision", "extra sandbox roots -> %v (operator setting, floor updated live)", normalized)
 	}
 	if persistErr != nil {
 		return fmt.Errorf("sandbox roots were published and applied live, but directory durability is unconfirmed: %w", persistErr)
@@ -194,7 +194,7 @@ func (a *App) setToolEnabled(name string, enabled bool) error {
 	if published {
 		*a.cfg = candidate
 		a.toolReg.SetToolEnabled(name, enabled)
-		log.Printf("Ring 5: tool %q -> %v (operator toggle)", name, enabled)
+		logsink.Info("ring.decision", "tool %q -> %v (operator toggle)", name, enabled)
 	}
 	if persistErr != nil {
 		return fmt.Errorf("tool toggle was published and applied live, but directory durability is unconfirmed: %w", persistErr)

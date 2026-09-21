@@ -3,7 +3,7 @@ package app
 import (
 	"bytes"
 	_ "embed"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 )
@@ -59,7 +59,7 @@ func skillsTemplate(stamp string) []byte {
 	if !bytes.Contains(skillsMD, []byte(skillsStampPrefix+skillsStampMarker)) {
 		// .
 		// .
-		log.Printf("[skills] seed: template lacks the describes-build marker — seeding verbatim")
+		logsink.Warn("seed.refusal", "seed: template lacks the describes-build marker — seeding verbatim")
 		return skillsMD
 	}
 	return bytes.Replace(skillsMD, []byte(skillsStampPrefix+skillsStampMarker), []byte(skillsStampPrefix+stamp), 1)
@@ -118,6 +118,7 @@ var skillsShippedSeeds = []string{
 	"a5427e5a9596c2b7d33ac35e6587e568ce90b3467c1841d406101c031b773be8",
 	"a352d34bdb1ea2de5da43966ac70ba44f23213d7ef43d402b5e3a27a5d67899f",
 	"faaa1dfc95eb79aa8306804d1bf9dda887cf80f799fd4f1ea3cf2247c5e19585",
+	"112849c716f89ae16649da6a9010d740ff8f543362cbd8be02766a559c869ece",
 }
 
 // .
@@ -127,7 +128,7 @@ var skillsShippedSeeds = []string{
 func (a *App) seedSkillsDoc() {
 	path := a.skillsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("[skills] seed: mkdir %s: %v", filepath.Dir(path), err)
+		logsink.Warn("seed.error", "seed: mkdir %s: %v", filepath.Dir(path), err)
 		return
 	}
 	seedDoc(path, skillsTemplate(BuildIdentity()), normalizeSkillsStamp, skillsShippedSeeds, "[skills] seed")

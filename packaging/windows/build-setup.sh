@@ -24,7 +24,7 @@ mkdir -p "$OUT"
 #   SIGN_CMD="<command>" — portable hook, run as `$SIGN_CMD <file>`. Point
 #     it at a one-line wrapper for cross-platform Microsoft Artifact Signing
 #     (the `sign` dotnet tool or jsign) carrying your account, endpoint and
-#     certificate profile. Preferred; keeps the win11 VM out of the path.
+#     certificate profile. Preferred; keeps a Windows machine out of the path.
 #   SIGNTOOL="<path>" — Windows signtool.exe with a plain code-signing cert.
 # Absent both, the executable ships unsigned.
 sign_one() {

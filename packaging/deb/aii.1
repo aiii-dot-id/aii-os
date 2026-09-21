@@ -44,15 +44,19 @@ with their ports and, once born, their names.
 Identity directory to run in. Defaults to the current directory.
 .TP
 .BI \-config " file"
-Config file name within the identity directory. Defaults to
-.IR config.json .
+Config file within the identity directory. Defaults to
+.IR config/config.json ,
+or
+.IR config.json
+for an identity installed before that move.
 .TP
 .B \-version
 Print the version and build identity, then exit.
 .SH FILES
 .TP
 .I ~/.aii/identity-N/
-An identity slot: config.json, data/ (ledger, database, key), log/.
+An identity slot: config/ (config.json, providers.json), data/ (ledger,
+database, key), log/.
 .TP
 .I ~/.aii/by-name/<Name>
 Symlink to the slot carrying that name. Derived from the ledger and

@@ -19,7 +19,7 @@ class WakeReceiver : BroadcastReceiver() {
         // goAsync's grace (~10s) is the budget; runtime boot is ~1-2s
         // and TIME's evaluation is milliseconds.
         //
-        // COLD START IS THE POINT (Sol P1-2): when this broadcast
+        // COLD START IS THE POINT: when this broadcast
         // relaunched a dead process, the wake itself is the reason the
         // runtime must start — the alarm receiver window is also the
         // background-start exemption that lets any resulting foreground

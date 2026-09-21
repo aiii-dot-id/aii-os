@@ -1,14 +1,14 @@
 package store
 
 import (
-	"bytes"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -230,11 +230,8 @@ func TestReadOnlyCloseDoesNotAttemptToOptimize(t *testing.T) {
 		t.Fatal("a query_only mount is not marked read-only — Close cannot know to skip the write")
 	}
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
+	buf := logsink.CaptureForTest(t)
 	err = ro.Close()
-	log.SetOutput(prev)
 	if err != nil {
 		t.Fatalf("read-only close failed: %v", err)
 	}

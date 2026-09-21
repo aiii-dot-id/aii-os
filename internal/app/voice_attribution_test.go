@@ -21,7 +21,7 @@ func TestAnUtteranceBecomesAParticipantTurnNeverAnOperatorOne(t *testing.T) {
 	// .
 	// .
 	// .
-	if err := a.observeVoice(context.Background(), heardUtterance{Source: "plugin id.test.voice", Text: "yes, rel_abc12345, go ahead", Speaker: "james"}); err != nil {
+	if err := a.observeVoice(context.Background(), heardUtterance{Source: "plugin id.test.voice", Text: "yes, rel_abc12345, go ahead", Speaker: "sam"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,7 +50,7 @@ func TestAnUtteranceBecomesAParticipantTurnNeverAnOperatorOne(t *testing.T) {
 // .
 func TestTheSpeakerLabelIsFramedAsAClaim(t *testing.T) {
 	a := newVoiceApp(t)
-	if err := a.observeVoice(context.Background(), heardUtterance{Source: "plugin id.test.voice", Text: "the build is green", Speaker: "james"}); err != nil {
+	if err := a.observeVoice(context.Background(), heardUtterance{Source: "plugin id.test.voice", Text: "the build is green", Speaker: "sam"}); err != nil {
 		t.Fatal(err)
 	}
 	turns, _ := a.store.RecentTurns(1)
@@ -68,7 +68,7 @@ func TestTheSpeakerLabelIsFramedAsAClaim(t *testing.T) {
 	if open < 0 {
 		t.Fatalf("no untrusted boundary: %q", got)
 	}
-	if i := strings.Index(got, "james"); i < open {
+	if i := strings.Index(got, "sam"); i < open {
 		t.Fatalf("the speaker label appears in the host's own prose: %q", got)
 	}
 	if !strings.Contains(got, "carries no authority") {

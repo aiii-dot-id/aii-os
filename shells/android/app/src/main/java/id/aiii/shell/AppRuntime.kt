@@ -24,7 +24,7 @@ object AppRuntime : mobile.WakeScheduler {
     private val pending = mutableListOf<(String?, String?) -> Unit>()
 
     // EVERY caller's callback registers and flushes exactly once — the
-    // recreation bug (Sol P2-4): a second activity arriving mid-start
+    // recreation bug: a second activity arriving mid-start
     // was returned UNREGISTERED, and if the first activity died before
     // start finished, nobody was left to load the URL: a blank window
     // over a healthy runtime. The pending list is the whole fix.
@@ -80,7 +80,7 @@ object AppRuntime : mobile.WakeScheduler {
 
     // The wake path when the broadcast RELAUNCHED the process. The old
     // comment said "a wake before Start is meaningless" — exactly
-    // backwards for a process the wake itself created (Sol P1-2): the
+    // backwards for a process the wake itself created: the
     // runtime never started, TIME never re-armed the next alarm, and
     // one process death silenced wakes forever. The wake IS the reason
     // to start.

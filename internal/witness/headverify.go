@@ -235,6 +235,17 @@ type HeadVerifier struct {
 	verified    int
 	unverified  int
 	footnotes   int
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	attestedOrdinal int64
+	attestedHash    string
 }
 
 // .
@@ -245,7 +256,7 @@ func NewHeadVerifier(keys map[string]*WitnessKeyMaterial) *HeadVerifier {
 	// .
 	// .
 	// .
-	return &HeadVerifier{keys: keys, prevOrdinal: -1, prevHash: ZeroLedgerHash}
+	return &HeadVerifier{keys: keys, prevOrdinal: -1, prevHash: ZeroLedgerHash, attestedOrdinal: -1}
 }
 
 // .
@@ -263,6 +274,8 @@ func (h *HeadVerifier) Verified() int { return h.verified }
 
 // .
 // .
+// .
+// .
 func (h *HeadVerifier) Unverified() int { return h.unverified }
 
 // .
@@ -272,6 +285,41 @@ func (h *HeadVerifier) Footnotes() int { return h.footnotes }
 
 // .
 func (h *HeadVerifier) Keys() int { return len(h.keys) }
+
+// .
+// .
+// .
+// .
+func (h *HeadVerifier) Attested() (seq uint64, hash string, ok bool) {
+	if h.attestedOrdinal < 0 {
+		return 0, "", false
+	}
+	return uint64(h.attestedOrdinal), h.attestedHash, true
+}
+
+// .
+// .
+// .
+// .
+func (h *HeadVerifier) Summary() string {
+	var reach string
+	if seq, hash, ok := h.Attested(); ok {
+		if len(hash) > 12 {
+			hash = hash[:12]
+		}
+		reach = fmt.Sprintf("witnessed through record %d (%s)", seq, hash)
+	} else {
+		reach = "no record witnessed"
+	}
+	line := fmt.Sprintf("%d witness heads verified under %d persisted keys, %s; %d tail heads unverified",
+		h.verified, len(h.keys), reach, h.unverified)
+	// .
+	// .
+	if h.footnotes > 0 {
+		line += fmt.Sprintf("; %d footnote heads accepted with no receipt (re-wrapped: they stand on the identity's proof alone)", h.footnotes)
+	}
+	return line
+}
 
 type headReceipt struct {
 	IdentityID                     string `json:"identity_id"`
@@ -331,7 +379,19 @@ func (h *HeadVerifier) VerifyHead(evt *ledger.Event) error {
 	h.prevOrdinal, h.prevHash = r.LedgerOrdinal, r.LedgerHash
 	km := h.keys[r.WitnessKeyID]
 	if km == nil {
-		h.unverified++
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		if !evt.Sealed() {
+			h.unverified++
+		}
 		return fmt.Errorf("record %d: %w (%s)", evt.Seq, ledger.ErrWitnessKeyUnknown, r.WitnessKeyID)
 	}
 	at, err := time.Parse(time.RFC3339, r.WitnessedAt)
@@ -360,5 +420,6 @@ func (h *HeadVerifier) VerifyHead(evt *ledger.Event) error {
 		return fmt.Errorf("record %d: witness signature under %s: %w", evt.Seq, km.KeyID, err)
 	}
 	h.verified++
+	h.attestedOrdinal, h.attestedHash = r.LedgerOrdinal, r.LedgerHash
 	return nil
 }

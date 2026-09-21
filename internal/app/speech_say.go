@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -326,7 +326,7 @@ func (a *App) speakAhead(text string) string {
 	if err != nil {
 		// .
 		// .
-		log.Printf("VOICE: this reply will not be spoken aloud: %v", err)
+		logsink.Info("voice.refusal", "this reply will not be spoken aloud: %v", err)
 		return ""
 	}
 	a.speakStart(r)
@@ -490,7 +490,7 @@ func (a *App) speakPlay(ctx context.Context, id string, w io.Writer) error {
 				return err
 			}
 			if err != nil {
-				log.Printf("VOICE: a reply stopped speaking part way through: %v", err)
+				logsink.Warn("voice.error", "a reply stopped speaking part way through: %v", err)
 			}
 			return nil
 		}

@@ -52,7 +52,7 @@ func TestFrameOverlayServesFullReForm(t *testing.T) {
 	for p, want := range wants {
 		got, ok := s.overlayAsset(p)
 		if !ok {
-			t.Fatalf("%s must be served from the re-form overlay — the operator ruling (2026-08-24) grants all three frame extensions", p)
+			t.Fatalf("%s must be served from the re-form overlay — the operator grants all three frame extensions", p)
 		}
 		if !strings.Contains(string(got), want) {
 			t.Fatalf("%s must serve the operator's bytes, %q not found in %q", p, want, got)

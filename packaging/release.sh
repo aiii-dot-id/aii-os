@@ -7,8 +7,8 @@
 # cannot be notarized, cannot be stapled, and cannot be installed.
 # GitHub is the DISTRIBUTION surface, not the factory.
 #
-# WHY IT STOPS TWICE: signing is offline by doctrine (RULINGS — the
-# platform_release key is held by AIII and never reaches a build host),
+# WHY IT STOPS TWICE: signing is offline by doctrine — the
+# platform_release key is held by AIII and never reaches a build host —
 # and publication is a person's act. This script assembles and VERIFIES;
 # it never signs and never publishes.
 #
@@ -24,8 +24,8 @@
 # wrong artifact kind, platform and arch missing, two forbidden fields
 # present, and a "sha256:"-prefixed hash where bare hex was required. No
 # signature it produced could ever have verified, and the bug survived
-# because `attach` only checked that a .sig FILE EXISTED (external
-# review). Both halves now call internal/updates through aii-release.
+# because `attach` only checked that a .sig FILE EXISTED.
+# Both halves now call internal/updates through aii-release.
 set -e
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -135,8 +135,8 @@ prepare)
   # printed its refusal to stderr and the candidate proceeded. Capture,
   # then indent. And EVERY executable: the check covered the .deb and
   # the Linux tarballs and skipped the macOS tarball, the Windows archive
-  # and installer, and both binaries inside the app bundle (external
-  # review). Presence was already enforced by the inventory,
+  # and installer, and both binaries inside the app bundle. Presence was
+  # already enforced by the inventory,
   # so an unmatched glob here is a bug, not a case to skip.
   bind() {
     out=$(GO="$GO" sh packaging/assert-source-bound.sh "$1" "$rev" 2>&1) || die "$out"

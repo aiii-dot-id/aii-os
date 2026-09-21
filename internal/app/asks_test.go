@@ -1,12 +1,13 @@
 package app
 
 import (
-	"log"
 	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -177,10 +178,7 @@ func TestAsksAreBoundedAndTyped(t *testing.T) {
 // .
 // .
 func TestASupersedeAndAWithdrawalAreOnTheRecord(t *testing.T) {
-	var lines []string
-	old := log.Writer()
-	log.SetOutput(writerFunc(func(p []byte) (int, error) { lines = append(lines, string(p)); return len(p), nil }))
-	defer log.SetOutput(old)
+	lines := logsink.CaptureForTest(t)
 
 	a := liveApp(t)
 	startSession(t, a, "ws_log", "draft the reply")
@@ -194,16 +192,11 @@ func TestASupersedeAndAWithdrawalAreOnTheRecord(t *testing.T) {
 	second := a.askViews()[0].ID
 	a.workObserved(store.WorkEvent{Kind: store.WorkDelivered, ID: "ws_log", Outcome: "served", Evidence: "completed_locally"})
 
-	whole := strings.Join(lines, "")
-	if !strings.Contains(whole, "ASK: "+second+" superseded "+first) {
+	whole := lines.String()
+	if !strings.Contains(whole, second+" superseded "+first) || !strings.Contains(whole, "ask.decision") {
 		t.Fatalf("the supersede names both cards:\n%s", whole)
 	}
-	if !strings.Contains(whole, "ASK: "+second+" withdrawn (session ws_log): the session it belonged to has delivered") {
+	if !strings.Contains(whole, second+" withdrawn (session ws_log): the session it belonged to has delivered") || !strings.Contains(whole, "ask.end") {
 		t.Fatalf("the withdrawal names the card and the reason:\n%s", whole)
 	}
 }
-
-// .
-type writerFunc func([]byte) (int, error)
-
-func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

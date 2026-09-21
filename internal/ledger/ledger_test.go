@@ -539,8 +539,18 @@ func TestTheChainBindsWholeEntries(t *testing.T) {
 	if err == nil {
 		t.Fatal("a re-signed rewrite of an interior field verified — the chain does not bind entries")
 	}
-	if !strings.Contains(err.Error(), "event 2: prev mismatch") {
-		t.Fatalf("the break must be the CHAIN at the next record, got: %v", err)
+	// .
+	// .
+	// .
+	var failure *VerifyFailure
+	if !errors.As(err, &failure) || failure.Seq != 3 || !strings.Contains(err.Error(), "record 3 (ledger.jsonl): prev mismatch") {
+		t.Fatalf("the break must be the CHAIN at the next record, named by its seq, got: %v", err)
+	}
+	// .
+	// .
+	// .
+	if failure.Proved.Seq != 2 || failure.Traversed.Seq != 2 {
+		t.Fatalf("proved %d, traversed %d, want both 2", failure.Proved.Seq, failure.Traversed.Seq)
 	}
 }
 

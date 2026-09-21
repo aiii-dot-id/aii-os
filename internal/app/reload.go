@@ -1,13 +1,14 @@
 package app
 
 import (
-	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/fsdir"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -33,12 +34,29 @@ func (a *App) watchConfig(path string) {
 	providerPath := providerFilePath(path)
 	config := fsdir.New(a.bgCtx, a.gate, filepath.Dir(path), fsdir.Options{Heartbeat: a.watcherInterval(), File: filepath.Base(path)})
 	providers := fsdir.New(a.bgCtx, a.gate, filepath.Dir(providerPath), fsdir.Options{Heartbeat: a.watcherInterval(), File: filepath.Base(providerPath)})
+	// .
+	// .
+	// .
+	// .
+	controlPath := LogControlPathIn(identityHomeFromConfig(path))
+	if err := os.MkdirAll(filepath.Dir(controlPath), 0o700); err != nil {
+		logsink.Warn("logs.error", "cannot watch %s (%v) — a level set there will not apply until the next boot", controlPath, err)
+	}
+	control := fsdir.New(a.bgCtx, a.gate, filepath.Dir(controlPath), fsdir.Options{Heartbeat: a.watcherInterval(), File: filepath.Base(controlPath)})
 	for {
 		select {
 		case <-a.bgCtx.Done():
 			return
 		case <-config.C:
 		case <-providers.C:
+		case <-control.C:
+			// .
+			// .
+			// .
+			// .
+			applyLogLevels(a.configSnapshot(), controlPath)
+			applyLogTaps(a.configSnapshot(), controlPath)
+			continue
 		}
 		// .
 		// .
@@ -78,7 +96,7 @@ func (a *App) reloadConfig() {
 	}
 	fresh, err := LoadConfig(current.SourcePath)
 	if err != nil {
-		log.Printf("Config reload: unreadable, keeping current: %v", err)
+		logsink.Warn("config.error", "unreadable, keeping current: %v", err)
 		return
 	}
 	loaded := *fresh
@@ -120,18 +138,18 @@ func (a *App) reloadConfig() {
 		if err != nil {
 			llmChanged = false
 			fresh.LLM = current.LLM
-			log.Printf("Config reload: llm refused, current substrate kept: %v", err)
+			logsink.Warn("config.refusal", "llm refused, current substrate kept: %v", err)
 		}
 	}
 
 	holdTurn := llmChanged && a.llmSwap != nil
 	if holdTurn {
 		if a.bgCtx == nil {
-			log.Printf("Config reload: application lifecycle is unavailable")
+			logsink.Warn("config.refusal", "application lifecycle is unavailable")
 			return
 		}
 		if err := a.acquireTurn(a.bgCtx); err != nil {
-			log.Printf("Config reload: cannot wait for current turn: %v", err)
+			logsink.Warn("config.refusal", "cannot wait for current turn: %v", err)
 			return
 		}
 	}
@@ -151,9 +169,9 @@ func (a *App) reloadConfig() {
 			a.setSubstrateCapability(proved)
 		}
 		if fileErr != nil {
-			log.Printf("Config reload: recheck failed, keeping current: %v", fileErr)
+			logsink.Warn("config.error", "recheck failed, keeping current: %v", fileErr)
 		} else {
-			log.Printf("Config reload: superseded by a concurrent configuration change")
+			logsink.Info("config.refusal", "superseded by a concurrent configuration change")
 		}
 		return
 	}
@@ -215,6 +233,9 @@ func (a *App) reloadConfig() {
 	} else if fresh.Speech.Mode.Revision < current.Speech.Mode.Revision {
 		fresh.Speech.Mode.Revision = current.Speech.Mode.Revision
 	}
+	// .
+	applyLogLevels(*fresh, LogControlPathIn(identityHomeFromConfig(fresh.SourcePath)))
+	applyLogTaps(*fresh, LogControlPathIn(identityHomeFromConfig(fresh.SourcePath)))
 	*a.cfg = *fresh
 	a.publishVoiceMode(fresh.Speech.Mode)
 	a.cfgMu.Unlock()
@@ -245,29 +266,29 @@ func (a *App) reloadConfig() {
 	}
 
 	if llmChanged {
-		log.Printf("Config reload: llm applied live (provider %q, model %q)", fresh.LLM.Provider, fresh.LLM.Model)
+		logsink.Info("config.decision", "llm applied live (provider %q, model %q)", fresh.LLM.Provider, fresh.LLM.Model)
 	}
 	if rootsChanged {
-		log.Printf("Config reload: sandbox roots applied live -> %v (floor updated)", fresh.Tools.ExtraRoots)
+		logsink.Info("config.decision", "sandbox roots applied live -> %v (floor updated)", fresh.Tools.ExtraRoots)
 	}
 	if autoloadChanged {
-		log.Printf("Config reload: plugins.autoload -> %s", fresh.Plugins.Autoload)
+		logsink.Info("config.decision", "plugins.autoload -> %s", fresh.Plugins.Autoload)
 		a.pokePluginSweep()
 	}
 	if togglesChanged {
-		log.Printf("Config reload: tool toggles applied live -> disabled %v", fresh.Tools.Disabled)
+		logsink.Info("config.decision", "tool toggles applied live -> disabled %v", fresh.Tools.Disabled)
 	}
 	if agencyChanged {
-		log.Printf("Config reload: agency ceilings applied live -> depth %d, parallel %d, mints %d, wall %ds, local wall %ds",
+		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d, mints %d, wall %ds, local wall %ds",
 			fresh.Agency.MaxSubagentDepth, fresh.Agency.MaxParallelSubagents,
 			fresh.Agency.SubagentMaxMints, fresh.Agency.SubagentWallSeconds, fresh.Agency.SubagentWallSecondsLocal)
 	}
 	if policyChanged {
-		log.Printf("Config reload: plugin grants/auth profiles applied live -> %d grant(s), %d profile(s)",
+		logsink.Info("config.decision", "plugin grants/auth profiles applied live -> %d grant(s), %d profile(s)",
 			len(fresh.Plugins.Grants), len(fresh.Plugins.AuthProfiles))
 	}
 	if savedForNextBoot {
-		log.Printf("Config reload: other settings changed and are SAVED FOR NEXT BOOT — this process keeps the values it started with")
+		logsink.Info("config.decision", "other settings changed and are SAVED FOR NEXT BOOT — this process keeps the values it started with")
 	}
 }
 
@@ -277,6 +298,8 @@ func (a *App) reloadConfig() {
 // .
 // .
 func blankLiveAppliable(c *Config) {
+	c.Logs.Level = ""
+	c.Logs.Detail = nil
 	c.LLM = LLMConfig{}
 	c.Speech = SpeechConfig{}
 	c.Tools.ExtraRoots = nil

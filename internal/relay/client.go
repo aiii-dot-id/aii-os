@@ -7,8 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -69,7 +69,7 @@ func (c *Client) Run(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			log.Printf("relay: %s at %s: %v — reconnecting in %s", c.Name, c.Relay, err, backoff)
+			logsink.Warn("relay.error", "%s at %s: %v — reconnecting in %s", c.Name, c.Relay, err, backoff)
 		}
 		select {
 		case <-ctx.Done():
@@ -152,7 +152,7 @@ func (c *Client) session(ctx context.Context) error {
 	c.connected, c.since, c.lastErr = true, now(), ""
 	c.sessions++
 	c.mu.Unlock()
-	log.Printf("relay: %s registered at %s", c.Name, c.Relay)
+	logsink.Info("relay.start", "%s registered at %s", c.Name, c.Relay)
 
 	var wmu sync.Mutex
 	write := func(m Message) error {
@@ -201,7 +201,7 @@ func (c *Client) session(ctx context.Context) error {
 func (c *Client) attach(ctx context.Context, id string) {
 	up, err := c.dial(ctx)
 	if err != nil {
-		log.Printf("relay: attach %s: %v", id, err)
+		logsink.Warn("relay.error", "attach %s: %v", id, err)
 		return
 	}
 	defer up.Close()
@@ -212,13 +212,13 @@ func (c *Client) attach(ctx context.Context, id string) {
 	_ = up.SetReadDeadline(time.Now().Add(AttachWithin))
 	m, err := ReadMessage(r)
 	if err != nil || m.Type != "attached" {
-		log.Printf("relay: attach %s not accepted: %v %s", id, err, m.Reason)
+		logsink.Warn("relay.refusal", "attach %s not accepted: %v %s", id, err, m.Reason)
 		return
 	}
 	_ = up.SetReadDeadline(time.Time{})
 	down, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", c.Local)
 	if err != nil {
-		log.Printf("relay: attach %s: the dashboard at %s: %v", id, c.Local, err)
+		logsink.Warn("relay.error", "attach %s: the dashboard at %s: %v", id, c.Local, err)
 		return
 	}
 	defer down.Close()

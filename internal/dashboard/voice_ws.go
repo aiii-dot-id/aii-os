@@ -3,7 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/binary"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 
 	"github.com/coder/websocket"
 )
@@ -144,7 +144,7 @@ func (s *Server) handleVoiceFrame(ctx context.Context, conn *websocket.Conn, dat
 			// .
 			// .
 			// .
-			log.Printf("VOICE: could not hear an utterance (%d bytes, %d Hz, %d ch): %v",
+			logsink.Warn("voice.error", "could not hear an utterance (%d bytes, %d Hz, %d ch): %v",
 				len(pcm), sampleRate, channels, err)
 			s.sendError(ctx, conn, "could not transcribe what you said: "+err.Error())
 		}

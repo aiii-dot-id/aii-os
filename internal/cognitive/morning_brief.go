@@ -3,7 +3,7 @@ package cognitive
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -80,7 +80,7 @@ func NewMorningBrief(store BriefStore, llm LLMCaller, briefWriter BriefWriter, c
 		if loc, err := time.LoadLocation(cfg.Timezone); err == nil {
 			mb.tz = loc
 		} else {
-			log.Printf("MORNING_BRIEF: cannot load timezone %s, using UTC", cfg.Timezone)
+			logsink.Warn("brief.error", "cannot load timezone %s, using UTC", cfg.Timezone)
 		}
 	}
 
@@ -179,7 +179,7 @@ func (m *MorningBriefFacility) Execute(ctx context.Context) error {
 	// .
 	if m.attention != nil {
 		if items, err := m.attention(ctx); err != nil {
-			log.Printf("MORNING_BRIEF: attention unreadable, the brief goes without it: %v", err)
+			logsink.Warn("brief.error", "attention unreadable, the brief goes without it: %v", err)
 		} else if low := memory.OfCost(items, memory.CostLow); len(low) > 0 {
 			parts = append(parts, "The record is holding these — reconfirm, advance, or let go; none is a chore:")
 			parts = append(parts, memory.RenderAttention(low))
@@ -204,14 +204,14 @@ func (m *MorningBriefFacility) Execute(ctx context.Context) error {
 		// .
 		// .
 		// .
-		log.Printf("MORNING_BRIEF: LLM call failed, no brief this pass: %v", err)
+		logsink.Warn("brief.error", "LLM call failed, no brief this pass: %v", err)
 		return nil
 	}
 
 	// .
 	if m.briefWriter != nil && output != "" {
 		m.briefWriter.SetBrief(output)
-		log.Printf("MORNING_BRIEF: wrote %d chars bridge summary", len(output))
+		logsink.Info("brief.end", "wrote %d chars bridge summary", len(output))
 	}
 
 	return nil
@@ -232,13 +232,13 @@ func (m *MorningBriefFacility) OnAlarm(ctx context.Context, alarmID string, cloc
 	// .
 	if m.turn != nil {
 		if !m.turn.TryBeginTurn() {
-			log.Printf("MORNING_BRIEF: the identity is in a turn — deferred")
+			logsink.Info("brief.refusal", "the identity is in a turn — deferred")
 			return AlarmResult{}
 		}
 		defer m.turn.EndTurn()
 	}
 	if err := m.Execute(ctx); err != nil {
-		log.Printf("MORNING_BRIEF: execute error: %v", err)
+		logsink.Warn("brief.error", "execute error: %v", err)
 		return AlarmResult{Accepted: false}
 	}
 

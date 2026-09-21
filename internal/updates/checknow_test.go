@@ -3,8 +3,11 @@ package updates
 import (
 	"context"
 	"errors"
+	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -190,5 +193,133 @@ func TestCheckNowEndsWithTheLifecycle(t *testing.T) {
 	snap := c.State().Snapshot("0.3.0")
 	if snap.Checking || snap.LastError == "" {
 		t.Fatalf("a cancelled run must finish, clear checking, and name its failure: %+v", snap)
+	}
+}
+
+// .
+// .
+// .
+// .
+// .
+func TestCheckNowIsHandedToItsOwnerAndRefusedWhenStopping(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	srv, _ := blockingRelease(t, release)
+	c := checkNowChecker(t, srv, false)
+	c.arm(func() bool { return false }, func() bool { return false })
+
+	// .
+	// .
+	var owned int
+	var ranInsideOwner bool
+	done := make(chan struct{})
+	c.SetRunner(func(work func()) bool {
+		owned++
+		inside := false
+		func() { inside = true; work() }()
+		ranInsideOwner = inside
+		return true
+	})
+	if err := c.CheckNow(context.Background(), func() { close(done) }); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, done)
+	if owned != 1 || !ranInsideOwner {
+		t.Fatalf("the check was not run by its owner: handed over %d times, ran inside=%v", owned, ranInsideOwner)
+	}
+	if snap := c.State().Snapshot("0.3.0"); snap.AvailableVersion != "0.4.0" || snap.Checking {
+		t.Fatalf("the owned check did not do the work: %+v", snap)
+	}
+
+	// .
+	// .
+	c.SetRunner(func(func()) bool { return false })
+	err := c.CheckNow(context.Background(), func() { t.Error("a refused check reported itself done") })
+	if !errors.Is(err, ErrStopping) {
+		t.Fatalf("a check asked for while stopping: %v", err)
+	}
+	if snap := c.State().Snapshot("0.3.0"); snap.Checking {
+		t.Error("a check that never began left the state saying checking")
+	}
+	// .
+	c.SetRunner(func(work func()) bool { work(); return true })
+	again := make(chan struct{})
+	if err := c.CheckNow(context.Background(), func() { close(again) }); err != nil {
+		t.Fatalf("after a refusal the next check must run: %v", err)
+	}
+	waitDone(t, again)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TestApplyDoesNotSwapAfterCancellation(t *testing.T) {
+	dir := t.TempDir()
+	exePath := filepath.Join(dir, "aii")
+	writeFile(t, dir, "aii", "old binary")
+	writeFile(t, dir, ".boot_completed", "ok")
+
+	const newVer = "9.9.9"
+	archive := releaseArchive(t, []byte("new binary"))
+	signer := newTestReleaseSigner(t)
+	signer.provisionTrustDir(t, dir)
+	sig := signer.signReleasePayload(t, releaseArchivePayload{
+		ArchiveHash: sha256hex(archive),
+		Version:     newVer,
+		Platform:    packagefmt.HostPlatform(),
+		Arch:        hostArchForTest(),
+		SourceRev:   "cancelapply0",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/archive":
+			w.Write(archive)
+		case "/sig":
+			w.Write(sig)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestChecker(signer.env, dir, &githubRelease{
+		TagName: "v" + newVer,
+		Assets: []githubAsset{
+			{Name: assetName(newVer), BrowserDownloadURL: srv.URL + "/archive"},
+			{Name: assetName(newVer) + ".platform.sig", BrowserDownloadURL: srv.URL + "/sig"},
+		},
+	})
+	c.state.SetAvailable(newVer)
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	ctx, cancel := context.WithCancel(context.Background())
+	prev := afterVerified
+	afterVerified = cancel
+	err := c.applyTo(ctx, exePath)
+	afterVerified = prev
+	if err == nil {
+		t.Fatal("A BINARY WAS SWAPPED AFTER THE REASON TO STOP ARRIVED")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the refusal does not name the cancellation: %v", err)
+	}
+	if got, _ := os.ReadFile(exePath); string(got) != "old binary" {
+		t.Errorf("the running program was replaced by a cancelled apply: %q", got)
+	}
+
+	// .
+	// .
+	if err := c.applyTo(context.Background(), exePath); err != nil {
+		t.Fatalf("the same apply without a cancellation must install: %v", err)
+	}
+	if got, _ := os.ReadFile(exePath); string(got) != "new binary" {
+		t.Fatalf("after the apply the binary is %q", got)
 	}
 }

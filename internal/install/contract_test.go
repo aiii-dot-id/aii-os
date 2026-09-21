@@ -26,11 +26,28 @@ func TestCreatedSlotConfigLoadsInTheRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(dir, "config.json")
+	path := install.ConfigPathIn(dir)
+	// .
+	// .
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("installer did not write its config: %v", err)
+	}
 	cfg, err := app.LoadConfig(path)
 	if err != nil {
 		raw, _ := os.ReadFile(path)
 		t.Fatalf("the runtime refuses the config `aii init` writes: %v\n\nconfig was:\n%s", err, raw)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("loading the installed config changed it: %v", err)
+	}
+	if cfg.SourcePath != path {
+		t.Fatalf("loaded %q, want the installer's %q", cfg.SourcePath, path)
+	}
+	if _, err := os.Stat(filepath.Join(dir, install.ConfigFileName)); !os.IsNotExist(err) {
+		t.Fatalf("fresh slot acquired a second config: %v", err)
 	}
 
 	// .
@@ -71,7 +88,7 @@ func TestEverySlotConfigLoads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfg, err := app.LoadConfig(filepath.Join(dir, "config.json"))
+		cfg, err := app.LoadConfig(install.ConfigPathIn(dir))
 		if err != nil {
 			t.Fatalf("slot %d writes a config the runtime refuses: %v", n, err)
 		}

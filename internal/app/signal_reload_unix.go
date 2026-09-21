@@ -3,7 +3,7 @@
 package app
 
 import (
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,7 +24,7 @@ func (a *App) installReloadSignal() {
 			case <-a.bgCtx.Done():
 				return
 			case <-ch:
-				log.Printf("SIGHUP: re-reading config")
+				logsink.Info("config.start", "re-reading config")
 				a.reloadConfig()
 			}
 		}

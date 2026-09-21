@@ -12,7 +12,7 @@ func TestCuriosityCueRendersAndIsSuppressed(t *testing.T) {
 	a, _ := focusFixture(t)
 
 	// .
-	state, err := a.buildWorkState()
+	state, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestCuriosityCueRendersAndIsSuppressed(t *testing.T) {
 	if err := a.store.SetCuriosityCue("the shape of tail latency", "bimodal under load", "ws_probe", "invitation"); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = a.buildWorkState()
+	state, _ = a.buildTurnFacts(false)
 	if !strings.Contains(state, "Curiosity") || !strings.Contains(state, "the shape of tail latency") {
 		t.Fatalf("a set cue must resurface as an invitation:\n%s", state)
 	}
@@ -39,11 +39,14 @@ func TestCuriosityCueRendersAndIsSuppressed(t *testing.T) {
 	if err := a.store.UpdateWorkPlan("ws_1", &focus, nil, nil, nil, nil, &dn); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = a.buildWorkState()
+	state, _ = a.buildTurnFacts(false)
 	if strings.Contains(state, "Curiosity") {
 		t.Fatalf("an operator decision must suppress the cue:\n%s", state)
 	}
-	if !strings.Contains(state, "Decision needed") {
-		t.Fatalf("the owed decision must be shown in its place:\n%s", state)
+	// .
+	// .
+	authored, _ := a.buildWorkState()
+	if !strings.Contains(authored, "Decision needed") {
+		t.Fatalf("the owed decision must be shown in its place:\n%s", authored)
 	}
 }

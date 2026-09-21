@@ -16,7 +16,7 @@ func TestWorkUpdatePlanSurface(t *testing.T) {
 	if _, err := engine.ExecuteAction(context.Background(), "verb", "work",
 		map[string]interface{}{
 			"action":      "start",
-			"description": "CS-4 plan surface",
+			"description": "the plan surface",
 		}); err != nil {
 		t.Fatalf("work start failed: %v", err)
 	}
@@ -39,14 +39,14 @@ func TestWorkUpdatePlanSurface(t *testing.T) {
 		map[string]interface{}{
 			"action":    "update",
 			"state":     "seams grounded",
-			"focus":     "land CS-4 plan surface",
+			"focus":     "land the plan surface",
 			"next_move": "render test",
 			"plan":      "## Plan\n- [ ] schema → store → verb → render\n- cite ws_ IDs",
 		}); err != nil {
 		t.Fatalf("plan update failed: %v", err)
 	}
 	ws, _ = st.ActiveWorkSession()
-	if ws.Focus != "land CS-4 plan surface" || ws.NextMove != "render test" {
+	if ws.Focus != "land the plan surface" || ws.NextMove != "render test" {
 		t.Fatalf("plan fields diverged: focus %q next %q", ws.Focus, ws.NextMove)
 	}
 	if !strings.Contains(ws.Plan, "cite ws_ IDs") {
@@ -65,7 +65,7 @@ func TestWorkUpdatePlanSurface(t *testing.T) {
 	if ws.Plan != "" {
 		t.Fatalf("empty plan did not clear: %q", ws.Plan)
 	}
-	if ws.Focus != "land CS-4 plan surface" {
+	if ws.Focus != "land the plan surface" {
 		t.Fatalf("clearing plan touched focus: %q", ws.Focus)
 	}
 	if ws.State != "seams grounded" {

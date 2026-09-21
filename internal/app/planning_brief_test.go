@@ -44,9 +44,10 @@ func TestPlanningBriefRendersOnlyUnderAnActiveSession(t *testing.T) {
 		t.Fatalf("the brief must be its own section before the resident's plan, not inside it (brief %d, plan %d)", bi, pi)
 	}
 	if strings.Contains(state[pi:], "Before you act") {
-		t.Fatal("substrate text inside the resident's plan section (CS-4)")
+		t.Fatal("substrate text inside the resident's plan section")
 	}
 
+	// .
 	// .
 	// .
 	// .
@@ -57,9 +58,15 @@ func TestPlanningBriefRendersOnlyUnderAnActiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ri, bi2 := strings.Index(withRhythm, "### Rhythm"), strings.Index(withRhythm, "### Before you act")
-	if ri < 0 || bi2 < 0 || ri > bi2 {
-		t.Fatalf("the rhythm line must render above the brief (rhythm %d, brief %d):\n%s", ri, bi2, withRhythm)
+	facts, err := a.buildTurnFacts(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withRhythm, "### Rhythm") || !strings.Contains(facts, "### Rhythm") {
+		t.Fatalf("the rhythm line belongs to the turn's facts, not the working state:\nstate:\n%s\nfacts:\n%s", withRhythm, facts)
+	}
+	if !strings.Contains(withRhythm, "the rhythm line in this turn's substrate block") {
+		t.Fatal("the brief still points at a rhythm line \"above\" it")
 	}
 
 	a.planningBrief = false

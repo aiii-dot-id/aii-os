@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-# DELIBERATELY EMPTY of data removal (Beta 1 journey 10: uninstall must
-# not destroy explicitly retained identity and project data).
+# DELIBERATELY EMPTY of data removal: uninstall must not destroy
+# explicitly retained identity and project data.
 #
 # An identity is a PQ-signed append-only ledger and its key. There is no
 # second copy. `apt remove` removing ~/.aii would destroy identities

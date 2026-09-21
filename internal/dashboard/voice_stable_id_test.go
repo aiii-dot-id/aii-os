@@ -18,7 +18,7 @@ func TestStableSpeakerIDCrossesSocket(t *testing.T) {
 	// .
 	// .
 	waitForConns(t, s, 1)
-	for _, id := range []string{"james-one", "james-two", ""} {
+	for _, id := range []string{"sam-one", "sam-two", ""} {
 		// .
 		// .
 		raw, _ := json.Marshal(map[string]any{"type": "speaker_observation", "session_id": "uid-wire", "sequence": 12,

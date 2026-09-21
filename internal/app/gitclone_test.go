@@ -39,7 +39,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 	// .
 	rebuilt := buildResponderPkg(t, t.TempDir(), "org.example.cloned")
 	succPkg := buildResponderPkg(t, t.TempDir(), "org.example.successor")
-	origin := filepath.Join(t.TempDir(), "ring4-memory")
+	origin := filepath.Join(t.TempDir(), "notes-plugin")
 	if err := os.MkdirAll(origin, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 	for name, body := range map[string][]byte{
 		"main.go":         []byte("package main // the review surface\n"),
 		"plugin.json":     []byte(`{"id":"org.example.cloned"}`),
-		"README.md":       []byte("# ring4-memory\n"),
+		"README.md":       []byte("# notes-plugin\n"),
 		"cloned.aiiospkg": data,
 	} {
 		if err := os.WriteFile(filepath.Join(origin, name), body, 0o644); err != nil {
@@ -106,7 +106,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 	if err := os.MkdirAll("plugins", 0o750); err != nil {
 		t.Fatal(err)
 	}
-	run(dir, "clone", "-q", origin, filepath.Join("plugins", "ring4-memory"))
+	run(dir, "clone", "-q", origin, filepath.Join("plugins", "notes-plugin"))
 	app.pokePluginSweep()
 
 	const tool = "pl_org_example_cloned_ping"
@@ -118,7 +118,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 
 	// .
 	// .
-	if _, err := os.Stat(filepath.Join("plugins", "ring4-memory", ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join("plugins", "notes-plugin", ".git")); err != nil {
 		t.Fatalf("the clone should carry its .git: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 		t.Fatal("expected a deterministic rebuild to be byte-identical")
 	}
 	run(origin, "commit", "-q", "--allow-empty", "-m", "no-op rebuild")
-	run(filepath.Join(dir, "plugins", "ring4-memory"), "pull", "-q")
+	run(filepath.Join(dir, "plugins", "notes-plugin"), "pull", "-q")
 	app.pluginMu.Lock()
 	nactive := len(app.plugins)
 	if nactive != 1 {
@@ -155,7 +155,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 	}
 	run(origin, "add", "-A")
 	run(origin, "commit", "-qm", "ship the successor")
-	run(filepath.Join(dir, "plugins", "ring4-memory"), "pull", "-q")
+	run(filepath.Join(dir, "plugins", "notes-plugin"), "pull", "-q")
 	app.pokePluginSweep()
 	waitFor(t, "the updated package to take over", func() bool {
 		_, oldStill := app.toolReg.Get(tool)
@@ -165,7 +165,7 @@ func TestGitCloneIntoPluginsIsTheInstall(t *testing.T) {
 	t.Log("pull replaced the package live — old deactivated, new activated")
 
 	// .
-	if err := os.RemoveAll(filepath.Join("plugins", "ring4-memory")); err != nil {
+	if err := os.RemoveAll(filepath.Join("plugins", "notes-plugin")); err != nil {
 		t.Fatal(err)
 	}
 	app.pokePluginSweep()

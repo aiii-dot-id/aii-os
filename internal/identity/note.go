@@ -3,7 +3,7 @@ package identity
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
@@ -102,6 +102,11 @@ func (e *Engine) verbNote(ctx context.Context, args map[string]interface{}) (str
 	if provenance == "external" {
 		payload["source_url"] = sourceURL
 	}
+	// .
+	// .
+	if cites, ok := args["cites"]; ok && cites != nil {
+		payload["cites"] = cites
+	}
 
 	// .
 	// .
@@ -119,7 +124,7 @@ func (e *Engine) verbNote(ctx context.Context, args map[string]interface{}) (str
 	// .
 	if private {
 		if err := e.store.MarkExperiencesProcessed([]string{expID}); err != nil {
-			log.Printf("CHARTER #9 RISK: private experience %s could not be marked processed: %v — it may be metabolized", expID, err)
+			logsink.Error("note.error", "CHARTER #9 RISK: private experience %s could not be marked processed: %v — it may be metabolized", expID, err)
 			return fmt.Sprintf("Noted (private) — WARNING: could not seal against processing: %v", err), nil
 		}
 	}
@@ -246,7 +251,7 @@ func (e *Engine) mintBeliefEvidenceEdges(ctx context.Context, args map[string]in
 		}
 	}
 	if len(refusals) > 0 {
-		log.Printf("belief evidence edge refusals: %v", refusals)
+		logsink.Warn("note.refusal", "belief evidence edge refusals: %s", logsink.Preview(fmt.Sprint(refusals)))
 	}
 	return refusals
 }

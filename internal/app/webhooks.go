@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -86,12 +86,12 @@ func (a *App) handleWebhook(w http.ResponseWriter, r *http.Request, pluginID, ho
 	// .
 	secret, why := a.webhookSecret(pluginID, decl.Signature.SecretSetting)
 	if secret == "" {
-		log.Printf("webhook %s/%s: no secret to verify with (%s) — refused", pluginID, hookPath, why)
+		logsink.Warn("webhook.refusal", "%s/%s: no secret to verify with (%s) — refused", pluginID, hookPath, why)
 		http.Error(w, "unverifiable", http.StatusUnauthorized)
 		return
 	}
 	if !verifyWebhook(decl.Signature, secret, r, body) {
-		log.Printf("webhook %s/%s: signature FAILED — refused, the operation did not run", pluginID, hookPath)
+		logsink.Warn("webhook.refusal", "%s/%s: signature FAILED — refused, the operation did not run", pluginID, hookPath)
 		http.Error(w, "signature failed", http.StatusUnauthorized)
 		return
 	}
@@ -146,27 +146,27 @@ func (a *App) handleWebhook(w http.ResponseWriter, r *http.Request, pluginID, ho
 	}
 	res, err := a.toolReg.Execute(ctx, pluginhost.ToolNameFor(pluginID, decl.Operation), args)
 	if err != nil || res.Error != "" {
-		log.Printf("webhook %s/%s: the operation failed (%v %s) — the sender may retry", pluginID, hookPath, err, res.Error)
+		logsink.Warn("webhook.error", "%s/%s: the operation failed (%v %s) — the sender may retry", pluginID, hookPath, err, res.Error)
 		http.Error(w, "the operation failed", http.StatusInternalServerError)
 		return
 	}
 	var out webhookResult
 	if strings.TrimSpace(res.Output) != "" {
 		if uerr := json.Unmarshal([]byte(res.Output), &out); uerr != nil {
-			log.Printf("webhook %s/%s: the operation's result is not a webhook result: %v", pluginID, hookPath, uerr)
+			logsink.Warn("webhook.error", "%s/%s: the operation's result is not a webhook result: %v", pluginID, hookPath, uerr)
 			http.Error(w, "the operation answered badly", http.StatusInternalServerError)
 			return
 		}
 	}
 	if out.Arrival != nil {
 		if out.Arrival.ID == "" || out.Arrival.From == "" {
-			log.Printf("webhook %s/%s: dropping an arrival with no id or sender", pluginID, hookPath)
+			logsink.Warn("webhook.refusal", "%s/%s: dropping an arrival with no id or sender", pluginID, hookPath)
 		} else {
 			route := a.webhookRoute(ctx, pluginID)
 			rowID := "in_" + route.Channel + "_" + out.Arrival.ID
 			fresh, rerr := a.store.RecordInbound(rowID, route.Channel, out.Arrival.From, out.Arrival.Body)
 			if rerr != nil {
-				log.Printf("webhook %s/%s: could not record the arrival: %v", pluginID, hookPath, rerr)
+				logsink.Warn("webhook.error", "%s/%s: could not record the arrival: %v", pluginID, hookPath, rerr)
 				http.Error(w, "the arrival could not be recorded", http.StatusInternalServerError)
 				return
 			}

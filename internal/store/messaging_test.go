@@ -10,11 +10,11 @@ import "testing"
 // .
 func TestARecordedArrivalIsRecordedOnce(t *testing.T) {
 	s := testStore(t)
-	fresh, err := s.RecordInbound("in_telegram_42", "telegram", "@james", "you up?")
+	fresh, err := s.RecordInbound("in_telegram_42", "telegram", "@sam", "you up?")
 	if err != nil || !fresh {
 		t.Fatalf("the first arrival was not new: %v %v", fresh, err)
 	}
-	fresh, err = s.RecordInbound("in_telegram_42", "telegram", "@james", "you up?")
+	fresh, err = s.RecordInbound("in_telegram_42", "telegram", "@sam", "you up?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestARecordedArrivalIsRecordedOnce(t *testing.T) {
 // .
 func TestArrivalsAreAnsweredByTimeNotByAFlag(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.RecordInbound("in_old", "telegram", "@james", "before"); err != nil {
+	if _, err := s.RecordInbound("in_old", "telegram", "@sam", "before"); err != nil {
 		t.Fatal(err)
 	}
 	older, err := s.InboundSince(0)
@@ -40,7 +40,7 @@ func TestArrivalsAreAnsweredByTimeNotByAFlag(t *testing.T) {
 	}
 	cut := older[0].ReceivedMs
 
-	if _, err := s.RecordInbound("in_new", "telegram", "@james", "after"); err != nil {
+	if _, err := s.RecordInbound("in_new", "telegram", "@sam", "after"); err != nil {
 		t.Fatal(err)
 	}
 	// .
@@ -97,7 +97,7 @@ func TestAnArrivalNeedsAnIdAChannelAndASender(t *testing.T) {
 // .
 func TestAnArrivalOnTheCutIsNotReturned(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.RecordInbound("in_edge", "telegram", "@james", "on the boundary"); err != nil {
+	if _, err := s.RecordInbound("in_edge", "telegram", "@sam", "on the boundary"); err != nil {
 		t.Fatal(err)
 	}
 	all, err := s.InboundSince(0)

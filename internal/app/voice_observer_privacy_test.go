@@ -56,7 +56,7 @@ func TestRestrictedPartialsAreWithheldOnTheRealTelemetryRoute(t *testing.T) {
 	for _, mode := range []string{"all", "only", "ignore"} {
 		t.Run(mode, func(t *testing.T) {
 			a := newVoiceApp(t)
-			a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: mode, UIDs: []string{"james"}}
+			a.cfg.Speech.Speakers = SpeakerPolicyConfig{Mode: mode, UIDs: []string{"sam"}}
 			if mode == "all" {
 				a.cfg.Speech.Speakers.UIDs = nil
 			}

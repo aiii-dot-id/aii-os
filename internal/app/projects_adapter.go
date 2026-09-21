@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,7 +196,7 @@ func (a *App) deleteProject(id string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("projects: %s deleted — its directory is kept at %s", id, dest)
+	logsink.Info("project.decision", "%s deleted — its directory is kept at %s", id, dest)
 	return nil
 }
 
@@ -218,11 +218,11 @@ func appendLineage(p *project.Project, state string) {
 	}
 	fh, err := os.OpenFile(filepath.Join(p.Dir, "lineage.md"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		log.Printf("projects: lineage append: %v", err)
+		logsink.Warn("project.error", "lineage append: %v", err)
 		return
 	}
 	if _, err := fh.WriteString(line + "\n"); err != nil {
-		log.Printf("projects: lineage write: %v", err)
+		logsink.Warn("project.error", "lineage write: %v", err)
 	}
 	fh.Close()
 }

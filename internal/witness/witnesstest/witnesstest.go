@@ -226,6 +226,25 @@ func (w *Witness) URL() string { return w.server.URL }
 
 // .
 // .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (w *Witness) Holds() (ordinal int64, identities int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ordinal = -1
+	for _, st := range w.rows {
+		ordinal = st.ordinal
+	}
+	return ordinal, len(w.rows)
+}
+
+// .
+// .
 func (w *Witness) Reset() {
 	w.mu.Lock()
 	defer w.mu.Unlock()

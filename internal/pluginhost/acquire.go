@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"sort"
@@ -234,7 +234,9 @@ type acquireJob struct {
 // .
 func NewAcquirer(cfg AcquirerConfig) *Acquirer {
 	if cfg.Logf == nil {
-		cfg.Logf = log.Printf
+		cfg.Logf = func(format string, args ...any) {
+			logsink.Info("plugins.decision", format, args...)
+		}
 	}
 	if cfg.Backoff == nil {
 		cfg.Backoff = defaultBackoff

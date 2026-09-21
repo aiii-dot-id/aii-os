@@ -203,7 +203,7 @@ func TestAStopCancelsOnlyAReceiveThatOverstays(t *testing.T) {
 func TestAnArrivalDuringAWakeTurnIsSteered(t *testing.T) {
 	a := liveApp(t)
 	shortStopGrace(t)
-	contact(t, a, Contact{Name: "james", Channel: "telegram", Address: "@james", Wake: true})
+	contact(t, a, Contact{Name: "sam", Channel: "telegram", Address: "@sam", Wake: true})
 	holding := make(chan struct{})
 	entered := make(chan struct{})
 	var once sync.Once
@@ -213,8 +213,8 @@ func TestAnArrivalDuringAWakeTurnIsSteered(t *testing.T) {
 		return "", nil
 	}
 	_, recv := installBlockingAdapter(t, a, "org.example.telegram", "telegram", 1)
-	recv.push(`[{"id":"1","from":"@james","body":"first"}]`)
-	recv.push(`[{"id":"2","from":"@james","body":"second"}]`)
+	recv.push(`[{"id":"1","from":"@sam","body":"first"}]`)
+	recv.push(`[{"id":"2","from":"@sam","body":"second"}]`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.convergeChannels(ctx)
@@ -242,8 +242,8 @@ func TestAnArrivalDuringAWakeTurnIsSteered(t *testing.T) {
 // .
 func TestAnIdleNonWakingArrivalTakesNoGate(t *testing.T) {
 	a := liveApp(t)
-	contact(t, a, Contact{Name: "james", Channel: "telegram", Address: "@james"})
-	installAdapter(t, a, "org.example.telegram", "telegram", "", `[{"id":"9","from":"@james","body":"hi"}]`, nil)
+	contact(t, a, Contact{Name: "sam", Channel: "telegram", Address: "@sam"})
+	installAdapter(t, a, "org.example.telegram", "telegram", "", `[{"id":"9","from":"@sam","body":"hi"}]`, nil)
 	route := a.channelRoutes(context.Background())["telegram"]
 	n, err := a.receiveFrom(context.Background(), route)
 	if err != nil || n != 1 {

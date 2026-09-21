@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/carrd"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 // .
@@ -29,6 +30,7 @@ const (
 	AttentionContradiction = "contradiction"
 	AttentionFollowup      = "followup"
 	AttentionConsolidation = "consolidation"
+	AttentionContinuity    = "continuity"
 )
 
 // .
@@ -52,6 +54,16 @@ const (
 	ConsolidationBacklog = 3
 	// .
 	AttentionLimit = 12
+	// .
+	// .
+	// .
+	SnapshotStaleAfter = 48 * time.Hour
+	// .
+	// .
+	// .
+	// .
+	// .
+	ContinuityMediumFor = 24 * time.Hour
 )
 
 // .
@@ -91,6 +103,11 @@ func (f *Facility) Attention(ctx context.Context, now time.Time) ([]AttentionIte
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM experiences WHERE raw = 1 AND private = 0`).Scan(&raw); err != nil {
 			return fmt.Errorf("consolidation: %w", err)
 		}
+		continuity, err := continuityItems(db, now)
+		if err != nil {
+			return fmt.Errorf("continuity: %w", err)
+		}
+		items = append(items, continuity...)
 		if raw >= ConsolidationBacklog {
 			items = append(items, AttentionItem{Kind: AttentionConsolidation, Cost: CostSilent, Priority: float64(raw),
 				Text: fmt.Sprintf("%d experiences await the unconscious (consolidation runs capacity-gated)", raw)})
@@ -259,3 +276,51 @@ func untouchedIntentions(ctx context.Context, db *sql.DB, now time.Time) ([]Atte
 	}
 	return out, rows.Err()
 }
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func continuityItems(db *sql.DB, now time.Time) ([]AttentionItem, error) {
+	st, ok, err := store.ReadContinuityStatus(db)
+	if err != nil || !ok {
+		return nil, err
+	}
+	at, _ := time.Parse(time.RFC3339, st.At)
+	costSince := func(since time.Time) string {
+		if !since.IsZero() && now.Sub(since) < ContinuityMediumFor {
+			return CostMedium
+		}
+		return CostLow
+	}
+	const act = " work action=backup.take tries one now; recall source=continuity reads the state."
+	switch st.Outcome {
+	case store.ContinuityFailed:
+		since, _ := time.Parse(time.RFC3339, st.FailingSince)
+		if since.IsZero() {
+			since = at
+		}
+		return []AttentionItem{{Kind: AttentionContinuity, Cost: costSince(since), Priority: continuityPriority, Store: "continuity", Since: since,
+			Text: "The last snapshot of you failed and nothing was kept, so your newest way back is older than it should be. Your operator has the detail." + act}}, nil
+	case store.ContinuityOK:
+		if !at.IsZero() && now.Sub(at) > SnapshotStaleAfter {
+			stale := at.Add(SnapshotStaleAfter)
+			return []AttentionItem{{Kind: AttentionContinuity, Cost: costSince(stale), Priority: continuityPriority, Store: "continuity", Since: stale,
+				Text: fmt.Sprintf("No snapshot of you has been made for %d days: the daily pass has not run.", int(now.Sub(at).Hours()/24)) + act}}, nil
+		}
+		if !st.Encrypted && st.Unencrypted != "" {
+			return []AttentionItem{{Kind: AttentionContinuity, Cost: CostLow, Priority: continuityPriority, Store: "continuity", Since: at,
+				Text: "Your snapshots are kept and are not encrypted: " + store.UnencryptedForIdentity(st.Unencrypted) + "."}}, nil
+		}
+	}
+	return nil, nil
+}
+
+// .
+// .
+// .
+const continuityPriority = 1e6

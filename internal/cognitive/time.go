@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -252,7 +252,7 @@ func (t *TIME) CancelAlarm(ownerName, alarmID string) error {
 // .
 // .
 func (t *TIME) DeleteLegacyAlarm(alarmID, reason string) error {
-	log.Printf("TIME: deleting legacy alarm %s (%s)", alarmID, reason)
+	logsink.Info("time.decision", "deleting legacy alarm %s (%s)", alarmID, reason)
 	return t.store.DeleteAlarm(alarmID)
 }
 
@@ -386,7 +386,7 @@ func (t *TIME) pulseFire() {
 		return
 	}
 	if err := t.AdvanceLifeClock(ctx); err != nil {
-		log.Printf("TIME: life clock advance failed: %v", err)
+		logsink.Warn("time.error", "life clock advance failed: %v", err)
 	}
 }
 
@@ -495,7 +495,7 @@ func (t *TIME) TimeWake() {
 	t.signalResched()
 	if ctx != nil {
 		if err := t.EvaluateAll(ctx); err != nil {
-			log.Printf("TIME: wake catch-up failed: %v", err)
+			logsink.Warn("time.error", "wake catch-up failed: %v", err)
 		}
 	}
 }
@@ -646,7 +646,7 @@ func (t *TIME) nextWake() (time.Time, bool) {
 	// .
 	alarms, err := t.store.DueAlarms("wall", int64(1)<<62, 16)
 	if err != nil {
-		log.Printf("TIME: next durable wake unavailable: %v", err)
+		logsink.Warn("time.error", "next durable wake unavailable: %v", err)
 		return best, has
 	}
 	for _, a := range alarms {
@@ -672,7 +672,7 @@ func (t *TIME) armPlatformWake(at time.Time) {
 	t.mu.Unlock()
 	if w != nil {
 		if err := w.WakeAt(at); err != nil {
-			log.Printf("TIME: platform wake register failed: %v", err)
+			logsink.Warn("time.error", "platform wake register failed: %v", err)
 		}
 	}
 }
@@ -710,7 +710,7 @@ func (t *TIME) runDue(ctx context.Context, now time.Time) {
 	}
 	// .
 	if alarms, err := t.store.DueAlarms("wall", now.UnixMilli(), 100); err != nil {
-		log.Printf("TIME: durable wall alarm evaluation failed: %v", err)
+		logsink.Warn("time.error", "durable wall alarm evaluation failed: %v", err)
 	} else if len(alarms) > 0 {
 		t.dispatchPass(ctx, "wall", alarms)
 	}
@@ -719,7 +719,7 @@ func (t *TIME) runDue(ctx context.Context, now time.Time) {
 func (t *TIME) runEphemeral(e *ephemeral) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("TIME: ephemeral %q PANICKED (contained): %v\n%s", e.id, r, debug.Stack())
+			logsink.Error("time.error", "ephemeral %q PANICKED (contained): %v\n%s", e.id, r, debug.Stack())
 			if e.interval > 0 {
 				t.Cancel(e.id)
 			}
@@ -809,7 +809,7 @@ func (t *TIME) dispatchAlarm(ctx context.Context, alarm store.Alarm) {
 		// .
 		// .
 		if !ok {
-			log.Printf("TIME: alarm %s has unregistered owner %s — not enqueued (row preserved)", alarm.AlarmID, alarm.OwnerName)
+			logsink.Warn("time.refusal", "alarm %s has unregistered owner %s — not enqueued (row preserved)", alarm.AlarmID, alarm.OwnerName)
 			return
 		}
 		// .
@@ -822,12 +822,12 @@ func (t *TIME) dispatchAlarm(ctx context.Context, alarm store.Alarm) {
 		t.pendingDispatch[alarm.AlarmID] = time.Now()
 		t.mu.Unlock()
 		if err := enq.EnqueueAlarm(alarm); err != nil {
-			log.Printf("TIME: alarm %s enqueue failed (row preserved for retry): %v", alarm.AlarmID, err)
+			logsink.Warn("time.error", "alarm %s enqueue failed (row preserved for retry): %v", alarm.AlarmID, err)
 		}
 		return
 	}
 	if !ok {
-		log.Printf("TIME: alarm %s has unregistered owner %s — skipping (row preserved)", alarm.AlarmID, alarm.OwnerName)
+		logsink.Warn("time.refusal", "alarm %s has unregistered owner %s — skipping (row preserved)", alarm.AlarmID, alarm.OwnerName)
 		return
 	}
 	result := t.invokeOwner(ctx, owner, alarm)
@@ -880,7 +880,7 @@ func (t *TIME) applyTransitions(alarm store.Alarm, result AlarmResult) error {
 			return fmt.Errorf("alarm %s delete failed (the alarm is still due and will fire again): %w", alarm.AlarmID, err)
 		}
 		if !ok {
-			log.Printf("TIME: alarm %s stale firing (row changed since due read) — delete skipped", alarm.AlarmID)
+			logsink.Debug("time.refusal", "alarm %s stale firing (row changed since due read) — delete skipped", alarm.AlarmID)
 		}
 	case result.NextDeadline != nil:
 		return t.applyCAS(alarm, *result.NextDeadline)
@@ -900,10 +900,10 @@ func (t *TIME) applyTransitions(alarm store.Alarm, result AlarmResult) error {
 		// .
 		if currentClock >= alarm.Deadline {
 			next := currentClock + declinedRetryAfterMS(alarm.Clock)
-			log.Printf("TIME: alarm %s declined without next deadline — deferred to %d (a past deadline is due again immediately)", alarm.AlarmID, next)
+			logsink.Info("time.decision", "alarm %s declined without next deadline — deferred to %d (a past deadline is due again immediately)", alarm.AlarmID, next)
 			return t.applyCAS(alarm, next)
 		}
-		log.Printf("TIME: alarm %s declined without next deadline — preserved", alarm.AlarmID)
+		logsink.Info("time.decision", "alarm %s declined without next deadline — preserved", alarm.AlarmID)
 	}
 	return nil
 }
@@ -939,7 +939,7 @@ func (t *TIME) ApplyAlarmTransitions(alarm store.Alarm, result AlarmResult) erro
 func (t *TIME) invokeOwner(ctx context.Context, owner AlarmOwner, alarm store.Alarm) (result AlarmResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("TIME: owner %q PANICKED on alarm %s (contained, treated as declined): %v\n%s",
+			logsink.Error("time.error", "owner %q PANICKED on alarm %s (contained, treated as declined): %v\n%s",
 				owner.Name(), alarm.AlarmID, r, debug.Stack())
 			result = AlarmResult{}
 		}
@@ -968,7 +968,7 @@ func (t *TIME) applyCAS(alarm store.Alarm, newDeadline int64) error {
 		return fmt.Errorf("alarm %s reschedule failed (the old deadline stands and will fire again): %w", alarm.AlarmID, err)
 	}
 	if !ok {
-		log.Printf("TIME: alarm %s stale firing (row changed since due read) — transition skipped", alarm.AlarmID)
+		logsink.Debug("time.refusal", "alarm %s stale firing (row changed since due read) — transition skipped", alarm.AlarmID)
 	}
 	if alarm.Clock == "wall" {
 		t.signalResched()

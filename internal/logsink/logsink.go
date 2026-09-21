@@ -26,10 +26,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
+	"io"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // .
@@ -58,10 +61,46 @@ type Config struct {
 	// .
 	// .
 	CompressDays int
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	MaxDays int
 }
 
 // .
 func (c Config) Enabled() bool { return c.Dir != "" }
+
+// .
+func (c Config) maxDays() int {
+	if c.MaxDays < 0 {
+		return 0
+	}
+	if c.MaxDays == 0 {
+		return 30
+	}
+	return c.MaxDays
+}
 
 // .
 // .
@@ -93,6 +132,7 @@ type Sink struct {
 	cfg  Config
 	dir  string
 	file *os.File
+	stop chan struct{}
 }
 
 // .
@@ -104,7 +144,9 @@ type Sink struct {
 // .
 func Install(cfg Config) (*Sink, error) {
 	if !cfg.Enabled() {
-		return nil, nil
+		s := &Sink{cfg: cfg}
+		s.installStream()
+		return s, nil
 	}
 	// .
 	// .
@@ -129,21 +171,51 @@ func Install(cfg Config) (*Sink, error) {
 		return nil, fmt.Errorf("logsink: cannot open %s: %w", live, err)
 	}
 	s := &Sink{cfg: cfg, dir: dir, file: f}
-	log.SetOutput(tee{file: f, stderr: os.Stderr})
+	s.installStream()
 
 	// .
 	if gz, rm, err := s.CompressOlder(); err != nil {
-		log.Printf("LOGS: retention error: %v", err)
+		Warn("logs.error", "retention error: %v", err)
 	} else if gz+rm > 0 {
-		log.Printf("LOGS: compressed %d, removed %d rotated log(s)", gz, rm)
+		Info("logs.end", "compressed %d, removed %d rotated log(s)", gz, rm)
 	}
 	return s, nil
+}
+
+// .
+func (s *Sink) installStream() {
+	// .
+	// .
+	// .
+	// .
+	// .
+	if def, cat, err := ParseDirective(os.Getenv(EnvDirective)); err == nil {
+		SetLevels(def, cat)
+	} else {
+		defer func() { Warn("logs", "%v — the level is unchanged", err) }()
+	}
+	var file io.Writer
+	if s.file != nil {
+		file = s.file
+	}
+	slog.SetDefault(slog.New(newHandler(file, stderrOrNil())))
+	// .
+	s.stop = make(chan struct{})
+	go digestEvery(time.Hour, s.stop)
+
 }
 
 // .
 // .
 // .
 func (s *Sink) Close() {
+	if s != nil && s.stop != nil {
+		close(s.stop)
+		s.stop = nil
+	}
+	// .
+	FlushDigest()
+	slog.SetDefault(slog.New(newHandler(nil, stderrOrNil())))
 	log.SetOutput(os.Stderr)
 	if s == nil || s.file == nil {
 		return

@@ -23,7 +23,7 @@ func TestReview2CuriositySuppressedByUnharvestedRecovery(t *testing.T) {
 	if err := a.store.DeliverWorkSession(id, "unserved: could not reach the jar", store.EvidenceExternalUnknown, ""); err != nil {
 		t.Fatal(err)
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}

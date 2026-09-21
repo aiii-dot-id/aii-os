@@ -47,7 +47,7 @@ func mintTestRing0(t *testing.T) (*testRoot, []byte, string) {
 		liveOnce.bundle, liveOnce.laws = a.Ring0, laws
 	})
 	if liveOnce.err != nil {
-		t.Fatalf("RING0 comes from the real servers and nowhere else (operator ruling 2026-09-19): %v", liveOnce.err)
+		t.Fatalf("RING0 comes from the real servers and nowhere else: %v", liveOnce.err)
 	}
 	return &testRoot{Env: pinnedRoot()}, liveOnce.bundle, liveOnce.laws
 }

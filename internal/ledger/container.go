@@ -85,6 +85,10 @@ func (e *Event) Sealed() bool { return e.sealed }
 
 // .
 // .
+func (e *Event) Container() string { return e.container }
+
+// .
+// .
 // .
 // .
 var sealStep = func(step string) {}
@@ -189,7 +193,7 @@ func sweepDebris(dir string) error {
 // .
 // .
 // .
-func scanLines(r io.Reader, fn func(line []byte, offset, size int64) error) error {
+func scanLines(r io.Reader, fn func(line []byte, offset, size int64, at int) error) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), MaxEventLineBytes)
 	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
@@ -202,12 +206,20 @@ func scanLines(r io.Reader, fn func(line []byte, offset, size int64) error) erro
 		return 0, nil, nil
 	})
 	var offset int64
+	at := 0
 	for sc.Scan() {
 		tok := sc.Bytes()
 		size := int64(len(tok))
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		at++
 		line := bytes.TrimSpace(tok)
 		if len(line) > 0 {
-			if err := fn(line, offset, size); err != nil {
+			if err := fn(line, offset, size, at); err != nil {
 				return err
 			}
 		}
@@ -233,12 +245,13 @@ func streamSegment(seg *segment, fn func(*Event) error) error {
 	defer gz.Close()
 	var last *Event
 	n := 0
-	err = scanLines(gz, func(line []byte, _, _ int64) error {
+	err = scanLines(gz, func(line []byte, _, _ int64, at int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
-			return fmt.Errorf("%s record %d: malformed line: %w", filepath.Base(seg.path), n+1, err)
+			return fmt.Errorf("%s line %d: malformed line: %w", filepath.Base(seg.path), at, err)
 		}
 		evt.sealed = true
+		evt.container = filepath.Base(seg.path)
 		if n == 0 && evt.Seq != seg.first {
 			return fmt.Errorf("%w: %s begins with record %d", ErrSegmentSet, filepath.Base(seg.path), evt.Seq)
 		}
@@ -369,11 +382,16 @@ func streamTail(f *os.File, newest *segment, fn func(*Event) error) error {
 		}
 	}()
 	n := 0
-	return scanLines(f, func(line []byte, _, _ int64) error {
+	return scanLines(f, func(line []byte, _, _ int64, at int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
-			return fmt.Errorf("record %d: malformed line: %w", n+1, err)
+			// .
+			// .
+			// .
+			// .
+			return fmt.Errorf("%s line %d: malformed line: %w", filepath.Base(f.Name()), at, err)
 		}
+		evt.container = filepath.Base(f.Name())
 		n++
 		if newest != nil && evt.Seq <= newest.last {
 			if oc == nil {
@@ -430,7 +448,7 @@ func reconcileTail(path string, newest *segment) error {
 		return err
 	}
 	var first *Event
-	err = scanLines(f, func(line []byte, _, _ int64) error {
+	err = scanLines(f, func(line []byte, _, _ int64, _ int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
 			return fmt.Errorf("tail record 1: malformed line: %w", err)
@@ -460,7 +478,7 @@ func reconcileTail(path string, newest *segment) error {
 	}
 	defer oc.close()
 	var keepFrom int64 = -1
-	err = scanLines(f, func(line []byte, offset, size int64) error {
+	err = scanLines(f, func(line []byte, offset, size int64, _ int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
 			return fmt.Errorf("tail: malformed line: %w", err)
@@ -623,7 +641,7 @@ func (l *Ledger) writeSegment(tmp string, first, head uint64) (int64, string, er
 	var afterHead int64 = -1
 	var headHash string
 	var expect = first
-	err = scanLines(src, func(line []byte, offset, size int64) error {
+	err = scanLines(src, func(line []byte, offset, size int64, _ int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
 			return fmt.Errorf("tail: malformed line: %w", err)

@@ -13,9 +13,9 @@ import (
 // .
 func TestVoiceStableSpeakerIDSurvivesHost(t *testing.T) {
 	for _, tc := range []struct{ name, id, label string }{
-		{"first duplicate label", "james-one", "Sam"},
-		{"second duplicate label", "james-two", "Sam"},
-		{"renamed same identity", "james-one", "Jim"},
+		{"first duplicate label", "sam-one", "Sam"},
+		{"second duplicate label", "sam-two", "Sam"},
+		{"renamed same identity", "sam-one", "Jim"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newVoiceApp(t)
@@ -132,9 +132,9 @@ func assertStableIDAnnotation(t *testing.T, payload, want string) {
 func TestVoiceStableSpeakerIDNeverInventedOrLeaked(t *testing.T) {
 	for _, tc := range []struct{ name, decision, id string }{
 		{"legacy known label is not an ID", "known", ""},
-		{"uncertain is not known", "uncertain", "james"},
-		{"unknown is not known", "unknown", "james"},
-		{"future decision is not known", "future", "james"},
+		{"uncertain is not known", "uncertain", "sam"},
+		{"unknown is not known", "unknown", "sam"},
+		{"future decision is not known", "future", "sam"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ev := observationRaw("s", 2, map[string]any{"refers_to": 1, "speaker": "Sam", "speaker_id": tc.id, "decision": tc.decision})
@@ -155,7 +155,7 @@ func TestVoiceStableSpeakerIDNeverInventedOrLeaked(t *testing.T) {
 	a := newVoiceApp(t)
 	a.enterSafe("stable ID regression proof")
 	a.voiceSessions.Store("s", &voiceHandle{id: "s"})
-	ev := observationRaw("s", 2, map[string]any{"refers_to": 1, "speaker": "Sam", "speaker_id": "james", "decision": "known"})
+	ev := observationRaw("s", 2, map[string]any{"refers_to": 1, "speaker": "Sam", "speaker_id": "sam", "decision": "known"})
 	fanned := 0
 	a.voiceEngineEvent(nil, ev, func(dashboard.VoiceEvent) { fanned++ })
 	if _, pending := a.speakerPending.Load("s/1"); fanned != 0 || pending {
@@ -170,7 +170,7 @@ func TestVoiceStableSpeakerIDRejectsPartialDecode(t *testing.T) {
 	a := newVoiceApp(t)
 	a.voiceSessions.Store("s", &voiceHandle{id: "s"})
 	ev := observationRaw("s", 2, map[string]any{
-		"refers_to": 1, "speaker": "Sam", "speaker_id": "james", "decision": "known", "score": "not a score",
+		"refers_to": 1, "speaker": "Sam", "speaker_id": "sam", "decision": "known", "score": "not a score",
 	})
 	ve, ok := voiceEventFor(ev, false)
 	if !ok {

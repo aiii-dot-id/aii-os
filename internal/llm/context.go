@@ -63,15 +63,22 @@ func EstimateInputTokens(messages []Message, tools []ToolDefinition) (int, error
 
 // .
 func ValidateInput(messages []Message, tools []ToolDefinition, limit int) error {
-	if limit <= 0 {
-		return nil
-	}
-	required, err := EstimateInputTokens(messages, tools)
+	_, err := AdmitInput(messages, tools, limit)
+	return err
+}
+
+// .
+// .
+// .
+// .
+// .
+func AdmitInput(messages []Message, tools []ToolDefinition, limit int) (required int, err error) {
+	required, err = EstimateInputTokens(messages, tools)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if required > limit {
-		return &ContextLimitError{Required: required, Limit: limit}
+	if limit > 0 && required > limit {
+		return required, &ContextLimitError{Required: required, Limit: limit}
 	}
-	return nil
+	return required, nil
 }

@@ -43,7 +43,7 @@ func hasVoiceEvent(ss []string, s string) bool {
 func dropEvent(dashboard.VoiceEvent) {}
 
 func finalEvent(id, text string) pluginhost.Event {
-	raw, _ := json.Marshal(map[string]any{"type": "transcript_final", "session_id": id, "text": text, "speaker": "james"})
+	raw, _ := json.Marshal(map[string]any{"type": "transcript_final", "session_id": id, "text": text, "speaker": "sam"})
 	return pluginhost.Event{Type: "transcript_final", SessionID: id, Raw: raw}
 }
 

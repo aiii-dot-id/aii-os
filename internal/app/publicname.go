@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -63,6 +63,8 @@ const (
 	certificateHourLocal = 5
 )
 
+var errPublicNameStopping = errors.New("public-name issuance is unavailable: application is stopping")
+
 // .
 type publicNameRuntime struct {
 	mu         sync.Mutex
@@ -84,7 +86,12 @@ type publicNameRuntime struct {
 	alias string
 	// .
 	// .
-	route      routeState
+	route routeState
+	// .
+	// .
+	// .
+	// .
+	routeTold  string
 	routeWake  chan struct{}
 	routeOwner bool
 	// .
@@ -201,7 +208,7 @@ func (a *App) wirePublicName(cfg Config) error {
 		a.pn.status = publicNameClaiming
 	}
 	a.pn.mu.Unlock()
-	log.Printf("public name: %s — origin %s", pn.Name, origin)
+	logsink.Info("route.start", "%s — origin %s", pn.Name, origin)
 	// .
 	// .
 	// .
@@ -214,11 +221,11 @@ func (a *App) wirePublicName(cfg Config) error {
 		a.signalRoute()
 	}
 	if mgr.Certificate() == nil {
-		go a.issuePublicCertificate(mgr)
+		a.runBackground(func() { a.issuePublicCertificate(mgr) })
 	}
 	if a.timeFac != nil {
 		if err := armCertificateAlarm(a.timeFac, time.Now()); err != nil {
-			log.Printf("public name: renewal alarm could not be armed: %v", err)
+			logsink.Warn("route.error", "renewal alarm could not be armed: %v", err)
 		}
 	}
 	return nil
@@ -269,20 +276,20 @@ func (a *App) startRelay(cfg Config, name string, endpoint certs.RelayEndpoint) 
 	// .
 	// .
 	if a.dashboard == nil || !a.dashboard.AccessTokenRequired() {
-		log.Printf("relay: REFUSED for %s — the running dashboard is not requiring an access token, and a relay would carry the public internet to it. Set dashboard.require_token true and RESTART (a saved setting does not take effect until then); read the token with `aii dashboard-token`.", name)
+		logsink.Warn("route.refusal", "REFUSED for %s — the running dashboard is not requiring an access token, and a relay would carry the public internet to it. Set dashboard.require_token true and RESTART (a saved setting does not take effect until then); read the token with `aii dashboard-token`.", name)
 		return
 	}
 	key := witness.AsIdentityKey(a.keyPair)
 	canonical, env, err := witness.EnsureIdentityEnvelope(key, a.store)
 	if err != nil {
-		log.Printf("relay: identity envelope: %v", err)
+		logsink.Warn("route.error", "identity envelope: %v", err)
 		return
 	}
 	// .
 	// .
 	id, err := witness.DeriveIdentityID(canonical, env)
 	if err != nil {
-		log.Printf("relay: identity id: %v", err)
+		logsink.Warn("route.error", "identity id: %v", err)
 		return
 	}
 	c := &relay.Client{Relay: addr, Name: name, IdentityID: id, Key: key, Env: env, Envelope: canonical, Local: a.dashboard.BoundAddr(), TLS: a.relayTLS}
@@ -318,7 +325,7 @@ func (a *App) learnServiceZone(pub namePublisher) {
 	}
 	a.pn.mu.Unlock()
 	if moved {
-		log.Printf("public name: the certificate service now serves %s and %s is under another zone — move the name under Settings → Dashboard → Public name", zone, name)
+		logsink.Warn("route.refusal", "the certificate service now serves %s and %s is under another zone — move the name under Settings → Dashboard → Public name", zone, name)
 	}
 }
 
@@ -368,7 +375,7 @@ func (a *App) movePublicName() (dashboard.PublicNameState, error) {
 	if _, err := a.door.Append(ledger.EventNetworkNameClaimed, 0, store.PublicNamePayload{NameID: id, Name: name, Zone: claimedZone}, ""); err != nil {
 		return a.publicNameState(), fmt.Errorf("record the move: %w", err)
 	}
-	log.Printf("public name: moved from %s to %s — the previous name is retired", current.Name, name)
+	logsink.Info("route.decision", "moved from %s to %s — the previous name is retired", current.Name, name)
 	if err := a.wirePublicName(cfg); err != nil {
 		return a.publicNameState(), err
 	}
@@ -403,11 +410,11 @@ func (a *App) issuePublicCertificate(mgr certificateManager) {
 	}
 	a.pn.mu.Unlock()
 	if err != nil {
-		log.Printf("public name %s: certificate not obtained: %v", name, err)
+		logsink.Warn("route.error", "%s: certificate not obtained: %v", name, err)
 		a.maintenanceAlert("certificate", fmt.Sprintf("the certificate for %s was not obtained: %v — Settings → Dashboard → Public name → Retry", name, err))
 		return
 	}
-	log.Printf("public name %s: certificate obtained, served now", name)
+	logsink.Info("route.start", "%s: certificate obtained, served now", name)
 	if a.dashboard != nil {
 		a.dashboard.BroadcastStatus()
 	}
@@ -475,7 +482,9 @@ func (a *App) retryPublicCertificate() (dashboard.PublicNameState, error) {
 	if mgr == nil {
 		return a.publicNameState(), errors.New("no public name is claimed")
 	}
-	go a.issuePublicCertificate(mgr)
+	if !a.runBackground(func() { a.issuePublicCertificate(mgr) }) {
+		return a.publicNameState(), errPublicNameStopping
+	}
 	retryIssueStarted()
 	return a.publicNameState(), nil
 }
@@ -570,7 +579,7 @@ func (a *App) renewPublicCertificate() {
 	case err != nil:
 		a.maintenanceAlert("certificate", fmt.Sprintf("renewal for %s failed with %.0f days left: %v", name, days, err))
 	case renewed:
-		log.Printf("public name %s: certificate renewed, %.0f days", name, days)
+		logsink.Info("route.renewal", "%s: certificate renewed, %.0f days", name, days)
 		if a.dashboard != nil {
 			a.dashboard.BroadcastStatus()
 		}
@@ -622,10 +631,10 @@ func (a *App) autoClaimPublicName(cfg Config) {
 		a.pn.mu.Lock()
 		a.pn.lastError = err.Error()
 		a.pn.mu.Unlock()
-		log.Printf("public name: not claimed (%v) — the local certificate serves meanwhile; the claim is retried at the next boot and at the daily certificate pass", err)
+		logsink.Warn("route.refusal", "not claimed (%v) — the local certificate serves meanwhile; the claim is retried at the next boot and at the daily certificate pass", err)
 		if a.timeFac != nil {
 			if aerr := armCertificateAlarm(a.timeFac, time.Now()); aerr != nil {
-				log.Printf("public name: retry alarm could not be armed: %v", aerr)
+				logsink.Warn("route.error", "retry alarm could not be armed: %v", aerr)
 			}
 		}
 	}

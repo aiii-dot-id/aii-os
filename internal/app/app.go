@@ -121,15 +121,16 @@ type App struct {
 	genesisClient *genesis.GenesisClient
 
 	// .
-	keyPair   *crypto.KeyPair
-	ledger    *ledger.Ledger
-	store     *store.Store
-	rings     *ring.Manager
-	engine    *identity.Engine
-	projects  *project.Manager
-	composer  *prompt.Composer
-	llmClient *llm.Client
-	toolReg   *tools.Registry
+	keyPair      *crypto.KeyPair
+	ledger       *ledger.Ledger
+	store        *store.Store
+	databaseView atomic.Pointer[databaseView]
+	rings        *ring.Manager
+	engine       *identity.Engine
+	projects     *project.Manager
+	composer     *prompt.Composer
+	llmClient    *llm.Client
+	toolReg      *tools.Registry
 
 	// .
 	// .
@@ -312,12 +313,30 @@ type App struct {
 	// .
 	// .
 	composedInterrupted bool
+	// .
+	// .
+	composedWithheld []string
 
 	// .
 	// .
 	// .
 	// .
 	bootInterrupted []string
+
+	// .
+	// .
+	maintMu sync.Mutex
+	// .
+	// .
+	lastVerify time.Time
+	// .
+	// .
+	bootChain string
+	// .
+	// .
+	// .
+	bootAttested     int64
+	bootAttestedHash string
 
 	// .
 	// .
@@ -567,9 +586,10 @@ func New(cfg *Config) *App {
 	turnGate <- struct{}{}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	a := &App{
-		fg:        &foreground.Holds{},
-		restartCh: make(chan struct{}),
-		cfg:       cfg, gate: quiesce.NewGate(), turnGate: turnGate,
+		bootAttested: -1,
+		fg:           &foreground.Holds{},
+		restartCh:    make(chan struct{}),
+		cfg:          cfg, gate: quiesce.NewGate(), turnGate: turnGate,
 		outboxPoke: make(chan struct{}, 1), listening: map[string]*channelListener{},
 		bgCtx: bgCtx, bgCancel: bgCancel,
 	}
@@ -685,14 +705,14 @@ func (a *App) runLeftoverSteerTurn(entries []steerEntry) {
 	// .
 	// .
 	if a.conv == nil || a.engine == nil || a.store == nil {
-		log.Printf("steering: %d leftover message(s) arrived before the runtime could run turns — dropped", len(entries))
+		logsink.Warn("steering.refusal", "%d leftover message(s) arrived before the runtime could run turns — dropped", len(entries))
 		releaseVoice(entries, "dropped: the runtime could not run turns")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if err := a.acquireTurn(ctx); err != nil {
-		log.Printf("steering: %d leftover message(s) could not open their turn: %v", len(entries), err)
+		logsink.Warn("steering.error", "%d leftover message(s) could not open their turn: %v", len(entries), err)
 		releaseVoice(entries, "the turn could not open")
 		return
 	}
@@ -703,18 +723,18 @@ func (a *App) runLeftoverSteerTurn(entries []steerEntry) {
 	for _, e := range entries {
 		if a.engine != nil {
 			if err := a.engine.RecordConversationTurn(e.role, e.content); err != nil {
-				log.Printf("steering: leftover turn not recorded: %v", err)
+				logsink.Warn("steering.error", "leftover turn not recorded: %v", err)
 			}
 		}
 		parts = append(parts, e.content)
 	}
-	log.Printf("steering: %d leftover message(s) opened their own turn", len(entries))
+	logsink.Info("steering.decision", "%d leftover message(s) opened their own turn", len(entries))
 	for _, e := range entries {
 		a.holdVoice(e.voice)
 	}
 	resp, err := a.runTurnLocked(ctx, strings.Join(parts, "\n\n"))
 	if err != nil {
-		log.Printf("steering: leftover turn failed: %v", err)
+		logsink.Warn("steering.error", "leftover turn failed: %v", err)
 		if a.dashboard != nil {
 			a.dashboard.BroadcastResponse("system", "Your queued message could not run: "+err.Error())
 		}
@@ -880,13 +900,13 @@ func (a *App) Run() {
 	// .
 	// .
 	a.installLogSink()
-	log.Printf("Identity home: %s (config %s)", home, cfgPath)
+	logsink.Info("boot.start", "Identity home: %s (config %s)", home, cfgPath)
 	// .
 	// .
 	// .
 	// .
 	// .
-	log.Printf("Boot identity: AII OS v%s (build %s)", VersionString(), BuildIdentity())
+	logsink.Info("boot.start", "Boot identity: AII OS v%s (build %s)", VersionString(), BuildIdentity())
 	// .
 	// .
 	// .
@@ -958,7 +978,7 @@ func (a *App) Stop() {
 }
 
 func (a *App) stop() {
-	log.Println("Shutting down...")
+	logsink.Info("boot.end", "shutting down")
 
 	a.stopSafeBeacon()
 	a.bgMu.Lock()
@@ -985,17 +1005,17 @@ func (a *App) stop() {
 	defer cancel()
 	if a.dashboard != nil {
 		if err := a.dashboard.Shutdown(shutCtx); err != nil {
-			log.Printf("dashboard shutdown: %v", err)
+			logsink.Warn("boot.error", "dashboard shutdown: %v", err)
 		}
 	}
 	a.birthMu.Lock()
 	defer a.birthMu.Unlock()
 	if err := a.acquireTurn(shutCtx); err != nil {
-		log.Printf("live runtime left open: resident turn did not quiesce: %v", err)
+		logsink.Warn("boot.error", "live runtime left open: resident turn did not quiesce: %v", err)
 		return
 	}
 	if err := a.closeLiveResources(); err != nil {
-		log.Printf("live runtime shutdown: %v", err)
+		logsink.Warn("boot.error", "live runtime shutdown: %v", err)
 	}
 	a.releaseTurn()
 	// .
@@ -1010,6 +1030,7 @@ func (a *App) stop() {
 // .
 // .
 func (a *App) closeLiveResources() error {
+	a.databaseView.Store(nil)
 	a.wakeMu.Lock()
 	timeFac := a.timeFac
 	a.timeFac = nil
@@ -1101,7 +1122,7 @@ func (a *App) ensureRing5Policy() *firewall.Policy {
 func (a *App) loadRing5() {
 	if a.ring5Content == "" {
 		a.rings.Set(ring.Ring5, nil)
-		log.Print("Ring 5 unavailable — no posture content loaded")
+		logsink.Warn("ring.refusal", "Ring 5 unavailable — no posture content loaded")
 		return
 	}
 	policy := a.ensureRing5Policy()
@@ -1131,7 +1152,7 @@ func (a *App) loadRing5() {
 	// .
 	// .
 	// .
-	log.Printf("Ring 5 loaded: platform bundle + local floor (%d bytes)", len(content))
+	logsink.Info("ring.start", "Ring 5 loaded: platform bundle + local floor (%d bytes)", len(content))
 }
 
 // .
@@ -1174,7 +1195,7 @@ func (a *App) startLive() (retErr error) {
 			return err
 		}
 	} else {
-		log.Printf("updates: rollback machinery idle on this host — %s", sr.Reason)
+		logsink.Info("updates.decision", "rollback machinery idle on this host — %s", sr.Reason)
 	}
 
 	// .
@@ -1183,6 +1204,18 @@ func (a *App) startLive() (retErr error) {
 		return fmt.Errorf("load identity key: %w", err)
 	}
 	a.keyPair = kp
+
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	if err := a.performPendingRestore(context.Background(), cfg, kp); err != nil {
+		logsink.Error("boot.refusal", "A RESTORE DID NOT FINISH — entering BOOT-SAFE (minimal, read-only): %v", err)
+		return a.startSafeBoot(fmt.Sprintf("a restore that was asked for did not finish: %v", err))
+	}
 
 	// .
 	// .
@@ -1215,10 +1248,18 @@ func (a *App) startLive() (retErr error) {
 	// .
 	heads, err := a.bootHeadVerifier(cfg)
 	if err != nil {
-		log.Printf("WITNESS KEYS BESIDE THE LEDGER DO NOT VERIFY — entering BOOT-SAFE (minimal, read-only): %v", err)
+		logsink.Error("boot.refusal", "BESIDE THE LEDGER DO NOT VERIFY — entering BOOT-SAFE (minimal, read-only): %v", err)
 		return a.startSafeBoot(fmt.Sprintf("witness keys beside the ledger do not verify: %v", err))
 	}
-	if _, err := ledger.VerifyChain(cfg.Identity.LedgerPath, kp.PublicKeyBytes(), heads); err != nil {
+	// .
+	// .
+	// .
+	// .
+	// .
+	tail, tailErr := witness.ReadLocalTail(filepath.Dir(cfg.Identity.LedgerPath))
+	tailCheck := witness.NewTailCheck(tail)
+	verified, err := ledger.VerifyChainVisiting(cfg.Identity.LedgerPath, kp.PublicKeyBytes(), heads, tailCheck.Visit)
+	if err != nil {
 		// .
 		// .
 		// .
@@ -1228,20 +1269,40 @@ func (a *App) startLive() (retErr error) {
 		// .
 		// .
 		// .
-		log.Printf("LEDGER CHAIN VERIFICATION FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
-		return a.startSafeBoot(fmt.Sprintf("chain verification failed at startup: %v", err))
+		// .
+		// .
+		// .
+		logsink.Error("boot.refusal", "LEDGER CHAIN VERIFICATION FAILED — entering BOOT-SAFE (minimal, read-only): %v; witness: %s", err, heads.Summary())
+		return a.startSafeBoot(fmt.Sprintf("chain verification failed at startup: %v; witness: %s", err, heads.Summary()))
 	}
 	if heads.Unverified() > 0 {
-		log.Printf("BOOT: %d witness heads in the tail carry receipts under keys not persisted beside the ledger — accepted on the identity's proof; they will not seal", heads.Unverified())
+		logsink.Warn("boot.refusal", "%d witness heads in the tail carry receipts under keys not persisted beside the ledger — accepted on the identity's proof; they will not seal", heads.Unverified())
 	}
 
 	// .
 	// .
 	// .
 	// .
-	if err := witness.CheckLocalTail(filepath.Dir(cfg.Identity.LedgerPath), lg); err != nil {
-		log.Printf("WITNESS TAIL CHECK FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
-		return a.startSafeBoot(fmt.Sprintf("witness-tail check failed at startup: %v", err))
+	if tailErr == nil {
+		tailErr = tailCheck.Held()
+	}
+	if tailErr != nil {
+		logsink.Error("boot.refusal", "WITNESS TAIL CHECK FAILED — entering BOOT-SAFE (minimal, read-only): %v", tailErr)
+		return a.startSafeBoot(fmt.Sprintf("witness-tail check failed at startup: %v", tailErr))
+	}
+	// .
+	// .
+	// .
+	a.bootChain = fmt.Sprintf("verified at boot through record %d", verified)
+	a.bootAttested = -1
+	if seq, hash, ok := heads.Attested(); ok {
+		a.bootAttested, a.bootAttestedHash = int64(seq), hash
+		a.bootChain += fmt.Sprintf("; witnessed through record %d", seq)
+	} else {
+		a.bootChain += "; no record witnessed"
+	}
+	if tail != nil {
+		a.bootChain += fmt.Sprintf("; holds record %d, the last the witness's tail names", tail.LedgerOrdinal)
 	}
 
 	// .
@@ -1257,7 +1318,7 @@ func (a *App) startLive() (retErr error) {
 			return a.startSafeBoot(fmt.Sprintf("security_posture.verify_fail: required Ring 5 unavailable or unverifiable: %v", err))
 		}
 		a.ring5Content = r5.Content
-		log.Printf("Ring 5 fetched from %s (%d bytes)", cfg.Genesis.FirewallURL, len(a.ring5Content))
+		logsink.Info("ring.start", "Ring 5 fetched from %s (%d bytes)", cfg.Genesis.FirewallURL, len(a.ring5Content))
 	}
 
 	// .
@@ -1270,7 +1331,7 @@ func (a *App) startLive() (retErr error) {
 		// .
 		var shape *store.ShapeError
 		if errors.As(err, &shape) {
-			log.Printf("PROJECTION SHAPE DISAGREES WITH THE CODE — entering BOOT-SAFE (minimal, read-only): %v", err)
+			logsink.Error("boot.refusal", "PROJECTION SHAPE DISAGREES WITH THE CODE — entering BOOT-SAFE (minimal, read-only): %v", err)
 			return a.startSafeBoot(fmt.Sprintf("projection mirror could not be read before ledger replay: %v.%s", err, rebuildRemedy(cfg)))
 		}
 		return fmt.Errorf("open database: %w", err)
@@ -1291,13 +1352,13 @@ func (a *App) startLive() (retErr error) {
 	if err != nil {
 		st.Close()
 		a.store = nil
-		log.Printf("PROJECTION MIRROR READ FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
+		logsink.Error("boot.refusal", "PROJECTION MIRROR READ FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
 		return a.startSafeBoot(fmt.Sprintf("projection mirror could not be read before ledger replay: %v", err))
 	}
 	if mseq > lg.LastSeq() {
 		st.Close()
 		a.store = nil
-		log.Printf("LEDGER BEHIND ITS OWN PROJECTION — entering BOOT-SAFE (minimal, read-only): mirror seq %d, ledger seq %d", mseq, lg.LastSeq())
+		logsink.Error("boot.refusal", "LEDGER BEHIND ITS OWN PROJECTION — entering BOOT-SAFE (minimal, read-only): mirror seq %d, ledger seq %d", mseq, lg.LastSeq())
 		return a.startSafeBoot(fmt.Sprintf("ledger ends at seq %d but the projection mirror acknowledged seq %d — events this runtime accepted are missing (torn-tail quarantine beside the ledger holds the damaged bytes)", lg.LastSeq(), mseq))
 	}
 
@@ -1312,19 +1373,8 @@ func (a *App) startLive() (retErr error) {
 	if err := st.ReplayFromFile(cfg.Identity.LedgerPath); err != nil {
 		st.Close()
 		a.store = nil
-		log.Printf("LEDGER REPLAY FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
+		logsink.Error("boot.refusal", "LEDGER REPLAY FAILED — entering BOOT-SAFE (minimal, read-only): %v", err)
 		return a.startSafeBoot(fmt.Sprintf("ledger replay failed at startup — projection rebuild refused, prior projection preserved: %v", err))
-	}
-
-	// .
-	// .
-	// .
-	a.wakeMu.Lock()
-	a.timeFac = cognitive.NewTIME(st, st)
-	a.wakeMu.Unlock()
-	a.timeFac.SetSafeSource(func() bool { _, s := a.SafeMode(); return s })
-	if err := a.timeFac.DeleteLegacyAlarm("heartbeat", "retired mechanism: heartbeat is a goroutine ticker, not an alarm"); err != nil {
-		return fmt.Errorf("remove retired heartbeat alarm: %w", err)
 	}
 
 	// .
@@ -1350,6 +1400,23 @@ func (a *App) startLive() (retErr error) {
 
 	// .
 	// .
+	st, err = a.activateDatabaseFormat(context.Background(), cfg, st)
+	if err != nil {
+		return a.startSafeBoot(err.Error())
+	}
+	a.store = st
+	st.SetWorkObserver(a.workObserved)
+	st.SetOperatorASCII(cfg.Dashboard.OperatorASCII != nil && *cfg.Dashboard.OperatorASCII)
+	a.wakeMu.Lock()
+	a.timeFac = cognitive.NewTIME(st, st)
+	a.wakeMu.Unlock()
+	a.timeFac.SetSafeSource(func() bool { _, s := a.SafeMode(); return s })
+	if err := a.timeFac.DeleteLegacyAlarm("heartbeat", "retired mechanism: heartbeat is a goroutine ticker, not an alarm"); err != nil {
+		return fmt.Errorf("remove retired heartbeat alarm: %w", err)
+	}
+
+	// .
+	// .
 	// .
 	// .
 	snaps, err := st.RingSnapshots()
@@ -1363,7 +1430,7 @@ func (a *App) startLive() (retErr error) {
 		a.rings.SetSection(ring.RingLevel(sn.RingLevel), sn.Section, sn.Content)
 	}
 	if len(snaps) > 0 {
-		log.Printf("Ring snapshots restored: %d sections", len(snaps))
+		logsink.Info("ring.start", "Ring snapshots restored: %d sections", len(snaps))
 	}
 	brief, err := st.GetBrief()
 	if err != nil {
@@ -1394,7 +1461,7 @@ func (a *App) startLive() (retErr error) {
 		// .
 		// .
 		// .
-		log.Printf("LLM: no API key on provider %q — expected for a local endpoint; if this provider requires one, chat will fail at call time with the provider's own error (set it in the dashboard, or export %s)", llmEntry.Name, cfg.LLM.APIKeyEnv)
+		logsink.Info("llm.refusal", "no API key on provider %q — expected for a local endpoint; if this provider requires one, chat will fail at call time with the provider's own error (set it in the dashboard, or export %s)", llmEntry.Name, cfg.LLM.APIKeyEnv)
 	}
 	lg.SetModelID(cc.Model)
 	// .
@@ -1416,7 +1483,7 @@ func (a *App) startLive() (retErr error) {
 	toolReg.SetSafeSource(a.SafeMode)
 	for _, name := range cfg.Tools.Disabled {
 		toolReg.SetToolEnabled(name, false)
-		log.Printf("Ring 5: tool %q disabled by operator config", name)
+		logsink.Debug("ring.decision", "tool %q disabled by operator config", name)
 	}
 	a.toolReg = toolReg
 
@@ -1429,9 +1496,9 @@ func (a *App) startLive() (retErr error) {
 	// .
 	// .
 	if names, aerr := st.AbandonUnfinishedToolCalls(); aerr != nil {
-		log.Printf("Warning: could not reconcile in-flight tool record: %v", aerr)
+		logsink.Warn("boot.error", "could not reconcile in-flight tool record: %v", aerr)
 	} else if len(names) > 0 {
-		log.Printf("BOOT: %d tool call(s) were in flight at last shutdown: %s — side effects unverified", len(names), strings.Join(names, ", "))
+		logsink.Warn("boot.refusal", "%d tool call(s) were in flight at last shutdown: %s — side effects unverified", len(names), strings.Join(names, ", "))
 		a.bootInterrupted = names
 	}
 
@@ -1481,7 +1548,29 @@ func (a *App) startLive() (retErr error) {
 	a.composer.SetName(a.store.IdentityName())
 	// .
 	// .
-	a.composer.SetPluginOperations(toolReg.HasDynamic)
+	a.composer.SetPluginOperations(pluginOperations(toolReg))
+	// .
+	// .
+	// .
+	// .
+	// .
+	if recorded, err := st.StandingOffer(); err != nil {
+		logsink.Warn("tools.error", "standing offer unreadable; plugin operations start inspect-only this run: %v", err)
+	} else {
+		seats := make([]tools.StandingSeat, 0, len(recorded))
+		for _, s := range recorded {
+			seats = append(seats, tools.StandingSeat{Name: s.Name, Print: s.Print})
+		}
+		toolReg.SetStandingOffer(seats, func(seats []tools.StandingSeat) {
+			record := make([]store.StandingSeat, 0, len(seats))
+			for _, s := range seats {
+				record = append(record, store.StandingSeat{Name: s.Name, Print: s.Print})
+			}
+			if err := st.SetStandingOffer(record); err != nil {
+				logsink.Warn("tools.error", "standing offer not recorded; it holds until this process ends: %v", err)
+			}
+		})
+	}
 
 	toolReg.SetProtectedPaths([]string{
 		cfg.Identity.LedgerPath, cfg.Identity.KeyPath, cfg.Identity.DBPath, cfg.SourcePath,
@@ -1514,7 +1603,7 @@ func (a *App) startLive() (retErr error) {
 		// .
 		// .
 		// .
-		log.Printf("plugins: broker/trust-root config REFUSED, all plugins run quarantined: %v", err)
+		logsink.Error("plugins.refusal", "broker/trust-root config REFUSED, all plugins run quarantined: %v", err)
 		pluginOpts = nil
 	}
 	// .
@@ -1541,16 +1630,16 @@ func (a *App) startLive() (retErr error) {
 	// .
 	if ds := cfg.Plugins.DevSection; ds != nil {
 		if reason, safe := a.SafeMode(); safe {
-			log.Printf("dev section %q: REFUSED — runtime is in SAFE mode (%s); unverified bytes stay off the screen", ds.ID, reason)
+			logsink.Warn("dev.refusal", "dev section %q: REFUSED — runtime is in SAFE mode (%s); unverified bytes stay off the screen", ds.ID, reason)
 		} else if sec, derr := sections.ActivateDev(ds.ID, ds.Path); derr != nil {
-			log.Printf("dev section %q: REFUSED, skipped: %v", ds.ID, derr)
+			logsink.Warn("dev.refusal", "dev section %q: REFUSED, skipped: %v", ds.ID, derr)
 		} else if rerr := a.sections.Register(sec); rerr != nil {
-			log.Printf("dev section %q: registration REFUSED: %v", ds.ID, rerr)
+			logsink.Warn("dev.refusal", "dev section %q: registration REFUSED: %v", ds.ID, rerr)
 		} else {
 			a.pluginMu.Lock()
 			a.sectionActs = append(a.sectionActs, sec)
 			a.pluginMu.Unlock()
-			log.Printf("dev section %q serving UNVERIFIED from %s (banner on, cache off, SAFE refuses)", ds.ID, ds.Path)
+			logsink.Warn("dev.decision", "dev section %q serving UNVERIFIED from %s (banner on, cache off, SAFE refuses)", ds.ID, ds.Path)
 		}
 	}
 
@@ -1565,6 +1654,7 @@ func (a *App) startLive() (retErr error) {
 	a.projects = project.NewManager(projRoot)
 	a.engine.SetProjects(projectsAdapter{a})
 	a.engine.SetVoice(voiceModeAdapter{a})
+	a.engine.SetContinuity(continuityAdapter{a})
 	// .
 	// .
 	// .
@@ -1575,7 +1665,7 @@ func (a *App) startLive() (retErr error) {
 	// .
 	// .
 	if p, why := a.activeOpenProject(); p == nil && why != "" {
-		log.Printf("restored project focus dropped — %s", why)
+		logsink.Info("project.decision", "restored project focus dropped — %s", why)
 		_ = a.store.SetActiveProject("")
 	}
 	// .
@@ -1690,7 +1780,7 @@ func (a *App) startLive() (retErr error) {
 	anchorer.SetOnIntegrityConflict(func(ce *witness.ConflictError) {
 		// .
 		// .
-		log.Printf("WITNESS INTEGRITY CONFLICT — entering SAFE MODE: %v", ce)
+		logsink.Error("witness.refusal", "WITNESS INTEGRITY CONFLICT — entering SAFE MODE: %v", ce)
 		a.enterSafe(fmt.Sprintf("witness rollback/fork conflict: %v", ce))
 	})
 	if cfg.Witness.URL != "" {
@@ -1747,6 +1837,10 @@ func (a *App) startLive() (retErr error) {
 		a.gate,
 		filepath.Dir(cfg.Identity.LedgerPath),
 	)
+	// .
+	// .
+	// .
+	a.updateChecker.SetRunner(a.runBackground)
 	a.installPlatformWake()
 	if err := a.wireCognitive(bgCtx, anchorer, door, cfg); err != nil {
 		return err
@@ -1772,7 +1866,7 @@ func (a *App) startLive() (retErr error) {
 	// .
 	// .
 	if err := a.wirePublicName(cfg); err != nil {
-		log.Printf("PUBLIC NAME: %v — the name is claimed and the dashboard serves the local certificate until this is fixed", err)
+		logsink.Warn("route.refusal", "%v — the name is claimed and the dashboard serves the local certificate until this is fixed", err)
 	}
 	// .
 	// .
@@ -1788,8 +1882,10 @@ func (a *App) startLive() (retErr error) {
 			// .
 			a.signalRoute()
 			for _, line := range dashboardAdvice(bootCfg.Dashboard.TLS, bootCfg.Dashboard.Host, a.publicNameState(), a.dashboard.TLSMaterial(), bootCfg.Certificate.serverURL() == "") {
+				// .
+				// .
+				// .
 				fmt.Println(line)
-				log.Printf("dashboard: %s", line)
 			}
 		})
 	}
@@ -1808,6 +1904,40 @@ func (a *App) startLive() (retErr error) {
 }
 
 // .
+// .
+// .
+// .
+func dreamConfig(cfg Config) cognitive.DreamConfig {
+	return cognitive.DreamConfig{
+		Threshold:        1,
+		MaxChars:         cfg.Prompt.SurfacingMaxChars,
+		TensionsMaxChars: cfg.Prompt.TensionsMaxChars,
+		// .
+		// .
+		// .
+		ConversationMaxChars: cfg.Prompt.DreamConversationMaxChars,
+		RoomNotePrefix:       voiceMarker + voiceRoomNote,
+	}
+}
+
+// .
+// .
+// .
+func consolidateConfig(cfg Config) cognitive.ConsolidateConfig {
+	return cognitive.ConsolidateConfig{
+		Threshold:        3,
+		Salience:         cfg.Memory.Salience,
+		Ring3MaxChars:    cfg.Prompt.Ring3MaxChars,
+		TensionsMaxChars: cfg.Prompt.TensionsMaxChars,
+		// .
+		// .
+		// .
+		OutcomeWindow:       cfg.Agency.OutcomeWindow,
+		ObservationMaxChars: cfg.Prompt.SurfacingMaxChars,
+	}
+}
+
+// .
 func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, door *ledgerAdapter, cfg Config) error {
 	stAdapt := a.store
 	llmAdapt := a.llmSwap
@@ -1822,18 +1952,15 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 		a.wakeMu.Unlock()
 		a.timeFac.SetSafeSource(func() bool { _, s := a.SafeMode(); return s })
 	}
-	dreamFac := cognitive.NewDream(stAdapt, llmAdapt, door, ringWriter, cognitive.DreamConfig{
-		Threshold: 1,
-	})
+	dreamFac := cognitive.NewDream(stAdapt, llmAdapt, door, ringWriter, dreamConfig(cfg))
 	dreamFac.SetAuthority(ringAuthority{a.promptGate, a.store})
+	dreamFac.SetConversation(stAdapt)
 	dreamFac.SetTensions(stAdapt)
 	a.timeFac.RegisterOwner(dreamFac)
-	consolidateFac := cognitive.NewConsolidate(stAdapt, llmAdapt, door, ringWriter, cognitive.ConsolidateConfig{
-		Threshold:     3,
-		Salience:      cfg.Memory.Salience,
-		Ring3MaxChars: cfg.Prompt.Ring3MaxChars,
-	})
+	consolidateFac := cognitive.NewConsolidate(stAdapt, llmAdapt, door, ringWriter, consolidateConfig(cfg))
 	consolidateFac.SetAuthority(ringAuthority{a.promptGate, a.store})
+	consolidateFac.SetTensions(stAdapt)
+	consolidateFac.SetOutcomes(stAdapt)
 	consolidateFac.SetDecisionLog(a.store)
 	a.timeFac.RegisterOwner(consolidateFac)
 	selfModelFac := cognitive.NewSelfModel(stAdapt, llmAdapt, selfModelCommitter{engine: a.engine})
@@ -1871,19 +1998,21 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	// .
 	// .
 	if n, err := a.store.SweepOrphanWorkSessions(); err != nil {
-		log.Printf("work: orphan sweep failed: %v", err)
+		logsink.Warn("work.error", "orphan sweep failed: %v", err)
 	} else if n > 0 {
-		log.Printf("work: closed %d work session(s) orphaned by a previous shutdown", n)
+		logsink.Info("work.decision", "closed %d work session(s) orphaned by a previous shutdown", n)
 	}
 	rhythmFac := cognitive.NewRhythm(stAdapt, facilityGate{a}, dreamFac, consolidateFac, selfModelFac, reviewFac)
+	rhythmFac.SetOutcomes(consolidateFac)
+	rhythmFac.SetConversation(dreamFac)
 	rhythmFac.SetDecisionLog(func(facility, decision, reason string) {
 		if err := a.store.RecordMemoryDecision(store.MemoryDecision{Kind: "rhythm", Facility: facility, Decision: decision, Record: map[string]interface{}{"reason": reason}}); err != nil {
-			log.Printf("RHYTHM: decision not logged: %v", err)
+			logsink.Warn("rhythm.error", "decision not logged: %v", err)
 		}
 	})
 	rhythmFac.SetAttention(a.store, door, func(id, content string) {
 		if _, err := a.store.AddOutboxMessageOnce(id, "operator", "", content, nil); err != nil {
-			log.Printf("RHYTHM: attention outbox: %v", err)
+			logsink.Warn("rhythm.error", "attention outbox: %v", err)
 		}
 	})
 	a.timeFac.RegisterOwner(rhythmFac)
@@ -1911,12 +2040,12 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 			}
 			if _, err := a.witnessProbe.Status(); err != nil {
 				a.witnessAttempt(false)
-				log.Printf("Witness unreachable: %v", err)
+				logsink.Warn("witness.error", "Witness unreachable: %v", err)
 				return
 			}
 			a.witnessAttempt(true)
 			if err := anchorer.CheckAndAnchor(); err != nil {
-				log.Printf("Witness: anchor failed (health OK): %v", err)
+				logsink.Warn("witness.error", "anchor failed (health OK): %v", err)
 			}
 		})
 	}
@@ -1983,7 +2112,7 @@ func (a *App) armFacilityAlarms(cfg Config) error {
 		if err := a.timeFac.SetAlarm("morning_brief", "morning_brief", "wall", morningDeadline, nil, ""); err != nil {
 			return fmt.Errorf("arm morning brief: %w", err)
 		}
-		log.Printf("Cognitive rhythm armed: metabolism every %ds wall-clock, capacity-gated; reflection on lived time (self-model every %d pulses, review every %d — a pulse counts only with operator interaction); morning_brief(%s)",
+		logsink.Info("rhythm.start", "Cognitive rhythm armed: metabolism every %ds wall-clock, capacity-gated; reflection on lived time (self-model every %d pulses, review every %d — a pulse counts only with operator interaction); morning_brief(%s)",
 			cfg.Agency.RhythmSeconds, selfModelEvery, reviewEvery, time.UnixMilli(morningDeadline).UTC().Format("15:04 UTC"))
 	}
 
@@ -1992,6 +2121,11 @@ func (a *App) armFacilityAlarms(cfg Config) error {
 	// .
 	// .
 	// .
+	// .
+	// .
+	a.ensureSnapshotKey(cfg)
+	a.sweepSnapshotDebrisAtBoot(cfg)
+
 	if err := armMaintenanceAlarm(a.timeFac, time.Now()); err != nil {
 		return fmt.Errorf("arm maintenance: %w", err)
 	}
@@ -2005,7 +2139,6 @@ func (a *App) armFacilityAlarms(cfg Config) error {
 
 // .
 func (a *App) buildLiveHandler() *dashboard.WSHandler {
-	log.Printf("buildLiveHandler: display name resolves per stats send (file>ledger>config), store=%p, engine=%p", a.store, a.engine)
 	return &dashboard.WSHandler{
 		Speaker:       "identity",
 		GetStats:      a.statsState,
@@ -2064,6 +2197,7 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 		SetAuthProfile:        a.SetAuthProfile,
 		DeleteAuthProfile:     a.DeleteAuthProfile,
 		UpdateCheck:           a.checkForUpdateNow,
+		Continuity:            a.continuityHooks(),
 		PublicNameClaim:       a.claimPublicName,
 		PublicNameRetry:       a.retryPublicCertificate,
 		PublicNameMove:        a.movePublicName,
@@ -2162,10 +2296,11 @@ func (a *App) buildLiveHandler() *dashboard.WSHandler {
 				return fmt.Errorf("unknown project action %q", req.Action)
 			}
 		},
-		GetConfig: func() (*dashboard.ConfigState, error) { return a.configState(), nil },
-		SetConfig: a.applyConfigChange,
-		ListLogs:  a.listLogs,
-		TailLogs:  a.tailLogs,
+		GetConfig:      func() (*dashboard.ConfigState, error) { return a.configState(), nil },
+		DatabaseExport: a.exportDatabase,
+		SetConfig:      a.applyConfigChange,
+		ListLogs:       a.listLogs,
+		TailLogs:       a.tailLogs,
 		GetTools: func() ([]dashboard.ToolState, error) {
 			states := a.toolReg.ToolStates()
 			out := make([]dashboard.ToolState, len(states))
@@ -2212,10 +2347,10 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, tag, message string) 
 		wakeID := fmt.Sprintf("wake_%s_%d_safe", alarmID, time.Now().UTC().UnixNano())
 		if a.dashboard != nil {
 			if n := a.dashboard.PushTransient(wakeID, notice+" "+message); n == 0 {
-				log.Printf("TIMER WAKE (SAFE): nobody connected — notice was transient-only: %s", notice)
+				logsink.Info("wake.decision", "(SAFE): nobody connected — notice was transient-only: %s", notice)
 			}
 		} else {
-			log.Printf("TIMER WAKE (SAFE, no dashboard): %s %s", notice, message)
+			logsink.Info("wake.decision", "(SAFE, no dashboard): %s %s", notice, message)
 		}
 		return
 	}
@@ -2232,7 +2367,7 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, tag, message string) 
 	// .
 	// .
 	if err := a.acquireTurn(ctx); err != nil {
-		log.Printf("TIMER WAKE %s: could not take the turn (floor already delivered): %v", alarmID, err)
+		logsink.Warn("wake.error", "%s: could not take the turn (floor already delivered): %v", alarmID, err)
 		return
 	}
 	defer a.releaseTurn()
@@ -2247,7 +2382,7 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, tag, message string) 
 	if err != nil {
 		// .
 		// .
-		log.Printf("TIMER WAKE turn failed for %s (floor already delivered): %v", alarmID, err)
+		logsink.Warn("wake.error", "turn failed for %s (floor already delivered): %v", alarmID, err)
 		return
 	}
 	if spoken == "" {
@@ -2255,9 +2390,9 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, tag, message string) 
 	}
 	wakeID := fmt.Sprintf("wake_%s_%d", alarmID, time.Now().UTC().UnixNano())
 	if err := a.store.AddOutboxMessage(wakeID, "operator", "", spoken, nil); err != nil {
-		log.Printf("TIMER WAKE outbox write failed: %v", err)
+		logsink.Warn("wake.error", "outbox write failed: %v", err)
 	}
-	log.Printf("TIMER WAKE: %s woke and spoke (%d chars)", alarmID, len(spoken))
+	logsink.Info("wake.end", "TIMER WAKE: %s woke and spoke (%d chars)", alarmID, len(spoken))
 }
 
 // .
@@ -2336,7 +2471,7 @@ func (a *App) sweepDeliveriesAfterTurn() {
 	// .
 	// .
 	// .
-	log.Printf("HARVEST_SWEEP_TURNEND: delivery unharvested at turn end (%s) — waking to harvest", id)
+	logsink.Info("harvest.decision", "delivery unharvested at turn end (%s) — waking to harvest", id)
 	// .
 	gateCtx, cancelGate := context.WithTimeout(a.bgCtx, harvestGateWait)
 	if !a.runBackground(func() {
@@ -2371,12 +2506,12 @@ func (a *App) scheduleContinuation(capped, byPressure bool) bool {
 	leg := a.contChain
 	a.turnMeterMu.Unlock()
 	if leg > maxContinuationChain {
-		log.Printf("CONTINUATION refused: %d consecutive capped turns on %s — standing down so the operator can look", leg-1, ws.ID)
+		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s — standing down so the operator can look", leg-1, ws.ID)
 		return false
 	}
 	sessionID := ws.ID
 	if !a.runBackground(func() { a.continueCappedTurn(sessionID, leg, byPressure) }) {
-		log.Printf("CONTINUATION not scheduled for %s: runtime stopping", sessionID)
+		logsink.Info("continuation.refusal", "not scheduled for %s: runtime stopping", sessionID)
 		return false
 	}
 	return true
@@ -2480,7 +2615,7 @@ func (a *App) yieldGate() (bool, string) {
 // .
 func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	if err := a.acquireTurn(a.bgCtx); err != nil {
-		log.Printf("CONTINUATION %s: could not take the turn: %v", sessionID, err)
+		logsink.Warn("continuation.error", "%s: could not take the turn: %v", sessionID, err)
 		return
 	}
 	defer a.releaseTurn()
@@ -2498,7 +2633,7 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	// .
 	// .
 	if ws, err := a.store.ActiveWorkSession(); err != nil {
-		log.Printf("CONTINUATION %s: resume card unreadable: %v", sessionID, err)
+		logsink.Warn("continuation.error", "%s: resume card unreadable: %v", sessionID, err)
 	} else if ws != nil {
 		if card := resumeCardFor(ws); card != "" {
 			fact += "\n\n" + card
@@ -2506,7 +2641,7 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	}
 	spoken, err := a.wake(turnCtx, "system", fact)
 	if err != nil {
-		log.Printf("CONTINUATION turn failed for %s (leg %d): %v", sessionID, leg, err)
+		logsink.Warn("continuation.error", "turn failed for %s (leg %d): %v", sessionID, leg, err)
 		return
 	}
 	if spoken == "" {
@@ -2514,9 +2649,9 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	}
 	wakeID := fmt.Sprintf("wake_cont_%d", time.Now().UTC().UnixNano())
 	if err := a.store.AddOutboxMessage(wakeID, "operator", "", spoken, nil); err != nil {
-		log.Printf("CONTINUATION outbox write failed: %v", err)
+		logsink.Warn("continuation.error", "outbox write failed: %v", err)
 	}
-	log.Printf("CONTINUATION: leg %d on %s spoke (%d chars)", leg, sessionID, len(spoken))
+	logsink.Info("continuation.end", "CONTINUATION: leg %d on %s spoke (%d chars)", leg, sessionID, len(spoken))
 }
 
 // .
@@ -2608,9 +2743,7 @@ func (a *App) warnTempHome(ledgerPath string) {
 	slash := filepath.ToSlash(abs)
 	tmp := filepath.ToSlash(os.TempDir())
 	if strings.HasPrefix(slash, tmp+"/") || slash == tmp || strings.HasPrefix(slash, "/tmp/") {
-		log.Printf("WARNING: the identity's home (%s) is under a TEMPORARY directory.", abs)
-		log.Printf("WARNING: temp directories are cleaned by the OS and by habit — an identity that should persist must not live here.")
-		log.Printf("WARNING: move the data dir to durable storage unless this identity is deliberately disposable.")
+		logsink.Warn("boot.refusal", "the identity's home (%s) is under a TEMPORARY directory — temp directories are cleaned by the OS and by habit, so move the data dir to durable storage unless this identity is deliberately disposable", abs)
 	}
 }
 
@@ -2910,17 +3043,32 @@ func (a *App) bootHeadVerifier(cfg Config) (*witness.HeadVerifier, error) {
 
 // .
 // .
-// .
 func (a *App) headVerifierFor(cfg Config, ledgerDir string) (*witness.HeadVerifier, error) {
-	var platform *witness.PublicKeyEnvelope
-	if cfg.Witness.PlatformPubkeyPath != "" {
-		env, err := witness.LoadPlatformEnvelope(cfg.Witness.PlatformPubkeyPath)
-		if err != nil {
-			return nil, err
-		}
-		platform = env
-	} else {
-		platform = genesis.PinnedRoot()
+	platform, err := witnessPlatform(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return witness.LoadHeadVerifier(ledgerDir, platform)
+}
+
+// .
+// .
+// .
+// .
+func (a *App) besideFor(cfg Config, ledgerDir string) (*witness.Beside, error) {
+	platform, err := witnessPlatform(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return witness.LoadBeside(ledgerDir, platform)
+}
+
+// .
+// .
+// .
+func witnessPlatform(cfg Config) (*witness.PublicKeyEnvelope, error) {
+	if cfg.Witness.PlatformPubkeyPath != "" {
+		return witness.LoadPlatformEnvelope(cfg.Witness.PlatformPubkeyPath)
+	}
+	return genesis.PinnedRoot(), nil
 }

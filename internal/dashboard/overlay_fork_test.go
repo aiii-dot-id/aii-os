@@ -34,7 +34,7 @@ func TestOverlayReportsForkOfShippedFrame(t *testing.T) {
 
 	out := captureLog(t, func() {
 		if _, ok := s.overlayAsset("/layout.css"); !ok {
-			t.Fatal("a valid overlay must still be served — R71 grants the fork")
+			t.Fatal("a valid overlay must still be served — the fork is granted")
 		}
 	})
 	if !strings.Contains(out, "FORK") {

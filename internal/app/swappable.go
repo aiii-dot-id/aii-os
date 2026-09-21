@@ -47,6 +47,13 @@ func (s *swappableLLM) ChatStructured(ctx context.Context, systemPrompt, userMes
 }
 
 // .
+// .
+// .
+func (s *swappableLLM) CheckSimple(ctx context.Context, systemPrompt, userMessage string) error {
+	return s.Current().CheckSimple(ctx, systemPrompt, userMessage)
+}
+
+// .
 func (s *swappableLLM) ChatSimple(ctx context.Context, systemPrompt, userMessage string) (string, string, error) {
 	return s.Current().ChatSimple(ctx, systemPrompt, userMessage)
 }

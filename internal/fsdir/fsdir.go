@@ -51,7 +51,7 @@ package fsdir
 
 import (
 	"context"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"time"
@@ -136,7 +136,7 @@ func New(ctx context.Context, gate *quiesce.Gate, dir string, opts Options) *Wat
 	w.C = w.c
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("fsdir: %s: no event plane (%v) — heartbeat-only at %s", dir, err, opts.Heartbeat)
+		logsink.Warn("fsdir.refusal", "%s: no event plane (%v) — heartbeat-only at %s", dir, err, opts.Heartbeat)
 	} else {
 		w.fw = fw
 	}
@@ -213,7 +213,7 @@ func (w *Watch) run(ctx context.Context, opts Options) {
 			// .
 			// .
 			// .
-			log.Printf("fsdir: %s: event plane error (%v) — forcing a look", w.dir, err)
+			logsink.Warn("fsdir.error", "%s: event plane error (%v) — forcing a look", w.dir, err)
 			w.dirty = true
 			arm()
 

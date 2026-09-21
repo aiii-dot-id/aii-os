@@ -2,7 +2,7 @@
 #
 # CI's normal test job proves the client agrees with fixtures the client
 # itself defines. It cannot prove the client still agrees with
-# aiii.id. On those diverged: genesis.aiii.id served a Ring 0
+# aiii.id. Once those diverged: genesis.aiii.id served a Ring 0
 # payload the shipped client rejected, every hermetic test stayed green,
 # and a fresh install could not be born.
 #
@@ -34,8 +34,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           # Pinned for the same reason as ci.yml: one exact toolchain,
-          # matching the the build host gate.
-          go-version: "1.27.0"
+          # the one the release is built with.
+          go-version: "1.27.1"
 
       - name: Live chain against aiii.id
         env:

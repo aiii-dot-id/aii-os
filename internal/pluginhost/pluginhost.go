@@ -43,6 +43,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/facility"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/jsonschema"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/pluginworker"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
@@ -106,6 +107,21 @@ type ActivePlugin struct {
 	// .
 	// .
 	inFlight opGate
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	teardown sync.Mutex
 	// .
 	ID string
 	// .
@@ -1044,6 +1060,8 @@ func (ap *ActivePlugin) Tools() []string {
 // .
 // .
 func (p *ActivePlugin) Deactivate(ctx context.Context) error {
+	p.teardown.Lock()
+	defer p.teardown.Unlock()
 	if p.sessionCancel != nil {
 		p.sessionCancel()
 	}
@@ -1457,6 +1475,7 @@ type opDescriptor struct {
 	raw          map[string]interface{}
 	input        *jsonschema.Schema
 	output       *jsonschema.Schema
+	outputRaw    map[string]interface{}
 	effects      string
 	capabilities []string
 	capsDeclared bool
@@ -1485,6 +1504,7 @@ func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.
 	disc.Keywords = append([]string(nil), d.keywords...)
 	disc.Examples = append([]string(nil), d.examples...)
 	disc.OperatorConfirms = d.operatorConfirms
+	disc.OutputSchema = d.outputRaw
 	return disc
 }
 
@@ -1572,11 +1592,11 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, m *packagefmt.Manif
 				d.raw, d.input = raw, compiled
 			}
 			if op.Output != "" {
-				_, compiled, err := loadSchema(pkgPath, res, op.Output)
+				raw, compiled, err := loadSchema(pkgPath, res, op.Output)
 				if err != nil {
 					return nil, &SchemaError{Operation: op.ID, File: op.Output, Err: err}
 				}
-				d.output = compiled
+				d.outputRaw, d.output = raw, compiled
 			}
 			set.ops[op.ID] = d
 		}
@@ -2116,7 +2136,7 @@ func (o *Options) logf(format string, args ...interface{}) {
 		o.Log.Printf(format, args...)
 		return
 	}
-	log.Printf(format, args...)
+	logsink.Info("plugins.decision", format, args...)
 }
 
 // .

@@ -16,8 +16,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,11 +48,11 @@ func (a *App) loadCatalog(root *sigenvelope.PublicKeyEnvelope) {
 	if a.catalogDir != "" {
 		cat, err := pluginhost.LoadCatalog(a.catalogDir, root)
 		if err != nil {
-			log.Printf("plugins: catalog at %s unavailable: %v", a.catalogDir, err)
+			logsink.Warn("catalog.error", "catalog at %s unavailable: %v", a.catalogDir, err)
 			return
 		}
 		a.adoptCatalog(cat, "")
-		log.Printf("plugins: catalog loaded from %s — %d plugin(s) available", a.catalogDir, len(cat.Plugins))
+		logsink.Info("catalog.start", "catalog loaded from %s — %d plugin(s) available", a.catalogDir, len(cat.Plugins))
 		return
 	}
 	// .
@@ -64,12 +64,12 @@ func (a *App) loadCatalog(root *sigenvelope.PublicKeyEnvelope) {
 	cat, err := pluginhost.LoadCatalog(a.catalogCache, root)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			log.Printf("plugins: the kept catalog at %s is unusable: %v", a.catalogCache, err)
+			logsink.Warn("catalog.error", "the kept catalog at %s is unusable: %v", a.catalogCache, err)
 		}
 		return
 	}
 	a.adoptCatalog(cat, "")
-	log.Printf("plugins: catalog loaded from the last verified fetch — %d plugin(s); the URL is refreshed when online", len(cat.Plugins))
+	logsink.Info("catalog.start", "catalog loaded from the last verified fetch — %d plugin(s); the URL is refreshed when online", len(cat.Plugins))
 }
 
 func (a *App) adoptCatalog(cat *pluginhost.Catalog, fetchedAt string) {
@@ -119,10 +119,10 @@ func (a *App) refreshCatalog(ctx context.Context) error {
 	a.adoptCatalog(cat, time.Now().UTC().Format(time.RFC3339))
 	if a.catalogCache != "" {
 		if err := writeCatalogCache(a.catalogCache, md, sig); err != nil {
-			log.Printf("plugins: the verified catalog could not be kept at %s: %v", a.catalogCache, err)
+			logsink.Warn("catalog.error", "the verified catalog could not be kept at %s: %v", a.catalogCache, err)
 		}
 	}
-	log.Printf("plugins: catalog refreshed from %s — %d plugin(s) available", url, len(cat.Plugins))
+	logsink.Info("catalog.end", "catalog refreshed from %s — %d plugin(s) available", url, len(cat.Plugins))
 	return nil
 }
 
@@ -130,7 +130,7 @@ func (a *App) catalogRefused(err error) error {
 	a.catalogMu.Lock()
 	a.catalogErr = err.Error()
 	a.catalogMu.Unlock()
-	log.Printf("plugins: catalog refresh: %v (the last good index stays)", err)
+	logsink.Warn("catalog.error", "catalog refresh: %v (the last good index stays)", err)
 	return err
 }
 
@@ -395,7 +395,7 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 		}
 	}
 	a.pokePluginSweep()
-	log.Printf("plugins: installed %s %s from the catalog (%s); the sweep will verify and activate it", id, entry.Version, pkg.URL)
+	logsink.Info("catalog.end", "installed %s %s from the catalog (%s); the sweep will verify and activate it", id, entry.Version, pkg.URL)
 	return nil
 }
 
@@ -413,7 +413,7 @@ func (a *App) UninstallPlugin(id string) error {
 		return err
 	}
 	a.pokePluginSweep()
-	log.Printf("plugins: uninstalled %s; the sweep will deactivate it", id)
+	logsink.Info("catalog.end", "uninstalled %s; the sweep will deactivate it", id)
 	return nil
 }
 

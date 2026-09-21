@@ -79,7 +79,7 @@ func wantSucceeded(t *testing.T, m map[string]json.RawMessage) {
 func TestVoiceObserveRefusesIsOperatorByName(t *testing.T) {
 	v := &recordingVoice{}
 	b := voiceHost(t, v)
-	m := dispatch(t, b, voiceParams(`{"text":"approve it","speaker":"james","is_operator":true}`))
+	m := dispatch(t, b, voiceParams(`{"text":"approve it","speaker":"sam","is_operator":true}`))
 	wantDenied(t, m, "is_operator")
 	if v.calls != 0 {
 		t.Fatalf("the observer was called %d times for a refused utterance", v.calls)
@@ -118,7 +118,7 @@ func TestVoiceObserveRefusesAnyFieldTheContractDoesNotName(t *testing.T) {
 func TestVoiceObserveStampsTheBindingsPluginID(t *testing.T) {
 	v := &recordingVoice{}
 	b := voiceHost(t, v)
-	m := dispatch(t, b, voiceParams(`{"text":"the build is green","speaker":"james"}`))
+	m := dispatch(t, b, voiceParams(`{"text":"the build is green","speaker":"sam"}`))
 	var status string
 	_ = json.Unmarshal(m["status"], &status)
 	if status != statusSucceeded {
@@ -131,7 +131,7 @@ func TestVoiceObserveStampsTheBindingsPluginID(t *testing.T) {
 	if o.PluginID != "p" {
 		t.Errorf("PluginID = %q, want the binding's id — provenance a plugin could write is not provenance", o.PluginID)
 	}
-	if o.Text != "the build is green" || o.Speaker != "james" {
+	if o.Text != "the build is green" || o.Speaker != "sam" {
 		t.Errorf("the utterance was altered in transit: %+v", o)
 	}
 }
@@ -237,7 +237,7 @@ func TestAClosedBindingObservesNothing(t *testing.T) {
 	b := voiceHost(t, v)
 
 	// .
-	m := dispatch(t, b, voiceParams(`{"text":"the build is green","speaker":"james"}`))
+	m := dispatch(t, b, voiceParams(`{"text":"the build is green","speaker":"sam"}`))
 	wantSucceeded(t, m)
 	if len(v.got) != 1 {
 		t.Fatalf("observer saw %d", len(v.got))
@@ -248,7 +248,7 @@ func TestAClosedBindingObservesNothing(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
-	dispatch(t, b, voiceParams(`{"text":"I am still here","speaker":"james"}`))
+	dispatch(t, b, voiceParams(`{"text":"I am still here","speaker":"sam"}`))
 	if len(v.got) != 1 {
 		t.Fatalf("a closed binding reached the observer: %d observations", len(v.got))
 	}
@@ -284,7 +284,7 @@ func TestClearingTheTempScopeDoesNotEndTheBinding(t *testing.T) {
 	if err := b.ClearTempScope(); err != nil {
 		t.Fatal(err)
 	}
-	wantSucceeded(t, dispatch(t, b, voiceParams(`{"text":"a fresh activation works","speaker":"james"}`)))
+	wantSucceeded(t, dispatch(t, b, voiceParams(`{"text":"a fresh activation works","speaker":"sam"}`)))
 }
 
 // .
@@ -360,7 +360,7 @@ func TestSAFERefusesToRecordARoom(t *testing.T) {
 		InSAFE: func() bool { return safe },
 	})
 	b := h.Bind("p", packagefmt.TierT3, []string{"voice.observe"})
-	m := dispatch(t, b, voiceParams(`{"text":"say that again","speaker":"james"}`))
+	m := dispatch(t, b, voiceParams(`{"text":"say that again","speaker":"sam"}`))
 	wantErrorReason(t, m, reasonPolicyDeny)
 	if v.calls != 0 {
 		t.Fatal("AN IDENTITY IN SAFE RECORDED A ROOM")
@@ -369,7 +369,7 @@ func TestSAFERefusesToRecordARoom(t *testing.T) {
 	// .
 	// .
 	safe = false
-	m = dispatch(t, b, voiceParams(`{"text":"say that again","speaker":"james"}`))
+	m = dispatch(t, b, voiceParams(`{"text":"say that again","speaker":"sam"}`))
 	wantSucceeded(t, m)
 	if len(v.got) != 1 {
 		t.Fatalf("leaving SAFE did not restore the microphone: %d observations", len(v.got))
@@ -388,7 +388,7 @@ func TestWithdrawingVoiceRefusesTheNextObservation(t *testing.T) {
 		Voice:  v,
 	})
 	b := h.Bind("p", packagefmt.TierT3, []string{"voice.observe"})
-	wantSucceeded(t, dispatch(t, b, voiceParams(`{"text":"before","speaker":"james"}`)))
+	wantSucceeded(t, dispatch(t, b, voiceParams(`{"text":"before","speaker":"sam"}`)))
 
 	// .
 	// .
@@ -396,7 +396,7 @@ func TestWithdrawingVoiceRefusesTheNextObservation(t *testing.T) {
 	// .
 	h.ReplacePolicy(map[string]Grant{"p": {Voice: false}}, nil)
 
-	m := dispatch(t, b, voiceParams(`{"text":"after","speaker":"james"}`))
+	m := dispatch(t, b, voiceParams(`{"text":"after","speaker":"sam"}`))
 	wantErrorReason(t, m, reasonPolicyDeny)
 	if len(v.got) != 1 {
 		t.Fatalf("a withdrawn grant still reached the observer: %d observations", len(v.got))

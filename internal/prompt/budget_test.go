@@ -171,7 +171,8 @@ func TestProtectedMaterialSurvivesImpossibleBudget(t *testing.T) {
 // .
 func TestFoldLadderOrderIsRuled(t *testing.T) {
 	got := foldOrder()
-	want := [4]string{"brief", "ring4", "ring3", "ring2"}
+	// .
+	want := [5]string{"brief", "turn", "ring4", "ring3", "ring2"}
 	if got != want {
 		t.Fatalf("fold ladder = %v, want %v — the order is ruled, not incidental", got, want)
 	}

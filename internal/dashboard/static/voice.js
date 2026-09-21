@@ -503,7 +503,7 @@ export class Playback {
   //
   // A REPLY THE ENGINE FINISHED MAKING IS NOT A REPLY THE OPERATOR HAS
   // HEARD. Its frames sit here, scheduled; a newer reply arriving simply
-  // queued behind them and both played (independent review GO143).
+  // queued behind them and both played.
   retire(stream) {
     const s = stream >>> 0;
     if (!this.playingStream(s)) { this.tombstones.add(s); return 0; }
@@ -852,6 +852,13 @@ export function modeName(listen, speak) {
 function setVoiceMode(name) {
   const pair = MODE_PAIRS[name];
   if (!pair || !sendJSON) return;
+  // A lane retired by this gesture must not reopen under the old mode
+  // while its acknowledgement is still in flight. A newer host revision
+  // decides what may open next; the displayed mode remains host-owned.
+  if (pair.listen !== 'off' || pair.speak !== 'on') {
+    speakerStoppedAtRevision = voiceMode().revision;
+    if (speakerLane) retireSpeaker();
+  }
   // Silence is owed NOW, not at the next reply: entering a mode that does
   // not speak stops what is being spoken as the operator asks for it.
   if (pair.speak === 'off') hushForSpeakOff();
@@ -888,9 +895,20 @@ function followSpeakHalf(speak) {
 // room speech, which is the host session's own act. Retiring the lane to
 // reopen it under the other name would throw away the words in flight to
 // change a label the host has already changed.
-function followListenHalf(listen) {
+let listenFollowedRevision = -1;
+function followListenHalf(listen, speak, revision) {
+  const changed = revision !== listenFollowedRevision;
+  listenFollowedRevision = revision;
   if (listen !== 'off') return;
-  // A conversation still streaming is FINISHED, never aborted: the
+  // Off is terminal, unlike Earbuds: neither a microphone nor an old
+  // conversation waiting for a final reply belongs to it. Apply once per
+  // accepted revision so a subsequent Off -> Listen gesture can acquire
+  // its device while the new host acknowledgement is in flight.
+  if (speak === 'off' && (resident || residentWanted)) {
+    if (changed) abortDuplex();
+    return;
+  }
+  // Earbuds FINISHES a conversation still streaming: the
   // microphone track ends, the lane drains, and the final reply for what
   // was already heard still plays — the same custody the tap's own
   // Finish → earbuds transition has. An abort would discard spoken words
@@ -1380,6 +1398,7 @@ function reportCaptureSettings(stream) {
 // back when it is done.
 let speakerLane = null;
 let speakerRefusedAt = 0;
+let speakerStoppedAtRevision = -1;
 let speakerWatch = null;
 let cloudSpeaking = false;
 // How long a refused output lane waits before asking again. The refusal
@@ -1389,6 +1408,7 @@ const SPEAKER_RETRY_MS = 15000;
 function speakerWanted() {
   if (!engineLane() || S.connected === false) return false;
   const m = voiceMode();
+  if (m.revision <= speakerStoppedAtRevision) return false;
   if (m.listen !== 'off' || m.speak !== 'on') return false;
   if (resident || residentWanted || held || capturing || latched) return false;
   return micState() !== 'safe';
@@ -1605,8 +1625,12 @@ function stopTracks(stream) {
 // half-close the input.
 export async function finishInput() {
   if (!resident || resident.finished || resident.finishing) return;
-  resident.finishing = true;
-  const tail = await finishWithTail(resident, flushCapture);
+  const conv = resident;
+  conv.finishing = true;
+  const tail = await finishWithTail(conv, flushCapture);
+  // Off may retire this conversation while its capture flush is pending.
+  // Its eventual completion must not tear down a replacement microphone.
+  if (resident !== conv) return;
   reportTail(tail);
   stopResidentCapture();
 }
@@ -1733,6 +1757,8 @@ export function connectionLost() {
   // below, so nothing in flight is left depending on it.
   modeRev = 0;
   offSeenRev = 0;
+  listenFollowedRevision = -1;
+  speakerStoppedAtRevision = -1;
   held = false;
   latched = false;
   stopCapture(false);
@@ -1807,7 +1833,7 @@ export function render() {
   // just turned off stops this page's microphone — whoever turned them off.
   const m = voiceMode();
   followSpeakHalf(m.speak);
-  followListenHalf(m.listen);
+  followListenHalf(m.listen, m.speak, m.revision);
   syncSpeaker();
   renderConverse();
   renderMicMenu();
@@ -1921,8 +1947,9 @@ function renderConverse() {
     const available = micState() === 'plugin';
     c.hidden = !available;
     c.disabled = !available || !S.connected;
-    const live = residentActive(), waiting = !live && residentWanted;
     const m = voiceMode();
+    const live = m.listen !== 'off' && residentActive();
+    const waiting = m.listen !== 'off' && !live && residentWanted;
     c.classList.toggle('live', live);
     c.classList.toggle('waiting', waiting);
     // The glyph is the state, and the state is the mode: a microphone to
@@ -1941,7 +1968,7 @@ function renderConverse() {
     const ended = inputEndedWhy || inputEndSentence(null);
     c.title = m.listen === 'meeting'
       ? 'Meeting — the room is being recorded and replies are not spoken; tap to talk with the identity'
-      : residentActive()
+      : live
         ? (resident.finished
           ? ended + ' Tap to end the conversation.'
           : 'Stop listening — the identity gives its final reply, then replies are spoken and you type')
@@ -2134,7 +2161,7 @@ function wireConverse() {
         playback.prime();
         render(); return;
       }
-      if (m.listen === 'off' && m.speak !== 'off') { abortDuplex(); setVoiceMode('off'); return; }
+      if (m.listen === 'off' && m.speak !== 'off') { setVoiceMode('off'); abortDuplex(); return; }
       // A MEETING IS A LANE, NOT ONLY A MODE, so leaving one retires the
       // lane FIRST. startDuplex opens nothing while a conversation is
       // resident (`if (resident) return`), so the meeting's own lane

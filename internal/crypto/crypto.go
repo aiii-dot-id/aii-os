@@ -148,9 +148,6 @@ func SaveKeyPair(kp *KeyPair, path string) (published bool, retErr error) {
 	if kp == nil || kp.PrivateKey == nil {
 		return false, errors.New("complete keypair is required")
 	}
-	if path == "" {
-		return false, errors.New("key path is required")
-	}
 	// .
 	privBytes := kp.PrivateKey.Bytes()
 	pubBytes := kp.PublicKey
@@ -160,7 +157,22 @@ func SaveKeyPair(kp *KeyPair, path string) (published bool, retErr error) {
 	data = append(data, byte(len(privBytes)>>24), byte(len(privBytes)>>16), byte(len(privBytes)>>8), byte(len(privBytes)))
 	data = append(data, privBytes...)
 	data = append(data, pubBytes...)
+	return PublishKeyFile(data, path)
+}
 
+// .
+// .
+// .
+// .
+// .
+// .
+func PublishKeyFile(data []byte, path string) (published bool, retErr error) {
+	if path == "" {
+		return false, errors.New("key path is required")
+	}
+	if _, err := ParseKeyPair(data); err != nil {
+		return false, fmt.Errorf("refusing to publish: %w", err)
+	}
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return false, fmt.Errorf("key temp create: %w", err)
@@ -207,6 +219,14 @@ func LoadKeyPair(path string) (*KeyPair, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read key file: %w", err)
 	}
+	return ParseKeyPair(data)
+}
+
+// .
+// .
+// .
+// .
+func ParseKeyPair(data []byte) (*KeyPair, error) {
 	if len(data) < 4 {
 		return nil, errors.New("key file too short")
 	}

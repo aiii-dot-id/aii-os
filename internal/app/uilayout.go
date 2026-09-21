@@ -19,7 +19,7 @@ package app
 import (
 	_ "embed"
 	"encoding/json"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,7 +82,7 @@ var overlayShippedSeeds = []string{
 func (a *App) seedOverlayREADME() {
 	dir := a.uiOverlayDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[ui-overlay] seed: mkdir %s: %v", dir, err)
+		logsink.Warn("layout.error", "seed: mkdir %s: %v", dir, err)
 		return
 	}
 	seedDoc(filepath.Join(dir, "README.md"), overlayREADME, nil, overlayShippedSeeds, "[ui-overlay] seed")
@@ -146,23 +146,23 @@ func (a *App) loadUILayout(quiet bool) bool {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("ui-layout: unreadable, keeping current: %v", err)
+			logsink.Warn("layout.error", "unreadable, keeping current: %v", err)
 			return false
 		}
 		raw = nil
 	}
 	if len(raw) > maxUILayoutBytes {
-		log.Printf("ui-layout: %d bytes exceeds the %d ceiling — keeping current (a layout is a screenful of JSON)", len(raw), maxUILayoutBytes)
+		logsink.Warn("layout.refusal", "%d bytes exceeds the %d ceiling — keeping current (a layout is a screenful of JSON)", len(raw), maxUILayoutBytes)
 		return false
 	}
 	if raw != nil {
 		var shape uiLayoutShape
 		if err := json.Unmarshal(raw, &shape); err != nil {
-			log.Printf("ui-layout: invalid JSON, keeping current (mid-edit saves must not blank the screen): %v", err)
+			logsink.Warn("layout.refusal", "invalid JSON, keeping current (mid-edit saves must not blank the screen): %v", err)
 			return false
 		}
 		if shape.V != 1 {
-			log.Printf("ui-layout: v must be 1, got %d — keeping current", shape.V)
+			logsink.Warn("layout.refusal", "v must be 1, got %d — keeping current", shape.V)
 			return false
 		}
 		// .
@@ -182,7 +182,7 @@ func (a *App) loadUILayout(quiet bool) bool {
 			}
 			sort.Strings(inert)
 			for _, name := range inert {
-				log.Printf("ui-layout: profile %q is kept but INERT — the frame selects only %s, so nothing in it will ever render", name, strings.Join(selectableUIProfileNames(), " or "))
+				logsink.Info("layout.decision", "profile %q is kept but INERT — the frame selects only %s, so nothing in it will ever render", name, strings.Join(selectableUIProfileNames(), " or "))
 			}
 		}
 	}
@@ -192,9 +192,9 @@ func (a *App) loadUILayout(quiet bool) bool {
 	a.uiLayoutMu.Unlock()
 	if changed && !quiet {
 		if raw == nil {
-			log.Printf("ui-layout: file absent — frame-only (no sections laid out)")
+			logsink.Info("layout.start", "file absent — frame-only (no sections laid out)")
 		} else {
-			log.Printf("ui-layout: loaded %s (%d bytes)", path, len(raw))
+			logsink.Info("layout.start", "loaded %s (%d bytes)", path, len(raw))
 		}
 	}
 	return changed

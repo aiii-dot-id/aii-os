@@ -17,7 +17,7 @@
 set -e
 
 OUT="${OUT:-dist}"
-# AII_GO first: the gate, CI and BETA1_CONTRACT item 3 all name the
+# AII_GO first: the gate and CI name the
 # toolchain that way, and a release built with a different compiler than
 # the one that gated it is not the artifact that was proven. Plain "go"
 # on the build host resolves to a shim that tries to DOWNLOAD go1.27 (go.mod forces

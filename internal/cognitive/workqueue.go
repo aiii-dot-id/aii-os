@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -13,6 +12,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/foreground"
 	"github.com/aiii-dot-id/aii-os/internal/quiesce"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -166,9 +167,9 @@ func (e *Executor) Stop() {
 // .
 func (e *Executor) pass(ctx context.Context) {
 	if n, err := e.q.SweepExpiredLeases(time.Now().UTC().UnixMilli()); err != nil {
-		log.Printf("WORKQ: sweep failed: %v", err)
+		logsink.Warn("workq.error", "sweep failed: %v", err)
 	} else if n > 0 {
-		log.Printf("WORKQ: swept %d expired leases (crash recovery)", n)
+		logsink.Info("workq.decision", "swept %d expired leases (crash recovery)", n)
 	}
 	for {
 		select {
@@ -180,7 +181,7 @@ func (e *Executor) pass(ctx context.Context) {
 		}
 		w, err := e.q.ClaimWork(nil, time.Now().UTC().UnixMilli())
 		if err != nil {
-			log.Printf("WORKQ: claim failed: %v", err)
+			logsink.Warn("workq.error", "claim failed: %v", err)
 			return
 		}
 		if w == nil {
@@ -197,31 +198,41 @@ func (e *Executor) pass(ctx context.Context) {
 	}
 }
 
+// .
+// .
+const alarmKindPrefix = "alarm."
+
 func (e *Executor) runOne(ctx context.Context, w *store.WorkItem) {
 	h := e.handlerFor(w.Kind)
 	if h == nil {
 		// .
 		// .
 		if err := e.q.FailWork(w.ID, "no handler registered for kind "+w.Kind); err != nil {
-			log.Printf("WORKQ: fail-fast %s (%s): %v", w.ID, w.Kind, err)
+			logsink.Warn("workq.refusal", "fail-fast %s (%s): %v", w.ID, w.Kind, err)
 		} else {
-			log.Printf("WORKQ: no handler for kind %q — item %s failed honestly (retries will exhaust)", w.Kind, w.ID)
+			logsink.Warn("workq.refusal", "no handler for kind %q — item %s failed honestly (retries will exhaust)", w.Kind, w.ID)
 		}
 		return
 	}
 	err := e.invokeHandler(ctx, h, w)
 	if err == nil {
 		if cerr := e.q.CompleteWork(w.ID); cerr != nil {
-			log.Printf("WORKQ: complete %s failed: %v", w.ID, cerr)
+			logsink.Warn("workq.error", "complete %s failed: %v", w.ID, cerr)
+		} else if strings.HasPrefix(w.Kind, alarmKindPrefix) {
+			// .
+			// .
+			// .
+			// .
+			logsink.Tick("workq.end", "alarms", 0)
 		} else {
-			log.Printf("WORKQ: %s %s done", w.Kind, w.ID)
+			logsink.Info("workq.end", "%s %s done", w.Kind, w.ID)
 		}
 		return
 	}
 	if ferr := e.q.FailWork(w.ID, err.Error()); ferr != nil {
-		log.Printf("WORKQ: fail %s: %v (original: %v)", w.ID, ferr, err)
+		logsink.Warn("workq.error", "fail %s: %v (original: %v)", w.ID, ferr, err)
 	} else {
-		log.Printf("WORKQ: %s %s failed: %v", w.Kind, w.ID, err)
+		logsink.Warn("workq.error", "%s %s failed: %v", w.Kind, w.ID, err)
 	}
 }
 
@@ -248,7 +259,7 @@ func (e *Executor) invokeHandler(ctx context.Context, h WorkHandler, w *store.Wo
 	defer rel()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("WORKQ: handler %q PANICKED on %s (contained, failed item): %v\n%s", w.Kind, w.ID, r, debug.Stack())
+			logsink.Error("workq.error", "handler %q PANICKED on %s (contained, failed item): %v\n%s", w.Kind, w.ID, r, debug.Stack())
 			err = fmt.Errorf("handler panic: %v", r)
 		}
 	}()

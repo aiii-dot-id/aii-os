@@ -77,7 +77,7 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]interface{}) (s
 	source, _ := args["source"].(string)
 	switch source {
 	case "", "experiences", "syntheses", "conversation", "ledger":
-	case "alarms", "projects", "skills", "curiosity":
+	case "alarms", "projects", "skills", "curiosity", "continuity":
 		// .
 		// .
 		// .
@@ -86,7 +86,7 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]interface{}) (s
 		}
 		return e.recallStanding(ctx, source, query)
 	default:
-		return "", fmt.Errorf("recall source %q is not a source — the record's stores are experiences, syntheses, conversation and ledger; the standing sources are alarms, projects, skills and curiosity; omit it to recall across the record", source)
+		return "", fmt.Errorf("recall source %q is not a source — the record's stores are experiences, syntheses, conversation and ledger; the standing sources are alarms, projects, skills, curiosity and continuity; omit it to recall across the record", source)
 	}
 	if cursor > 0 && source == "" {
 		return "", fmt.Errorf("after_seq=%d needs a source: sequence numbers are per-source, and this one means a different position in each. Pass source=experiences|syntheses|conversation|ledger with the seq that source reported", cursor)

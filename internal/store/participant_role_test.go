@@ -10,7 +10,7 @@ import "testing"
 // .
 func TestAParticipantTurnCanBeRecorded(t *testing.T) {
 	s := testStore(t)
-	if err := s.AddConversationTurn("participant", "james asked about the ledger"); err != nil {
+	if err := s.AddConversationTurn("participant", "sam asked about the ledger"); err != nil {
 		t.Fatalf("a participant turn was refused — the CHECK was not widened: %v", err)
 	}
 	turns, err := s.RecentTurns(10)

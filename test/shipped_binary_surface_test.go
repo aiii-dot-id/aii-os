@@ -75,7 +75,14 @@ func TestTheRuntimeOffersVerifyAndNotDevsign(t *testing.T) {
 	// .
 	out, _ := exec.Command(bin, "verify").CombinedOutput()
 	if !strings.Contains(string(out), "-ledger") {
-		t.Errorf("`aii verify` must exist — MAINTENANCE.md tells a source-less operator to run it, and Beta journey 8 depends on it. Got: %s", out)
+		t.Errorf("`aii verify` must exist — the maintenance guide tells a source-less operator to run it, and restoring depends on it. Got: %s", out)
+	}
+
+	// .
+	// .
+	out, _ = exec.Command(bin, "escrow").CombinedOutput()
+	if !strings.Contains(string(out), "aii escrow restore") || !strings.Contains(string(out), "age -d") {
+		t.Errorf("`aii escrow` must exist and say how its file opens without it. Got: %s", out)
 	}
 
 	// .

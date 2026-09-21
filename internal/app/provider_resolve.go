@@ -6,7 +6,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"reflect"
 
@@ -92,7 +92,7 @@ func (a *App) resolveLLMConfig(cfg LLMConfig, reg *providerRegistry) (llm.Client
 			// .
 			// .
 			// .
-			log.Printf("LLM: provider %q lists %d model(s) and none is named %q (by id or canonical name) — its window cannot be derived from the list; set context_length on the entry or use a name the provider lists",
+			logsink.Warn("llm.refusal", "provider %q lists %d model(s) and none is named %q (by id or canonical name) — its window cannot be derived from the list; set context_length on the entry or use a name the provider lists",
 				entry.Name, listed, model)
 		}
 	}
@@ -150,8 +150,6 @@ func discoveredWindow(m modelMeta, entry providerEntry, provider, model string) 
 		known = window
 	}
 	if reserve > 0 && known > 0 && reserve+promptSafetyTokens >= known {
-		// .
-		// .
 		reserve = 0
 	}
 	return window, reserve
@@ -201,7 +199,7 @@ func resolveOutputAllocation(entry providerEntry) providerEntry {
 	if entry.ThinkingBudget < 0 {
 		entry.ThinkingBudget = 0
 	}
-	log.Printf("LLM: provider %q thinking budget clamped %d -> %d — the entry left < %d visible output tokens of %d",
+	logsink.Info("llm.budget", "provider %q thinking budget clamped %d -> %d — the entry left < %d visible output tokens of %d",
 		entry.Name, requested, entry.ThinkingBudget, visibleFloor, output)
 	return entry
 }
@@ -233,7 +231,7 @@ func providerAPIKey(entry providerEntry, supplied, fallbackEnv string) string {
 		if key == "" {
 			// .
 			// .
-			log.Printf("LLM: provider %q names %s for its key and that variable is empty — "+
+			logsink.Warn("llm.refusal", "provider %q names %s for its key and that variable is empty — "+
 				"sending no credential rather than another provider's",
 				entry.Name, entry.APIKeyEnv)
 		}
@@ -314,7 +312,7 @@ func promptBudgetFor(entry providerEntry, promptBudget int) (int, budgetSource) 
 			reserve = defaultOutputReserve
 		}
 		if derived := cl - reserve - promptSafetyTokens; derived > 0 && (promptBudget == 0 || derived < promptBudget) {
-			log.Printf("Prompt budget derived from model window: %d (context %d - output %d - margin %d)", derived, cl, reserve, promptSafetyTokens)
+			logsink.Info("llm.budget", "Prompt budget derived from model window: %d (context %d - output %d - margin %d)", derived, cl, reserve, promptSafetyTokens)
 			promptBudget, source = derived, budgetDerived
 		}
 	}
@@ -324,7 +322,7 @@ func promptBudgetFor(entry providerEntry, promptBudget int) (int, budgetSource) 
 		// .
 		// .
 		// .
-		log.Printf("Prompt budget: FALLBACK %d tokens — provider %q declares no context_length and none was discovered; the model's real window may be far larger. Set context_length on the provider entry (Settings → Providers).",
+		logsink.Warn("llm.budget", "Prompt budget: FALLBACK %d tokens — provider %q declares no context_length and none was discovered; the model's real window may be far larger. Set context_length on the provider entry (Settings → Providers).",
 			promptBudget, entry.Name)
 	}
 	return promptBudget, source
@@ -431,7 +429,7 @@ func (a *App) providerRuntimeMatches(reg *providerRegistry) bool {
 func limitModelOutput(entry providerEntry, model string, eff *effectiveCaps) providerEntry {
 	cap, ok := eff.capabilityFor(model)
 	if ok && cap.MaxOutputTokens > 0 && entry.MaxOutputTokens > cap.MaxOutputTokens {
-		log.Printf("LLM output allocation: provider %q model %q limited from %d to its declared maximum %d", entry.Name, model, entry.MaxOutputTokens, cap.MaxOutputTokens)
+		logsink.Info("llm.budget", "LLM output allocation: provider %q model %q limited from %d to its declared maximum %d", entry.Name, model, entry.MaxOutputTokens, cap.MaxOutputTokens)
 		entry.MaxOutputTokens = cap.MaxOutputTokens
 	}
 	return entry

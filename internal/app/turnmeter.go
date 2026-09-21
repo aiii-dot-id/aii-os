@@ -6,7 +6,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"math"
 	"time"
 
@@ -50,7 +50,7 @@ func (a *App) recordTurnCost(u conversation.TurnUsage) {
 	if u.CacheReadReports < u.Calls {
 		text += "; cache details incomplete"
 	}
-	log.Printf("Turn cost: %s (in %d, out %d)", text, u.PromptTokens, u.CompletionTokens)
+	logsink.Info("turn.budget", "Turn cost: %s (in %d, out %d)", text, u.PromptTokens, u.CompletionTokens)
 	// .
 	// .
 	// .
@@ -170,7 +170,7 @@ func (a *App) logTurnSummary() {
 	predicted, independent, declaredAt := a.turnFirstPredicted, a.turnIndependent, a.turnDeclaredOrdinal
 	rounds := a.turnRounds
 	a.turnMeterMu.Unlock()
-	log.Printf("TURN_SUMMARY calls=%d read_only=%d spawned=%d harvested=%d predicted=%d declared_at=%d independent=%d rounds=%d", calls, ro, spawned, harvested, predicted, declaredAt, independent, rounds)
+	logsink.Info("turn.end", "TURN_SUMMARY calls=%d read_only=%d spawned=%d harvested=%d predicted=%d declared_at=%d independent=%d rounds=%d", calls, ro, spawned, harvested, predicted, declaredAt, independent, rounds)
 	// .
 	// .
 	// .
@@ -192,7 +192,7 @@ func (a *App) logTurnSummary() {
 			// .
 			// .
 			// .
-			log.Printf("Warning: turn metric not recorded: %v", err)
+			logsink.Warn("turn.error", "turn metric not recorded: %v", err)
 		}
 	}
 	a.resetTurnMeter()

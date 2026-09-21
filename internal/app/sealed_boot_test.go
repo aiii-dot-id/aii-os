@@ -136,7 +136,7 @@ func TestASnapshotOfASealedRecordIsWholeAndVerifiesOnItsOwn(t *testing.T) {
 	}
 	defer app.Stop()
 	cfg := app.configSnapshot()
-	app.runMaintenance()
+	app.runMaintenance(t.Context())
 	snaps := backupFiles(t, app.backupsDir(cfg))
 	if len(snaps) != 1 {
 		t.Fatalf("%d snapshots, want 1 (%v)", len(snaps), snaps)

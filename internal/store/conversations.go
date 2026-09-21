@@ -3,7 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,7 +150,7 @@ func (s *Store) restoreActiveProject() {
 		// .
 		// .
 		// .
-		log.Printf("runtime_meta active_project restore failed: %v", err)
+		logsink.Warn("store.error", "runtime_meta active_project restore failed: %v", err)
 		return
 	}
 	s.activeProject = v
@@ -357,7 +357,45 @@ func (s *Store) SearchTurns(q string, beforeSeq uint64, limit int) ([]Conversati
 func (s *Store) RecentTurns(n int) ([]ConversationTurn, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.recentTurnsLocked(n)
+}
 
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (s *Store) ConversationWindow(n int) ([]ConversationTurn, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM conversations WHERE role != 'system'`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	turns, err := s.recentTurnsLocked(SteppedWindow(total, n))
+	return turns, total, err
+}
+
+// .
+// .
+// .
+func SteppedWindow(total, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if total <= n {
+		return total
+	}
+	return n + (total-n)%n
+}
+
+func (s *Store) recentTurnsLocked(n int) ([]ConversationTurn, error) {
 	// .
 	// .
 	// .

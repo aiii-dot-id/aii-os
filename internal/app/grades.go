@@ -21,7 +21,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -89,7 +89,7 @@ func (a *App) gradeResult(req dashboard.GradeRequest) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("the grade could not be recorded: %w", err)
 	}
-	log.Printf("GRADE: the operator graded %s %s (turn %d)%s", session, grade, seq, gradeLogTail(comment))
+	logsink.Info("grade.end", "the operator graded %s %s (turn %d)%s", session, grade, seq, gradeLogTail(comment))
 	// .
 	// .
 	// .

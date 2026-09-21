@@ -80,7 +80,7 @@ func TestCreateWritesTheSlotPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	data, err := os.ReadFile(ConfigPathIn(dir))
 	if err != nil {
 		t.Fatal(err)
 	}

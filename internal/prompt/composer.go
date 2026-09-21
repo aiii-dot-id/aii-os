@@ -23,6 +23,7 @@ package prompt
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -40,7 +41,24 @@ type Composer struct {
 	// .
 	// .
 	// .
-	pluginOps func() bool
+	pluginOps func() PluginOperations
+}
+
+// .
+// .
+type PluginFamily struct {
+	Name  string
+	Count int
+	Names []string
+	More  int
+}
+
+// .
+// .
+// .
+type PluginOperations struct {
+	Families     []PluginFamily
+	MoreFamilies int
 }
 
 type IdentitySource interface {
@@ -60,6 +78,12 @@ type Prompt struct {
 	Text          string
 	StableLen     int
 	TokenEstimate int
+	// .
+	// .
+	// .
+	// .
+	// .
+	Turn string
 }
 
 // .
@@ -110,7 +134,7 @@ func (c *Composer) SetIdentitySource(source IdentitySource) { c.identity = sourc
 // .
 // .
 // .
-func (c *Composer) SetPluginOperations(fn func() bool) { c.pluginOps = fn }
+func (c *Composer) SetPluginOperations(fn func() PluginOperations) { c.pluginOps = fn }
 
 // .
 func (c *Composer) SetName(name string) {
@@ -134,13 +158,21 @@ func (c *Composer) SetName(name string) {
 // .
 // .
 func (c *Composer) Compose(workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(c.MaxTokens(), workSessionState, reserveTokens, false)
+	return c.compose(c.MaxTokens(), workSessionState, "", reserveTokens, false)
+}
+
+// .
+// .
+// .
+// .
+func (c *Composer) ComposeTurn(workSessionState, turnFacts string, reserveTokens int) (*Prompt, error) {
+	return c.compose(c.MaxTokens(), workSessionState, turnFacts, reserveTokens, false)
 }
 
 // .
 // .
 func (c *Composer) ComposeWithin(maxTokens int, workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(maxTokens, workSessionState, reserveTokens, false)
+	return c.compose(maxTokens, workSessionState, "", reserveTokens, false)
 }
 
 // .
@@ -152,15 +184,15 @@ func (c *Composer) ComposeWithin(maxTokens int, workSessionState string, reserve
 // .
 // .
 func (c *Composer) ComposeFolded(workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(c.MaxTokens(), workSessionState, reserveTokens, true)
+	return c.compose(c.MaxTokens(), workSessionState, "", reserveTokens, true)
 }
 
 // .
 func (c *Composer) ComposeFoldedWithin(maxTokens int, workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(maxTokens, workSessionState, reserveTokens, true)
+	return c.compose(maxTokens, workSessionState, "", reserveTokens, true)
 }
 
-func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens int, foldElastic bool) (*Prompt, error) {
+func (c *Composer) compose(maxTokens int, workSessionState, turnFacts string, reserveTokens int, foldElastic bool) (*Prompt, error) {
 	var sections []Section
 
 	// .
@@ -239,12 +271,19 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 	// .
 	// .
 	toolContent := toolGuidance
-	if c.pluginOps != nil && c.pluginOps() {
+	if c.pluginOps != nil {
 		// .
 		// .
 		// .
 		// .
-		toolContent += "\n\n" + pluginPosture
+		// .
+		// .
+		// .
+		// .
+		// .
+		if hint := renderPluginHint(c.pluginOps()); hint != "" {
+			toolContent += "\n\n" + hint
+		}
 	}
 	sections = append(sections, Section{
 		Name: "Tool Use", Content: toolContent, Source: "tools",
@@ -291,6 +330,14 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 			Source: "ring4", Elastic: true, Volatile: true,
 		})
 	}
+	// .
+	// .
+	if turnFacts != "" {
+		sections = append(sections, Section{
+			Name: "This Turn", Ring: ring.Ring4, Content: turnFacts,
+			Source: "turn", Elastic: true, Volatile: true,
+		})
+	}
 
 	// .
 	// .
@@ -324,9 +371,14 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 	// .
 	// .
 	var parts []string
+	var turn string
 	stableLen, sealed := 0, false
 	for _, s := range sections {
 		if s.Content == "" {
+			continue
+		}
+		if s.Source == "turn" {
+			turn = s.Content
 			continue
 		}
 		if s.Volatile || s.Folded {
@@ -340,10 +392,22 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 		}
 		parts = append(parts, s.Content)
 	}
-	if len(omissions) > 0 {
-		// .
-		// .
-		parts = append(parts, renderOmissions(omissions))
+	// .
+	// .
+	// .
+	var systemOmissions, turnOmissions []Omission
+	for _, o := range omissions {
+		if o.Source == "turn" {
+			turnOmissions = append(turnOmissions, o)
+		} else {
+			systemOmissions = append(systemOmissions, o)
+		}
+	}
+	if len(systemOmissions) > 0 {
+		parts = append(parts, renderOmissions(systemOmissions))
+	}
+	if len(turnOmissions) > 0 {
+		turn = strings.TrimSpace(renderOmissions(turnOmissions))
 	}
 	fullText := strings.Join(parts, "\n\n")
 	stableText := fullText[:stableLen]
@@ -354,6 +418,7 @@ func (c *Composer) compose(maxTokens int, workSessionState string, reserveTokens
 		Text:          fullText,
 		StableLen:     len(stableText),
 		TokenEstimate: tokenEstimate,
+		Turn:          turn,
 	}, nil
 }
 
@@ -542,9 +607,67 @@ The identity functions offered to you are your organs, not attachments. Sandbox 
 // .
 // .
 // .
+const (
+	pluginHintHead = "Plugin operations installed beside you — named here, not in your tool list until you offer one:"
+	pluginHintTail = "Reach them through your tools organ: tools action=show name=… inspects one, its arguments and its receipt rule; tools action=offer name=… makes it callable from your next turn and keeps it so, across restarts, until action=release returns the seat or the operation changes what it declares — eight at a time; tools action=search query=… finds one by need. A plugin's success is what the host's receipt says, never the plugin's own text."
+)
+
 // .
 // .
-const pluginPosture = `Plugins installed beside you add operations that are not listed here. Reach them through your tools organ: tools orients you (families and counts); tools action=search query=… finds one; tools action=show name=… inspects its arguments and its receipt rule; tools action=offer name=… makes it callable from your next turn, eight at a time, and action=release returns the seat. A plugin's success is what the host's receipt says, never the plugin's own text.`
+// .
+// .
+// .
+// .
+// .
+var pluginNameGrammar = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+
+const maxPrintedPluginName = 64
+
+func printablePluginName(name string) bool {
+	return len(name) <= maxPrintedPluginName && pluginNameGrammar.MatchString(name)
+}
+
+// .
+// .
+// .
+// .
+func renderPluginHint(ops PluginOperations) string {
+	var lines []string
+	unprinted := 0
+	for _, f := range ops.Families {
+		if !printablePluginName(f.Name) {
+			unprinted += f.Count
+			continue
+		}
+		var names []string
+		more := f.More
+		for _, n := range f.Names {
+			if printablePluginName(n) {
+				names = append(names, n)
+			} else {
+				more++
+			}
+		}
+		line := fmt.Sprintf("  %s — %d", f.Name, f.Count)
+		if len(names) > 0 {
+			line += ": " + strings.Join(names, ", ")
+		}
+		if more > 0 {
+			line += fmt.Sprintf(" (+%d more)", more)
+		}
+		lines = append(lines, line)
+	}
+	if ops.MoreFamilies > 0 {
+		lines = append(lines, fmt.Sprintf("  … and %d more families; tools action=search narrows them", ops.MoreFamilies))
+	}
+	if unprinted > 0 {
+		lines = append(lines, fmt.Sprintf("  … and %d operation(s) in families whose names this prompt does not print; tools action=brief lists them", unprinted))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return pluginHintHead + "\n" + strings.Join(lines, "\n") + "\n" + pluginHintTail
+}
 
 // .
 // .

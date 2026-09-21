@@ -185,6 +185,35 @@ func TestHeadVerifierChecksTheReceiptChainAndTheWitnessSignature(t *testing.T) {
 		t.Fatalf("whole chain: n=%d err=%v", n, err)
 	}
 
+	// .
+	// .
+	if seq, hash, ok := hv.Attested(); !ok || seq != 6 || hash != r2.LedgerHash {
+		t.Fatalf("attested (%d, %s, %v), want record 6 by its hash", seq, hash, ok)
+	}
+	if !strings.Contains(hv.Summary(), "2 witness heads verified under 1 persisted keys, witnessed through record 6 (") {
+		t.Fatalf("summary: %s", hv.Summary())
+	}
+
+	// .
+	// .
+	// .
+	// .
+	t.Run("a cursor that advanced is not a receipt that verified", func(t *testing.T) {
+		v := NewHeadVerifier(nil)
+		if err := v.VerifyHead(head1); !errors.Is(err, ledger.ErrWitnessKeyUnknown) {
+			t.Fatalf("first head: %v", err)
+		}
+		if err := v.VerifyHead(head2); !errors.Is(err, ledger.ErrWitnessKeyUnknown) {
+			t.Fatalf("fixture: the cursor did not advance past an unverified receipt: %v", err)
+		}
+		if seq, _, ok := v.Attested(); ok {
+			t.Fatalf("A RECEIPT NOBODY VERIFIED IS REPORTED AS THE WITNESS'S REACH: record %d", seq)
+		}
+		if !strings.Contains(v.Summary(), "no record witnessed; 2 tail heads unverified") {
+			t.Fatalf("summary: %s", v.Summary())
+		}
+	})
+
 	t.Run("out of order breaks the receipt chain", func(t *testing.T) {
 		if err := NewHeadVerifier(keys).VerifyHead(head2); err == nil || !strings.Contains(err.Error(), "continues from") {
 			t.Fatalf("want a chain error, got %v", err)
@@ -242,6 +271,11 @@ func TestHeadVerifierChecksTheReceiptChainAndTheWitnessSignature(t *testing.T) {
 		if err := v2.VerifyHead(forgedHead); err == nil || !strings.Contains(err.Error(), "witness signature") {
 			t.Fatalf("want a signature error, got %v", err)
 		}
+		// .
+		// .
+		if seq, _, ok := v2.Attested(); !ok || seq != 6 {
+			t.Fatalf("A FORGED RECEIPT MOVED THE WITNESS'S REACH: attested record %d (%v), want 6", seq, ok)
+		}
 	})
 	t.Run("a head outside the key's window is refused", func(t *testing.T) {
 		expired := map[string]*WitnessKeyMaterial{}
@@ -271,4 +305,31 @@ func TestHeadVerifierChecksTheReceiptChainAndTheWitnessSignature(t *testing.T) {
 			t.Fatalf("want an identity error, got %v", err)
 		}
 	})
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TestTheSummaryCountsFootnoteHeads(t *testing.T) {
+	v := NewHeadVerifier(nil)
+	for seq := uint64(5); seq <= 7; seq++ {
+		evt := &ledger.Event{Seq: seq, Type: ledger.EventSystemWitnessed,
+			Payload: []byte(`{"receipt_before_rewrap":{"ledger_ordinal":4,"ledger_hash":"x"}}`)}
+		if err := v.VerifyHead(evt); err != nil {
+			t.Fatalf("a footnote head was refused: %v", err)
+		}
+	}
+	if v.Footnotes() != 3 {
+		t.Fatalf("fixture: %d footnotes counted", v.Footnotes())
+	}
+	if got := v.Summary(); !strings.Contains(got, "3 footnote heads accepted with no receipt") {
+		t.Fatalf("the summary hides what was accepted without a receipt: %s", got)
+	}
+	// .
+	if got := NewHeadVerifier(nil).Summary(); got != "0 witness heads verified under 0 persisted keys, no record witnessed; 0 tail heads unverified" {
+		t.Fatalf("the plain summary changed: %s", got)
+	}
 }

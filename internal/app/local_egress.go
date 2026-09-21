@@ -1,7 +1,7 @@
 package app
 
 import (
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"strconv"
 	"strings"
@@ -92,8 +92,8 @@ func (a *App) applyLocalFetch(cfg Config, reg interface {
 	}
 	rejected := reg.SetLocalFetch(cfg.Tools.LocalHosts, a.ownListener)
 	if len(rejected) > 0 {
-		log.Printf("Config: tools.local_hosts entries ignored: %s", strings.Join(rejected, "; "))
+		logsink.Warn("config.refusal", "tools.local_hosts entries ignored: %s", strings.Join(rejected, "; "))
 	} else if n := len(cfg.Tools.LocalHosts); n > 0 {
-		log.Printf("Config: web_fetch may reach %d local device(s) the operator named (tools.local_hosts)", n)
+		logsink.Warn("config.decision", "web_fetch may reach %d local device(s) the operator named (tools.local_hosts)", n)
 	}
 }

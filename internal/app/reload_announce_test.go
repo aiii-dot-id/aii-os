@@ -1,12 +1,11 @@
 package app
 
 import (
-	"bytes"
-	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -28,9 +27,7 @@ func reloadLog(t *testing.T, edit func(*Config)) string {
 		t.Fatal(err)
 	}
 
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
+	buf := logsink.CaptureForTest(t)
 	a.reloadConfig()
 	return buf.String()
 }

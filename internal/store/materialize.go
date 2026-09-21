@@ -632,7 +632,131 @@ func (s *Store) ValidateEvent(eventType ledger.EventType, ringLevel int, payload
 	// .
 	// .
 	// .
+	// .
+	// .
+	// .
+	if err := s.validateCitationsLocked(eventType, payload); err != nil {
+		return err
+	}
+	// .
+	// .
+	if err := s.validateDreamedThroughLocked(eventType, payload); err != nil {
+		return err
+	}
+	// .
+	// .
+	// .
 	return s.materializeLocked(cand, false)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (s *Store) validateCitationsLocked(eventType ledger.EventType, payload []byte) error {
+	cites, err := ledger.ParseCitations(payload)
+	if err != nil {
+		return fmt.Errorf("%s: %w", eventType, err)
+	}
+	if len(cites) == 0 {
+		return nil
+	}
+	if !ledger.CitesAllowed(eventType) {
+		return fmt.Errorf("%s: %w: citations are carried by experience.create, belief.upsert and edge.create only", eventType, ledger.ErrCitation)
+	}
+	self, err := s.ownFingerprintLocked()
+	if err != nil {
+		return fmt.Errorf("%s: cites: %w", eventType, err)
+	}
+	for i, c := range cites {
+		if self == "" || c.Identity != self {
+			continue
+		}
+		var evt ledger.Event
+		var typ string
+		var ring sql.NullInt64
+		err := s.h().QueryRow(`SELECT seq, prev, ts, type, ring, content FROM ledger WHERE seq = ?`, c.Seq).
+			Scan(&evt.Seq, &evt.Prev, &evt.Timestamp, &typ, &ring, &evt.Content)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("%s: %w: citation %d names record %d of your own record, which does not hold one — a record cites what is already written", eventType, ledger.ErrCitation, i, c.Seq)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: cites: read record %d: %w", eventType, c.Seq, err)
+		}
+		if !ring.Valid {
+			return fmt.Errorf("%s: cites: record %d carries no ring — its entry hash cannot be recomputed", eventType, c.Seq)
+		}
+		evt.Type, evt.Ring = ledger.EventType(typ), int(ring.Int64)
+		if got := evt.EntryHash(); got != c.EntryHash {
+			return fmt.Errorf("%s: %w: citation %d says your record %d has entry hash %s; it has %s", eventType, ledger.ErrCitation, i, c.Seq, c.EntryHash, got)
+		}
+	}
+	return nil
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (s *Store) validateDreamedThroughLocked(eventType ledger.EventType, payload []byte) error {
+	claim, err := ledger.ParseDreamedThrough(payload)
+	if err != nil {
+		return fmt.Errorf("%s: %w", eventType, err)
+	}
+	if claim == nil {
+		return nil
+	}
+	var p struct {
+		Provenance string `json:"provenance"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return fmt.Errorf("%s: dreamed_through: %w", eventType, err)
+	}
+	if !ledger.DreamedThroughAllowed(eventType) || p.Provenance != "dream" {
+		return fmt.Errorf("%s: %w: it is carried by a dream note — an experience.create with provenance dream — and by nothing else", eventType, ledger.ErrDreamedThrough)
+	}
+	// .
+	var content string
+	err = s.h().QueryRow(`SELECT content FROM conversations WHERE id = ?`, claim.Turn).Scan(&content)
+	length := uint64(turnLength(content))
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("%s: %w: it names turn %q, which the transcript does not hold — a note claims what it read", eventType, ledger.ErrDreamedThrough, claim.Turn)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: dreamed_through: read turn %q: %w", eventType, claim.Turn, err)
+	}
+	if claim.Position > length {
+		return fmt.Errorf("%s: %w: position %d lies past the end of turn %q (%d code points)", eventType, ledger.ErrDreamedThrough, claim.Position, claim.Turn, length)
+	}
+	return nil
+}
+
+// .
+// .
+func (s *Store) ownFingerprintLocked() (string, error) {
+	var payload []byte
+	err := s.h().QueryRow(`SELECT payload FROM ledger WHERE type = 'ring0.genesis' ORDER BY seq ASC LIMIT 1`).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the genesis: %w", err)
+	}
+	var p struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return "", fmt.Errorf("read the genesis: %w", err)
+	}
+	return p.Fingerprint, nil
 }
 
 func (s *Store) materializeExperience(evt *ledger.Event, replayMode bool) error {

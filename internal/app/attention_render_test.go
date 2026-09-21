@@ -11,7 +11,7 @@ import (
 // .
 func TestAttentionRendersOneMediumItemAndIsSuppressed(t *testing.T) {
 	a, _ := focusFixture(t)
-	state, err := a.buildWorkState()
+	state, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestAttentionRendersOneMediumItemAndIsSuppressed(t *testing.T) {
 	exec(`INSERT INTO beliefs (id, statement, ring, confidence, evidence_count, first_seq, last_seq) VALUES ('b_a', 'the lighthouse is red', 3, 0.8, 1, 900001, 900001)`)
 	exec(`INSERT INTO beliefs (id, statement, ring, confidence, evidence_count, first_seq, last_seq) VALUES ('b_b', 'the lighthouse is white', 3, 0.8, 1, 900002, 900002)`)
 	exec(`INSERT INTO edges (id, from_id, to_id, edge_type, created_seq) VALUES ('ed_t', 'b_a', 'b_b', 'CONTRADICTS', 900003)`)
-	state, err = a.buildWorkState()
+	state, err = a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestAttentionRendersOneMediumItemAndIsSuppressed(t *testing.T) {
 	if err := a.store.UpdateWorkPlan("ws_1", &focus, nil, nil, nil, nil, &dn); err != nil {
 		t.Fatal(err)
 	}
-	state, _ = a.buildWorkState()
+	state, _ = a.buildTurnFacts(false)
 	if strings.Contains(state, "### Attention") {
 		t.Fatalf("an owed decision must suppress the attention item:\n%s", state)
 	}

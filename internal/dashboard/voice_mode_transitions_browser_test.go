@@ -54,7 +54,7 @@ run(async () => {
     const asked = opened;
 
     // THE IDENTITY, SETTINGS OR ANOTHER BROWSER TURNS LISTENING OFF.
-    show('off', 'off', 2);
+    show('off', 'on', 2);
     await until(() => track.readyState === 'ended', 'listen=off left the microphone live: ' + track.readyState);
     assert(residentActive(), 'off ended the conversation — the reply for what was already heard is still owed');
     assert(acted('abort') === 0 && acted('close') === 0, 'off discarded the session instead of finishing its input: ' + JSON.stringify(msgs));
@@ -62,7 +62,7 @@ run(async () => {
 
     // OWED ONCE. The next status frame carries the same off and says
     // nothing new.
-    show('off', 'off', 3);
+    show('off', 'on', 3);
     await tick(); await tick();
     assert(ends() === 1 && acted('abort') === 0, 'a second off frame finished the input again: ' + ends() + ' END frames, ' + acted('abort') + ' aborts');
 
@@ -133,12 +133,96 @@ run(async () => {
     assert(acted('abort') === 0, 'the off frame aborted a session that still owes a reply: ' + JSON.stringify(msgs));
     assert(msgs.length === said, 'the off frame sent something new: ' + JSON.stringify(msgs.slice(said)));
     assert(residentActive(), 'the off frame ended the conversation that was draining');
+    const button = document.getElementById('converse');
+    assert(button.dataset.glyph === 'ear' && button.classList.contains('earbuds'),
+      'the draining conversation hides Earbud mode: ' + button.outerHTML);
+    assert(button.title.startsWith('Earbuds') && button.getAttribute('aria-pressed') === 'false' && !button.classList.contains('live'),
+      'Earbud still claims that the microphone is listening: ' + button.outerHTML);
+
+    // A newer Off from any controller closes the session, not just input.
+    // Retaining a final reply is Earbud semantics, not Off semantics.
+    show('off', 'off', 3);
+    await until(() => acted('abort') === 1, 'Off left the resident session open');
+    assert(!residentActive() && button.dataset.glyph === 'micoff', 'Off is not off: ' + button.outerHTML);
+    host.sessionState({ state: 'closed', session_id: 'vs-live' });
+    show('off', 'off', 3);
+    assert(acted('open') === 1, 'Off reopened a voice session');
   } finally { abortDuplex(); track.stop(); await ac.close(); }
 });
 </script>`
 
 func TestTheOperatorsOwnFinishIsNotPaidAgainByTheVoiceModeFrameThatFollows(t *testing.T) {
 	runPageInEngines(t, voiceListenOffAfterOwnFinishPage, micModules)
+}
+
+func TestVoiceOffClosesAnActiveConversationWithoutReopeningIt(t *testing.T) {
+	page := micMarkup + `<script type="module">
+import { assert, run } from './__harness.js';
+import { bindTransport, startDuplex, connectionLost, residentActive, converseForTest, render, wireMic } from './voice.js';
+import { S } from './state.js';
+run(async () => {
+  const sent = [];
+  const host = bindTransport(() => {}, m => { sent.push(m); return 'r' + sent.length; });
+  const ac = new AudioContext();
+  const tracks = [];
+  navigator.mediaDevices.getUserMedia = async () => {
+    const stream = ac.createMediaStreamDestination().stream;
+    tracks.push(stream.getAudioTracks()[0]); return stream;
+  };
+  const until = async (ok, what) => {
+    for (let i = 0; i < 300 && !ok(); i++) await new Promise(r => setTimeout(r, 10));
+    assert(ok(), what);
+  };
+  const count = action => sent.filter(m => m.voice && m.voice.action === action).length;
+  const show = (listen, speak, rev) => {
+    S.stats = {voice_engine:true, voice_state:'plugin', voice_listen:listen, voice_speak:speak, voice_mode_revision:rev};
+    S.connected = true; render();
+  };
+  try {
+    wireMic(); show('interactive', 'on', 1);
+    converseForTest('waiting'); await startDuplex();
+    host.sessionState({state:'open', session_id:'vs-off'});
+    show('off', 'off', 2);
+    assert(!residentActive() && tracks[0].readyState === 'ended' && count('abort') === 1,
+      'Off left capture or the resident session alive: ' + JSON.stringify(sent));
+    host.sessionState({state:'closed', session_id:'vs-off'});
+    show('off', 'off', 2);
+    show('interactive', 'on', 1); // stale status cannot revive anything
+    assert(count('open') === 1 && count('abort') === 1, 'Off reopened or closed twice: ' + JSON.stringify(sent));
+    assert(document.getElementById('converse').dataset.glyph === 'micoff', 'stale status replaced Off');
+
+    // Off -> Listen acquires under the gesture, before the mode ack.
+    const button = document.getElementById('converse');
+    button.click();
+    await until(() => count('open') === 2, 'Listen did not reopen after Off');
+    host.sessionState({state:'open', session_id:'vs-next'});
+    assert(tracks[1].readyState === 'live', 'the old Off stopped the new Listen gesture');
+    show('interactive', 'on', 3);
+    button.click(); // Listen -> Earbud: preserve the final reply
+    await until(() => tracks[1].readyState === 'ended', 'Earbud left the microphone open');
+    show('off', 'on', 4);
+    assert(button.dataset.glyph === 'ear' && residentActive(), 'Earbud is hidden while the final reply drains');
+    button.click(); // Earbud -> Off, BEFORE the host mode acknowledgement
+    assert(count('abort') === 2 && !residentActive(), 'the Off tap did not close the conversation');
+    host.sessionState({state:'closed', session_id:'vs-next'});
+    assert(count('open') === 2, 'the close acknowledgement reopened Earbud under stale mode');
+    show('off', 'off', 5);
+    assert(button.dataset.glyph === 'micoff' && count('open') === 2, 'the full cycle did not end Off');
+
+    // Enter Earbud directly, then Off: the output-only lane also retires
+    // immediately, even when its close beats the mode acknowledgement.
+    show('off', 'on', 6);
+    host.sessionState({state:'open', session_id:'vs-output'});
+    assert(count('open') === 3 && tracks.length === 2, 'Earbud acquired a microphone or did not open output');
+    button.click();
+    assert(count('abort') === 3, 'Off did not close the output-only session immediately');
+    host.sessionState({state:'closed', session_id:'vs-output'});
+    assert(count('open') === 3, 'output close reopened the session before Off was acknowledged');
+    show('off', 'off', 7);
+  } finally { S.connected = false; connectionLost(); tracks.forEach(t => t.stop()); await ac.close(); }
+});
+</script>`
+	runPageInEngines(t, page, micModules)
 }
 
 // .

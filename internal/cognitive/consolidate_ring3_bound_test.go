@@ -1,16 +1,16 @@
 package cognitive
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -27,17 +27,10 @@ import (
 
 // .
 // .
-func captureLog(t *testing.T) *bytes.Buffer {
+func captureLog(t *testing.T) *logsink.Capture {
 	t.Helper()
-	var buf bytes.Buffer
-	writer, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(writer)
-		log.SetFlags(flags)
-	})
-	return &buf
+	buf := logsink.CaptureForTest(t)
+	return buf
 }
 
 // .

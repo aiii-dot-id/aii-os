@@ -166,7 +166,10 @@ type Engine struct {
 	rings    *ring.Manager
 	projects ProjectPort
 	voice    VoicePort
-	toolDisc ToolDiscoverer
+	// .
+	// .
+	continuity ContinuityPort
+	toolDisc   ToolDiscoverer
 	// .
 	// .
 	instruments *memory.Facility

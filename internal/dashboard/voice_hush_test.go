@@ -17,6 +17,11 @@ func TestAVoiceHushCrossesTheSocket(t *testing.T) {
 	}
 	defer s.Shutdown(context.Background())
 	conn := dialWS(t, addr)
+	// .
+	// .
+	// .
+	// .
+	drainUntil(t, conn, "status")
 	for _, h := range []VoiceHush{
 		{SessionID: "vs-1", SynthesisID: "fb-1", Route: "cloud", Reason: "the operator spoke"},
 		{SessionID: "vs-1", Route: "browser", Reason: "the session was aborted"},

@@ -28,7 +28,7 @@ func TestComposeShowsQueuedChildrenApart(t *testing.T) {
 	if it, err := st.ClaimWork([]string{identity.SubagentWorkKind}, time.Now().UnixMilli()); err != nil || it == nil || it.DedupKey != "ws_run" {
 		t.Fatalf("claim: %+v %v", it, err)
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildTurnFacts(false)
 	if err != nil {
 		t.Fatal(err)
 	}

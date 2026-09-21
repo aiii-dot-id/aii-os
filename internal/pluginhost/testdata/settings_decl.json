@@ -1,5 +1,5 @@
 {
- "_": "Settings declaration vectors (S6, 2026-09-05): what install-root/settings.json may say. The host (internal/pluginhost.ParseSettings) and the kit (pkg/aiiospkg, the packager) hold the same file to these cases; a case is {name, decl, ok, error_contains}.",
+ "_": "Settings declaration vectors: what install-root/settings.json may say. The host (internal/pluginhost.ParseSettings) and the kit (pkg/aiiospkg, the packager) hold the same file to these cases; a case is {name, decl, ok, error_contains}.",
  "cases": [
   {
    "name": "a number with bounds and a default",

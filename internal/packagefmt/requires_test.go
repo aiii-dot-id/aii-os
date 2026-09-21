@@ -62,7 +62,7 @@ func TestRequirementsParseAndExposePerVariant(t *testing.T) {
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("effective required predicates = %v, want %v (release-level first, then variant — the C admission validates both, plugin_host_install.c:1102-1121)", got, want)
+			t.Fatalf("effective required predicates = %v, want %v (release-level first, then variant — the C admission validates both)", got, want)
 		}
 	}
 	backends := m.BackendDeclarations(v)

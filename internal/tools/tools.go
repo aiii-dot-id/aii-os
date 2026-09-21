@@ -12,7 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"os"
 	"path/filepath"
@@ -134,14 +134,23 @@ type Registry struct {
 	hostOnly   map[string]bool
 	offered    map[string]bool
 	offerOrder []string
-	webFetch   *WebFetchTool
-	extraRoots []string
-	protected  []string
-	cwd        string
-	policy     *firewall.Policy
-	timeouts   Timeouts
-	sandbox    string
-	disabled   map[string]bool
+	// .
+	// .
+	// .
+	// .
+	// .
+	// .
+	standing     []StandingSeat
+	persistOffer func([]StandingSeat)
+	told         map[string]bool
+	webFetch     *WebFetchTool
+	extraRoots   []string
+	protected    []string
+	cwd          string
+	policy       *firewall.Policy
+	timeouts     Timeouts
+	sandbox      string
+	disabled     map[string]bool
 
 	// .
 	// .
@@ -381,6 +390,7 @@ func (r *Registry) RegisterDynamic(t Tool, origin string) error {
 	}
 	r.tools[t.Name()] = t
 	r.sources[t.Name()] = origin
+	r.reseatLocked(t.Name())
 	return nil
 }
 
@@ -412,6 +422,7 @@ func (r *Registry) RegisterHostOp(t Tool, origin string) error {
 		r.hostOnly = map[string]bool{}
 	}
 	r.hostOnly[t.Name()] = true
+	r.unofferLocked(t.Name())
 	return nil
 }
 
@@ -494,8 +505,16 @@ func (r *Registry) SupersedeOriginIf(origin string, set []Tool, hostOnly map[str
 				r.hostOnly = map[string]bool{}
 			}
 			r.hostOnly[name] = true
+			r.unofferLocked(name)
 		} else {
 			delete(r.hostOnly, name)
+			// .
+			// .
+			// .
+			if r.offered[name] && !r.seatMatchesLocked(name) {
+				r.unofferLocked(name)
+			}
+			r.reseatLocked(name)
 		}
 	}
 	return nil
@@ -530,7 +549,7 @@ func (r *Registry) SetExtraRoots(roots []string) {
 		// .
 		// .
 		if rootExposesSubstrate(abs, sandbox, protected) {
-			log.Printf("Ring 5: REFUSED grant %q — it would expose the identity's own substrate", abs)
+			logsink.Warn("tools.refusal", "REFUSED grant %q — it would expose the identity's own substrate", abs)
 			continue
 		}
 		resolved = append(resolved, abs)
@@ -740,7 +759,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	// .
 	defer func() {
 		if p := recover(); p != nil {
-			log.Printf("tool %s panicked on model-authored arguments: %v\n%s", name, p, debug.Stack())
+			logsink.Error("tools.error", "tool %s panicked on model-authored arguments: %v\n%s", name, p, debug.Stack())
 			res, err = Result{Error: fmt.Sprintf("tool %s failed internally: %v", name, p)}, nil
 		}
 	}()

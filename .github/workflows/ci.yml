@@ -13,12 +13,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          # One exact toolchain, matching the the build host gate.
-          go-version: "1.27.0"
+          # One exact toolchain: the one the release is built with.
+          go-version: "1.27.1"
 
       - name: Format
         # gofmt is a gate, not advice: vet does not check formatting, and
-        # a drifted file landed (export/export.go, fixed
+        # a drifted file once landed (export/export.go, fixed
         # alongside this gate) and haunted the working tree for days.
         # Fail fast, name the offenders.
         run: |
@@ -67,7 +67,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.1"
 
       # The native-T3 containment tests refuse to run an uncontained
       # plugin child (their own typed refusal says so); the runner
@@ -85,8 +85,8 @@ jobs:
           # The runner image's Edge hangs sized headless windows (the
           # phone-width and layout journeys time out at 60s while the
           # same journeys pass in its Chrome and Firefox).
-          # Name the engines this pipeline vouches for; the build host's gate
-          # runs all three. Owed: the runner-Edge hazard root-caused,
+          # Name the engines this pipeline vouches for; the build host's
+          # gate runs all three. Owed: the runner-Edge hazard root-caused,
           # then this narrowing retired.
           AII_BROWSER_ENGINES: "blink-chrome,gecko-firefox"
         run: ./test/run_race_scope.sh "${{ matrix.scope }}"

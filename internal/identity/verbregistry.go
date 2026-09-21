@@ -1,7 +1,12 @@
 package identity
 
-import "context"
+import (
+	"context"
 
+	"github.com/aiii-dot-id/aii-os/internal/ledger"
+)
+
+// .
 // .
 // .
 // .
@@ -77,6 +82,28 @@ func integer(desc string) map[string]interface{} {
 func strArray(desc string) map[string]interface{} {
 	return map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": desc}
 }
+
+// .
+// .
+// .
+func citesArg(desc string) map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "array",
+		"description": desc,
+		"maxItems":    ledger.MaxCitations,
+		"items": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"identity":   str("The cited identity's key fingerprint: 64 lowercase hex characters. It may be your own"),
+				"seq":        integer("The cited record's seq in that identity's ledger"),
+				"entry_hash": str("The cited record's entry hash: 64 lowercase hex characters"),
+			},
+			"required":             []string{"identity", "seq", "entry_hash"},
+			"additionalProperties": false,
+		},
+	}
+}
+
 func selfModelRefArray(desc string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "array",
@@ -113,6 +140,7 @@ func init() {
 				"reinforces":   str("A belief id this reinforces — mints REINFORCED_BY"),
 				"contradicts":  str("A belief id this contradicts — mints CONTRADICTS; the belief's standing derives from it"),
 				"private":      boolean("Charter #9: held in your record, never metabolized by DREAM or CONSOLIDATE, never surfaced"),
+				"cites":        citesArg("Exact citations: the records this note is about, each by identity fingerprint, seq and entry hash. A citation says WHICH record you mean — not that it is true or that its author agrees. One of your own records is checked against your ledger; another identity's is recorded as your claim"),
 				"duplicate_ok": boolean("Only after a duplicate pushback: mint anyway — the recurrence itself is the observation"),
 			}, "content")},
 		{Name: "recall",
@@ -123,8 +151,8 @@ func init() {
 				"exact": boolean("Require the verbatim phrase, words in order, with no fuzzy matches"),
 				"limit": integer("How many hits to return across sources (default 7, at most 50)"),
 				"decay": strEnum("Ranking policy: carrd (default: age and use lower a memory's strength, by durability class), actr (ACT-R base-level activation: every past recall counts, recency and spacing raise a memory, no class), or none (pure retrieval, the match alone)", "carrd", "actr", "none"),
-				"source": strEnum("Enumerate ONE source newest-first instead of recalling across all. Required with after_seq, because a sequence number belongs to one source and means nothing in another. The record's stores page: experiences, syntheses, conversation, ledger. The standing sources read whole and take no after_seq: alarms (pending, overdue and fired; query words filter id, tag, message and status), projects (your workrooms with their contracts; query words filter), skills (your doctrine proposals; query words filter), curiosity (the one cue you left yourself).",
-					"experiences", "syntheses", "conversation", "ledger", "alarms", "projects", "skills", "curiosity"),
+				"source": strEnum("Enumerate ONE source newest-first instead of recalling across all. Required with after_seq, because a sequence number belongs to one source and means nothing in another. The record's stores page: experiences, syntheses, conversation, ledger. The standing sources read whole and take no after_seq: alarms (pending, overdue and fired; query words filter id, tag, message and status), projects (your workrooms with their contracts; query words filter), skills (your doctrine proposals; query words filter), curiosity (the one cue you left yourself), continuity (your snapshots, their encryption, your keys' escrow and your chain; query=snapshots or a snapshot's name opens that part).",
+					"experiences", "syntheses", "conversation", "ledger", "alarms", "projects", "skills", "curiosity", "continuity"),
 				"after_seq": integer("Page older results WITHIN source: the lowest seq shown for that source in the previous page. Requires source."),
 			}, "query")},
 		{Name: "send",
@@ -135,10 +163,10 @@ func init() {
 				"to":      str("Who to send it to: \"operator\" (default), or a name from your address book"),
 			}, "message")},
 		{Name: "work",
-			Description: "Work sessions — doing. Spawn for independent bounded work that can run concurrently, or one independent review after failure, ambiguity, or material consequence; use direct tools for a tightly coupled loop. Actions: spawn (a copy of you on a directed sub-goal — same constitution, charter, and self; set thinking_budget at your level or lower; context folded|full; outcome lands in your working state, Ring 4 ephemeral — note what deserves memory), start, update (state, plus optional focus / next_move / plan / expected_evidence / falsifier / decision_needed — your authored plan surface, rendered back to you verbatim — and steps, a call-count estimate you are later shown against the truth), deliver. Ring 4 working state is never minted to the ledger; if a delivery fulfills a promise, you complete that commitment deliberately. Optional role on spawn selects an operator-configured inference route (agency.roles); it grants no authority. The doing around sessions lives here too (R103): alarm.set / alarm.cancel (an alarm survives restarts and wakes you with its message; read them with recall source=alarms), project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; read them with recall source=projects), curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; read with recall source=curiosity), voice.mode (what your host's microphone does and whether your replies are spoken — the pair in force is in your working state), and measure (observational ratios over your own durable events — not an authority).",
+			Description: "Work sessions — doing. Spawn for independent bounded work that can run concurrently, or one independent review after failure, ambiguity, or material consequence; use direct tools for a tightly coupled loop. Actions: spawn (a copy of you on a directed sub-goal — same constitution, charter, and self; set thinking_budget at your level or lower; context folded|full; outcome lands in your working state, Ring 4 ephemeral — note what deserves memory), start, update (state, plus optional focus / next_move / plan / expected_evidence / falsifier / decision_needed — your authored plan surface, rendered back to you verbatim — and steps, a call-count estimate you are later shown against the truth), deliver. Ring 4 working state is never minted to the ledger; if a delivery fulfills a promise, you complete that commitment deliberately. Optional role on spawn selects an operator-configured inference route (agency.roles); it grants no authority. The doing around sessions lives here too: alarm.set / alarm.cancel (an alarm survives restarts and wakes you with its message; read them with recall source=alarms), project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; read them with recall source=projects), curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; read with recall source=curiosity), voice.mode (what your host's microphone does and whether your replies are spoken — the pair in force is in your working state), backup.take / backup.verify (a snapshot of you — record and memory — taken now, or a kept one proved to still restore; read with recall source=continuity), and measure (observational ratios over your own durable events — not an authority).",
 			Handler:     (*Engine).verbWork,
 			Params: obj(map[string]interface{}{
-				"action":            strEnum("spawn (run a sub-goal with your full mind/tools), status (one read-only rendezvous: running + delivered-unharvested sub-agents; never sleep-poll instead), yield (end THIS TURN to free your gate while workers run — the session stays active and a delivery wakes you; the right move when only waiting remains), start, update, deliver; measure (your outcome ratios, observational); alarm.set / alarm.cancel (a promise to surface something later; read with recall source=alarms); project.create / project.update / project.close / project.select / project.deselect / project.evidence / project.waive (your durable workrooms; read with recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself; read with recall source=curiosity); voice.mode (change what your host's microphone does and whether your replies are spoken; the pair in force is in your working state)", "spawn", "status", "yield", "start", "update", "deliver", "measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear", "voice.mode"),
+				"action":            strEnum("spawn (run a sub-goal with your full mind/tools), status (one read-only rendezvous: running + delivered-unharvested sub-agents; never sleep-poll instead), yield (end THIS TURN to free your gate while workers run — the session stays active and a delivery wakes you; the right move when only waiting remains), start, update, deliver; measure (your outcome ratios, observational); alarm.set / alarm.cancel (a promise to surface something later; read with recall source=alarms); project.create / project.update / project.close / project.select / project.deselect / project.evidence / project.waive (your durable workrooms; read with recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself; read with recall source=curiosity); voice.mode (change what your host's microphone does and whether your replies are spoken; the pair in force is in your working state); backup.take / backup.verify (a snapshot of you; id names the one to prove)", "spawn", "status", "yield", "start", "update", "deliver", "measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear", "voice.mode", "backup.take", "backup.verify"),
 				"goal":              str("(spawn) ONE bounded, falsifiable deliverable — not a research program (two live 600k+-token fragments taught this). If you cannot name the single artifact the worker returns, the goal is too broad; outcome returns to your working state"),
 				"thinking_budget":   integer("(spawn, optional) reasoning tokens for the sub-agent — at your level or lower, never an escalation (clamped)"),
 				"role":              str("(spawn, optional) named inference route in agency.roles; an unrouted name falls back to your active model"),
@@ -162,7 +190,7 @@ func init() {
 				"answer":            str("(yield) the best current answer for the operator: what is established, what is missing, what would change it. Required once a sub-agent has ended unfinished or failed since the operator last spoke, or on the third yield against one ask — a turn that ends without an answer failed the operator, whatever its internal state"),
 				// .
 				"hours":       integer("(measure, optional) measurement window in hours; default 48"),
-				"id":          str("(alarm.set/alarm.cancel) the alarm's name — optional for alarm.set, one is chosen for you; the same name replaces"),
+				"id":          str("(alarm.set/alarm.cancel) the alarm's name — optional for alarm.set, one is chosen for you; the same name replaces; (backup.verify) the snapshot's name, the newest if omitted"),
 				"tag":         str("(alarm.set, optional) your own category key (e.g. ops, work) — a word recall source=alarms filters by"),
 				"when":        str("(alarm.set) absolute time to fire, RFC3339 (e.g. 2026-08-18T07:00:00-04:00) — when OR duration"),
 				"duration":    str("(alarm.set) relative time from now (e.g. 10m, 90s, 1h30m) — when OR duration"),
@@ -234,19 +262,20 @@ func init() {
 				"from_id":               str("(edge.create) source entity"),
 				"to_id":                 str("(edge.create) target entity"),
 				"edge_type":             str("(edge.create) e.g. SUPPORTS, CONTRADICTS, DERIVED_FROM"),
+				"cites":                 citesArg("(belief.upsert, edge.create) Exact citations: the records this act rests on, each by identity fingerprint, seq and entry hash — yours or another identity's. A claim about WHICH record, never evidence standing; refused on any other variant"),
 				"state":                 str("(state_change) the new state"),
 				"outcome":               str("(intention.state_change to completed/abandoned; REQUIRED) one line beginning served:|partial:|unserved: — your verdict on whether the work served the intent, then what happened"),
 				"old_id":                str("(belief.supersede) the superseded belief id — commit.go validation and consolidate.go supersession both require these exact keys"),
 				"new_id":                str("(belief.supersede) the replacing belief id"),
 			}, "variant")},
 		{Name: "tools",
-			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you, which are not listed in your prompt: brief them by family, search by need, show one, offer it into your callable set (eight seats), release it.",
+			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you, which are not listed in your prompt: brief them by family, search by need, show one, offer it into your callable set (eight seats; it stays, across restarts, until you release it or it changes what it declares), release it.",
 			Handler:     (*Engine).verbTools,
 			Params: obj(map[string]interface{}{
 				"depth":  integer("1 = names, 2 = +descriptions, 3 = full detail (progressive disclosure)"),
-				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | offer (name: make it callable from your next turn) | release (name)"),
+				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | offer (name: make it callable from your next turn, until you release it) | release (name)"),
 				"query":  str("(search) what you need, in your own words"),
-				"name":   str("(show, offer, release) the operation id, e.g. memory.recall, or its tool name"),
+				"name":   str("(show, offer, release) the operation id as your prompt or the brief names it, or its tool name"),
 			})},
 	}
 
@@ -270,6 +299,7 @@ func init() {
 		{Name: "project", Description: "absorbed: work action=project.create|update|close|select|deselect|evidence|waive; recall source=projects", Handler: (*Engine).verbProject},
 		{Name: "curiosity", Description: "absorbed: work action=curiosity|curiosity.clear; recall source=curiosity", Handler: (*Engine).verbCuriosity},
 		{Name: "measure", Description: "absorbed: work action=measure", Handler: (*Engine).verbMeasure},
+		{Name: "continuity", Description: "absorbed: work action=backup.take|backup.verify; recall source=continuity", Handler: (*Engine).verbContinuity},
 	}
 	for _, v := range absorbedVerbs {
 		if v.Name == "" || v.Description == "" || v.Handler == nil {

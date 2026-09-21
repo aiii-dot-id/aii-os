@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"regexp"
 	"sort"
 	"strings"
@@ -368,13 +368,13 @@ func (s *Store) rebuildTable(table, declaredSQL string, live, want map[string]bo
 	}
 	defer func() {
 		if _, rerr := conn.ExecContext(context.Background(), `PRAGMA legacy_alter_table=OFF`); rerr != nil {
-			log.Printf("RECONCILE: legacy alter mode could NOT be restored on this connection (%v)", rerr)
+			logsink.Error("store.error", "legacy alter mode could NOT be restored on this connection after a table rebuild (%v)", rerr)
 		}
 		// .
 		// .
 		// .
 		if _, rerr := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`); rerr != nil {
-			log.Printf("RECONCILE: foreign keys could NOT be restored on this connection (%v) — the process should be restarted", rerr)
+			logsink.Error("store.error", "foreign keys could NOT be restored on this connection after a table rebuild (%v) — the process should be restarted", rerr)
 		}
 	}()
 
@@ -733,7 +733,7 @@ func (s *Store) recreateEmpty(table, declaredSQL string, indexes, triggers []str
 	}
 	defer func() {
 		if _, rerr := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`); rerr != nil {
-			log.Printf("RECONCILE: foreign keys could NOT be restored on this connection (%v) — the process should be restarted", rerr)
+			logsink.Error("store.error", "foreign keys could NOT be restored on this connection after recreating an empty table (%v) — the process should be restarted", rerr)
 		}
 	}()
 	tx, err := conn.BeginTx(context.Background(), nil)
@@ -906,7 +906,7 @@ func (s *Store) reconcileRetired(schemaText string, rep *ReconcileReport) error 
 		}
 		_, derr := conn.ExecContext(context.Background(), "DROP TABLE "+name)
 		if _, rerr := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`); rerr != nil {
-			log.Printf("RECONCILE: foreign keys could NOT be restored on this connection (%v) — the process should be restarted", rerr)
+			logsink.Error("store.error", "foreign keys could NOT be restored on this connection after retiring a table (%v) — the process should be restarted", rerr)
 		}
 		conn.Close()
 		if derr != nil {

@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -35,6 +34,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
@@ -443,6 +443,25 @@ func (l *Loop) Run(ctx context.Context, systemPrompt string, history []llm.Messa
 // .
 // .
 func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.Message, omittedHistory int) (Result, error) {
+	return l.RunTurn(ctx, system, history, omittedHistory, "")
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Message, omittedHistory int, facts string) (Result, error) {
 	l.cfgMu.RLock()
 	cfg := l.cfg
 	l.cfgMu.RUnlock()
@@ -470,9 +489,15 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 	// .
 	// .
 	systemBase := system.Content + systemAdditions()
+	system.Content = systemBase
 	messages := append([]llm.Message{system}, history...)
 	fit := fitState{current: len(messages) - 1, omitted: omittedHistory, baseOmitted: omittedHistory,
-		fallback: cfg.ContextBudgetFallback, readOnly: cfg.ReplaySafe}
+		fallback: cfg.ContextBudgetFallback, readOnly: cfg.ReplaySafe, facts: facts}
+	fit.base, fit.based = messages[fit.current].Content, true
+	// .
+	// .
+	messages[fit.current].CacheBefore = true
+	renderCurrent(messages, &fit)
 
 	// .
 	// .
@@ -531,6 +556,11 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 	// .
 	// .
 	turnID := "turn_" + uuid.New().String()
+	// .
+	// .
+	// .
+	// .
+	ctx = logsink.WithSource(ctx, logsink.Source{Turn: shortTurn(turnID)})
 	ordinal := 0
 	// .
 	// .
@@ -558,8 +588,8 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 		// .
 		// .
 		if i > 0 && turnUsage.TotalTokens+silentSpent >= cfg.TurnTokenBudget {
-			pressureBase := systemBase + "\n\n## Budget pressure\nThis turn's token budget is spent. Answer now from the available context without calling more tools; say plainly what remains undone."
-			finalTools, fitErr := fitFinalRequest(&messages, &fit, pressureBase, toolDefs, cfg.ContextBudgetTokens, l.transcript)
+			addBoundaryNote(&messages, &fit, budgetPressureNote)
+			finalTools, fitErr := fitFinalRequest(&messages, &fit, systemBase, toolDefs, cfg.ContextBudgetTokens, l.transcript)
 			if fitErr != nil {
 				return fail(fitErr)
 			}
@@ -579,7 +609,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			spoken = append(spoken, finalText,
 				declare("This turn's token budget (%d) is spent: %d tokens over %d calls. The answer above ends the turn; the work continues in a fresh turn.",
 					cfg.TurnTokenBudget, turnUsage.TotalTokens+silentSpent, turnUsage.Calls))
-			log.Printf("TURN BUDGET: fence at %d tokens — %d spent over %d call(s); turn ended with a bounded wrap-up",
+			logsink.InfoCtx(ctx, "turn.budget", "TURN BUDGET: fence at %d tokens — %d spent over %d call(s); turn ended with a bounded wrap-up",
 				cfg.TurnTokenBudget, turnUsage.TotalTokens+silentSpent, turnUsage.Calls)
 			break
 		}
@@ -591,8 +621,8 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			// .
 			// .
 			continuedAtPressure = true
-			pressureBase := systemBase + "\n\n## Context pressure\nAnswer now from the available context without calling more tools."
-			finalTools, fitErr := fitFinalRequest(&messages, &fit, pressureBase, toolDefs, cfg.ContextBudgetTokens, l.transcript)
+			addBoundaryNote(&messages, &fit, contextPressureNote)
+			finalTools, fitErr := fitFinalRequest(&messages, &fit, systemBase, toolDefs, cfg.ContextBudgetTokens, l.transcript)
 			if fitErr != nil {
 				return fail(fitErr)
 			}
@@ -648,7 +678,15 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 		if finalText != "" {
 			spoken = append(spoken, finalText)
 		}
-		log.Printf("LLM iteration %d: finish=%s, toolCalls=%d, contentLen=%d", i, choice.FinishReason, len(choice.Message.ToolCalls), len(choice.Message.Content))
+		// .
+		// .
+		// .
+		// .
+		// .
+		// .
+		logsink.InfoCtx(ctx, "llm.return", "LLM iteration %d: finish=%s, toolCalls=%d, contentLen=%d, model=%s, tokens=%d, %dms, id=%s",
+			i, choice.FinishReason, len(choice.Message.ToolCalls), len(choice.Message.Content),
+			resp.ModelID, resp.Usage.TotalTokens, resp.Duration.Milliseconds(), resp.CallID)
 
 		// .
 		// .
@@ -703,16 +741,16 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 		if degenerateEmission(choice.Message.Content) {
 			if degenNudged {
 				spoken = append(spoken, declare("Degenerate repetition was detected in the model's output twice this turn; the turn ends here rather than spending further."))
-				log.Printf("DEGENERATE OUTPUT: second detection (len %d) — turn ended", len(choice.Message.Content))
+				logsink.WarnCtx(ctx, "turn.decision", "DEGENERATE OUTPUT: second detection (len %d) — turn ended", len(choice.Message.Content))
 				break
 			}
 			degenNudged = true
 			if len(choice.Message.ToolCalls) == 0 {
-				log.Printf("DEGENERATE OUTPUT: repetition detected in a final answer (len %d) — marked", len(choice.Message.Content))
+				logsink.WarnCtx(ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in a final answer (len %d) — marked", len(choice.Message.Content))
 				spoken = append(spoken, declare("Degenerate repetition was detected in this reply; treat its repeating tail as noise, not conclusions."))
 				break
 			}
-			log.Printf("DEGENERATE OUTPUT: repetition detected in emission (len %d) — tool calls discarded, corrective note sent", len(choice.Message.Content))
+			logsink.WarnCtx(ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in emission (len %d) — tool calls discarded, corrective note sent", len(choice.Message.Content))
 			messages = append(messages, llm.Message{Role: "assistant", Content: choice.Message.Content})
 			messages = append(messages, llm.Message{Role: "user",
 				Content: "[loop note — your last output degenerated into repetition, and its tool calls were discarded unexecuted. Stop. State in ONE short sentence the single next tool call, then emit exactly that call — or give the final answer in plain prose.]"})
@@ -765,7 +803,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 					// .
 					// .
 					// .
-					log.Printf("NUDGE %s sent: reply announced untaken work (fit ok)", kind)
+					logsink.InfoCtx(ctx, "nudge.decision", "NUDGE %s sent: reply announced untaken work (fit ok)", kind)
 					messages, fit = candidate, candidateFit
 					continue
 				}
@@ -802,7 +840,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			}
 			callBudgetSurplus = append(callBudgetSurplus, choice.Message.ToolCalls[allowed:]...)
 			choice.Message.ToolCalls = choice.Message.ToolCalls[:allowed]
-			log.Printf("CALL BUDGET: %d of %d calls spent — %d call(s) in this batch not executed",
+			logsink.InfoCtx(ctx, "turn.budget", "CALL BUDGET: %d of %d calls spent — %d call(s) in this batch not executed",
 				toolCallsSoFar+allowed, cfg.MaxToolCalls, len(callBudgetSurplus))
 		}
 
@@ -835,7 +873,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 				// .
 				// .
 				for idx, tc := range choice.Message.ToolCalls {
-					log.Printf("Tool call: %s(%s)", tc.Function.Name, logPreview(tc.Function.Arguments))
+					logsink.InfoCtx(ctx, "tool.start", "Tool call: %s(%s)", tc.Function.Name, logPreview(tc.Function.Arguments))
 					if l.emit != nil {
 						l.emit.EmitToolEvent("tool_call", tc.Function.Name, tc.Function.Arguments)
 					}
@@ -871,7 +909,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 					}()
 				}
 				wg.Wait()
-				log.Printf("Parallel batch: %d read-only call(s) executed concurrently", len(choice.Message.ToolCalls))
+				logsink.InfoCtx(ctx, "tool.start", "Parallel batch: %d read-only call(s) executed concurrently", len(choice.Message.ToolCalls))
 			}
 		}
 
@@ -886,7 +924,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			// .
 			// .
 			if !preStarted[tcIdx] {
-				log.Printf("Tool call: %s(%s)", tc.Function.Name, logPreview(tc.Function.Arguments))
+				logsink.InfoCtx(ctx, "tool.start", "Tool call: %s(%s)", tc.Function.Name, logPreview(tc.Function.Arguments))
 				if l.emit != nil {
 					l.emit.EmitToolEvent("tool_call", tc.Function.Name, tc.Function.Arguments)
 				}
@@ -918,7 +956,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 					return fail(fmt.Errorf("record tool result: %w", err))
 				}
 			}
-			log.Printf("Tool result: %s", logPreview(result))
+			logsink.InfoCtx(ctx, "tool.end", "Tool result: %s", logPreview(result))
 			// .
 			// .
 			// .
@@ -960,7 +998,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 				if cfg.HeuristicNudges && repeats >= repeatResultThreshold && !repeatNudged {
 					repeatNudged = true
 					messages[len(messages)-1].Content += repeatResultNote(repeats, truncated)
-					log.Printf("Repeat-result nudge sent: identical %d-rune result received %d times in the last %d calls (truncated=%v)",
+					logsink.InfoCtx(ctx, "nudge.decision", "Repeat-result nudge sent: identical %d-rune result received %d times in the last %d calls (truncated=%v)",
 						len([]rune(modelResult)), repeats, repeatResultWindow, truncated)
 				}
 			}
@@ -1042,7 +1080,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 					_, active = cfg.PlanState()
 				}
 				messages[len(messages)-1].Content += firstActNote(active) + calibrationMirror(cfg.Calibration)
-				log.Printf("NUDGE first-act sent: round %d, %d act(s) in the batch, session active=%v", i+1, acts, active)
+				logsink.InfoCtx(ctx, "nudge.decision", "NUDGE first-act sent: round %d, %d act(s) in the batch, session active=%v", i+1, acts, active)
 			}
 		}
 
@@ -1072,7 +1110,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 				if active {
 					variant = "session active without a plan — asked to update it"
 				}
-				log.Printf("NUDGE plan sent: round %d, %s", i+1, variant)
+				logsink.InfoCtx(ctx, "nudge.decision", "NUDGE plan sent: round %d, %s", i+1, variant)
 			}
 		}
 
@@ -1104,7 +1142,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 				if missingSteps || missingIndep {
 					scalarNudged = true
 					messages[len(messages)-1].Content += scalarAskNote(i+1, missingSteps, missingIndep, calibrationMirror(cfg.Calibration))
-					log.Printf("NUDGE scalar sent: round %d, missing steps=%v independent=%v", i+1, missingSteps, missingIndep)
+					logsink.InfoCtx(ctx, "nudge.decision", "NUDGE scalar sent: round %d, missing steps=%v independent=%v", i+1, missingSteps, missingIndep)
 				}
 			}
 		}
@@ -1127,7 +1165,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			if toolCallsSoFar >= limit && i+softCapGraceRounds < cfg.MaxIterations-1 {
 				softCapFinal = i + softCapGraceRounds
 				messages[len(messages)-1].Content += checkpointNote(declared, toolCallsSoFar, softCapGraceRounds)
-				log.Printf("NUDGE checkpoint sent: round %d, %d calls spent (declared %d, limit %d) — turn will continue in a fresh turn after %d more rounds",
+				logsink.InfoCtx(ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent (declared %d, limit %d) — turn will continue in a fresh turn after %d more rounds",
 					i+1, toolCallsSoFar, declared, limit, softCapGraceRounds)
 			}
 		}
@@ -1140,7 +1178,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			if declared, spawnedNow := cfg.FanoutState(); declared >= 2 && spawnedNow == 0 {
 				fanoutNudged = true
 				messages[len(messages)-1].Content += fanoutNudgeNote(declared)
-				log.Printf("NUDGE fanout sent: round %d, %d independent step(s) declared, 0 spawned", i+1, declared)
+				logsink.InfoCtx(ctx, "nudge.decision", "NUDGE fanout sent: round %d, %d independent step(s) declared, 0 spawned", i+1, declared)
 			}
 		}
 
@@ -1152,7 +1190,7 @@ func (l *Loop) RunSystem(ctx context.Context, system llm.Message, history []llm.
 			// .
 			// .
 			// .
-			log.Printf("Tool budget warning sent: %d round(s) remain of %d", remaining, cfg.MaxIterations)
+			logsink.InfoCtx(ctx, "turn.budget", "Tool budget warning sent: %d round(s) remain of %d", remaining, cfg.MaxIterations)
 		}
 
 		// .
@@ -1288,23 +1326,36 @@ type fitState struct {
 	readOnly func(llm.ToolCall) bool
 	// .
 	fallback bool
+	// .
+	// .
+	// .
+	// .
+	facts string
+	base  string
+	based bool
+	// .
+	// .
+	tight bool
 }
 
+// .
+// .
+// .
+// .
 func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 	tools []llm.ToolDefinition, budget int, transcript Transcript) error {
-	oldSystem := (*messages)[0].Content
-	setFitSystem(&(*messages)[0], systemBase, st)
-	if oldSystem != (*messages)[0].Content {
+	changed := (*messages)[0].Content != systemBase
+	(*messages)[0].Content = systemBase
+	if renderCurrent(*messages, st) {
+		changed = true
+	}
+	if changed {
 		resetProviderReasoning(messages)
 	}
 	for {
 		err := llm.ValidateInput(*messages, tools, budget)
 		if err == nil {
-			before := (*messages)[0].Content
-			warnIfTight(messages, st, systemBase, tools, budget)
-			if before != (*messages)[0].Content {
-				resetProviderReasoning(messages)
-			}
+			warnIfTight(messages, st, tools, budget)
 			noteIfPressured(messages, st, tools, budget)
 			return llm.ValidateInput(*messages, tools, budget)
 		}
@@ -1326,7 +1377,7 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 		// .
 		// .
 		if st.current > 1 {
-			yieldOldestTurn(messages, st, systemBase)
+			yieldOldestTurn(messages, st)
 			continue
 		}
 		// .
@@ -1343,7 +1394,7 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 
 // .
 // .
-func yieldOldestTurn(messages *[]llm.Message, st *fitState, systemBase string) {
+func yieldOldestTurn(messages *[]llm.Message, st *fitState) {
 	{
 		// .
 		// .
@@ -1369,15 +1420,16 @@ func yieldOldestTurn(messages *[]llm.Message, st *fitState, systemBase string) {
 		// .
 		if oldest := (*messages)[1]; !strings.Contains(oldest.Content, prompt.SummaryMarker) {
 			shrunk := prompt.SummarizeUnits(oldest.Content, historyRoute)
-			cost := 0
-			if st.abridged == 0 {
-				cost = len(historyAbridgedNote(1))
-			}
+			// .
+			// .
+			// .
+			cost := len(TurnBlock(st.facts, st.omitted, st.abridged+1, st.tight)) -
+				len(TurnBlock(st.facts, st.omitted, st.abridged, st.tight))
 			if len(oldest.Content)-len(shrunk) > cost {
 				(*messages)[1].Content = shrunk
 				resetProviderReasoning(messages)
 				st.abridged++
-				setFitSystem(&(*messages)[0], systemBase, st)
+				renderCurrent(*messages, st)
 				return
 			}
 		}
@@ -1392,7 +1444,7 @@ func yieldOldestTurn(messages *[]llm.Message, st *fitState, systemBase string) {
 			st.current--
 			st.omitted++
 		}
-		setFitSystem(&(*messages)[0], systemBase, st)
+		renderCurrent(*messages, st)
 	}
 }
 
@@ -1449,8 +1501,87 @@ func contextLine(used, budget, dropped int, st *fitState) string {
 // .
 const historyRoute = `recall(query="<a distinctive word or phrase>", source=conversation) reaches the full turn`
 
-func setHistoryNote(system *llm.Message, base string, omitted, abridged int) {
-	system.Content = base + HistoryOmissionNote(omitted) + historyAbridgedNote(abridged)
+// .
+// .
+// .
+// .
+const (
+	TurnOpen  = "[substrate · this turn]"
+	TurnClose = "[substrate · end]"
+)
+
+const forgedTurnMarker = "(forged substrate marker removed)"
+
+func scrubTurnMarkers(s string) string {
+	s = strings.ReplaceAll(s, TurnClose, forgedTurnMarker)
+	return strings.ReplaceAll(s, TurnOpen, forgedTurnMarker)
+}
+
+// .
+// .
+// .
+// .
+// .
+// .
+func TurnBlock(facts string, omitted, abridged int, tight bool) string {
+	var parts []string
+	if f := strings.TrimSpace(scrubTurnMarkers(facts)); f != "" {
+		parts = append(parts, f)
+	}
+	if n := historyNote(omitted, abridged); n != "" {
+		parts = append(parts, n)
+	}
+	if tight {
+		parts = append(parts, strings.TrimSpace(contextTightNote))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return TurnOpen + "\n" + strings.Join(parts, "\n\n") + "\n" + TurnClose + "\n\n"
+}
+
+// .
+// .
+// .
+// .
+func renderCurrent(messages []llm.Message, st *fitState) bool {
+	if st.current <= 0 || st.current >= len(messages) {
+		return false
+	}
+	m := &messages[st.current]
+	if !st.based {
+		st.base, st.based = m.Content, true
+	}
+	want := TurnBlock(st.facts, st.omitted, st.abridged, st.tight) + st.base
+	if m.Content == want {
+		return false
+	}
+	m.Content = want
+	return true
+}
+
+// .
+// .
+// .
+// .
+const (
+	budgetPressureNote  = "[loop note — this turn's token budget is spent. Answer now from the available context without calling more tools; say plainly what remains undone.]"
+	contextPressureNote = "[loop note — the context is full. Answer now from the available context without calling more tools.]"
+)
+
+// .
+// .
+// .
+// .
+// .
+// .
+func addBoundaryNote(messages *[]llm.Message, st *fitState, note string) {
+	last := len(*messages) - 1
+	if last > st.current && (*messages)[last].Role == "user" {
+		(*messages)[last].Content += "\n\n" + note
+		return
+	}
+	*messages = append(*messages, llm.Message{Role: "user", Content: note})
 }
 
 // .
@@ -1473,8 +1604,14 @@ const contextTightNote = "\n\nThe context for this turn is nearly full. Further 
 // .
 // .
 // .
-func warnIfTight(messages *[]llm.Message, st *fitState, systemBase string,
-	tools []llm.ToolDefinition, budget int) {
+// .
+// .
+// .
+// .
+// .
+// .
+// .
+func warnIfTight(messages *[]llm.Message, st *fitState, tools []llm.ToolDefinition, budget int) {
 	if st.warned || budget <= 0 {
 		return
 	}
@@ -1482,10 +1619,21 @@ func warnIfTight(messages *[]llm.Message, st *fitState, systemBase string,
 	if err != nil || used*100 < budget*contextTightPercent {
 		return
 	}
-	(*messages)[0].Content += contextTightNote
-	if llm.ValidateInput(*messages, tools, budget) != nil {
-		setHistoryNote(&(*messages)[0], systemBase, st.omitted, st.abridged)
-		return
+	last := len(*messages) - 1
+	if last == st.current {
+		st.tight = true
+		renderCurrent(*messages, st)
+		if llm.ValidateInput(*messages, tools, budget) != nil {
+			st.tight = false
+			renderCurrent(*messages, st)
+			return
+		}
+	} else {
+		(*messages)[last].Content += contextTightNote
+		if llm.ValidateInput(*messages, tools, budget) != nil {
+			(*messages)[last].Content = strings.TrimSuffix((*messages)[last].Content, contextTightNote)
+			return
+		}
 	}
 	st.warned = true
 }
@@ -1497,9 +1645,26 @@ func historyAbridgedNote(abridged int) string {
 	if abridged <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n%d older turn(s) are shown abridged; %s.", abridged, historyRoute)
+	return fmt.Sprintf("%d older turn(s) are shown abridged; %s.", abridged, historyRoute)
 }
 
+// .
+// .
+func historyNote(omitted, abridged int) string {
+	var lines []string
+	if n := HistoryOmissionNote(omitted); n != "" {
+		lines = append(lines, n)
+	}
+	if n := historyAbridgedNote(abridged); n != "" {
+		lines = append(lines, n)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "### Conversation context\n" + strings.Join(lines, "\n")
+}
+
+// .
 // .
 func HistoryOmissionNote(omitted int) string {
 	if omitted <= 0 {
@@ -1516,7 +1681,7 @@ func HistoryOmissionNote(omitted int) string {
 	// .
 	// .
 	// .
-	return fmt.Sprintf("\n\n## Conversation context\n%d older conversation turns are not shown. Each is still individually searchable by its own words: recall(query=\"<a distinctive word or phrase>\", source=conversation).", omitted)
+	return fmt.Sprintf("%d older conversation turns are not shown. Each is still individually searchable by its own words: recall(query=\"<a distinctive word or phrase>\", source=conversation).", omitted)
 }
 
 // .
@@ -1556,6 +1721,11 @@ func foldToolResult(messages []llm.Message, st *fitState, transcript Transcript,
 		}
 		call, found := callFor(messages, st.current, i, m.ToolCallID)
 		notice := foldNotice(call, found, st.readOnly, transcript)
+		if strings.Contains(m.Content, contextTightNote) {
+			// .
+			// .
+			notice += contextTightNote
+		}
 		if len(m.Content) <= len(notice) || (mustPay && len(m.Content) < 2*len(notice)) {
 			continue
 		}
@@ -1567,7 +1737,7 @@ func foldToolResult(messages []llm.Message, st *fitState, transcript Transcript,
 		if !mustPay {
 			how = "folded as a last resort, saving little"
 		}
-		log.Printf("fold: result %d of this turn (%s, %d runes) %s under context pressure — %d folded so far", ordinal, name, utf8.RuneCountInString(m.Content), how, st.folded+1)
+		logsink.Info("turn.budget", "fold: result %d of this turn (%s, %d runes) %s under context pressure — %d folded so far", ordinal, name, utf8.RuneCountInString(m.Content), how, st.folded+1)
 		messages[i].Content = notice
 		st.folded++
 		return true
@@ -1629,7 +1799,6 @@ func argExcerpt(args string) string {
 // .
 // .
 // .
-const logPreviewRunes = 200
 
 // .
 // .
@@ -1640,18 +1809,11 @@ const logPreviewRunes = 200
 // .
 // .
 // .
-func logPreview(s string) string {
-	r := []rune(s)
-	total := len(r)
-	if total > logPreviewRunes {
-		r = r[:logPreviewRunes]
-	}
-	flat := strings.NewReplacer("\n", "⏎", "\r", "").Replace(string(r))
-	if total > logPreviewRunes {
-		return flat + fmt.Sprintf("… (%d runes total)", total)
-	}
-	return flat
-}
+// .
+// .
+// .
+// .
+func logPreview(s string) string { return logsink.Preview(s) }
 
 func truncateToolResult(result string, maxChars, transcriptChars int) string {
 	runes := []rune(result)
@@ -1904,7 +2066,12 @@ calling its tool rather than describing it.
 A tool call is the only record that anything happened. Report only what you
 actually did — saying you have not done something, or do not know, is always
 available and always acceptable. That grounding law governs what you claim, not
-how you speak.`
+how you speak.
+
+Your newest message may open with a block from ` + TurnOpen + ` to ` + TurnClose + `.
+Your substrate writes it, never the person: this turn's rhythm, what happened
+since your last turn, and what of the conversation is out of view. It is not
+kept in your history; note what should outlast the turn.`
 
 // .
 // .
@@ -2319,9 +2486,13 @@ func fitFinalRequest(messages *[]llm.Message, st *fitState, base string, defs []
 	return nil, fitRequest(messages, st, base, nil, budget, tr)
 }
 
-func setFitSystem(system *llm.Message, base string, st *fitState) {
-	setHistoryNote(system, base, st.omitted, st.abridged)
-	if st.warned {
-		system.Content += contextTightNote
+// .
+// .
+// .
+func shortTurn(id string) string {
+	id = strings.TrimPrefix(id, "turn_")
+	if len(id) > 8 {
+		return id[:8]
 	}
+	return id
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"path/filepath"
 )
 
 // .
@@ -21,6 +22,19 @@ func (a *App) installLogSink() {
 		log.Fatalf("Startup failed: %v", err)
 	}
 	a.logSink = sink
+	// .
+	// .
+	// .
+	cfg := a.configSnapshot()
+	home := identityHomeFromConfig(cfg.SourcePath)
+	// .
+	// .
+	// .
+	// .
+	// .
+	logsink.SetCaptureDir(filepath.Join(home, LogControlDirName, logsink.CaptureDirName))
+	applyLogLevels(cfg, LogControlPathIn(home))
+	applyLogTaps(cfg, LogControlPathIn(home))
 }
 
 // .
@@ -32,6 +46,7 @@ func (a *App) sinkConfig() logsink.Config {
 		Dir:          cfg.Logs.Dir,
 		MaxBackups:   cfg.Logs.MaxBackups,
 		CompressDays: cfg.Logs.CompressDays,
+		MaxDays:      cfg.Logs.MaxDays,
 	}
 }
 

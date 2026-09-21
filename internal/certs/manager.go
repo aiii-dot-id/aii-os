@@ -37,8 +37,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -139,7 +139,7 @@ func New(cfg Config) (*Manager, error) {
 		// .
 		// .
 		// .
-		log.Printf("certs: the name changed from %s to %s — the stored certificate is set aside", m.state.Name, cfg.Name)
+		logsink.Info("certs.decision", "the name changed from %s to %s — the stored certificate is set aside", m.state.Name, cfg.Name)
 		for _, p := range []string{m.certPath(), m.keyPath()} {
 			if _, err := os.Stat(p); err == nil {
 				_ = os.Rename(p, p+".prev")
@@ -148,7 +148,7 @@ func New(cfg Config) (*Manager, error) {
 		m.state = State{}
 	}
 	if err := m.loadCertificate(); err != nil {
-		log.Printf("certs: stored certificate not used: %v", err)
+		logsink.Warn("certs.refusal", "stored certificate not used: %v", err)
 	}
 	return m, nil
 }

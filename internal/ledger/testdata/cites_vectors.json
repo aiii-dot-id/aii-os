@@ -1,0 +1,510 @@
+{
+ "about": "The grammar of the cites payload member (docs/ENTITY_TYPES.md; internal/ledger/cites.go). Every implementation that WRITES a record holds cites to this grammar at admission; none applies it on replay. payload is the event payload; valid says whether a writer admits it; count is the number of citations it carries.",
+ "max_citations": 16,
+ "vectors": [
+  {
+   "name": "no cites member",
+   "payload": {
+    "id": "e",
+    "content": "x"
+   },
+   "valid": true,
+   "count": 0
+  },
+  {
+   "name": "one citation",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": true,
+   "count": 1
+  },
+  {
+   "name": "sixteen, the bound",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 1,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 2,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 3,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 4,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 5,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 6,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 8,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 9,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 10,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 11,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 12,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 13,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 14,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 15,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 16,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": true,
+   "count": 16
+  },
+  {
+   "name": "the same record of two identities",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": true,
+   "count": 2
+  },
+  {
+   "name": "seventeen",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 1,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 2,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 3,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 4,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 5,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 6,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 8,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 9,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 10,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 11,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 12,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 13,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 14,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 15,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 16,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 17,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "an empty list",
+   "payload": {
+    "id": "e",
+    "cites": []
+   },
+   "valid": false
+  },
+  {
+   "name": "null",
+   "payload": {
+    "id": "e",
+    "cites": null
+   },
+   "valid": true,
+   "count": 0
+  },
+  {
+   "name": "not an array",
+   "payload": {
+    "id": "e",
+    "cites": {
+     "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "seq": 7,
+     "entry_hash": "abababababababababababababababababababababababababababababababab"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "a string",
+   "payload": {
+    "id": "e",
+    "cites": "seq 7 of cdcd"
+   },
+   "valid": false
+  },
+  {
+   "name": "a citation that is not an object",
+   "payload": {
+    "id": "e",
+    "cites": [
+     [
+      "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      7,
+      "abababababababababababababababababababababababababababababababab"
+     ]
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "a friendly name",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab",
+      "name": "Nova"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "no seq",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "no entry_hash",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "no identity",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "a name in place of the hash",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "name": "x"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "seq zero",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 0,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "seq negative",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": -1,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "seq a fraction",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 1.5,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "seq a string",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": "7",
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "an uppercase fingerprint",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "a short fingerprint",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "a hash that is not hex",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "a long hash",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "ababababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "the same citation twice",
+   "payload": {
+    "id": "e",
+    "cites": [
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     },
+     {
+      "identity": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seq": 7,
+      "entry_hash": "abababababababababababababababababababababababababababababababab"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "seq as 7.0 \u2014 a float spelling of an integer",
+   "payload": {"id":"e","cites":[{"identity":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":7.0,"entry_hash":"abababababababababababababababababababababababababababababababab"}]},
+   "valid": false
+  },
+  {
+   "name": "seq as 7e0 \u2014 an exponent spelling of an integer",
+   "payload": {"id":"e","cites":[{"identity":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":7e0,"entry_hash":"abababababababababababababababababababababababababababababababab"}]},
+   "valid": false
+  },
+  {
+   "name": "seq at the bound, 2^63-1",
+   "payload": {"id":"e","cites":[{"identity":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":9223372036854775807,"entry_hash":"abababababababababababababababababababababababababababababababab"}]},
+   "valid": true,
+   "count": 1
+  },
+  {
+   "name": "seq past the bound, 2^63",
+   "payload": {"id":"e","cites":[{"identity":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":9223372036854775808,"entry_hash":"abababababababababababababababababababababababababababababababab"}]},
+   "valid": false
+  },
+  {
+   "name": "seq at 2^64-1",
+   "payload": {"id":"e","cites":[{"identity":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":18446744073709551615,"entry_hash":"abababababababababababababababababababababababababababababababab"}]},
+   "valid": false
+  }
+ ]
+}

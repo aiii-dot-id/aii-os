@@ -54,6 +54,7 @@ var ddlAppliers = map[string]bool{
 	"internal/store/reconcile_parse.go": true,
 }
 
+// .
 func TestSchemaSoleOwner(t *testing.T) {
 	root := repoRoot(t)
 	// .
@@ -111,6 +112,7 @@ func TestSchemaSoleOwner(t *testing.T) {
 // .
 // .
 // .
+// .
 func TestOnlySchemaFileOwnsDDL(t *testing.T) {
 	root := repoRoot(t)
 	ddl := regexp.MustCompile(`(?i)\b(CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER|VIRTUAL\s+TABLE)|ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|TRIGGER))\b`)
@@ -160,6 +162,7 @@ func TestOnlySchemaFileOwnsDDL(t *testing.T) {
 // .
 // .
 // .
+// .
 func TestSchemaContainsNoAlter(t *testing.T) {
 	schemaBytes, err := schemaFS.ReadFile("schema.sql")
 	if err != nil {
@@ -192,11 +195,9 @@ func TestSchemaContainsNoAlter(t *testing.T) {
 // .
 // .
 // .
-var futureDateOK = map[string]map[string]bool{
-	"docs/SYSTEM_STATE_2026-08-16.md": {"2026-09-16": true},
-	"docs/BETA1_CONTRACT.md":          {"2026-08-31": true},
-}
+var futureDateOK = map[string]map[string]bool{}
 
+// .
 func TestNoFutureDates(t *testing.T) {
 	root := repoRoot(t)
 	dateRe := regexp.MustCompile(`(20[0-9]{2})-([0-9]{2})-([0-9]{2})`)

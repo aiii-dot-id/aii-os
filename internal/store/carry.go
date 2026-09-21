@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/store/compressvfs"
 	"sort"
 	"strings"
 )
@@ -53,6 +54,9 @@ func (r CarryReport) String() string {
 // .
 func CarryAcross(dbPath, ledgerPath string) (CarryReport, error) {
 	report := CarryReport{Ephemeral: map[string]int64{}, Derived: map[string][2]int64{}}
+	if err := compressvfs.Register(); err != nil {
+		return report, fmt.Errorf("register database VFS: %w", err)
+	}
 	schemaBytes, err := schemaFS.ReadFile("schema.sql")
 	if err != nil {
 		return report, fmt.Errorf("cannot read embedded schema: %w", err)
@@ -61,7 +65,7 @@ func CarryAcross(dbPath, ledgerPath string) (CarryReport, error) {
 	// .
 	// .
 	// .
-	raw, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=foreign_keys(0)&_pragma=busy_timeout(5000)")
+	raw, err := sql.Open("sqlite", databaseURI(dbPath)+"?vfs="+compressvfs.Name+"&_pragma=foreign_keys(0)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return report, fmt.Errorf("open %s: %w", dbPath, err)
 	}

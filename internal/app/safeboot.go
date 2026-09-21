@@ -18,7 +18,7 @@ package app
 
 import (
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"path/filepath"
 	"sync"
 
@@ -92,7 +92,7 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	st, err := store.OpenReadOnly(cfg.Identity.DBPath)
 	if err != nil {
-		log.Printf("BOOT-SAFE: no prior projection to mount read-only (%v) — using an empty in-memory view", err)
+		logsink.Warn("safe.start", "no prior projection to mount read-only (%v) — using an empty in-memory view", err)
 		st, err = store.NewMemory()
 		if err != nil {
 			// .
@@ -100,6 +100,7 @@ func (a *App) startSafeBoot(reason string) error {
 		}
 	}
 	a.store = st
+	a.databaseView.Store(&databaseView{store: st, notice: reason})
 
 	// .
 	// .
@@ -114,7 +115,7 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	// .
 	if err := a.rings.SealSafePosture(safeBootRing0 + "\n\n## Why this boot is SAFE\n" + reason); err != nil {
-		log.Printf("SAFE: Ring 0 was already sealed (%v) — the posture text is not installed; the reason stands in the log and on the page", err)
+		logsink.Warn("safe.refusal", "Ring 0 was already sealed (%v) — the posture text is not installed; the reason stands in the log and on the page", err)
 	}
 
 	// .
@@ -125,9 +126,9 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	cc, llmEntry, rerr := a.resolveLLM()
 	if rerr != nil {
-		log.Printf("BOOT-SAFE: LLM substrate unresolved (%v) — the SAFE conversation will refuse until it is fixed; the operator surface stays up", rerr)
+		logsink.Warn("safe.refusal", "LLM substrate unresolved (%v) — the SAFE conversation will refuse until it is fixed; the operator surface stays up", rerr)
 	} else if cc.APIKey == "" && cc.Credential == nil {
-		log.Printf("BOOT-SAFE: no API key on provider %q — the SAFE conversation will refuse until one is configured; the operator surface stays up", llmEntry.Name)
+		logsink.Warn("safe.refusal", "no API key on provider %q — the SAFE conversation will refuse until one is configured; the operator surface stays up", llmEntry.Name)
 	}
 	promptBudget := cfg.Prompt.MaxTokens
 	budgetGuess := false
@@ -193,7 +194,7 @@ func (a *App) startSafeBoot(reason string) error {
 	// .
 	// .
 	a.composer.SetName(a.store.IdentityName())
-	a.composer.SetPluginOperations(toolReg.HasDynamic)
+	a.composer.SetPluginOperations(pluginOperations(toolReg))
 
 	// .
 	// .
@@ -207,6 +208,7 @@ func (a *App) startSafeBoot(reason string) error {
 	a.projects = project.NewManager(projRoot)
 	a.engine.SetProjects(projectsAdapter{a})
 	a.engine.SetVoice(voiceModeAdapter{a})
+	a.engine.SetContinuity(continuityAdapter{a})
 	a.engine.SetTimers(identity.NewStoreTimers(st))
 	a.engine.SetEmbedder(memoryEmbedder{a})
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)

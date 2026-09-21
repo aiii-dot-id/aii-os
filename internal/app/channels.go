@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"regexp"
 	"sort"
 	"strings"
@@ -162,22 +162,22 @@ func (a *App) routesFor(ctx context.Context) (map[string]channelRoute, bool) {
 	for _, p := range installed {
 		res, err := a.toolReg.Execute(ctx, p.Channel.Describe, map[string]interface{}{})
 		if err != nil || res.Error != "" {
-			log.Printf("channel %s: describe() failed (%v %s) — installed but carrying nothing", p.ID, err, res.Error)
+			logsink.Warn("channel.refusal", "%s: describe() failed (%v %s) — installed but carrying nothing", p.ID, err, res.Error)
 			complete = false
 			continue
 		}
 		var reply describeReply
 		if uerr := json.Unmarshal([]byte(res.Output), &reply); uerr != nil || reply.Channel == "" {
-			log.Printf("channel %s: describe() did not name a channel (%v) — installed but carrying nothing", p.ID, uerr)
+			logsink.Warn("channel.refusal", "%s: describe() did not name a channel (%v) — installed but carrying nothing", p.ID, uerr)
 			complete = false
 			continue
 		}
 		if !channelNameRe.MatchString(reply.Channel) {
-			log.Printf("channel %s: describe() named %q, which is not a channel name (lowercase letters, digits, . _ -, at most 32) — installed but carrying nothing", p.ID, reply.Channel)
+			logsink.Warn("channel.refusal", "%s: describe() named %q, which is not a channel name (lowercase letters, digits, . _ -, at most 32) — installed but carrying nothing", p.ID, reply.Channel)
 			continue
 		}
 		if contested[reply.Channel] {
-			log.Printf("channel %q claimed by %s as well — refusing to guess; none of them will carry it", reply.Channel, p.ID)
+			logsink.Warn("channel.refusal", "%q claimed by %s as well — refusing to guess; none of them will carry it", reply.Channel, p.ID)
 			continue
 		}
 		if prior, taken := routes[reply.Channel]; taken {
@@ -185,7 +185,7 @@ func (a *App) routesFor(ctx context.Context) (map[string]channelRoute, bool) {
 			// .
 			// .
 			// .
-			log.Printf("channel %q claimed by both %s and %s — refusing to guess; neither will carry it",
+			logsink.Warn("channel.refusal", "%q claimed by both %s and %s — refusing to guess; neither will carry it",
 				reply.Channel, prior.Plugin, p.ID)
 			delete(routes, reply.Channel)
 			contested[reply.Channel] = true
@@ -272,18 +272,18 @@ func (a *App) deliverOutbox(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if reason, safe := a.SafeMode(); safe {
-		log.Printf("outbox: %d message(s) held under SAFE (%s) — nothing leaves until the record is trusted again", len(pending), reason)
+		logsink.Warn("outbox.refusal", "%d message(s) held under SAFE (%s) — nothing leaves until the record is trusted again", len(pending), reason)
 		return 0, nil
 	}
 	routes := a.channelRoutes(ctx)
 	if len(routes) == 0 {
-		log.Printf("outbox: %d message(s) queued and no channel adapter installed to carry them", len(pending))
+		logsink.Warn("outbox.refusal", "%d message(s) queued and no channel adapter installed to carry them", len(pending))
 		return 0, nil
 	}
 	delivered := 0
 	for _, m := range pending {
 		if err := a.deliverOne(ctx, m, routes); err != nil {
-			log.Printf("outbox %s: %v", m.ID, err)
+			logsink.Warn("outbox.error", "%s: %v", m.ID, err)
 			continue
 		}
 		delivered++
@@ -427,8 +427,8 @@ type channelListener struct {
 func (a *App) listen(ctx context.Context, l *channelListener) {
 	defer close(l.done)
 	r := l.route
-	log.Printf("channel %s: listening via %s (receive budget %s)", r.Channel, r.Plugin, r.Budget)
-	defer log.Printf("channel %s: stopped listening", r.Channel)
+	logsink.Info("channel.start", "%s: listening via %s (receive budget %s)", r.Channel, r.Plugin, r.Budget)
+	defer logsink.Info("channel.end", "%s: stopped listening", r.Channel)
 	for ctx.Err() == nil {
 		select {
 		case <-l.stop:
@@ -443,7 +443,7 @@ func (a *App) listen(ctx context.Context, l *channelListener) {
 		wait := time.Duration(0)
 		switch {
 		case err != nil:
-			log.Printf("channel %s: receive failed, standing off: %v", r.Channel, err)
+			logsink.Warn("channel.error", "%s: receive failed, standing off: %v", r.Channel, err)
 			wait = receiveStandoff
 		case got == 0:
 			if elapsed := time.Since(started); elapsed < receiveFloor {
@@ -474,7 +474,7 @@ func (a *App) stopListener(l *channelListener) {
 		select {
 		case <-l.done:
 		case <-time.After(wait):
-			log.Printf("channel %s: receive did not return within its budget (%s) plus grace — cancelling, which kills the adapter's process", l.route.Channel, l.route.Budget)
+			logsink.Warn("channel.budget", "%s: receive did not return within its budget (%s) plus grace — cancelling, which kills the adapter's process", l.route.Channel, l.route.Budget)
 			l.cancel()
 			<-l.done
 		}
@@ -504,13 +504,13 @@ func (a *App) receiveFrom(ctx context.Context, r channelRoute) (int, error) {
 	fresh := 0
 	for _, in := range arrivals {
 		if in.ID == "" || in.From == "" {
-			log.Printf("channel %s: dropping an arrival with no id or sender", r.Channel)
+			logsink.Warn("channel.refusal", "%s: dropping an arrival with no id or sender", r.Channel)
 			continue
 		}
 		rowID := "in_" + r.Channel + "_" + in.ID
 		isNew, err := a.store.RecordInbound(rowID, r.Channel, in.From, in.Body)
 		if err != nil {
-			log.Printf("channel %s: could not record an arrival: %v", r.Channel, err)
+			logsink.Warn("channel.error", "%s: could not record an arrival: %v", r.Channel, err)
 			continue
 		}
 		if !isNew {
@@ -602,7 +602,7 @@ func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 	framed := frameArrival(r, who, in.From, in.Body)
 	if !mayWake {
 		if _, err := a.steerWith(roleParticipant, framed, nil); err != nil && !errors.Is(err, dashboard.ErrBusyInternal) {
-			log.Printf("channel %s: %s not steered (%v) — the next turn carries it", r.Channel, rowID, err)
+			logsink.Info("channel.refusal", "%s: %s not steered (%v) — the next turn carries it", r.Channel, rowID, err)
 		}
 		return
 	}
@@ -611,7 +611,7 @@ func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 	// .
 	steered, err := a.AdmitParticipant(framed)
 	if err != nil {
-		log.Printf("channel %s: %s not admitted (%v) — the next turn carries it", r.Channel, rowID, err)
+		logsink.Info("channel.refusal", "%s: %s not admitted (%v) — the next turn carries it", r.Channel, rowID, err)
 		return
 	}
 	if steered {
@@ -624,7 +624,7 @@ func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 		if _, err := a.wakeParticipant(framed); err != nil {
 			// .
 			// .
-			log.Printf("channel %s: could not wake for %s (message kept): %v", r.Channel, rowID, err)
+			logsink.Warn("channel.error", "%s: could not wake for %s (message kept): %v", r.Channel, rowID, err)
 		}
 	}()
 }
@@ -679,7 +679,7 @@ func (a *App) convergeChannels(ctx context.Context) {
 	for _, r := range routes {
 		if r.Push {
 			if _, live := a.listening[r.Plugin]; !live {
-				log.Printf("channel %s: receives by webhook via %s (no receive loop)", r.Channel, r.Plugin)
+				logsink.Info("channel.start", "%s: receives by webhook via %s (no receive loop)", r.Channel, r.Plugin)
 			}
 			continue
 		}
@@ -719,9 +719,9 @@ func (a *App) runOutbox(ctx context.Context) {
 		case <-a.outboxPoke:
 		}
 		if n, err := a.deliverOutbox(ctx); err != nil {
-			log.Printf("outbox: %v", err)
+			logsink.Warn("outbox.error", "%v", err)
 		} else if n > 0 {
-			log.Printf("outbox: carried %d message(s)", n)
+			logsink.Info("outbox.end", "carried %d message(s)", n)
 		}
 	}
 }

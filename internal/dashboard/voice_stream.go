@@ -16,8 +16,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"sync"
 	"sync/atomic"
 
@@ -117,9 +117,16 @@ type VoiceEvent struct {
 	Speaker   string `json:"speaker,omitempty"`
 	// .
 	// .
-	SpeakerID string `json:"speaker_id,omitempty"`
-	Final     bool   `json:"final,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	SpeakerID        string `json:"speaker_id,omitempty"`
+	SpeakerUUID      string `json:"speaker_uuid,omitempty"`
+	RegistryRevision string `json:"registry_revision,omitempty"`
+	Continuity       string `json:"continuity,omitempty"`
+	DisplayLabel     string `json:"display_label,omitempty"`
+	TrackID          string `json:"track_id,omitempty"`
+	StartSample      *int64 `json:"start_sample,omitempty"`
+	EndSample        *int64 `json:"end_sample,omitempty"`
+	Final            bool   `json:"final,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 	// .
 	// .
 	Revision uint64 `json:"revision,omitempty"`
@@ -356,7 +363,7 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 		// .
 		// .
 		// .
-		log.Printf("VOICE: session %s opened by the page at %s (%s; mode %s; endpoints %s, %s)", sess.ID(), cl.addr, clip(cl.agent, 60), mode, cv.micID, cv.spkID)
+		logsink.Info("voice.session", "session %s opened by the page at %s (%s; mode %s; endpoints %s, %s)", sess.ID(), cl.addr, clip(cl.agent, 60), mode, cv.micID, cv.spkID)
 		s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "open", Label: sess.Label()})
 		// .
 		// .
@@ -376,14 +383,14 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 			default:
 			}
 			why := sess.InputCompletionReason()
-			log.Printf("VOICE: session %s stopped accepting speech (%s)", sess.ID(), clip(why, 120))
+			logsink.Info("voice.session", "session %s stopped accepting speech (%s)", sess.ID(), clip(why, 120))
 			s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "input_complete", Label: sess.Label(), Reason: why})
 		}()
 		// .
 		// .
 		go func() {
 			<-sess.Done()
-			log.Printf("VOICE: session %s of the page at %s ended (%s)", sess.ID(), cl.addr, sess.Label())
+			logsink.Info("voice.session", "session %s of the page at %s ended (%s)", sess.ID(), cl.addr, sess.Label())
 			s.sendVoiceState(context.Background(), conn, VoiceSessionState{SessionID: sess.ID(), State: "closed", Label: sess.Label()})
 			if cv.mic != nil {
 				cv.mic.end()

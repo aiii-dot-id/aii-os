@@ -12,8 +12,7 @@
 # THE VERSION IS PINNED IN go.mod, not resolved from whatever happens to
 # be in $GOBIN. `go tool staticcheck` builds the version this module
 # declares, which is the same reason gobind and gomobile are pinned
-# there (P1: artifacts were not reproducibly
-# buildable at HEAD).
+# there: without the pin, artifacts were not reproducibly buildable.
 #
 # THE TOOLCHAIN MUST BE ON PATH. staticcheck shells out to `go list`, and
 # with an older `go` first on PATH it cannot parse the tool block in

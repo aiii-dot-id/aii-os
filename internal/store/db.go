@@ -17,9 +17,12 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"github.com/aiii-dot-id/aii-os/internal/store/compressvfs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +31,10 @@ import (
 
 //go:embed schema.sql
 var schemaFS embed.FS
+
+// .
+// .
+const storeIdleConnections = 2
 
 // .
 type Store struct {
@@ -89,6 +96,9 @@ func (s *Store) h() dbi {
 // .
 // .
 func New(path string) (*Store, error) {
+	if err := compressvfs.Register(); err != nil {
+		return nil, fmt.Errorf("register database VFS: %w", err)
+	}
 	// .
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
@@ -97,12 +107,13 @@ func New(path string) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", sqliteDSN(path))
+	db, err := sql.Open("sqlite", sqliteDSN(path)+"&vfs="+compressvfs.Name)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
 
 	s := &Store{db: db}
+	db.SetMaxIdleConns(storeIdleConnections)
 
 	// .
 	// .
@@ -117,7 +128,7 @@ func New(path string) (*Store, error) {
 	if raw, rerr := schemaFS.ReadFile("schema.sql"); rerr == nil {
 		notes, _ := s.applyDeclaredReplacements(string(raw))
 		for _, line := range notes {
-			log.Print(line)
+			logsink.Info("store.decision", "%s", line)
 		}
 	}
 
@@ -143,13 +154,13 @@ func New(path string) (*Store, error) {
 		rep, err := s.reconcileSchema(string(raw))
 		forcedSidecars = rep.RebuildSidecars
 		for _, line := range rep.Lines() {
-			log.Print(line)
+			logsink.Info("store.decision", "%s", line)
 		}
 		if err != nil {
 			// .
 			// .
 			// .
-			log.Printf("RECONCILE: could not complete — %v", err)
+			logsink.Warn("store.error", "reconcile could not complete — %v", err)
 		}
 	}
 
@@ -178,7 +189,7 @@ func New(path string) (*Store, error) {
 	// .
 	// .
 	for _, line := range s.ensureSidecars(forcedSidecars...) {
-		log.Print(line)
+		logsink.Info("store.decision", "%s", line)
 	}
 
 	// .
@@ -196,11 +207,14 @@ func New(path string) (*Store, error) {
 // .
 // .
 func OpenReadOnly(path string) (*Store, error) {
+	if err := compressvfs.Register(); err != nil {
+		return nil, fmt.Errorf("register database VFS: %w", err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("no database to mount read-only: %w", err)
 	}
-	dsn := "file:" + path +
-		"?_pragma=query_only(1)" +
+	dsn := databaseURI(path) +
+		"?vfs=" + compressvfs.Name + "&mode=ro&_pragma=query_only(1)" +
 		"&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -253,7 +267,7 @@ func NewMemory() (*Store, error) {
 // .
 // .
 func sqliteDSN(path string) string {
-	return "file:" + path +
+	return databaseURI(path) +
 		"?_pragma=foreign_keys(1)" +
 		"&_pragma=busy_timeout(5000)" +
 		// .
@@ -271,6 +285,16 @@ func sqliteDSN(path string) string {
 		// .
 		// .
 		"&_pragma=journal_size_limit(8388608)"
+}
+
+// .
+// .
+func databaseURI(path string) string {
+	escaped := strings.ReplaceAll(url.PathEscape(filepath.ToSlash(path)), "%2F", "/")
+	if strings.HasPrefix(escaped, "//") {
+		return "file://" + escaped
+	}
+	return "file:" + escaped
 }
 
 // .
@@ -310,12 +334,12 @@ func (s *Store) Close() error {
 	// .
 	// .
 	if conn, cerr := s.db.Conn(context.Background()); cerr != nil {
-		log.Printf("store: optimize on close skipped: %v", cerr)
+		logsink.Debug("store.end", "optimize on close skipped: no connection (%v)", cerr)
 	} else {
 		if _, err := conn.ExecContext(context.Background(), "PRAGMA analysis_limit=400"); err != nil {
-			log.Printf("store: optimize on close skipped: %v", err)
+			logsink.Debug("store.end", "optimize on close skipped: analysis_limit refused (%v)", err)
 		} else if _, err := conn.ExecContext(context.Background(), "PRAGMA optimize"); err != nil {
-			log.Printf("store: optimize on close skipped: %v", err)
+			logsink.Debug("store.end", "optimize on close skipped: optimize refused (%v)", err)
 		}
 		conn.Close()
 	}

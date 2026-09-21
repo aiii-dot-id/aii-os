@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/http"
 	"os"
 	"strings"
@@ -566,7 +566,7 @@ func (a *App) HearUtterance(ctx context.Context, pcm []byte, sampleRate, channel
 		// .
 		// .
 		// .
-		log.Printf("VOICE: %d bytes of audio transcribed to nothing", len(pcm))
+		logsink.Info("voice.decision", "%d bytes of audio transcribed to nothing", len(pcm))
 		return nil
 	}
 	// .

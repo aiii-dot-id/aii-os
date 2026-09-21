@@ -62,13 +62,13 @@ func TestSendRefusesANameItCannotReach(t *testing.T) {
 
 func TestSendQueuesForSomeoneReachable(t *testing.T) {
 	e, _ := timerEngine(t)
-	book(t, e, "james")
+	book(t, e, "sam")
 
-	out, err := e.verbSend(context.Background(), map[string]interface{}{"to": "james", "message": "the build is green"})
+	out, err := e.verbSend(context.Background(), map[string]interface{}{"to": "sam", "message": "the build is green"})
 	if err != nil {
 		t.Fatalf("send to a reachable person was refused: %v", err)
 	}
-	if !strings.Contains(out, "james") {
+	if !strings.Contains(out, "sam") {
 		t.Fatalf("the answer does not say who it went to: %q", out)
 	}
 
@@ -77,7 +77,7 @@ func TestSendQueuesForSomeoneReachable(t *testing.T) {
 		t.Fatalf("got %d queued, want 1", len(msgs))
 	}
 	// .
-	if msgs[0].ToRole != "peer" || msgs[0].ToIdentity != "james" {
+	if msgs[0].ToRole != "peer" || msgs[0].ToIdentity != "sam" {
 		t.Fatalf("the queued row does not name the person: %+v", msgs[0])
 	}
 }
@@ -87,12 +87,12 @@ func TestSendQueuesForSomeoneReachable(t *testing.T) {
 // .
 func TestNamingAChannelIsNotASecretFeature(t *testing.T) {
 	e, _ := timerEngine(t)
-	book(t, e, "james")
+	book(t, e, "sam")
 
 	if _, err := e.verbSend(context.Background(), map[string]interface{}{
-		"to": "james on signal", "message": "call me",
+		"to": "sam on signal", "message": "call me",
 	}); err == nil {
-		t.Fatal("\"james on signal\" was accepted — the surface advertises a choice it cannot make")
+		t.Fatal("\"sam on signal\" was accepted — the surface advertises a choice it cannot make")
 	}
 	if n := len(queued(t, e)); n != 0 {
 		t.Fatalf("a refused send left %d message(s) queued", n)
@@ -135,8 +135,8 @@ func TestOperatorDeliveryNeverCarriesSomeoneElsesMail(t *testing.T) {
 	if err := st.AddOutboxMessage("msg_for_operator", "operator", "", "yours", nil); err != nil {
 		t.Fatal(err)
 	}
-	book(t, e, "james")
-	if err := st.AddOutboxMessage("msg_for_peer", "peer", "james", "not yours", nil); err != nil {
+	book(t, e, "sam")
+	if err := st.AddOutboxMessage("msg_for_peer", "peer", "sam", "not yours", nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -97,7 +97,7 @@ func run(startup bool, slotDir string) error {
 	}
 	if serving(port) {
 		return fmt.Errorf("port %d is already in use by another program.\n\nThis identity is not running, so opening that address would show you something else. Change \"dashboard\".\"port\" in %s and try again.",
-			port, filepath.Join(slotDir, "config.json"))
+			port, install.ConfigPathIn(slotDir))
 	}
 
 	// .

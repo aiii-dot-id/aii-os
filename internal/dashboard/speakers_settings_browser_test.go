@@ -35,12 +35,12 @@ run(() => {
   byId('sp-speakers-mode').value = 'only'; byId('sp-speakers-mode').onchange();
   assert(!byId('sp-speakers-list-row').hidden && byId('sp-speakers-unid-row').hidden, 'only shows the list, not the unidentified rule');
   // The save sends the whole policy as one object.
-  byId('sp-speakers-uids').value = 'james-one, ada.2  visitor';
+  byId('sp-speakers-uids').value = 'sam-one, ada.2  visitor';
   saveConfigSection('speech_speakers');
   const sent = sets();
   assert(sent.length === 1 && sent[0]['speech.speakers'], 'one config_set with the policy: ' + JSON.stringify(sent));
   const pol = sent[0]['speech.speakers'];
-  assert(pol.mode === 'only' && JSON.stringify(pol.uids) === '["james-one","ada.2","visitor"]' && !('unidentified' in pol), 'the object is the mode and the ids, the unidentified rule only under ignore: ' + JSON.stringify(pol));
+  assert(pol.mode === 'only' && JSON.stringify(pol.uids) === '["sam-one","ada.2","visitor"]' && !('unidentified' in pol), 'the object is the mode and the ids, the unidentified rule only under ignore: ' + JSON.stringify(pol));
   assert(speakersReadback({ mode: 'all', uids: [], revision: 0 }).startsWith('Everyone is heard'), 'all reads back as everyone');
 });
 </script>`
@@ -60,7 +60,7 @@ import { converseForTest, speakerFilterLine, voiceEvent } from './voice.js';
 import { S } from './state.js';
 import { assert, run } from './__harness.js';
 run(() => {
-  S.stats = { voice_engine: true, voice_state: 'plugin', speakers: { mode: 'only', uids: ['james-one'], revision: 2, withheld_finals: 3 } }; S.connected = true;
+  S.stats = { voice_engine: true, voice_state: 'plugin', speakers: { mode: 'only', uids: ['sam-one'], revision: 2, withheld_finals: 3 } }; S.connected = true;
   const fl = document.getElementById('voice-filter');
   converseForTest('idle');
   assert(fl.hidden, 'nothing is said while nobody listens');

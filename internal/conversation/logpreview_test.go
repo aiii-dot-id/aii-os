@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,7 @@ func TestALogLineIsNotACopyOfTheContent(t *testing.T) {
 	secret := strings.Repeat("private thought ", 500)
 	got := logPreview(secret)
 
-	if len(([]rune(got))) > logPreviewRunes+64 {
+	if len(([]rune(got))) > logsink.PreviewRunes+64 {
 		t.Fatalf("the log line carries %d runes of content", len([]rune(got)))
 	}
 	if !strings.Contains(got, "8000 runes total") {

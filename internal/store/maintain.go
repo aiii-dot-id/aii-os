@@ -3,10 +3,17 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/store/compressvfs"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
+// .
+// .
 // .
 // .
 // .
@@ -121,8 +128,18 @@ func (s *Store) ForeignKeyCheck() error {
 // .
 // .
 func (s *Store) Housekeep() (string, error) {
+	return s.HousekeepContext(context.Background())
+}
+
+// .
+// .
+// .
+func (s *Store) HousekeepContext(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.readOnly {
+		return "read-only mount; housekeeping skipped", nil
+	}
 
 	// .
 	// .
@@ -132,7 +149,7 @@ func (s *Store) Housekeep() (string, error) {
 	// .
 	// .
 	// .
-	conn, err := s.db.Conn(context.Background())
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return "", fmt.Errorf("pin connection: %w", err)
 	}
@@ -143,19 +160,19 @@ func (s *Store) Housekeep() (string, error) {
 	// .
 	// .
 	// .
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA analysis_limit=400"); err != nil {
+	if _, err := conn.ExecContext(ctx, "PRAGMA analysis_limit=400"); err != nil {
 		return "", fmt.Errorf("analysis_limit: %w", err)
 	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA optimize"); err != nil {
+	if _, err := conn.ExecContext(ctx, "PRAGMA optimize"); err != nil {
 		return "", fmt.Errorf("optimize: %w", err)
 	}
 
 	var busy, logPages, checkpointed int
-	if err := conn.QueryRowContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)").
+	if err := conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").
 		Scan(&busy, &logPages, &checkpointed); err != nil {
 		// .
 		// .
-		return "optimize ok, wal checkpoint unavailable", nil
+		return "", fmt.Errorf("wal checkpoint: %w", err)
 	}
 	// .
 	// .
@@ -181,12 +198,29 @@ func (s *Store) Housekeep() (string, error) {
 	// .
 	sidecarNote := sidecarHousekeeping(conn)
 
-	_, _ = conn.ExecContext(context.Background(), "PRAGMA shrink_memory")
+	_, _ = conn.ExecContext(ctx, "PRAGMA shrink_memory")
 
 	if busy != 0 {
 		return "optimize ok, wal checkpoint busy (a reader held it)" + pruneNote + sidecarNote, nil
 	}
-	return fmt.Sprintf("optimize ok, wal checkpointed (%d pages)%s%s", checkpointed, pruneNote, sidecarNote), nil
+	// .
+	// .
+	// .
+	s.db.SetMaxIdleConns(0)
+	defer s.db.SetMaxIdleConns(storeIdleConnections)
+	var reclaimed int64
+	compactionNote := ""
+	if err := conn.QueryRowContext(ctx, "PRAGMA "+compressvfs.CompactPragma).Scan(&reclaimed); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var sqliteErr *sqlite.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY {
+			compactionNote = ", compressed-container compaction busy (reader holds database)"
+		} else {
+			return "", fmt.Errorf("compressed-container compaction: %w", err)
+		}
+	} else if reclaimed > 0 {
+		compactionNote = fmt.Sprintf(", compressed-container reclaimed %d bytes", reclaimed)
+	}
+	return fmt.Sprintf("optimize ok, wal checkpointed (%d pages)%s%s%s", checkpointed, pruneNote, sidecarNote, compactionNote), nil
 }
 
 // .

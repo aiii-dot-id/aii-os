@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -249,7 +249,7 @@ func (a *App) providersPath() string {
 }
 
 func providerFilePath(configPath string) string {
-	return filepath.Join(filepath.Dir(configPath), "providers.json")
+	return filepath.Join(filepath.Dir(configPath), ProvidersFileName)
 }
 
 // .
@@ -567,7 +567,7 @@ func loadProvidersFile(path string) (*providerRegistry, error) {
 		if _, werr := writeFileAtomic(path, scaffoldProviders()); werr != nil {
 			return nil, fmt.Errorf("cannot scaffold %s: %w", path, werr)
 		}
-		log.Printf("No providers file found. Created default %s — user-editable, like config.json.", path)
+		logsink.Info("providers.start", "No providers file found. Created default %s — user-editable, like config.json.", path)
 		data, err = os.ReadFile(path)
 	}
 	if err != nil {
@@ -940,7 +940,7 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		return commitErr
 	}
 
-	log.Printf("LLM: provider %q edited — validated live client activated (model %s)", name, client.ModelName())
+	logsink.Info("providers.decision", "provider %q edited — validated live client activated (model %s)", name, client.ModelName())
 	return nil
 }
 

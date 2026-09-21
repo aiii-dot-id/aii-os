@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -179,9 +179,9 @@ func (c *Client) stepDown(from int32, refusal error) {
 	}
 	switch from + 1 {
 	case streamPlain:
-		log.Printf("LLM: %s refused the stream with usage asked for (%s) — this client streams without stream_options from here on", c.endpoint, clip(refusal.Error(), 200))
+		logsink.Warn("llm.refusal", "%s refused the stream with usage asked for (%s) — this client streams without stream_options from here on", c.endpoint, clip(refusal.Error(), 200))
 	case streamOff:
-		log.Printf("LLM: %s refused the streamed completion (%s) — this client's completions run unstreamed under the %s total ceiling from here on", c.endpoint, clip(refusal.Error(), 200), c.idle)
+		logsink.Warn("llm.refusal", "%s refused the streamed completion (%s) — this client's completions run unstreamed under the %s total ceiling from here on", c.endpoint, clip(refusal.Error(), 200), c.idle)
 	}
 }
 

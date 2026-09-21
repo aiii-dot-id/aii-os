@@ -321,7 +321,7 @@ func TestAReportCarriesTheManifestItWasScoredAgainst(t *testing.T) {
 // .
 func TestSpeakerCoverageIsReported(t *testing.T) {
 	a := speechClip("a.wav", "quiet", "the ledger")
-	a.Speaker = "james"
+	a.Speaker = "sam"
 	b := speechClip("b.wav", "quiet", "the ledger")
 	b.Speaker = "other"
 	m := testManifest(nil, a, b)
@@ -329,7 +329,7 @@ func TestSpeakerCoverageIsReported(t *testing.T) {
 		ran("a.wav", "the ledger", time.Second, 0),
 		ran("b.wav", "the ledger", time.Second, 0),
 	})
-	if r.SpeakerClips["james"] != 1 || r.SpeakerClips["other"] != 1 {
+	if r.SpeakerClips["sam"] != 1 || r.SpeakerClips["other"] != 1 {
 		t.Fatalf("speaker coverage = %v", r.SpeakerClips)
 	}
 }

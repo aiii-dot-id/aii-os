@@ -1,12 +1,12 @@
 package app
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // .
@@ -27,10 +27,7 @@ func TestUILayoutInertProfileWarns(t *testing.T) {
 	a := New(&Config{Identity: IdentityConfig{LedgerPath: filepath.Join(dir, "ledger.jsonl")}})
 	path := a.uiLayoutPath()
 
-	var logBuf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logBuf)
-	defer log.SetOutput(prev)
+	logBuf := logsink.CaptureForTest(t)
 
 	// .
 	// .

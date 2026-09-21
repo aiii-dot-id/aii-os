@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/url"
 	"strings"
 	"sync"
@@ -137,7 +137,7 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 				st.models, st.meta = prev.models, prev.meta
 			}
 			if st.state != prev.state || st.reason != prev.reason {
-				log.Printf("providers: %s — %s%s (%d model(s) listed)", r.name, st.state, reasonSuffix(st.reason), len(st.models))
+				logsink.Info("providers.decision", "%s — %s%s (%d model(s) listed)", r.name, st.state, reasonSuffix(st.reason), len(st.models))
 			}
 			a.provStatus[r.name] = st
 			out[r.name] = st
@@ -233,7 +233,7 @@ func (a *App) providerDirectory() dashboard.ProviderDirectory {
 	dir := dashboard.ProviderDirectory{SkipSignInWithValidToken: a.configSnapshot().Dashboard.skipSignInWithValidToken()}
 	reg, err := a.loadProviders()
 	if err != nil {
-		log.Printf("providers: %v", err)
+		logsink.Warn("providers.error", "%v", err)
 		return dir
 	}
 	dir.Providers = a.providerInfos(reg)
@@ -247,7 +247,7 @@ func (a *App) providerDirectory() dashboard.ProviderDirectory {
 func (a *App) providerDirectoryLive() []dashboard.ProviderInfo {
 	reg, err := a.loadProviders()
 	if err != nil {
-		log.Printf("providers: %v", err)
+		logsink.Warn("providers.error", "%v", err)
 		return nil
 	}
 	return a.providerInfos(reg)

@@ -62,6 +62,7 @@ var publishing = map[string]bool{
 	"PublishNew":        true,
 }
 
+// .
 func TestNoCallerDiscardsPublished(t *testing.T) {
 	fset := token.NewFileSet()
 	files, sites := 0, 0

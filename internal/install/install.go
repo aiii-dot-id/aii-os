@@ -203,7 +203,10 @@ func writeConfig(dir string, port int) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(dir, "config.json")
+	path := ConfigPathIn(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

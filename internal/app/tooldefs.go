@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
-	"log"
 	"strings"
 	"time"
 
@@ -142,7 +142,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 			// .
 			// .
 			// .
-			log.Printf("app: malformed tool arguments for %s: %v (raw %.160q)", tc.Function.Name, err, tc.Function.Arguments)
+			logsink.Warn("tool.refusal", "malformed tool arguments for %s: %v (raw %.160q)", tc.Function.Name, err, tc.Function.Arguments)
 			if a.toolReg != nil {
 				a.toolReg.CountMalformed()
 			}
@@ -167,10 +167,10 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 				a.toolReg.CountDuplicateArgKeys()
 			}
 			if conflicts := tools.ConflictingArgKeys(tc.Function.Arguments); len(conflicts) > 0 {
-				log.Printf("app: conflicting argument keys %v in %s call — REFUSED, nothing executed (raw %.200q)", conflicts, tc.Function.Name, tc.Function.Arguments)
+				logsink.Warn("tool.refusal", "conflicting argument keys %v in %s call — REFUSED, nothing executed (raw %.200q)", conflicts, tc.Function.Name, tc.Function.Arguments)
 				return conversation.Observation{Text: fmt.Sprintf("Error: argument key(s) %v appear more than once in this %s call with DIFFERENT values — the emission was corrupted and NOTHING was executed. Go decodes the LAST copy; in the field scan the last copy was the drifted one and the first copy was intact. Do not treat any earlier result from this call as a fact about the world. Reissue the call once, with each key appearing exactly once.", conflicts, tc.Function.Name), Failed: true}
 			}
-			log.Printf("app: duplicate argument keys %v in %s call — copies agree, dispatching normally (raw %.200q)", dups, tc.Function.Name, tc.Function.Arguments)
+			logsink.Info("tool.decision", "duplicate argument keys %v in %s call — copies agree, dispatching normally (raw %.200q)", dups, tc.Function.Name, tc.Function.Arguments)
 		}
 	}
 

@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"log"
 	"os"
 	_ "time/tzdata"
@@ -39,10 +40,25 @@ func main() {
 			os.Exit(runUnregister(os.Args[2:]))
 		case "verify":
 			os.Exit(runVerify(os.Args[2:], os.Stdout, os.Stderr))
+		case "snapshot":
+			// .
+			// .
+			os.Exit(runSnapshot(os.Args[2:], os.Stdout, os.Stderr))
+		case "escrow":
+			// .
+			// .
+			// .
+			// .
+			os.Exit(runEscrow(os.Args[2:], os.Stdout, os.Stderr, terminalPassphrase(os.Stderr)))
 		case "memory-score":
 			// .
 			// .
 			os.Exit(runMemoryScore(os.Args[2:], os.Stdout, os.Stderr))
+		case "log":
+			// .
+			// .
+			// .
+			os.Exit(runLog(os.Args[2:], os.Stdout, os.Stderr))
 		case "dashboard-token":
 			// .
 			// .
@@ -61,7 +77,7 @@ func main() {
 	// .
 	// .
 	showVersion := flag.Bool("version", false, "Print version and build identity, then exit")
-	configPath := flag.String("config", "config.json", "Path to config file")
+	configPath := flag.String("config", "", "Path to config file (default: config/config.json, or config.json for an identity installed before that move)")
 	// .
 	// .
 	// .
@@ -98,6 +114,11 @@ func main() {
 			log.Fatalf("cannot enter identity directory %s: %v", *startDir, err)
 		}
 	}
+	// .
+	// .
+	if *configPath == "" {
+		*configPath = app.DefaultConfigPath()
+	}
 
 	cfg, err := app.LoadConfig(*configPath)
 	if err != nil {
@@ -107,7 +128,7 @@ func main() {
 	// .
 	// .
 	if app.Version != "" {
-		log.Printf("AII OS v%s", app.Current())
+		logsink.Info("boot.start", "AII OS v%s", app.Current())
 	}
 
 	app.New(cfg).Run()

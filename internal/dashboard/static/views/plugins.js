@@ -636,7 +636,7 @@ function newProfileHTML(providers) {
   const hosts = d.hosts != null ? d.hosts : (prov ? prov.hosts.join(', ') : '');
   const why = d.connector ? '<div class="dim-note">Your identity asked to connect <b>' + esc(d.connector) + '</b> (' + esc(d.scope === 'modify' ? 'read and modify' : 'read only') + '). Finish the profile below, then Connect it' + (d.handle ? ', then set <b>' + esc(d.handle) + '</b> on ' + esc(d.plugin) + ' to this profile\'s name and grant it the handle' : '; the plugin that needs it cites this profile by name as its handle') + '.</div>' : '';
   return '<div class="profile-form"><h4>NEW PROFILE</h4>' + why +
-    '<label class="f">NAME</label><input id="pf-name" value="' + esc(d.name || '') + '" placeholder="google-james">' +
+    '<label class="f">NAME</label><input id="pf-name" value="' + esc(d.name || '') + '" placeholder="google-work">' +
     '<label class="f">PROVIDER</label><select id="pf-provider">' + provOpts + '</select>' +
     '<label class="f">REGISTERED RETURN URL</label><input id="pf-redirect" value="' + esc(d.redirect_uri || returnURL || '') + '"><div class="store-hint">' + (manual ? 'The provider shows a code at this address. Paste that code here to finish sign-in.' : 'Register this dashboard address with the provider for browser sign-in.') + '</div>' +
     '<label class="f">CLIENT ID (OPTIONAL WHEN CONFIGURED)</label><input id="pf-client" value="' + esc(d.client_id || '') + '" placeholder="the client the authority knows you by">' +
