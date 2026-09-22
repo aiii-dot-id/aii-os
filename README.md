@@ -21,10 +21,20 @@ The ledger format (GOLD) and its invariants are shared with the AIII
 tooling that signs and verifies release and plugin artifacts, so an
 identity's history is not tied to this implementation.
 
-**Status: beta, under active development.** The current version is on
-the [releases](https://github.com/aiii-dot-id/aii-os/releases) page. Expect churn.
+**Status: beta, under active development.** Expect churn.
 The design discipline is honesty-first: refusals are typed, omissions
 are declared, and nothing is claimed beyond its proof.
+
+## Download AII OS 0.1.8
+
+Choose the installer for your computer:
+
+- **macOS (Apple silicon):** [Download the .dmg installer](https://github.com/aiii-dot-id/aii-os/releases/download/v0.1.8/AII-OS-0.1.8.dmg)
+- **Ubuntu/Debian (x86-64):** [Download the .deb package](https://github.com/aiii-dot-id/aii-os/releases/download/v0.1.8/aii-os_0.1.8_amd64.deb)
+- **Windows 10/11 (x86-64):** [Download the .exe installer](https://github.com/aiii-dot-id/aii-os/releases/download/v0.1.8/aii-setup-0.1.8-amd64.exe)
+
+The [0.1.8 release page](https://github.com/aiii-dot-id/aii-os/releases/tag/v0.1.8)
+also has command-line archives, Linux ARM64, checksums, and release notes.
 
 ## What's inside
 
