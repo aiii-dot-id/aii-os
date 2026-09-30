@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AII OS
+Comment=Open your identity's dashboard, starting it if it is not running
+Exec=aii-app
+Icon=aii-os
+Terminal=false
+Categories=Utility;
+StartupNotify=false

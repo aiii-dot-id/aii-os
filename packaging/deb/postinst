@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+. /usr/share/aii-os/aii-units.sh
+
+case "$1" in
+  configure|abort-upgrade|abort-deconfigure|abort-remove)
+    systemctl --global daemon-reload >/dev/null 2>&1 || true
+
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+      units=$(aii_units)
+      if [ -n "$units" ]; then
+        deb-systemd-invoke --user daemon-reload >/dev/null || true
+        deb-systemd-invoke --user restart $units >/dev/null || true
+      fi
+    fi
+
+    if [ -z "$2" ]; then
+      cat <<'MSG'
+
+AII OS is installed.
+
+  aii init      create an identity slot and start it
+  aii slots     list your slots
+
+Your identities live in ~/.aii/, which this package does not own and
+will never remove. Uninstalling AII OS removes the program only.
+
+MSG
+    fi
+    ;;
+esac
+
+exit 0

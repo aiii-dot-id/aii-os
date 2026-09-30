@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+. /usr/share/aii-os/aii-units.sh
+
+if [ -z "${DPKG_ROOT:-}" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+  units=$(aii_units)
+  if [ -n "$units" ]; then
+    deb-systemd-invoke --user stop $units >/dev/null || true
+  fi
+fi
+
+exit 0

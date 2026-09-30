@@ -1,0 +1,42 @@
+[Unit]
+# One template unit serves every slot: aii-os@identity-0,
+# aii-os@identity-1. %i is the slot directory name.
+Description=AII OS identity (%i)
+Documentation=https://aiii.id
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# -dir is passed LITERALLY. The runtime resolves no home of its own —
+# the ENTIRELY LOCAL law forbids it, because a configless run that
+# invented one resurrected an identity the operator believed deleted.
+# The path lives here, in the launcher, where an operator can read it.
+ExecStart=/usr/bin/aii -dir %h/.aii/%i
+WorkingDirectory=%h/.aii/%i
+Restart=on-failure
+RestartSec=5s
+
+# The identity's whole world is its slot directory, so it is given
+# nothing else it needs. These are DEFENCE IN DEPTH, not a guarantee:
+# a user manager silently skips the namespace options where it lacks
+# the privilege to set them up, and a live run in a container confirmed
+# a write outside the slot still landed. Nothing above depends on them
+# holding — the by-name links are maintained by `aii slots` because the
+# ledger is the authority on names, not because the sandbox forbids the
+# runtime from writing them.
+#
+# Only options a USER manager can apply appear here. The capability
+# directives (ProtectKernelTunables, ProtectKernelModules,
+# ProtectControlGroups, RestrictSUIDSGID) manipulate the bounding set,
+# which an unprivileged user manager may not do: with them the service
+# dies at 218/CAPABILITIES before it ever runs. They belong to system
+# units, and this is deliberately not one.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.aii/%i
+
+[Install]
+WantedBy=default.target
