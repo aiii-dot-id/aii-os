@@ -1,11 +1,11 @@
 package sections
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 )
@@ -72,23 +72,28 @@ func loadVerifiedMember(pkgPath string, res *packagefmt.Result, rel string) ([]b
 	}
 	raw, err := packagefmt.ReadMember(pkgPath, rel)
 	if err != nil {
-		return nil, &TamperError{Member: rel, Want: want}
+		return nil, &TamperError{Member: rel, Want: want, Err: err}
 	}
-	sum := sha256.Sum256(raw)
-	if got := "sha256:" + hex.EncodeToString(sum[:]); got != want {
+	if want, got, ok := res.MemberDigest(rel, raw); !ok {
 		return nil, &TamperError{Member: rel, Want: want, Got: got}
 	}
 	return raw, nil
 }
 
 func extractVerified(pkgPath string, res *packagefmt.Result, dir string) error {
+	rels := make([]string, 0, len(res.FileDigests))
 	for rel := range res.FileDigests {
 		if !cleanEntryPath(rel) {
 			return &TamperError{Member: rel, Want: res.FileDigests[rel]}
 		}
-		raw, err := loadVerifiedMember(pkgPath, res, rel)
-		if err != nil {
-			return err
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	written := make(map[string]bool, len(rels))
+	err := packagefmt.ReadMembers(pkgPath, rels, func(rel string, raw []byte) error {
+		written[rel] = true
+		if want, got, ok := res.MemberDigest(rel, raw); !ok {
+			return &TamperError{Member: rel, Want: want, Got: got}
 		}
 		dst := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
@@ -97,8 +102,18 @@ func extractVerified(pkgPath string, res *packagefmt.Result, dir string) error {
 		if err := os.WriteFile(dst, raw, 0o600); err != nil {
 			return fmt.Errorf("sections: extract %s: %w", rel, err)
 		}
+		return nil
+	})
+
+	var walk *packagefmt.Error
+	if errors.As(err, &walk) {
+		for _, rel := range rels {
+			if !written[rel] {
+				return &TamperError{Member: rel, Want: res.FileDigests[rel], Err: err}
+			}
+		}
 	}
-	return nil
+	return err
 }
 
 func removeCache(dir string) error {

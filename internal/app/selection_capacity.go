@@ -15,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/consolewin"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
+	"github.com/aiii-dot-id/aii-os/internal/vulkancap"
 )
 
 func pluginAdmissionPolicy(cfg Config) pluginfacility.AdmissionPolicy {
@@ -26,12 +28,16 @@ func pluginAdmissionPolicy(cfg Config) pluginfacility.AdmissionPolicy {
 }
 
 func measureSelectionResources(ctx context.Context) (pluginfacility.Availability, error) {
+	return measureSelectionFacts(ctx, packagefmt.HostPlatform(), hostCapacity{}.Measure, vulkanProbe)
+}
+
+func measureSelectionFacts(ctx context.Context, platform string, host func() pluginfacility.Availability, vulkan func() (string, []string, error)) (pluginfacility.Availability, error) {
 	if err := ctx.Err(); err != nil {
 		return pluginfacility.Availability{}, err
 	}
-	a := (hostCapacity{}).Measure()
+	a := host()
 	a.Devices = make(map[string]pluginfacility.DeviceAvailability)
-	switch packagefmt.HostPlatform() {
+	switch platform {
 	case "macos":
 
 		if runtime.GOARCH == "arm64" && a.HostKnown {
@@ -41,8 +47,15 @@ func measureSelectionResources(ctx context.Context) (pluginfacility.Availability
 			}
 		}
 	case "linux", "windows":
+		if probe, args, err := vulkan(); err == nil {
+			if raw, err := selectionQuery(ctx, probe, args...); err == nil {
+				if d, ok := parseVulkanCapacity(raw); ok {
+					a.Devices["vulkan"] = d
+				}
+			}
+		}
 		path := "/usr/bin/nvidia-smi"
-		if packagefmt.HostPlatform() == "windows" {
+		if platform == "windows" {
 			root := os.Getenv("SystemRoot")
 			if !filepath.IsAbs(root) {
 				break
@@ -57,7 +70,20 @@ func measureSelectionResources(ctx context.Context) (pluginfacility.Availability
 			}
 		}
 	}
-	return a, ctx.Err()
+	return a, nil
+}
+
+func parseVulkanCapacity(raw []byte) (pluginfacility.DeviceAvailability, bool) {
+	var c vulkancap.Capacity
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&c) != nil || c.Total <= 0 || c.Available < 0 || c.Available > c.Total {
+		return pluginfacility.DeviceAvailability{}, false
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return pluginfacility.DeviceAvailability{}, false
+	}
+	return pluginfacility.DeviceAvailability{Known: true, Total: c.Total, Available: c.Available}, true
 }
 
 func selectionQuery(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -66,23 +92,31 @@ func selectionQuery(ctx context.Context, path string, args ...string) ([]byte, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
 	var out limitedSelectionOutput
-	cmd.Stdout, cmd.Stderr = &out, io.Discard
-	cmd.WaitDelay = 250 * time.Millisecond
-	if err := cmd.Run(); err != nil {
+	if err := selectionCommand(ctx, &out, path, args...).Run(); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
 }
 
-type limitedSelectionOutput struct{ bytes.Buffer }
+func selectionCommand(ctx context.Context, out io.Writer, path string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Stdout, cmd.Stderr = out, io.Discard
+	cmd.WaitDelay = 250 * time.Millisecond
+	consolewin.Hide(cmd)
+	return cmd
+}
+
+type limitedSelectionOutput struct{ buffer bytes.Buffer }
+
+func (b *limitedSelectionOutput) Len() int      { return b.buffer.Len() }
+func (b *limitedSelectionOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *limitedSelectionOutput) Write(p []byte) (int, error) {
 	if len(p) > (64<<10)-b.Len() {
 		return 0, errors.New("hardware query exceeded 64 KiB")
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 
 func parseNvidiaCapacity(raw []byte) (pluginfacility.DeviceAvailability, bool) {

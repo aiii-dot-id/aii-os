@@ -1,6 +1,10 @@
 package pluginfacility
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 type Availability struct {
 	HostKnown     bool
@@ -15,6 +19,16 @@ type DeviceAvailability struct {
 	Total, Available int64
 
 	Unified bool
+}
+
+func deviceDomains(backend string) []string {
+	var out []string
+	for _, d := range strings.Split(backend, "+") {
+		if d != "" && d != "cpu" && !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 type Capacity interface {

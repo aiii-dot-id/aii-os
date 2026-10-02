@@ -38,11 +38,17 @@ type pluginSubscriber struct {
 }
 
 func (a *App) startSubscriber(ap *pluginhost.ActivePlugin) {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	a.startSubscriberLocked(ap)
+}
+
+func (a *App) startSubscriberLocked(ap *pluginhost.ActivePlugin) {
 	var s *pluginSubscriber
 	var ctx context.Context
 	if len(ap.Subscriptions) > 0 {
 		var stop context.CancelFunc
-		ctx, stop = context.WithCancel(context.Background())
+		ctx, stop = context.WithCancel(a.lifetime())
 		s = &pluginSubscriber{calibration: ap.CalibrationOperation(), id: ap.ID, owner: ap, subs: append([]pluginhost.SubscriptionDecl(nil), ap.Subscriptions...), queue: make(chan pluginEvent, pluginEventQueue), stop: stop}
 	}
 	if s != nil {
@@ -52,22 +58,22 @@ func (a *App) startSubscriber(ap *pluginhost.ActivePlugin) {
 			ap.SetCalibrationSource(s)
 		}
 	}
-	a.subMu.Lock()
 	if prior, ok := a.subscribers[ap.ID]; ok {
 		prior.stop()
 		delete(a.subscribers, ap.ID)
 	}
-	if s != nil {
-		if a.subscribers == nil {
-			a.subscribers = map[string]*pluginSubscriber{}
-		}
-		a.subscribers[ap.ID] = s
-	}
-	a.subMu.Unlock()
 	if s == nil {
 		return
 	}
-	go a.deliverEvents(ctx, s)
+	if !a.runBackground(func() { a.deliverEvents(ctx, s) }) {
+		s.stop()
+		logsink.Info("plugins.refusal", "plugin %s: its events are not delivered: %v", ap.ID, errStopping)
+		return
+	}
+	if a.subscribers == nil {
+		a.subscribers = map[string]*pluginSubscriber{}
+	}
+	a.subscribers[ap.ID] = s
 	logsink.Info("plugins.start", "plugin %s: subscribed to %d event topic(s)", ap.ID, len(s.subs))
 }
 
@@ -75,26 +81,14 @@ func (a *App) stopSubscriberOf(ap *pluginhost.ActivePlugin) {
 	if ap == nil {
 		return
 	}
-	a.subMu.Lock()
+	a.pluginMu.Lock()
 	s, ok := a.subscribers[ap.ID]
 	if ok && s.owner == ap {
 		delete(a.subscribers, ap.ID)
 	} else {
 		ok = false
 	}
-	a.subMu.Unlock()
-	if ok {
-		s.stop()
-	}
-}
-
-func (a *App) stopSubscriber(id string) {
-	a.subMu.Lock()
-	s, ok := a.subscribers[id]
-	if ok {
-		delete(a.subscribers, id)
-	}
-	a.subMu.Unlock()
+	a.pluginMu.Unlock()
 	if ok {
 		s.stop()
 	}
@@ -103,13 +97,14 @@ func (a *App) stopSubscriber(id string) {
 func (a *App) emitPluginEvent(topic string, payload map[string]interface{}) {
 	a.emitPluginEventAttributed(topic, payload, false)
 }
+
 func (a *App) emitPluginEventAttributed(topic string, payload map[string]interface{}, attributionLost bool) {
-	a.subMu.RLock()
+	a.pluginMu.RLock()
 	subs := make([]*pluginSubscriber, 0, len(a.subscribers))
 	for _, s := range a.subscribers {
 		subs = append(subs, s)
 	}
-	a.subMu.RUnlock()
+	a.pluginMu.RUnlock()
 	if len(subs) == 0 {
 		return
 	}
@@ -217,14 +212,3 @@ func (a *App) deliverEvents(ctx context.Context, s *pluginSubscriber) {
 		}
 	}
 }
-
-func (a *App) subscriberDropped(id string) int64 {
-	a.subMu.RLock()
-	defer a.subMu.RUnlock()
-	if s, ok := a.subscribers[id]; ok {
-		return s.dropped.Load()
-	}
-	return 0
-}
-
-var _ = sync.Mutex{}

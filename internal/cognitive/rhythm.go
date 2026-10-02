@@ -7,16 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 type Rhythm struct {
-	decide      func(facility, decision, reason string)
-	stagSrc     stagnationSource
-	attnDoor    LedgerWriter
-	attnOutbox  func(id, content string)
+	decide     func(facility, decision, reason string)
+	stagSrc    stagnationSource
+	attnDoor   LedgerWriter
+	attnOutbox func(id, content string)
+
 	lastProbeID string
 
 	raw  rawLister
@@ -58,7 +59,7 @@ type TurnGate interface {
 }
 
 type rawLister interface {
-	ListRawExperiences(limit int) ([]store.Experience, error)
+	ListRawExperiences(limit int) ([]rows.Experience, error)
 }
 
 const (
@@ -75,11 +76,11 @@ func NewRhythm(raw rawLister, turn TurnGate, dream, consolidate, selfModel, revi
 }
 
 type stagnationSource interface {
-	StaleActiveIntentions(minGap uint64) ([]store.StaleIntention, error)
+	StaleActiveIntentions(minGap uint64) ([]rows.StaleIntention, error)
 
 	VerdictCounts() (served, partial, unserved int, err error)
 
-	OldestStaleBelief(minGap uint64) (store.StaleBelief, bool, error)
+	OldestStaleBelief(minGap uint64) (rows.StaleBelief, bool, error)
 
 	EntityExists(id string) (bool, error)
 }

@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
 	"net"
 	"net/http"
@@ -30,7 +32,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/retryafter"
 	"github.com/aiii-dot-id/aii-os/internal/store"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const (
@@ -512,9 +513,16 @@ func (b *Binding) clearTempScope(ctx context.Context, retire bool) error {
 			return err
 		}
 		return errors.Join(b.clearTempFiles(),
-			b.host.cfg.Store.PluginKVClearTempScoped(b.storageScope()),
-			b.host.cfg.Store.PluginMemoryClearTempScoped(b.storageScope()))
+			leftUnderSAFE(b.host.cfg.Store.PluginKVClearTemp(b.storageScope())),
+			leftUnderSAFE(b.host.cfg.Store.PluginMemoryClearTemp(b.storageScope())))
 	}
+}
+
+func leftUnderSAFE(err error) error {
+	if errors.As(err, new(*store.FrozenError)) {
+		return nil
+	}
+	return err
 }
 
 func (b *Binding) admitStorage(ctx context.Context) (context.Context, func(), bool) {
@@ -785,7 +793,8 @@ func effectsAllow(effects, op string) bool {
 	case opFSWrite, opFSDelete, opFSPublish, opToolsPublish, opToolsWithdraw:
 		return effects == "" || effects == EffectsWriteLocal || effects == EffectsWriteExternal || effects == EffectsExec
 	}
-	return true
+
+	return false
 }
 
 func httpMethodOf(op string) string {
@@ -895,7 +904,7 @@ func (b *Binding) dispatchKVList(p invokeParams) ([]byte, error) {
 	if args.Limit > 0 && args.Limit < limit {
 		limit = args.Limit
 	}
-	keys, truncated, err := b.host.cfg.Store.PluginKVListScoped(b.storageScope(), target.Prefix, limit)
+	keys, truncated, err := b.host.cfg.Store.PluginKVList(b.storageScope(), target.Prefix, limit)
 	if err != nil {
 		return nil, fmt.Errorf("broker: kv.list: %w", err)
 	}
@@ -1004,11 +1013,14 @@ func (b *Binding) InvokeRefused(operation, detail, effect string) {
 		Detail:          detail,
 		Effect:          effect,
 	}
+
 	raw, err := json.Marshal(rec)
-	if err != nil {
-		return
+	if err == nil {
+		err = b.host.cfg.Store.AppendPluginReceipt(rec.ID, b.pluginID, opInvokeResult, "", false, raw)
 	}
-	_ = b.host.cfg.Store.AppendPluginReceipt(rec.ID, b.pluginID, opInvokeResult, "", false, raw)
+	if err != nil {
+		logsink.Error("broker.error", "%s: the receipt of a refused %s answer was not recorded: %v", b.pluginID, operation, err)
+	}
 }
 
 type successResult struct {
@@ -1405,7 +1417,7 @@ func (b *Binding) dispatchKV(_ context.Context, p invokeParams, g Grant) ([]byte
 				status: statusFailed, reason: reasonKVValueTooLarge,
 				detail: fmt.Sprintf("value of %d bytes exceeds the %d-byte ceiling", len(*args.Value), b.host.cfg.maxKVValueBytes())})
 		}
-		err := st.PluginKVPutScoped(b.storageScope(), key, *args.Value, temp, b.host.cfg.maxKVKeys(), b.host.cfg.maxKVTotalBytes())
+		err := st.PluginKVPut(b.storageScope(), key, *args.Value, temp, b.host.cfg.maxKVKeys(), b.host.cfg.maxKVTotalBytes())
 		if errors.Is(err, store.ErrPluginKVQuota) {
 			return b.resultReply(p.Operation, p.PluginOperation, key, outcome{
 				status: statusFailed, reason: reasonKVQuotaExceeded, detail: err.Error()})
@@ -1422,7 +1434,7 @@ func (b *Binding) dispatchKV(_ context.Context, p invokeParams, g Grant) ([]byte
 			status: statusSucceeded, transportOK: true, operationResult: or})
 
 	case opKVGet:
-		value, found, err := st.PluginKVGetScoped(b.storageScope(), key)
+		value, found, err := st.PluginKVGet(b.storageScope(), key)
 		if err != nil {
 			return nil, fmt.Errorf("broker: kv.get: %w", err)
 		}
@@ -1438,7 +1450,7 @@ func (b *Binding) dispatchKV(_ context.Context, p invokeParams, g Grant) ([]byte
 			status: statusSucceeded, transportOK: true, operationResult: or})
 
 	default:
-		deleted, err := st.PluginKVDeleteScoped(b.storageScope(), key, temp)
+		deleted, err := st.PluginKVDelete(b.storageScope(), key, temp)
 		if err != nil {
 			return nil, fmt.Errorf("broker: kv.delete: %w", err)
 		}
@@ -1471,8 +1483,8 @@ func parseHostScope(s string) (hostScope, bool) {
 	case "", "*":
 		sc.anyPort = true
 	default:
-		var p int
-		if _, err := fmt.Sscanf(portText, "%d", &p); err != nil || p < 1 || p > 65535 {
+		p, err := strconv.Atoi(portText)
+		if err != nil || p < 1 || p > 65535 {
 			return hostScope{}, false
 		}
 		sc.port = p
@@ -1569,7 +1581,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 			grantScopes = append(grantScopes, sc)
 		}
 	}
-	localScopes, _ := tools.LocalScopes(grant.Local)
+	localScopes, _ := firewall.LocalScopes(grant.Local)
 
 	localCapable := envelopeHas(b.envelope, capNetLocal)
 	local := localCapable && localTarget(host, port, localScopes)
@@ -1726,10 +1738,10 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 
 	baseGuard := b.host.cfg.Guard
 	if baseGuard == nil {
-		baseGuard = tools.FetchGuard
+		baseGuard = firewall.FetchGuard
 	}
 
-	lg := tools.GuardAdmitting(baseGuard, localScopes, b.host.cfg.OwnListener)
+	lg := firewall.GuardAdmitting(baseGuard, localScopes, b.host.cfg.OwnListener)
 	guard := lg.Guard
 
 	envelopeScopes := netEnvelopeScopes(b.envelope)
@@ -1739,7 +1751,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 		}
 		hu, err := url.Parse(rawURL)
 		if err != nil {
-			return fmt.Errorf("%w: unparseable redirect target", tools.ErrEgressBlocked)
+			return fmt.Errorf("%w: unparseable redirect target", firewall.ErrEgressBlocked)
 		}
 		hh, hp := urlHostPort(hu)
 		if auth.source != nil {
@@ -1751,20 +1763,20 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 				}
 			}
 			if hu.Scheme != "https" || !pinned {
-				return fmt.Errorf("%w: redirect is outside the OAuth profile hosts", tools.ErrEgressBlocked)
+				return fmt.Errorf("%w: redirect is outside the OAuth profile hosts", firewall.ErrEgressBlocked)
 			}
 		} else if auth.profile != "" {
 
 			plaintext := hu.Scheme == "http" && local && grant.PlaintextCredentials
 			if !strings.EqualFold(hh, host) || hp != port || (hu.Scheme != "https" && !plaintext) {
-				return fmt.Errorf("%w: redirect violates the auth profile host:port or HTTPS requirement", tools.ErrEgressBlocked)
+				return fmt.Errorf("%w: redirect violates the auth profile host:port or HTTPS requirement", firewall.ErrEgressBlocked)
 			}
 		}
 		if localCapable && localTarget(hh, hp, localScopes) {
 			return nil
 		}
 		if !anyScopeMatches(envelopeScopes, hh, hp) || !anyScopeMatches(grantScopes, hh, hp) {
-			return fmt.Errorf("%w: %s:%d is outside the plugin's granted hosts", tools.ErrEgressBlocked, hh, hp)
+			return fmt.Errorf("%w: %s:%d is outside the plugin's granted hosts", firewall.ErrEgressBlocked, hh, hp)
 		}
 		return nil
 	}
@@ -1784,7 +1796,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 	if call.body != nil {
 		bodyReader = bytes.NewReader(call.body)
 	}
-	req, err := http.NewRequestWithContext(tools.WithPins(ctx, lg), method, dialURL, bodyReader)
+	req, err := http.NewRequestWithContext(firewall.WithPins(ctx, lg), method, dialURL, bodyReader)
 	if err != nil {
 		return b.resultReply(p.Operation, p.PluginOperation, target.URL, outcome{
 			status: statusDenied, reason: reasonTargetInvalid, detail: "malformed URL", method: method})
@@ -1803,7 +1815,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 		req.Header.Set(name, value)
 	}
 
-	client := tools.GuardedClient(timeout, hopGuard, b.host.cfg.Transport)
+	client := firewall.GuardedClient(timeout, hopGuard, b.host.cfg.Transport)
 	if !call.followRedirects {
 
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -1826,7 +1838,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 				attemptReq.Body = io.NopCloser(bytes.NewReader(call.body))
 			}
 			resp, err = client.Do(attemptReq)
-			if err == nil || errors.Is(err, tools.ErrEgressBlocked) || attempt == attempts {
+			if err == nil || errors.Is(err, firewall.ErrEgressBlocked) || attempt == attempts {
 				break
 			}
 			lost = lost || wrote
@@ -1870,7 +1882,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 		reason, status, effect := reasonNetRemoteFailed, statusFailed, EffectNotPerformed
 		var protocolStatus *int
 		switch {
-		case wrote && errors.Is(err, tools.ErrEgressBlocked):
+		case wrote && errors.Is(err, firewall.ErrEgressBlocked):
 			effect = EffectPerformed
 			if resp != nil {
 				code := resp.StatusCode
@@ -1878,7 +1890,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 			}
 		case wrote || lost:
 			reason, effect = reasonNetEffectUnknown, EffectUnknown
-		case errors.Is(err, tools.ErrEgressBlocked):
+		case errors.Is(err, firewall.ErrEgressBlocked):
 			reason, status = reasonPolicyDeny, statusDenied
 		}
 		return b.resultReply(p.Operation, p.PluginOperation, target.URL, outcome{
@@ -2400,7 +2412,7 @@ func (h *Host) profileSource(name string, profile AuthProfile, params oauth.OAut
 	th, tp := urlHostPort(tu)
 	base := h.cfg.Guard
 	if base == nil {
-		base = tools.FetchGuard
+		base = firewall.FetchGuard
 	}
 	guard := func(ctx context.Context, raw string) error {
 		if gerr := base(ctx, raw); gerr != nil {
@@ -2408,15 +2420,15 @@ func (h *Host) profileSource(name string, profile AuthProfile, params oauth.OAut
 		}
 		gu, perr := url.Parse(raw)
 		if perr != nil {
-			return fmt.Errorf("%w: unparseable token endpoint", tools.ErrEgressBlocked)
+			return fmt.Errorf("%w: unparseable token endpoint", firewall.ErrEgressBlocked)
 		}
 		gh, gp := urlHostPort(gu)
 		if !strings.EqualFold(gh, th) || gp != tp {
-			return fmt.Errorf("%w: a token refresh dials only its authority (%s:%d)", tools.ErrEgressBlocked, th, tp)
+			return fmt.Errorf("%w: a token refresh dials only its authority (%s:%d)", firewall.ErrEgressBlocked, th, tp)
 		}
 		return nil
 	}
-	client := tools.GuardedClient(30*time.Second, guard, h.cfg.Transport)
+	client := firewall.GuardedClient(30*time.Second, guard, h.cfg.Transport)
 	src, err := oauth.NewProfileSource(profile.TokenFile, params, client)
 	if err != nil {
 		return nil, oauthDenial(name, err)
@@ -2451,11 +2463,14 @@ func (b *Binding) receiptAuthRefresh(profile string, err error) {
 		PluginID:  b.pluginID, PluginVersion: b.release.Version, PackageHash: b.release.PackageHash,
 		Tier: b.tier.String(), Operation: opAuthRefresh, Target: "auth_profile:" + profile, Detail: detail,
 	}
-	raw, merr := json.Marshal(rec)
-	if merr != nil {
-		return
+
+	raw, rerr := json.Marshal(rec)
+	if rerr == nil {
+		rerr = b.host.cfg.Store.AppendPluginReceipt(rec.ID, b.pluginID, opAuthRefresh, rec.Target, err == nil, raw)
 	}
-	_ = b.host.cfg.Store.AppendPluginReceipt(rec.ID, b.pluginID, opAuthRefresh, rec.Target, err == nil, raw)
+	if rerr != nil {
+		logsink.Error("broker.error", "%s: the receipt of the %s token refresh was not recorded: %v", b.pluginID, profile, rerr)
+	}
 }
 
 const opAuthRefresh = "auth.refresh"
@@ -2483,9 +2498,9 @@ const (
 
 const CredentialPlaceholder = "{credential}"
 
-func localTarget(host string, port int, scopes []tools.LocalScope) bool {
+func localTarget(host string, port int, scopes []firewall.LocalScope) bool {
 	if ip, err := netip.ParseAddr(host); err == nil {
-		return tools.IsLocalIP(ip.Unmap().AsSlice())
+		return firewall.IsLocalIP(ip.Unmap().AsSlice())
 	}
 	for _, s := range scopes {
 		if s.CoversName(host, port) {

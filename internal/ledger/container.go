@@ -40,10 +40,12 @@ var (
 )
 
 type HeadVerifier interface {
-	VerifyHead(evt *Event) error
+	VerifyHead(evt *Event, hashAt func(seq uint64) (string, bool)) (attested uint64, err error)
 }
 
 func (e *Event) Sealed() bool { return e.sealed }
+
+func (e *Event) Closing() bool { return e.closing }
 
 func (e *Event) Container() string { return e.container }
 
@@ -203,6 +205,7 @@ func streamSegment(seg *segment, fn func(*Event) error) error {
 			return fmt.Errorf("%s line %d: malformed line: %w", filepath.Base(seg.path), at, err)
 		}
 		evt.sealed = true
+		evt.closing = evt.Seq == seg.last
 		evt.container = filepath.Base(seg.path)
 		if n == 0 && evt.Seq != seg.first {
 			return fmt.Errorf("%w: %s begins with record %d", ErrSegmentSet, filepath.Base(seg.path), evt.Seq)

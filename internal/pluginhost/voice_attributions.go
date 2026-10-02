@@ -48,7 +48,7 @@ func (v *VoiceSession) queueReconciledAttributionsLocked(snap Snapshot) error {
 		if revision == 0 {
 			continue
 		}
-		row["type"] = json.RawMessage(`"speaker_observation"`)
+		row["type"], _ = json.Marshal(EventSpeakerObservation)
 		row["session_id"], _ = json.Marshal(snap.SessionID)
 
 		delete(row, "sequence")

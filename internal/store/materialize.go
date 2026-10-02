@@ -11,6 +11,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
 	"github.com/aiii-dot-id/aii-os/internal/store/cursor"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func normalizedBeliefStatement(s string) string {
@@ -102,6 +104,7 @@ func (s *Store) validateBeliefAdmissionLocked(eventType ledger.EventType, payloa
 		distinct[id] = true
 	}
 	activeIDs := map[string]bool{}
+	like := trigram.Against(statement)
 	for rows.Next() {
 		var id, current string
 		if err := rows.Scan(&id, &current); err != nil {
@@ -117,7 +120,7 @@ func (s *Store) validateBeliefAdmissionLocked(eventType ledger.EventType, payloa
 		if normalizedBeliefStatement(current) == norm {
 			return fmt.Errorf("active belief %q already states this; add evidence to it instead of minting a duplicate", id)
 		}
-		if trigram.Similarity(current, statement) >= 0.75 {
+		if like(current) >= 0.75 {
 			if !distinct[id] || strings.TrimSpace(p.Distinction) == "" {
 				return fmt.Errorf("belief %q may already express this claim; cite it in distinct_from[] and explain the difference, or add evidence to it", id)
 			}
@@ -257,10 +260,10 @@ func (e *MissingEventTargetError) Error() string {
 func (s *Store) materializeLocked(evt *ledger.Event, replayMode bool) error {
 
 	if _, err := s.h().Exec(
-		`INSERT INTO ledger (seq, prev, ts, type, ring, payload, content, sig)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO ledger (seq, prev, ts, type, ring, payload, content)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		evt.Seq, evt.Prev, evt.Timestamp, evt.Type, evt.Ring,
-		string(evt.Payload), evt.Content, evt.Sig,
+		string(evt.Payload), evt.Content,
 	); err != nil {
 		return fmt.Errorf("ledger mirror insert failed: %w", err)
 	}
@@ -307,15 +310,6 @@ func (s *Store) materializeLocked(evt *ledger.Event, replayMode bool) error {
 	default:
 		return fmt.Errorf("unknown event type: %s", evt.Type)
 	}
-}
-
-func (s *Store) MaterializeAll(events []ledger.Event) error {
-	for i := range events {
-		if err := s.MaterializeReplay(&events[i]); err != nil {
-			return fmt.Errorf("materialize failed at seq %d: %w", events[i].Seq, err)
-		}
-	}
-	return nil
 }
 
 func (s *Store) materializeBirth(evt *ledger.Event) error {
@@ -759,6 +753,9 @@ func (s *Store) ValidateEvent(eventType ledger.EventType, ringLevel int, payload
 	if err := s.validateBeliefAdmissionLocked(eventType, payload); err != nil {
 		return err
 	}
+	if err := s.validateSupersedeSuccessorLocked(eventType, payload); err != nil {
+		return err
+	}
 
 	if err := s.materializeLocked(cand, false); err != nil {
 		return err
@@ -768,6 +765,22 @@ func (s *Store) ValidateEvent(eventType ledger.EventType, ringLevel int, payload
 	}
 	return nil
 }
+
+func Fault(err error) bool {
+	var e *sqlite.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code() & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_FULL,
+		sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOMEM,
+		sqlite3.SQLITE_READONLY, sqlite3.SQLITE_NOTADB:
+		return true
+	}
+	return false
+}
+
+func (s *Store) Fault(err error) bool { return Fault(err) }
 
 var ErrRing2TextChange = errors.New("Ring 2 text cannot be replaced by a Ring 3 upsert")
 
@@ -796,6 +809,31 @@ func (s *Store) validateRing2TextLocked(eventType ledger.EventType, payload []by
 	}
 	if ring == 2 && text != "" && text != previous {
 		return fmt.Errorf("%w: belief %q retains its words; mint a new belief and supersede this id", ErrRing2TextChange, p.ID)
+	}
+	return nil
+}
+
+func (s *Store) validateSupersedeSuccessorLocked(eventType ledger.EventType, payload []byte) error {
+	if eventType != ledger.EventBeliefSupersede {
+		return nil
+	}
+	var p struct {
+		OldID string `json:"old_id"`
+		NewID string `json:"new_id"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return nil
+	}
+	if p.NewID == p.OldID {
+		return fmt.Errorf("belief.supersede names %q as its own successor: a belief is superseded by another belief, or archived", p.NewID)
+	}
+	var one int
+	err := s.h().QueryRow(`SELECT 1 FROM beliefs WHERE id = ? AND archived = 0`, p.NewID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &MissingEventTargetError{Event: eventType, Kind: "belief", ID: p.NewID}
+	}
+	if err != nil {
+		return fmt.Errorf("read successor belief %q: %w", p.NewID, err)
 	}
 	return nil
 }
@@ -944,17 +982,6 @@ func (s *Store) materializeExperience(evt *ledger.Event, replayMode bool) error 
 		p.ID, p.Content, categoryVal, rawVal, privateVal, p.Provenance, evt.Seq, evt.Timestamp,
 	)
 	return err
-}
-
-type FacilityRunPayload struct {
-	Inputs    []string            `json:"inputs"`
-	Outputs   []uint64            `json:"outputs"`
-	Confirmed []ConfirmedCrossing `json:"confirmed,omitempty"`
-}
-
-type ConfirmedCrossing struct {
-	ID    string `json:"id"`
-	Ticks int64  `json:"ticks"`
 }
 
 func (s *Store) materializeFacilityRun(evt *ledger.Event, replayMode bool) error {

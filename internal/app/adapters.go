@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
@@ -176,6 +178,48 @@ type ledgerAdapter struct {
 	captureRecord  func(string) (ledger.Capture, error)
 
 	onAppend func(*ledger.Event)
+
+	pauseUntil time.Time
+	pauseEnd   chan struct{}
+}
+
+const appendPauseBound = 2 * time.Second
+
+func (l *ledgerAdapter) PauseAppends() (release func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pauseEnd != nil && time.Now().Before(l.pauseUntil) {
+		return func() {}
+	}
+	end := make(chan struct{})
+	l.pauseEnd, l.pauseUntil = end, time.Now().Add(appendPauseBound)
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.pauseEnd == end {
+			close(end)
+			l.pauseEnd, l.pauseUntil = nil, time.Time{}
+		}
+	}
+}
+
+func (l *ledgerAdapter) awaitPause() {
+	if l.pauseEnd == nil {
+		return
+	}
+	wait := time.Until(l.pauseUntil)
+	if wait <= 0 {
+		return
+	}
+	end := l.pauseEnd
+	l.mu.Unlock()
+	timer := time.NewTimer(wait)
+	select {
+	case <-end:
+	case <-timer.C:
+	}
+	timer.Stop()
+	l.mu.Lock()
 }
 
 type eventProjection interface {
@@ -184,11 +228,22 @@ type eventProjection interface {
 }
 
 func (l *ledgerAdapter) Append(eventType ledger.EventType, ring int, payload interface{}, modelID string) (*ledger.Event, error) {
+	return l.admit(eventType, ring, payload, modelID, false)
+}
+
+func (l *ledgerAdapter) appendHead(eventType ledger.EventType, ring int, payload interface{}) (*ledger.Event, error) {
+	return l.admit(eventType, ring, payload, "", true)
+}
+
+func (l *ledgerAdapter) admit(eventType ledger.EventType, ring int, payload interface{}, modelID string, head bool) (*ledger.Event, error) {
 
 	if l.Ledger == nil {
 		return nil, fmt.Errorf("refused before append: no ledger is open — the record could not be read at startup")
 	}
 	l.mu.Lock()
+	if !head {
+		l.awaitPause()
+	}
 	var prepared ledger.PreparedPayload
 	var err error
 	if modelID == "" {
@@ -201,7 +256,11 @@ func (l *ledgerAdapter) Append(eventType ledger.EventType, ring int, payload int
 	}
 	if err != nil {
 		l.mu.Unlock()
-		return nil, fmt.Errorf("refused before append: %w", err)
+		if store.Fault(err) {
+
+			return nil, fmt.Errorf("admission could not run; nothing was appended: %w", err)
+		}
+		return nil, fmt.Errorf("%w before append: %w", store.ErrRefused, err)
 	}
 	appendPrepared := l.appendPrepared
 	if appendPrepared == nil {
@@ -317,27 +376,21 @@ func (t appTranscript) RecordToolStart(turnID string, ordinal int, callID, tool,
 	return err
 }
 
-func (t appTranscript) RecordToolDoneObserved(turnID string, ordinal int, tool, args string, obs conversation.Observation) error {
+func (t appTranscript) RecordToolDone(turnID string, ordinal int, tool, args string, obs conversation.Observation) error {
 	_, err := t.recordToolDoneObservedDurable(turnID, ordinal, tool, args, obs)
 	return err
 }
 
 func (t appTranscript) recordToolDoneObservedDurable(turnID string, ordinal int, tool, args string, obs conversation.Observation) (bool, error) {
-	return t.recordToolDoneDurable(turnID, ordinal, tool, args, obs.Text, obs.Failed, obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS, WorkSession: obs.WorkSession, SessionReason: obs.SessionReason, ReasonCode: obs.ReasonCode})
+	return t.recordToolDoneDurable(turnID, ordinal, tool, args, obs.Text, observedOutcome(obs), obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS, WorkSession: obs.WorkSession, SessionReason: obs.SessionReason, ReasonCode: obs.ReasonCode})
 }
-func (t appTranscript) RecordToolDone(turnID string, ordinal int, tool, args, result string, failed, truncated bool) error {
-	return t.recordToolDone(turnID, ordinal, tool, args, result, failed, truncated, store.ToolMeasurement{})
-}
-func (t appTranscript) recordToolDone(turnID string, ordinal int, tool, args, result string, failed, truncated bool, m store.ToolMeasurement) error {
-	_, err := t.recordToolDoneDurable(turnID, ordinal, tool, args, result, failed, truncated, m)
-	return err
-}
-func (t appTranscript) recordToolDoneDurable(turnID string, ordinal int, tool, args, result string, failed, truncated bool, m store.ToolMeasurement) (bool, error) {
-	err := t.st.RecordToolDoneMeasured(turnID, ordinal, tool, args, result, failed, truncated, m)
+
+func (t appTranscript) recordToolDoneDurable(turnID string, ordinal int, tool, args, result string, outcome interaction.Outcome, truncated bool, m store.ToolMeasurement) (bool, error) {
+	err := t.st.RecordToolDoneMeasured(turnID, ordinal, tool, args, result, outcome, truncated, m)
 	if !t.diverts(err) {
 		return err == nil, err
 	}
-	serr := t.safe.RecordToolDone(turnID, ordinal, tool, args, result, failed, truncated)
+	serr := t.safe.recordToolDone(turnID, ordinal, tool, outcome)
 	if serr == nil {
 		return false, nil
 	}
@@ -355,7 +408,7 @@ func (t appTranscript) recordToolDoneDurable(turnID string, ordinal int, tool, a
 		return false, fmt.Errorf("SAFE completion cannot identify its durable attempt: %w", readErr)
 	}
 	logsink.Warn("tool.refusal", "SAFE began during %s #%d (%s): the freeze refuses its durable done, so its start stays open", turnID, ordinal, tool)
-	return false, t.safe.RecordDurableCompletion(turnID, ordinal, tool, model, id, parent, failed)
+	return false, t.safe.RecordDurableCompletion(turnID, ordinal, tool, model, id, parent, outcome)
 }
 
 func (t appTranscript) TranscriptResultExcerptLimit() int {
@@ -368,28 +421,15 @@ func (t appTranscript) TranscriptResultExcerptLimit() int {
 type appToolExecutor struct{ a *App }
 
 func (x appToolExecutor) Execute(ctx context.Context, call llm.ToolCall) conversation.Observation {
-	session, reason := "", ""
-	if child, ok := ctx.Value(identity.SubagentWorkSession{}).(string); ok {
-		session = child
-	} else if x.a.store != nil {
-		if ws, err := x.a.store.ActiveWorkSession(); err != nil {
-			reason = "session_lookup_failed"
-		} else if ws != nil {
-			session = ws.ID
-		}
-	}
-	if session == "" && reason == "" {
-		reason = "no_session"
-	}
 	started := time.Now()
 	obs := x.a.executeToolCall(ctx, call)
+
+	if obs.Failed && !obs.Refused && errors.Is(ctx.Err(), context.Canceled) {
+		obs.Cancelled = true
+	}
 	if obs.DurationMS == nil {
 		elapsed := time.Since(started).Milliseconds()
 		obs.DurationMS = &elapsed
-	}
-	if obs.WorkSession == "" && obs.SessionReason == "" {
-		obs.WorkSession = session
-		obs.SessionReason = reason
 	}
 	return obs
 }
@@ -420,9 +460,9 @@ type appEmitter struct {
 }
 
 func (e appEmitter) EmitToolEvent(kind, name, args string) {
-	e.a.toolEmitMu.Lock()
-	emit := e.a.toolEmit
-	e.a.toolEmitMu.Unlock()
+	e.a.turn.mu.Lock()
+	emit := e.a.turn.toolEmit
+	e.a.turn.mu.Unlock()
 	if emit != nil {
 		if e.actor != "" {
 			args = "[" + e.actor + "] " + args
@@ -501,7 +541,7 @@ func (m witnessMinter) MintWitnessed(receipt witness.WitnessReceipt, witnessKeyI
 			WitnessSigB64:                  receipt.WitnessSignature.SigB64,
 		},
 	}
-	return m.door.Append(ledger.EventSystemWitnessed, 0, payload, "")
+	return m.door.appendHead(ledger.EventSystemWitnessed, 0, payload)
 }
 
 type trustEpochGuard struct {
@@ -519,12 +559,18 @@ func (g trustEpochGuard) AcceptTrustEpoch(root string, epoch int64, payloadSHA25
 	return err
 }
 
+type cognitionFacilities struct {
+	consolidateFacility atomic.Pointer[cognitive.ConsolidateFacility]
+
+	reviewFacility atomic.Pointer[cognitive.IdentityReviewFacility]
+}
+
 func (a *App) ledgerAppended(evt *ledger.Event) {
 	if evt == nil {
 		return
 	}
 
-	if f := a.consolidateFacility.Load(); f != nil && (evt.Type == ledger.EventBeliefSupersede || evt.Type == ledger.EventBeliefArchive) {
+	if f := a.cognition.consolidateFacility.Load(); f != nil && (evt.Type == ledger.EventBeliefSupersede || evt.Type == ledger.EventBeliefArchive) {
 		f.BeliefRetired()
 	}
 	a.emitPluginEvent(pluginhost.TopicLedgerAppended, map[string]interface{}{"event_type": string(evt.Type), "ring": evt.Ring, "seq": evt.Seq})

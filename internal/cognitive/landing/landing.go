@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
-	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/store/cursor"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type Door interface {
@@ -39,8 +39,8 @@ func ConversationCursors(src ConversationPublisher) func(cursor.ConversationBatc
 	}
 }
 
-func OutcomeCursors(src OutcomePublisher) func(store.OutcomeBatch) Cursor {
-	return func(batch store.OutcomeBatch) Cursor {
+func OutcomeCursors(src OutcomePublisher) func(rows.OutcomeBatch) Cursor {
+	return func(batch rows.OutcomeBatch) Cursor {
 		if src == nil || batch.Through == batch.From {
 			return Cursor{read: len(batch.Outcomes)}
 		}
@@ -86,7 +86,7 @@ func (l *Lander) Land(p Pass) (Landed, error) {
 		if out.Product != nil {
 			outputs = []uint64{out.Product.Seq}
 		}
-		if _, err := l.door.Append(p.Marker, 3, store.FacilityRunPayload{Inputs: p.Inputs, Outputs: outputs}, p.ModelID); err != nil {
+		if _, err := l.door.Append(p.Marker, 3, rows.FacilityRunPayload{Inputs: p.Inputs, Outputs: outputs}, p.ModelID); err != nil {
 			return out, fmt.Errorf("the run marker was refused — nothing consumed, the pass will run again: %w", err)
 		}
 		out.Marked = true

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"path/filepath"
 	"strings"
@@ -9,12 +10,10 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
-	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/sections"
 	"github.com/aiii-dot-id/aii-os/internal/store"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"github.com/aiii-dot-id/aii-os/internal/updates"
 )
 
@@ -201,6 +200,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	promptBudget := cfg.Prompt.MaxTokens
 	budgetGuess := false
 	if rerr == nil {
+		a.adoptProvider(llmEntry)
 		promptBudget = a.rememberPromptBudget(llmEntry, promptBudget)
 		_, src := a.currentPromptBudget()
 		budgetGuess = src == budgetFallback
@@ -212,16 +212,9 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.llmClient = a.newLLMClient(cc, promptBudget)
 	a.llmSwap = newSwappableLLM(a.llmClient)
 
-	toolReg := tools.NewRegistry(cfg.Tools.CWD, a.ensureRing5Policy(), tools.Timeouts{
-		ShellSeconds:    cfg.Tools.ShellTimeoutSeconds,
-		WebFetchSeconds: cfg.Tools.WebFetchTimeoutSeconds,
-	})
-	if err := checkNameOwners(toolReg); err != nil {
-		return err
-	}
-	a.applyLocalFetch(cfg, toolReg)
-	toolReg.SetSafeSource(a.SafeMode)
-	if err := applyDisabledTools(toolReg, cfg.Tools.Disabled); err != nil {
+	toolReg, err := a.newToolRegistry(cfg)
+	if err != nil {
+
 		return err
 	}
 
@@ -230,7 +223,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.toolReg = toolReg
 	a.loadRing5()
 
-	a.safeTools = &safeToolRecord{owner: a.engine}
+	a.safeTools = &safeToolRecord{}
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
 		a.safeTools, appEmitter{a: a}, conversation.Config{
 			MaxIterations:      cfg.Agency.MaxToolRounds,
@@ -250,19 +243,21 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.composer.SetPluginOperations(pluginOperations(toolReg))
 
 	door := &ledgerAdapter{Ledger: a.ledger, kp: a.keyPair, st: st, onIntegrity: a.integrityLost}
-	a.engine = identity.NewEngine(st, door, a.rings, toolDiscovererAdapter{toolReg})
-	a.safeTools.owner = a.engine
-	projRoot := cfg.Projects.Root
-	if projRoot == "" {
-		projRoot = filepath.Join(cfg.Tools.CWD, "projects")
-	}
-	a.projects = project.NewManager(projRoot)
-	a.wireProjectInteractionRecorder()
-	a.engine.SetProjects(projectsAdapter{a})
-	a.engine.SetVoice(voiceModeAdapter{a})
-	a.engine.SetContinuity(continuityAdapter{a})
-	a.engine.SetTimers(identity.NewStoreTimers(st))
-	a.engine.SetEmbedder(memoryEmbedder{a})
+	a.wireProjects(cfg)
+	a.adoptEngine(identity.NewEngine(st, door, a.rings, toolDiscovererAdapter{toolReg}, identity.Ports{
+		Projects:   projectsAdapter{a},
+		Voice:      voiceModeAdapter{a},
+		Continuity: continuityAdapter{a},
+		Timers:     identity.NewStoreTimers(st),
+		Embedder:   memoryEmbedder{a},
+
+		HeardHistory: nil,
+		Reachable:    nil,
+		AskProposer:  nil,
+		WorkWake:     nil,
+		YieldGate:    nil,
+		RouteIsLocal: nil,
+	}))
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)
 
 	a.applySafeState(reason)
@@ -298,6 +293,11 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	return nil
 }
 
+func (a *App) adoptEngine(e *identity.Engine) {
+	a.engine = e
+	a.safeTools.owner = e
+}
+
 type safeToolRecord struct {
 	mu     sync.Mutex
 	events []SafeToolEvent
@@ -311,7 +311,7 @@ type SafeToolEvent struct {
 	Tool                        string
 	Model                       string
 	Done                        bool
-	Failed                      bool
+	Outcome                     interaction.Outcome
 	StartSequence, DoneSequence uint64
 	StartedAt, DoneAt           string
 	DurableParent, ExecutionID  string
@@ -352,7 +352,11 @@ func (r *safeToolRecord) RecordToolStart(turnID string, ordinal int, _, tool, _,
 	return nil
 }
 
-func (r *safeToolRecord) RecordToolDone(turnID string, ordinal int, tool, _, _ string, failed, _ bool) error {
+func (r *safeToolRecord) RecordToolDone(turnID string, ordinal int, tool, _ string, obs conversation.Observation) error {
+	return r.recordToolDone(turnID, ordinal, tool, observedOutcome(obs))
+}
+
+func (r *safeToolRecord) recordToolDone(turnID string, ordinal int, tool string, outcome interaction.Outcome) error {
 	r.mu.Lock()
 	changed := false
 	defer func() {
@@ -363,7 +367,7 @@ func (r *safeToolRecord) RecordToolDone(turnID string, ordinal int, tool, _, _ s
 	}()
 	for i := len(r.events) - 1; i >= 0; i-- {
 		if e := &r.events[i]; e.TurnID == turnID && e.Ordinal == ordinal && !e.Done {
-			e.Done, e.Failed = true, failed
+			e.Done, e.Outcome = true, outcome
 			if r.owner != nil {
 				e.DoneSequence, e.DoneAt = r.owner.StampTransient()
 				changed = true
@@ -382,7 +386,7 @@ func (r *safeToolRecord) Events() []SafeToolEvent {
 	return append([]SafeToolEvent(nil), r.events...)
 }
 
-func (r *safeToolRecord) RecordDurableCompletion(turn string, ordinal int, tool, model, execution, parent string, failed bool) error {
+func (r *safeToolRecord) RecordDurableCompletion(turn string, ordinal int, tool, model, execution, parent string, outcome interaction.Outcome) error {
 	r.mu.Lock()
 	changed := false
 	defer func() {
@@ -402,7 +406,7 @@ func (r *safeToolRecord) RecordDurableCompletion(turn string, ordinal int, tool,
 		seq, stamp = r.owner.StampTransient()
 		changed = true
 	}
-	r.events = append(r.events, SafeToolEvent{TurnID: turn, Ordinal: ordinal, Tool: tool, Model: model, Done: true, Failed: failed, DoneSequence: seq, DoneAt: stamp, DurableParent: parent, ExecutionID: execution})
+	r.events = append(r.events, SafeToolEvent{TurnID: turn, Ordinal: ordinal, Tool: tool, Model: model, Done: true, Outcome: outcome, DoneSequence: seq, DoneAt: stamp, DurableParent: parent, ExecutionID: execution})
 	if len(r.events) > safeToolRecordKept {
 		old := r.events[0]
 		if old.StartSequence > 0 {

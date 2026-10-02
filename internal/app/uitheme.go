@@ -23,7 +23,7 @@ const uiThemeFile = "theme.json"
 
 func (a *App) uiThemePath() string {
 	a.snapshotUILayoutPath(a.configSnapshot().Identity.LedgerPath)
-	return filepath.Join(filepath.Dir(a.uiLayoutFilePath), uiThemeFile)
+	return filepath.Join(filepath.Dir(a.dash.uiLayoutFilePath), uiThemeFile)
 }
 
 type uiThemeShape struct {
@@ -131,10 +131,10 @@ func (a *App) loadUITheme(quiet bool) bool {
 			return false
 		}
 	}
-	a.uiThemeMu.Lock()
-	changed := string(a.uiThemeRaw) != string(clean)
-	a.uiThemeRaw = clean
-	a.uiThemeMu.Unlock()
+	a.dash.mu.Lock()
+	changed := string(a.dash.uiThemeRaw) != string(clean)
+	a.dash.uiThemeRaw = clean
+	a.dash.mu.Unlock()
 	if changed && !quiet {
 		if clean == nil {
 			logsink.Info("theme.start", "file absent — compiled defaults")
@@ -146,9 +146,9 @@ func (a *App) loadUITheme(quiet bool) bool {
 }
 
 func (a *App) currentUITheme() []byte {
-	a.uiThemeMu.Lock()
-	defer a.uiThemeMu.Unlock()
-	return a.uiThemeRaw
+	a.dash.mu.Lock()
+	defer a.dash.mu.Unlock()
+	return a.dash.uiThemeRaw
 }
 
 func (a *App) watchUITheme() {

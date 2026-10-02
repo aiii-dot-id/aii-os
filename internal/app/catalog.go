@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
+	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
 	"io"
 	"io/fs"
 	"net/http"
@@ -17,8 +19,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"github.com/aiii-dot-id/aii-os/internal/version"
 )
 
@@ -30,7 +30,7 @@ func (a *App) effectiveCatalogURL() string {
 	if u := strings.TrimSpace(a.configSnapshot().Plugins.CatalogURL); u != "" {
 		return u
 	}
-	return pluginhost.DefaultCatalogURL
+	return plugincatalog.DefaultCatalogURL
 }
 
 func (a *App) catalogState() (url, fetchedAt, refusal string) {
@@ -89,7 +89,7 @@ func (a *App) catalogViews() []dashboard.CatalogEntryView {
 	return catalogViewsFor(cat, installed, a.pendingSummaries())
 }
 
-func catalogViewsFor(cat *pluginhost.Catalog, installed map[string]installedRelease, pending map[string]pendingMark) []dashboard.CatalogEntryView {
+func catalogViewsFor(cat *plugincatalog.Index, installed map[string]installedRelease, pending map[string]pendingMark) []dashboard.CatalogEntryView {
 	out := make([]dashboard.CatalogEntryView, 0, len(cat.Plugins))
 	for _, e := range cat.Plugins {
 		_, pkg, _ := cat.Select(e.ID)
@@ -102,7 +102,7 @@ func catalogViewsFor(cat *pluginhost.Catalog, installed map[string]installedRele
 		if ir, ok := installed[e.ID]; ok {
 			v.Installed = true
 			v.InstalledVersion, v.InstalledTier = ir.version, ir.tier
-			v.UpdateAvailable = pkg != nil && pluginhost.NewerVersion(e.Version, ir.version)
+			v.UpdateAvailable = pkg != nil && plugincatalog.NewerVersion(e.Version, ir.version)
 		}
 
 		if pm, ok := pending[e.ID]; ok {
@@ -189,6 +189,10 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 	if err := keepOnly(slot, final); err != nil {
 		after = errors.Join(after, err)
 	}
+
+	if acq := a.acquirer(); acq != nil {
+		acq.Reselect(id)
+	}
 	a.pokePluginSweep()
 	if after != nil {
 		return fmt.Errorf("plugins: %s %s is in place, but: %w", id, entry.Version, after)
@@ -197,7 +201,7 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 	return nil
 }
 
-func (a *App) fetchVerified(ctx context.Context, id string, pkg *pluginhost.CatalogPackage) (string, error) {
+func (a *App) fetchVerified(ctx context.Context, id string, pkg *plugincatalog.CatalogPackage) (string, error) {
 	if err := os.MkdirAll("plugins", 0o750); err != nil {
 		return "", &CatalogInstallRefusal{ID: id, Reason: "place", Cause: err}
 	}
@@ -282,7 +286,7 @@ func (a *App) UninstallPlugin(id string) error {
 }
 
 func (a *App) fetchPackage(ctx context.Context, url string, w io.Writer) (int64, error) {
-	if err := tools.FetchGuard(ctx, url); err != nil {
+	if err := firewall.FetchGuard(ctx, url); err != nil {
 		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -290,7 +294,7 @@ func (a *App) fetchPackage(ctx context.Context, url string, w io.Writer) (int64,
 		return 0, err
 	}
 	req.Header.Set("User-Agent", "AII-OS/1.0 (plugin acquisition)")
-	client := tools.GuardedClient(30*time.Minute, nil, nil)
+	client := firewall.GuardedClient(30*time.Minute, nil, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
@@ -300,4 +304,34 @@ func (a *App) fetchPackage(ctx context.Context, url string, w io.Writer) (int64,
 		return 0, fmt.Errorf("the catalog host answered %d", resp.StatusCode)
 	}
 	return io.Copy(w, io.LimitReader(resp.Body, maxCatalogPackageBytes+1))
+}
+
+func (a *App) wirePluginHooks(h *dashboard.WSHandler) {
+	h.SetPluginKey = a.SetPluginSecret
+	h.ClearPluginKey = a.ClearPluginSecret
+	h.SettingChoices = a.PluginSettingChoices
+	h.PluginAct = func(req dashboard.PluginAction) error {
+		switch req.Action {
+		case "install":
+			return a.InstallFromCatalog(a.lifetime(), req.ID)
+		case "uninstall":
+			return a.UninstallPlugin(req.ID)
+		case "retry":
+			return a.RetryPlugin(req.ID)
+		case "confirm", "deny":
+			return a.decideAct(a.lifetime(), req.ID, req.Act, req.Action == "confirm")
+		case "always":
+			return a.alwaysAct(a.lifetime(), req.ID, req.Act)
+		default:
+			return fmt.Errorf("unknown plugin action %q", req.Action)
+		}
+	}
+	h.CatalogRefresh = func() error {
+		ctx, cancel := context.WithTimeout(a.lifetime(), 2*time.Minute)
+		defer cancel()
+
+		err := a.catalog.Refresh(ctx)
+		a.catalogChanged()
+		return err
+	}
 }

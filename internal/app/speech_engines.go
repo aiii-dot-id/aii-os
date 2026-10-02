@@ -75,3 +75,21 @@ func speechEngineServes(provider string, engines []dashboard.SpeechService) (id 
 	}
 	return "", false, false
 }
+
+func (a *App) speechEngineFor(provider string) *pluginhost.ActivePlugin {
+	live := a.voicePlugins()
+	offered := make([]dashboard.SpeechService, len(live))
+	for i, p := range live {
+		offered[i] = dashboard.SpeechService{Name: p.ID}
+	}
+	id, serves, _ := speechEngineServes(provider, offered)
+	if !serves {
+		return nil
+	}
+	for _, p := range live {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}

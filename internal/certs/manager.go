@@ -60,12 +60,13 @@ type State struct {
 }
 
 type Manager struct {
-	cfg    Config
-	mu     sync.Mutex
-	state  State
-	cert   *tls.Certificate
-	leaf   *x509.Certificate
-	client *acme.Client
+	cfg      Config
+	ordering chan struct{}
+	mu       sync.Mutex
+	state    State
+	cert     *tls.Certificate
+	leaf     *x509.Certificate
+	client   *acme.Client
 }
 
 const (
@@ -92,7 +93,7 @@ func New(cfg Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("certs: %w", err)
 	}
-	m := &Manager{cfg: cfg}
+	m := &Manager{cfg: cfg, ordering: make(chan struct{}, 1)}
 	if raw, err := os.ReadFile(filepath.Join(cfg.Dir, stateFile)); err == nil {
 		if err := json.Unmarshal(raw, &m.state); err != nil {
 			return nil, fmt.Errorf("certs: state.json: %w", err)
@@ -158,13 +159,29 @@ func (m *Manager) State() State {
 	return m.state
 }
 
+func (m *Manager) takeOrder(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case m.ordering <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) orderDone() { <-m.ordering }
+
 func (m *Manager) Ensure(ctx context.Context) (issued bool, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.cfg.Name == "" {
 		return false, ErrNoName
 	}
-	if m.cert != nil {
+	if err := m.takeOrder(ctx); err != nil {
+		return false, err
+	}
+	defer m.orderDone()
+	if m.Certificate() != nil {
 		return false, nil
 	}
 	if err := m.obtain(ctx); err != nil {
@@ -174,29 +191,37 @@ func (m *Manager) Ensure(ctx context.Context) (issued bool, err error) {
 }
 
 func (m *Manager) Renew(ctx context.Context) (renewed bool, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.cfg.Name == "" {
 		return false, ErrNoName
 	}
-	if m.cert == nil {
+	if err := m.takeOrder(ctx); err != nil {
+		return false, err
+	}
+	defer m.orderDone()
+	m.mu.Lock()
+	leaf := m.leaf
+	m.mu.Unlock()
+	if leaf == nil {
 		if err := m.obtain(ctx); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
-	if w, err := m.renewalWindow(ctx); err == nil && w != nil {
-		if m.state.Window == nil || *m.state.Window != *w {
-			m.state.Window = w
-			m.state.RenewAt = m.pointIn(*w)
-			_ = m.saveState()
-		}
+
+	w, werr := m.renewalWindow(ctx, leaf)
+	m.mu.Lock()
+	if werr == nil && w != nil && (m.state.Window == nil || *m.state.Window != *w) {
+		m.state.Window = w
+		m.state.RenewAt = m.pointIn(*w)
+		m.keep("the renewal window")
 	}
 	if m.state.RenewAt.IsZero() {
 		m.state.RenewAt = m.pointIn(m.fallbackWindow())
-		_ = m.saveState()
+		m.keep("the renewal point")
 	}
-	if m.cfg.Now().Before(m.state.RenewAt) {
+	due := !m.cfg.Now().Before(m.state.RenewAt)
+	m.mu.Unlock()
+	if !due {
 		return false, nil
 	}
 	if err := m.obtain(ctx); err != nil {
@@ -218,20 +243,29 @@ func (m *Manager) obtain(ctx context.Context) (retErr error) {
 	if m.cfg.Publisher == nil {
 		return ErrNoPublisher
 	}
+	m.mu.Lock()
 	m.state.LastAttempt = m.cfg.Now()
+	m.mu.Unlock()
 	defer func() {
-		if retErr != nil {
-			m.state.LastError = retErr.Error()
-		} else {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if retErr == nil {
 			m.state.LastError = ""
+			m.keep("the new certificate's state")
+			return
 		}
-		_ = m.saveState()
+		m.state.LastError = retErr.Error()
+		if err := m.saveState(); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("certs: the attempt was not saved either: %w", err))
+		}
 	}()
 	client, err := m.acmeClient(ctx)
 	if err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.state.Orders++
+	m.mu.Unlock()
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(m.cfg.Name))
 	if err != nil {
 		return fmt.Errorf("order: %w", err)
@@ -298,6 +332,25 @@ func (m *Manager) obtain(ctx context.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if err := m.install(der, key, leaf); err != nil {
+		return err
+	}
+
+	w, werr := m.renewalWindow(ctx, leaf)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if werr == nil && w != nil {
+		m.state.Window = w
+		m.state.RenewAt = m.pointIn(*w)
+	} else {
+		m.state.RenewAt = m.pointIn(m.fallbackWindow())
+	}
+	return nil
+}
+
+func (m *Manager) install(der [][]byte, key *ecdsa.PrivateKey, leaf *x509.Certificate) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := writePair(m.certPath(), m.keyPath(), der, key); err != nil {
 		return err
 	}
@@ -309,27 +362,26 @@ func (m *Manager) obtain(ctx context.Context) (retErr error) {
 	m.state.IssuedAt = leaf.NotBefore
 	m.state.NotAfter = leaf.NotAfter
 	m.state.Window = nil
-	if w, err := m.renewalWindow(ctx); err == nil && w != nil {
-		m.state.Window = w
-		m.state.RenewAt = m.pointIn(*w)
-	} else {
-		m.state.RenewAt = m.pointIn(m.fallbackWindow())
-	}
 	return nil
 }
 
 func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
-	if m.client != nil {
-		return m.client, nil
+	m.mu.Lock()
+	c, accountURL := m.client, m.state.AccountURL
+	m.mu.Unlock()
+	if c != nil {
+		return c, nil
 	}
 	key, err := loadOrMintAccountKey(filepath.Join(m.cfg.Dir, accountKeyFile))
 	if err != nil {
 		return nil, err
 	}
-	c := &acme.Client{Key: key, DirectoryURL: m.cfg.DirectoryURL, HTTPClient: m.cfg.HTTPClient}
-	if m.state.AccountURL != "" {
-		c.KID = acme.KeyID(m.state.AccountURL)
+	c = &acme.Client{Key: key, DirectoryURL: m.cfg.DirectoryURL, HTTPClient: m.cfg.HTTPClient}
+	if accountURL != "" {
+		c.KID = acme.KeyID(accountURL)
+		m.mu.Lock()
 		m.client = c
+		m.mu.Unlock()
 		return c, nil
 	}
 	acct := &acme.Account{}
@@ -344,9 +396,11 @@ func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
 		return nil, fmt.Errorf("account: %w", err)
 	}
 	c.KID = acme.KeyID(a.URI)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.state.AccountURL = a.URI
 	m.state.DirectoryURL = m.cfg.DirectoryURL
-	_ = m.saveState()
+	m.keep("the ACME account")
 	m.client = c
 	return c, nil
 }
@@ -372,12 +426,18 @@ func (m *Manager) pointIn(w Window) time.Time {
 	return at
 }
 
+func (m *Manager) keep(what string) {
+	if err := m.saveState(); err != nil {
+		logsink.Warn("certs.error", "%s for %s was not saved — the certificate is unaffected, but a restart would read an older state: %v", what, m.cfg.Name, err)
+	}
+}
+
 func (m *Manager) saveState() error {
 	raw, err := json.MarshalIndent(m.state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeOwnerOnly(filepath.Join(m.cfg.Dir, stateFile), raw)
+	return writeFile(filepath.Join(m.cfg.Dir, stateFile), raw, 0o600)
 }
 
 func NewNameID() (string, error) {
@@ -386,8 +446,4 @@ func NewNameID() (string, error) {
 		return "", err
 	}
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
-}
-
-func NameOf(id, zone string) string {
-	return "ui." + strings.TrimSuffix(id, ".") + "." + strings.TrimSuffix(zone, ".")
 }

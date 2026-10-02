@@ -2,14 +2,11 @@ package pluginhost
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/bbb"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
-	"github.com/aiii-dot-id/aii-os/internal/facility"
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/jsonschema"
@@ -19,8 +16,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/pluginworker"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
-	"github.com/aiii-dot-id/aii-os/internal/workercmd"
-	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,10 +136,12 @@ type Options struct {
 
 	Broker *broker.Host
 
-	Facilities *facility.Set
+	Facilities []string
 
 	ResourceFacts   func(context.Context) (pluginfacility.Availability, error)
 	SelectionPolicy pluginfacility.AdmissionPolicy
+
+	Replacing *AcceleratorProfile
 
 	WorkerBinary string
 
@@ -174,8 +171,6 @@ type Options struct {
 	HostVersion string
 
 	Acquirer *Acquirer
-
-	Log *log.Logger
 
 	Settings func(pluginID string) map[string]interface{}
 
@@ -222,7 +217,12 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 		}
 	}
 
-	descs, derr := loadDescriptors(pkgPath, res, m)
+	declared := []string{SettingsFile, WebhooksFile, ScheduleFile, SubscriptionsFile}
+	for _, decl := range append(append([]packagefmt.InterfaceDecl{}, m.Interfaces.Core...), m.Interfaces.Optional...) {
+		declared = append(declared, descriptorFile(decl))
+	}
+	held := walkMembers(pkgPath, res, nil, declared...)
+	descs, derr := loadDescriptors(pkgPath, res, held, m)
 	if derr != nil {
 		return nil, derr
 	}
@@ -276,12 +276,12 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 		binding.SetPublisher(ap)
 	}
 
-	decls, settingsErr := loadSettings(pkgPath, res, m)
+	decls, settingsErr := loadSettings(pkgPath, res, held, m)
 	if settingsErr != nil {
 		return nil, errors.Join(settingsErr, binding.CloseContext(ctx))
 	}
 	ap.Settings = decls
-	hooks, herr := loadWebhooks(pkgPath, res, m, decls)
+	hooks, herr := loadWebhooks(pkgPath, res, held, m, decls)
 	if herr != nil {
 		return nil, errors.Join(herr, binding.CloseContext(ctx))
 	}
@@ -289,7 +289,7 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 	if opts != nil {
 		ap.webhookURL = opts.WebhookURL
 	}
-	sched, serr := loadSchedule(pkgPath, res, m)
+	sched, serr := loadSchedule(pkgPath, res, held, m)
 	if serr == nil {
 		serr = holdScheduleToDescriptors(m.ID, sched, descs)
 	}
@@ -297,7 +297,7 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 		return nil, errors.Join(serr, binding.CloseContext(ctx))
 	}
 	ap.Schedule = sched
-	subs, suberr := loadSubscriptions(pkgPath, res, m)
+	subs, suberr := loadSubscriptions(pkgPath, res, held, m)
 	if suberr != nil {
 		return nil, errors.Join(suberr, binding.CloseContext(ctx))
 	}
@@ -328,8 +328,8 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 		sup, dir, serr := startSupervisedWASM(ctx, res, variant, artifactBytes, binding, opts, proof)
 		if serr != nil {
 			var child *supervisor.ChildExitError
-			if errors.As(serr, &child) && (child.Code == workercmd.ExitDescriptorMismatch || child.Code == workercmd.ExitDescriptorUnasked) {
-				serr = descriptorError(m, serr, child.Code == workercmd.ExitDescriptorUnasked)
+			if errors.As(serr, &child) && (child.Code == bbb.ExitDescriptorMismatch || child.Code == bbb.ExitDescriptorUnasked) {
+				serr = descriptorError(m, serr, child.Code == bbb.ExitDescriptorUnasked)
 			}
 			return nil, errors.Join(serr, binding.CloseContext(ctx))
 		}
@@ -357,9 +357,9 @@ func (s *Staged) Start(ctx context.Context, reg *tools.Registry, registerNow boo
 					kept = 2
 				}
 				if removed, err := opts.RuntimeRoots.Retire(pluginDir, kept); err != nil {
-					opts.logf("plugin %s: retiring old runtime roots: %v", m.ID, err)
+					logDecision("plugin %s: retiring old runtime roots: %v", m.ID, err)
 				} else if len(removed) > 0 {
-					opts.logf("plugin %s: retired %d old runtime root(s)", m.ID, len(removed))
+					logDecision("plugin %s: retired %d old runtime root(s)", m.ID, len(removed))
 				}
 			}
 			ap.RuntimeRoot = root
@@ -596,6 +596,8 @@ const ReasonActivationWithdrawn = "ACTIVATION_WITHDRAWN"
 
 const ReasonNotAdmitted = "ACTIVATION_NOT_ADMITTED"
 
+const ReasonConfirmationUnavailable = "CONFIRMATION_UNAVAILABLE"
+
 const ReasonCancelledBeforeDispatch = "CANCELLED_BEFORE_DISPATCH"
 
 func (ap *ActivePlugin) Authorize(valid func() bool) {
@@ -789,14 +791,12 @@ func extractArtifact(res *packagefmt.Result, variant *packagefmt.Variant, artifa
 		_ = os.RemoveAll(dir)
 		return "", "", nil, fmt.Errorf("pluginhost: write artifact: %w", err)
 	}
-	want := res.FileDigests[variant.Entrypoint]
 	verify = func() error {
 		raw, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return &EntrypointDigestError{Member: variant.Entrypoint, Want: want}
+			return &EntrypointDigestError{Member: variant.Entrypoint, Want: res.FileDigests[variant.Entrypoint]}
 		}
-		sum := sha256.Sum256(raw)
-		if got := "sha256:" + hex.EncodeToString(sum[:]); got != want {
+		if want, got, ok := res.MemberDigest(variant.Entrypoint, raw); !ok {
 			return &EntrypointDigestError{Member: variant.Entrypoint, Want: want, Got: got}
 		}
 		return nil
@@ -840,7 +840,6 @@ func startSupervisedWASM(ctx context.Context, res *packagefmt.Result, variant *p
 		ReadyAllowance: startupAllowance(opts, res.Manifest.ID, nil).Sentence(),
 		VerifyArtifact: verify,
 		ExitMeaning:    supervisor.WorkerExitMeaning,
-		Log:            opts.Log,
 	}, supervisorDispatcher(binding))
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -907,9 +906,7 @@ func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, vari
 	if rt != nil {
 		containment.Description += "; runtime root " + rt.root
 	}
-	if opts.Log != nil {
-		opts.Log.Printf("plugin %s: native child %s; image %s", res.Manifest.ID, containment, image.Binding())
-	}
+	logsink.Info("plugins.start", "plugin %s: native child %s; image %s", res.Manifest.ID, containment, image.Binding())
 	spec := supervisor.Spec{
 		PluginID:        res.Manifest.ID,
 		ArgvContainment: containment,
@@ -921,7 +918,6 @@ func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, vari
 		RLimitASBytes:   opts.MemoryMax[res.Manifest.ID],
 		ExtraFiles:      image.ExtraFiles(),
 		VerifyArtifact:  verify,
-		Log:             opts.Log,
 	}
 	spec.SessionMode = sessionMode
 
@@ -991,20 +987,45 @@ func signedCapabilitySurface(m *packagefmt.Manifest, variant *packagefmt.Variant
 	return out
 }
 
-func loadVerifiedMember(pkgPath string, res *packagefmt.Result, rel string) ([]byte, error) {
-	want, ok := res.FileDigests[rel]
-	if !ok {
+func loadVerifiedMember(pkgPath string, res *packagefmt.Result, held map[string][]byte, rel string) ([]byte, error) {
+	if _, ok := res.FileDigests[rel]; !ok {
 		return nil, &EntrypointDigestError{Member: rel}
 	}
-	raw, err := packagefmt.ReadMember(pkgPath, rel)
-	if err != nil {
-		return nil, err
+	raw, ok := held[rel]
+	if !ok {
+		if err := walkPackage(pkgPath, []string{rel}, func(_ string, b []byte) error {
+			raw = b
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 	}
-	sum := sha256.Sum256(raw)
-	if got := "sha256:" + hex.EncodeToString(sum[:]); got != want {
+	if want, got, ok := res.MemberDigest(rel, raw); !ok {
 		return nil, &EntrypointDigestError{Member: rel, Want: want, Got: got}
 	}
 	return raw, nil
+}
+
+var walkPackage = packagefmt.ReadMembers
+
+func walkMembers(pkgPath string, res *packagefmt.Result, held map[string][]byte, rels ...string) map[string][]byte {
+	if held == nil {
+		held = make(map[string][]byte)
+	}
+	var want []string
+	for _, rel := range rels {
+		_, listed := res.FileDigests[rel]
+		if _, taken := held[rel]; listed && !taken {
+			want = append(want, rel)
+		}
+	}
+	if len(want) > 0 {
+		_ = walkPackage(pkgPath, want, func(rel string, raw []byte) error {
+			held[rel] = raw
+			return nil
+		})
+	}
+	return held
 }
 
 func toolName(pluginID, method string) (string, error) {
@@ -1092,14 +1113,16 @@ func (e *SchemaError) Unwrap() error { return e.Err }
 
 func (e *SchemaError) WaitsOnPackage() bool { return !e.Unread }
 
-func loadDescriptors(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest) (*descriptorSet, error) {
+func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) (*descriptorSet, error) {
+	decls := append(append([]packagefmt.InterfaceDecl{}, m.Interfaces.Core...), m.Interfaces.Optional...)
+	held = walkMembers(pkgPath, res, held, namedSchemas(decls, held)...)
 	set := &descriptorSet{ops: make(map[string]*opDescriptor), files: make(map[string][]byte)}
-	for _, decl := range append(append([]packagefmt.InterfaceDecl{}, m.Interfaces.Core...), m.Interfaces.Optional...) {
-		schemaRel := fmt.Sprintf("interfaces/%s.v%d.schema.json", decl.ID, decl.Version)
+	for _, decl := range decls {
+		schemaRel := descriptorFile(decl)
 		if _, listed := res.FileDigests[schemaRel]; !listed {
 			continue
 		}
-		descBytes, err := loadVerifiedMember(pkgPath, res, schemaRel)
+		descBytes, err := loadVerifiedMember(pkgPath, res, held, schemaRel)
 		if err != nil {
 			return nil, &SchemaError{File: schemaRel, Err: err, Unread: true}
 		}
@@ -1145,14 +1168,14 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, m *packagefmt.Manif
 				}
 			}
 			if op.Input != "" {
-				raw, compiled, unread, err := loadSchema(pkgPath, res, op.Input)
+				raw, compiled, unread, err := loadSchema(pkgPath, res, held, op.Input)
 				if err != nil {
 					return nil, &SchemaError{Operation: op.ID, File: op.Input, Err: err, Unread: unread}
 				}
 				d.raw, d.input = raw, compiled
 			}
 			if op.Output != "" {
-				raw, compiled, unread, err := loadSchema(pkgPath, res, op.Output)
+				raw, compiled, unread, err := loadSchema(pkgPath, res, held, op.Output)
 				if err != nil {
 					return nil, &SchemaError{Operation: op.ID, File: op.Output, Err: err, Unread: unread}
 				}
@@ -1162,6 +1185,27 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, m *packagefmt.Manif
 		}
 	}
 	return set, nil
+}
+
+func descriptorFile(decl packagefmt.InterfaceDecl) string {
+	return fmt.Sprintf("interfaces/%s.v%d.schema.json", decl.ID, decl.Version)
+}
+
+func namedSchemas(decls []packagefmt.InterfaceDecl, held map[string][]byte) []string {
+	var names []string
+	for _, decl := range decls {
+		var ops []struct {
+			Input  string `json:"input"`
+			Output string `json:"output"`
+		}
+		if json.Unmarshal(held[descriptorFile(decl)], &ops) != nil {
+			continue
+		}
+		for _, op := range ops {
+			names = append(names, op.Input, op.Output)
+		}
+	}
+	return names
 }
 
 type descriptorSet struct {
@@ -1193,11 +1237,11 @@ func proveDescriptor(ctx context.Context, m *packagefmt.Manifest, artifactBytes 
 		return descriptorError(m, err, !errors.As(err, &mismatch))
 	}
 	if !ok {
-		opts.logf("plugin %s: descriptor unproven — the artifact exports no %s (an older kit); the packaged file is taken as declared", m.ID, pluginworker.ExportDescribe)
+		logDecision("plugin %s: descriptor unproven — the artifact exports no %s (an older kit); the packaged file is taken as declared", m.ID, pluginworker.ExportDescribe)
 		return nil
 	}
 	if len(m.Interfaces.Core) != 1 {
-		opts.logf("plugin %s: descriptor unproven — %d core interfaces and one describe export", m.ID, len(m.Interfaces.Core))
+		logDecision("plugin %s: descriptor unproven — %d core interfaces and one describe export", m.ID, len(m.Interfaces.Core))
 		return nil
 	}
 	return nil
@@ -1215,9 +1259,7 @@ func descriptorExpectation(m *packagefmt.Manifest, set *descriptorSet) (string, 
 	if len(m.Interfaces.Core) != 1 {
 		return pluginworker.DescriptorMultiple, nil
 	}
-	decl := m.Interfaces.Core[0]
-	schemaRel := fmt.Sprintf("interfaces/%s.v%d.schema.json", decl.ID, decl.Version)
-	want, present := set.files[schemaRel]
+	want, present := set.files[descriptorFile(m.Interfaces.Core[0])]
 	if !present {
 		return pluginworker.DescriptorMissing, nil
 	}
@@ -1228,11 +1270,11 @@ func descriptorExpectation(m *packagefmt.Manifest, set *descriptorSet) (string, 
 	return digest, nil
 }
 
-func loadSchema(pkgPath string, res *packagefmt.Result, rel string) (schema map[string]interface{}, compiled *jsonschema.Schema, unread bool, err error) {
+func loadSchema(pkgPath string, res *packagefmt.Result, held map[string][]byte, rel string) (schema map[string]interface{}, compiled *jsonschema.Schema, unread bool, err error) {
 	if _, listed := res.FileDigests[rel]; !listed {
 		return nil, nil, false, errors.New("declared but not in the package")
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, rel)
+	raw, err := loadVerifiedMember(pkgPath, res, held, rel)
 	if err != nil {
 		return nil, nil, true, err
 	}
@@ -1353,16 +1395,16 @@ type rpcErrorObject struct {
 func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}) (result tools.Result, callErr error) {
 
 	if t.gate != nil && !t.gate.Load() {
-		return tools.Result{Error: fmt.Sprintf("plugin %s: this release is being admitted; its operations are not yet callable", t.plugin), ReasonCode: ReasonNotAdmitted}, nil
+		return tools.Refusal(ReasonNotAdmitted, fmt.Sprintf("plugin %s: this release is being admitted; its operations are not yet callable", t.plugin)), nil
 	}
 
 	if t.authorized != nil && !t.authorized() {
-		return tools.Result{Error: fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin), ReasonCode: ReasonActivationWithdrawn}, nil
+		return tools.Refusal(ReasonActivationWithdrawn, fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin)), nil
 	}
 
 	if t.desc != nil && t.desc.input != nil {
 		if verr := t.desc.input.Validate(jsonValue(args)); verr != nil {
-			return tools.Result{Error: "arguments refused before the call: " + verr.Error(), ReasonCode: broker.ReasonArgumentInvalid}, nil
+			return tools.Refusal(broker.ReasonArgumentInvalid, "arguments refused before the call: "+verr.Error()), nil
 		}
 	}
 	injected := make(map[string]interface{}, len(args)+2)
@@ -1384,7 +1426,7 @@ func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 
 	if t.authorized != nil && !t.authorized() {
-		return tools.Result{Error: fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin), ReasonCode: ReasonActivationWithdrawn}, nil
+		return tools.Refusal(ReasonActivationWithdrawn, fmt.Sprintf("plugin %s: this release was withdrawn; its operations are not callable", t.plugin)), nil
 	}
 
 	delivery := calibrationDeliveryFrom(ctx)
@@ -1392,19 +1434,19 @@ func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}
 		defer func() { delivery.Finish(delivery.Accept(result, callErr)) }()
 	}
 	if err := tools.CheckDispatch(ctx); err != nil {
-		result := tools.Result{Error: err.Error()}
+		code := ""
 		var changed *tools.DispatchTargetChangedError
 		var refused *tools.DispatchRefusedError
 		switch {
 		case errors.As(err, &changed):
-			result.ReasonCode = tools.ReasonDispatchTargetChanged
+			code = tools.ReasonDispatchTargetChanged
 		case errors.As(err, &refused):
-			result.ReasonCode = refused.Code
+			code = refused.Code
 		}
-		return result, nil
+		return tools.Refusal(code, err.Error()), nil
 	}
 	if t.gate != nil && !t.gate.Load() {
-		return tools.Result{Error: "activation not admitted", ReasonCode: ReasonNotAdmitted}, nil
+		return tools.Refusal(ReasonNotAdmitted, "activation not admitted"), nil
 	}
 	injected["_host_now_ms"] = time.Now().UnixMilli()
 
@@ -1418,7 +1460,7 @@ func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}
 			effects = t.desc.effects
 		}
 		if gerr := gate.AdmitOperation(t.plugin, t.operation, effects); gerr != nil {
-			return tools.Result{Error: gerr.Error() + "; nothing ran", ReasonCode: ReasonOperatorGrant}, nil
+			return tools.Refusal(ReasonOperatorGrant, gerr.Error()+"; nothing ran"), nil
 		}
 	}
 
@@ -1434,7 +1476,7 @@ func (t *operationTool) Execute(ctx context.Context, args map[string]interface{}
 		}
 		if act == nil {
 			if t.acts == nil {
-				return tools.Result{Error: fmt.Sprintf("%s needs the operator's confirmation and this host has no way to ask for it; nothing ran", t.operation)}, nil
+				return tools.Refusal(ReasonConfirmationUnavailable, fmt.Sprintf("%s needs the operator's confirmation and this host has no way to ask for it; nothing ran", t.operation)), nil
 			}
 			id, perr := t.acts.Propose(ctx, ActProposal{Plugin: t.plugin, Tool: t.name, Operation: t.operation, Summary: t.desc.summary, Effects: t.desc.effects, Args: args})
 			if perr != nil {
@@ -1624,11 +1666,7 @@ func modelNames(decls []ModelDecl) []string {
 	return out
 }
 
-func (o *Options) logf(format string, args ...interface{}) {
-	if o != nil && o.Log != nil {
-		o.Log.Printf(format, args...)
-		return
-	}
+func logDecision(format string, args ...any) {
 	logsink.Info("plugins.decision", format, args...)
 }
 

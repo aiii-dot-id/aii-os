@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func runLog(args []string, stdout, stderr io.Writer) int {
 	path := *config
 	switch {
 	case path == "":
-		path = app.ConfigPathIn(*dir)
+		path = install.ConfigPathIn(*dir)
 	case *dir != "" && !filepath.IsAbs(path):
 		path = filepath.Join(*dir, path)
 	}
@@ -36,7 +37,7 @@ func runLog(args []string, stdout, stderr io.Writer) int {
 	control := app.LogControlPathIn(*dir)
 
 	show := func() int {
-		cfg, err := app.LoadConfig(path)
+		cfg, err := app.ReadConfig(path)
 		if err != nil {
 			fmt.Fprintf(stderr, "log: %v\n", err)
 			return 1
@@ -92,7 +93,7 @@ func runLog(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "* carries an artifact, not a sentence: reached only by its own name, never by a group")
 		return 0
 	case "groups":
-		cfg, err := app.LoadConfig(path)
+		cfg, err := app.ReadConfig(path)
 		if err != nil {
 			fmt.Fprintf(stderr, "log: %v\n", err)
 			return 1

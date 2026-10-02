@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || android
 
 package pluginhost
 
@@ -16,7 +16,8 @@ func linuxAcceleratorDevices(profile *AcceleratorProfile, dev fs.FS) ([]string, 
 	}
 	vulkan, cuda := false, false
 	switch profile.Backend {
-	case "vulkan":
+	case "vulkan", "cpu+vulkan", "vulkan+cpu":
+
 		vulkan = true
 	case "cuda":
 		cuda = true

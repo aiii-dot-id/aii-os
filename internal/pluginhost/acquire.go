@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
 	"sort"
@@ -161,7 +160,11 @@ type Acquirer struct {
 	mu   sync.Mutex
 	ctx  context.Context
 	jobs map[string]*acquireJob
+
+	chosen map[string]chosenSet
 }
+
+type chosenSet struct{ packageHash, manifestHash, variant string }
 
 type acquireJob struct {
 	m      Material
@@ -180,9 +183,7 @@ type acquireJob struct {
 
 func NewAcquirer(cfg AcquirerConfig) *Acquirer {
 	if cfg.Logf == nil {
-		cfg.Logf = func(format string, args ...any) {
-			logsink.Info("plugins.decision", format, args...)
-		}
+		cfg.Logf = logDecision
 	}
 	if cfg.Backoff == nil {
 		cfg.Backoff = defaultBackoff
@@ -190,7 +191,29 @@ func NewAcquirer(cfg AcquirerConfig) *Acquirer {
 	if cfg.ProgressEvery <= 0 {
 		cfg.ProgressEvery = 2 * time.Second
 	}
-	return &Acquirer{cfg: cfg, jobs: map[string]*acquireJob{}}
+	return &Acquirer{cfg: cfg, jobs: map[string]*acquireJob{}, chosen: map[string]chosenSet{}}
+}
+
+func (q *Acquirer) chosenFor(id, packageHash, manifestHash string) string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	c, ok := q.chosen[id]
+	if !ok || c.packageHash != packageHash || c.manifestHash != manifestHash {
+		return ""
+	}
+	return c.variant
+}
+
+func (q *Acquirer) choose(id, packageHash, manifestHash, variant string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.chosen[id] = chosenSet{packageHash: packageHash, manifestHash: manifestHash, variant: variant}
+}
+
+func (q *Acquirer) Reselect(id string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.chosen, id)
 }
 
 func defaultBackoff(attempt int) time.Duration {
@@ -327,6 +350,12 @@ func (q *Acquirer) Keep(wanted map[string]bool) {
 		if !wanted[id] && !job.stopping {
 			drop = append(drop, job)
 			q.stopLocked(job)
+		}
+	}
+
+	for id := range q.chosen {
+		if !wanted[id] {
+			delete(q.chosen, id)
 		}
 	}
 	q.mu.Unlock()

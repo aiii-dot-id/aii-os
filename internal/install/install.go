@@ -2,6 +2,7 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -12,6 +13,8 @@ import (
 	"strings"
 
 	configdir "github.com/aiii-dot-id/aii-os/config"
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
+	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
 
 const Dir = ".aii"
@@ -57,6 +60,8 @@ func operatorHome() (string, error) {
 	}
 	return home, nil
 }
+
+var ErrNotRunning = errors.New("not running")
 
 func SlotName(n int) string { return slotPrefix + strconv.Itoa(n) }
 
@@ -109,7 +114,7 @@ func Create(root string, n int) (string, error) {
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("stat %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fileperm.MkdirOwnerOnly(dir); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
 	if err := writeConfig(dir, Port(n)); err != nil {
@@ -140,7 +145,12 @@ func writeConfig(dir string, port int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+
+	published, err := atomicfile.WriteReplace(path, data, 0o600)
+	if err != nil {
+		if published {
+			return fmt.Errorf("write %s: published but not durable: %w", path, err)
+		}
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil

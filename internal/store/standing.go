@@ -12,6 +12,10 @@ const (
 	standingEdgesForSQL = `SELECT id, from_id, to_id, edge_type, created_seq
 		 FROM edges WHERE (from_id = ? OR to_id = ?) AND archived = 0
 		 ORDER BY created_seq, id`
+
+	standingIncomingEdgesSQL = `SELECT id, from_id, to_id, edge_type, created_seq
+		 FROM edges WHERE to_id = ? AND archived = 0
+		 ORDER BY created_seq, id`
 	standingBeliefSQL = `SELECT id, statement, ring, COALESCE(node_type, ''), confidence, evidence_count, confirmed_at_ticks, first_seq, last_seq
 		 FROM beliefs WHERE id = ?`
 	standingRetiredSQL    = `SELECT archived, CASE WHEN superseded_by IS NOT NULL THEN 1 ELSE 0 END FROM beliefs WHERE id = ?`
@@ -53,7 +57,7 @@ func (b boundReader) QueryRow(q string, args ...interface{}) *sql.Row {
 func (s *Store) StandingFor(id string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, err := s.standingReportRead(s.db, id, nil)
+	r, err := s.standingReportRead(s.db, id, nil, false)
 	if err != nil {
 		return "", err
 	}
@@ -73,15 +77,19 @@ func (s *Store) StandingDetail(ctx context.Context, id string, cur *StandingCurs
 	if err != nil {
 		return nil, fmt.Errorf("standing of %s: read snapshot: %w", id, err)
 	}
-	r, err := s.standingReportRead(boundReader{ctx: ctx, s: tx}, id, cur)
+	r, err := s.standingReportRead(boundReader{ctx: ctx, s: tx}, id, cur, true)
 	if err != nil {
 		return nil, errors.Join(err, tx.Close())
 	}
 	return r, tx.Close()
 }
 
-func (s *Store) standingReportRead(q standingReader, id string, cur *StandingCursor) (*StandingReport, error) {
-	edges, err := edgesForBeliefRead(q, id)
+func (s *Store) standingReportRead(q standingReader, id string, cur *StandingCursor, every bool) (*StandingReport, error) {
+	query, args := standingIncomingEdgesSQL, []any{id}
+	if every {
+		query, args = standingEdgesForSQL, []any{id, id}
+	}
+	edges, err := edgesRead(q, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("standing of %s: edges: %w", id, err)
 	}
@@ -202,7 +210,11 @@ func (s *Store) standingReportRead(q standingReader, id string, cur *StandingCur
 }
 
 func edgesForBeliefRead(q standingReader, beliefID string) ([]Edge, error) {
-	rows, err := q.Query(standingEdgesForSQL, beliefID, beliefID)
+	return edgesRead(q, standingEdgesForSQL, beliefID, beliefID)
+}
+
+func edgesRead(q standingReader, query string, args ...any) ([]Edge, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -303,11 +315,6 @@ func authorshipClassOf(provenance string) string {
 	}
 }
 
-type TensionPair struct {
-	LeftID, RightID string
-	EdgeID          string
-}
-
 func (s *Store) TensionsView() ([]TensionPair, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -328,20 +335,6 @@ func (s *Store) TensionsView() ([]TensionPair, error) {
 		out = append(out, tp)
 	}
 	return out, rows.Err()
-}
-
-type TensionEnd struct {
-	ID string
-
-	Kind string
-
-	Text string
-
-	Retired bool
-
-	Sealed bool
-
-	Provenance string
 }
 
 func (s *Store) TensionEnds(ids []string) (map[string]TensionEnd, error) {

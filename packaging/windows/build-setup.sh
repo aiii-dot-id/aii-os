@@ -23,7 +23,7 @@ sign_one() {
 
 ldflags="-s -w -X github.com/aiii-dot-id/aii-os/internal/app.Version=$VERSION"
 
-resources() { # <package dir> <file name> <description>
+resources() {
   GOOS= GOARCH= "$GO" run ./packaging/icon syso -arch "$ARCH" -version "$VERSION" \
     -file "$2" -description "$3" -o "$1/rsrc_windows_$ARCH.syso"
 }
@@ -40,7 +40,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH="$ARCH" "$GO" build -trimpath \
 echo "==> AII OS.exe (windowsgui: the launcher)"
 CGO_ENABLED=0 GOOS=windows GOARCH="$ARCH" "$GO" build -trimpath \
   -ldflags "$ldflags -H windowsgui" -o "$payload/AII OS.exe" ./cmd/aii-app
-cp LICENSE "$payload/LICENSE" # installed beside the program (§4(a))
+cp LICENSE "$payload/LICENSE"
 
 sign_one "$payload/aii.exe"
 sign_one "$payload/AII OS.exe"

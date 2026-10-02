@@ -2,7 +2,11 @@
 
 package tools
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"syscall"
+)
 
 func writeFileNoFollowSame(path string, data []byte, perm os.FileMode, measured os.FileInfo) (bool, error) {
 	if measured == nil {
@@ -62,6 +66,27 @@ func rewriteSameFile(path string, data []byte, measured os.FileInfo) error {
 	}
 	return cerr
 }
+
+func openForCopy(path string, perm os.FileMode) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, perm)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err == nil && !st.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file — write refused", path)
+	}
+	if err == nil {
+		err = f.Truncate(0)
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+var errCrossDevice error = syscall.Errno(17)
 
 func openWriteReceipt(path string) (*os.File, error) {
 	st, err := os.Lstat(path)

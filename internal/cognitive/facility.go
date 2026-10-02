@@ -4,17 +4,11 @@ import (
 	"context"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
-type Facility interface {
-	Name() string
-	Predicate(ctx context.Context) bool
-	Execute(ctx context.Context) error
-}
-
-func evidenceText(e store.Experience) string {
+func evidenceText(e rows.Experience) string {
 	text := e.Content
 
 	if e.Provenance == "external" {

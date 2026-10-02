@@ -1,4 +1,4 @@
-package pluginhost
+package plugincatalog
 
 import (
 	"encoding/json"
@@ -52,7 +52,7 @@ type CatalogEntry struct {
 
 const DefaultCatalogURL = "https://raw.githubusercontent.com/aiii-dot-id/plugin-catalog/main/aiios-plugins.md"
 
-type Catalog struct {
+type Index struct {
 	Version   int            `json:"catalog_version"`
 	Generated string         `json:"generated"`
 	Plugins   []CatalogEntry `json:"plugins"`
@@ -71,7 +71,7 @@ type catalogSig struct {
 	CatalogSHA256  string `json:"catalog_sha256"`
 }
 
-func LoadCatalog(dir string, platformRoot *sigenvelope.PublicKeyEnvelope) (*Catalog, error) {
+func LoadCatalog(dir string, platformRoot *sigenvelope.PublicKeyEnvelope) (*Index, error) {
 	mdBytes, err := os.ReadFile(filepath.Join(dir, CatalogFile))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
@@ -83,7 +83,7 @@ func LoadCatalog(dir string, platformRoot *sigenvelope.PublicKeyEnvelope) (*Cata
 	return ParseCatalog(mdBytes, sigBytes, platformRoot)
 }
 
-func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyEnvelope) (*Catalog, error) {
+func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyEnvelope) (*Index, error) {
 	if platformRoot == nil {
 		return nil, fmt.Errorf("catalog: no platform_release root is pinned — the catalog cannot be verified (unverifiable is not unsigned)")
 	}
@@ -103,7 +103,7 @@ func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyE
 		return nil, err
 	}
 
-	var cat Catalog
+	var cat Index
 	if err := json.Unmarshal([]byte(block), &cat); err != nil {
 		return nil, fmt.Errorf("catalog: index block malformed: %w", err)
 	}
@@ -151,7 +151,7 @@ func catalogBlock(md []byte) (string, error) {
 	return rest[:j], nil
 }
 
-func (c *Catalog) validate() error {
+func (c *Index) validate() error {
 	if len(c.MustUnderstand) > 16 {
 		return fmt.Errorf("catalog: must_understand names %d features; at most 16", len(c.MustUnderstand))
 	}
@@ -203,7 +203,7 @@ func (c *Catalog) validate() error {
 	return nil
 }
 
-func (c *Catalog) Search(query string) []CatalogEntry {
+func (c *Index) Search(query string) []CatalogEntry {
 	q := strings.ToLower(strings.TrimSpace(query))
 	var out []CatalogEntry
 	for _, e := range c.Plugins {
@@ -231,11 +231,11 @@ func (e CatalogEntry) SupportedBy(hostVersion string) (bool, string) {
 	return true, ""
 }
 
-func (c *Catalog) SelectFor(id, platform, arch string) (*CatalogEntry, *CatalogPackage, error) {
+func (c *Index) SelectFor(id, platform, arch string) (*CatalogEntry, *CatalogPackage, error) {
 	return c.SelectForHost(id, platform, arch, version.Authored())
 }
 
-func (c *Catalog) SelectForHost(id, platform, arch, hostVersion string) (*CatalogEntry, *CatalogPackage, error) {
+func (c *Index) SelectForHost(id, platform, arch, hostVersion string) (*CatalogEntry, *CatalogPackage, error) {
 	for i := range c.Plugins {
 		if c.Plugins[i].ID != id {
 			continue
@@ -262,7 +262,7 @@ func (c *Catalog) SelectForHost(id, platform, arch, hostVersion string) (*Catalo
 	return nil, nil, fmt.Errorf("catalog: %s is not in the catalog", id)
 }
 
-func (c *Catalog) Select(id string) (*CatalogEntry, *CatalogPackage, error) {
+func (c *Index) Select(id string) (*CatalogEntry, *CatalogPackage, error) {
 	return c.SelectFor(id, packagefmt.HostPlatform(), packagefmt.HostArch())
 }
 

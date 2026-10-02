@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ func (a *App) ensureDashboardToken() error {
 	changed := false
 	minted := ""
 
-	if !cfg.Dashboard.RequireToken && !loopbackBind(cfg.Dashboard.Host) {
+	if !cfg.Dashboard.RequireToken && !dashboard.IsLoopback(cfg.Dashboard.Host) {
 		logsink.Warn("dashboard.decision", "bind %q is not loopback and require_token was false — REQUIRING a token, because Host and Origin gates bind a browser and not a direct client", dashboardBindName(cfg.Dashboard.Host))
 		cfg.Dashboard.RequireToken = true
 		changed = true
@@ -56,7 +55,7 @@ func (a *App) ensureDashboardToken() error {
 	}
 	if required {
 
-		if n := len(cfg.Dashboard.AccessToken); n < shortAccessToken && !loopbackBind(cfg.Dashboard.Host) {
+		if n := len(cfg.Dashboard.AccessToken); n < shortAccessToken && !dashboard.IsLoopback(cfg.Dashboard.Host) {
 			logsink.Warn("dashboard.refusal", "the access token in %s is %d bytes long on a network bind; clear dashboard.access_token to mint a strong one", cfg.SourcePath, n)
 		}
 		if err := validateDashboardAccessToken(cfg.Dashboard.AccessToken); err != nil {
@@ -80,9 +79,6 @@ func (a *App) ensureDashboardToken() error {
 		}
 	}
 	if minted != "" {
-		a.mintedTokenMu.Lock()
-		a.mintedToken = minted
-		a.mintedTokenMu.Unlock()
 		logsink.Info("dashboard.decision", "access token minted and stored in config.json")
 	}
 	return nil
@@ -99,34 +95,11 @@ func dashboardTokenPath(cfg Config) string {
 	return filepath.Join(dir, "dashboard-token")
 }
 
-func loopbackBind(host string) bool {
-	h := strings.TrimSpace(host)
-	if h == "" {
-		return false
-	}
-	if strings.EqualFold(h, "localhost") {
-		return true
-	}
-	if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
-		return ip.IsLoopback()
-	}
-
-	return false
-}
-
 func dashboardBindName(host string) string {
 	if strings.TrimSpace(host) == "" {
 		return "every interface"
 	}
 	return host
-}
-
-func (a *App) DashboardMintedToken() string {
-	a.mintedTokenMu.Lock()
-	defer a.mintedTokenMu.Unlock()
-	t := a.mintedToken
-	a.mintedToken = ""
-	return t
 }
 
 func (a *App) newDashboard(handler *dashboard.WSHandler) (*dashboard.Server, error) {
@@ -144,9 +117,9 @@ func (a *App) newDashboard(handler *dashboard.WSHandler) (*dashboard.Server, err
 }
 
 func (a *App) dashboardToken() string {
-	a.dashboardTokenMu.Lock()
-	defer a.dashboardTokenMu.Unlock()
-	return a.dashboardAccessToken
+	a.dash.mu.Lock()
+	defer a.dash.mu.Unlock()
+	return a.dash.dashboardAccessToken
 }
 
 func (a *App) StartAuthenticatedEmbedded() error {
@@ -181,9 +154,9 @@ func (a *App) DashboardAccessTokenForOrigin(origin string) (string, error) {
 }
 
 func (a *App) setDashboardToken(token string) {
-	a.dashboardTokenMu.Lock()
-	a.dashboardAccessToken = token
-	a.dashboardTokenMu.Unlock()
+	a.dash.mu.Lock()
+	a.dash.dashboardAccessToken = token
+	a.dash.mu.Unlock()
 }
 
 type dashboardTokenRefusal struct{ Requirement string }
@@ -198,7 +171,7 @@ func (a *App) rearmDashboardToken(d DashboardConfig) error {
 	}
 
 	bind := a.dashboard.BindHost()
-	required := a.embeddedAuthentication || d.RequireToken || !loopbackBind(bind)
+	required := a.embeddedAuthentication || d.RequireToken || !dashboard.IsLoopback(bind)
 	if !required {
 		a.pn.mu.Lock()
 		if a.pn.relay != nil {
@@ -299,7 +272,7 @@ func mintDashboardToken() (string, error) {
 }
 
 func RotateDashboardToken(path string) (string, error) {
-	cfg, err := LoadConfig(path)
+	cfg, err := ReadConfig(path)
 	if err != nil {
 		return "", err
 	}
@@ -313,4 +286,10 @@ func RotateDashboardToken(path string) (string, error) {
 		return "", err
 	}
 	return token, nil
+}
+
+func (a *App) wireDashboardAccessHooks(h *dashboard.WSHandler) {
+	h.DashboardToken = a.dashboardToken
+	h.RotateDashboardToken = a.rotateDashboardAccess
+	h.RequireDashboardToken = a.requireDashboardAccess
 }

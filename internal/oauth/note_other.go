@@ -2,9 +2,12 @@
 
 package oauth
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
-func adoptedBytes(_, path string) ([]byte, error) { return os.ReadFile(path) }
+func adoptedBytes(_ context.Context, _, path string) ([]byte, error) { return os.ReadFile(path) }
 
 func forgetAdopted(string) {}
 

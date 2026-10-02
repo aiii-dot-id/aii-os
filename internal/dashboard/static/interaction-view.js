@@ -1,5 +1,3 @@
-// One bounded scroll window per authoritative source, one socket read lane.
-// Notifications invalidate; rows come only from the reader. No polling/replay.
 import { S } from './state.js';
 import { send, wsReady } from './ws.js';
 import { renderInteractionPages } from './views/chat.js';
@@ -18,12 +16,8 @@ const render = (position = '', reading = null) => {
 };
 const bounds = rows => ({ anchor_id: rows[0].id, end_id: rows.at(-1).id });
 const sequence = row => BigInt(row.sequence);
-// Twice UTF-16 length bounds retained string storage without encoding every
-// row repeatedly during a trim. The count also bounds DOM/projection work.
 const rowSize = row => JSON.stringify(row).length * 2;
 const size = rows => rows.reduce((n, row) => n + rowSize(row), 0);
-// One tab's reading bookmark. It holds only source-qualified references;
-// source retirement falls back through the existing declared-reset path.
 const bookmarkKey = 'aii.history.position';
 let restored = null;
 try {
@@ -34,7 +28,7 @@ try {
       saved.reading.open.every(e => typeof e.key === 'string' && Array.isArray(e.indices) && e.indices.every(Number.isInteger))) restored = saved;
 } catch (_) {}
 function saveReading() {
-  if (restored) return; // Do not replace an unfinished restore with a partial view.
+  if (restored) return;
   const reading = S.interactionBookmark?.();
   if (!reading || (S.view && S.view !== 'chat')) return;
   const windows = {};
@@ -49,7 +43,6 @@ function saveReading() {
   } catch (_) {}
 }
 window.addEventListener('pagehide', saveReading);
-// Keep the last visible reading position when another main page is opened.
 S.saveInteractionPosition = saveReading;
 function refresh(source) {
   const saved = restored?.windows[source];
@@ -114,9 +107,6 @@ S.interactionLatest = () => {
   }
   drain();
 };
-// An upward gesture supersedes a pending jump or background tail read even
-// in the middle of the loaded window. The existing intent identity rejects
-// its late response; no second request is opened while it is in flight.
 S.interactionHold = () => {
   S.cancelReadingRestore?.();
   restored = null;
@@ -127,8 +117,6 @@ S.interactionHold = () => {
     }
   }
 };
-// Called only on user scroll gestures. Revalidate newly visible older facts,
-// including mutable annotations/delivery, without scanning offscreen history.
 S.interactionScroll = () => {
   for (const source of sources) {
     const page = pages.get(source);
@@ -146,7 +134,6 @@ function fail(source, message) {
 S.interactionPage = (page, id, window) => {
   if (!pending || pending.id !== id) return;
   const { source, intent } = pending; pending = null;
-  // An older read may finish after a jump. It has no authority over that intent.
   if (intents.get(source) !== intent) { drain(); return; }
   if (!page || page.version !== 1 || page.source !== source || (page.cursor || '') !== intent.cursor ||
       !Array.isArray(page.rows) || !page.rows.every(r => r.id && /^\d+$/.test(r.sequence)) ||
@@ -189,8 +176,6 @@ S.interactionPage = (page, id, window) => {
   } else if (mode === 'newer') {
     rows = [...previous.rows, ...rows]; older = previous.has_older;
   }
-  // Navigation keeps a contiguous interval; discard only the far edge. ID
-  // anchors let a later gesture reload that edge without retained cursor stacks.
   let bytes = size(rows);
   while (rows.length > maxRows || bytes > maxBytes) {
     if (mode === 'older') { bytes -= rowSize(rows.pop()); newer = true; }
@@ -200,9 +185,6 @@ S.interactionPage = (page, id, window) => {
   if (!dirty.has(source)) for (const row of intent.rows) page.invalidated.delete(row.id);
   page.rows = rows; page.has_older = !!older; page.has_newer = !!newer;
   page.reset = resetSources.delete(source); pages.set(source, page);
-  // Refresh visible facts, then extend the same window from its last record.
-  // A transport page never replaces an already loaded conversation. Follow
-  // further pages only for this live catch-up, while the reader still follows.
   if (intent.follow && S.interactionFollowing?.() && rows.length && (mode === 'range' || newer)) {
     intents.set(source, { window: { mode: 'newer', incarnation: page.incarnation, anchor_id: rows.at(-1).id }, cursor: '', rows: [], follow: true });
   }

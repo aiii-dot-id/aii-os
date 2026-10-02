@@ -15,22 +15,6 @@ const OutcomeCursorKey = "consolidate.outcomes_considered_through"
 
 const MaxOutcomesPerIntake = 8
 
-type Outcome struct {
-	Seq       uint64
-	EntryHash string
-	Kind      string
-	ID        string
-	State     string
-	Said      string
-	Was       string
-}
-
-type OutcomeBatch struct {
-	From     uint64
-	Through  uint64
-	Outcomes []Outcome
-}
-
 func (s *Store) OutcomeCursor() (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

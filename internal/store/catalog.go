@@ -35,7 +35,6 @@ var writers = map[string]map[string]string{
 	"trust_epochs":         {"trustepochs.go": "the materializer for trust.epoch_accepted lives there"},
 	"self_model_synthesis": {"self_model.go": "the materializer for self_model.synthesize lives there"},
 	"ledger":               {"replay.go": "the clear", "reconcile.go": "schema replacement only within verified replay's transaction"},
-	"tool_events":          {"reconcile.go": "schema reconciliation carries rows through a shape change"},
 	"identity_lifetime":    {"materialize.go": "materializeBirth seeds the singleton with INSERT OR IGNORE; lived time accumulates at runtime and is never cleared"},
 	"public_name":          {"publicname.go": "the materializer for network.name_claimed lives there"},
 }

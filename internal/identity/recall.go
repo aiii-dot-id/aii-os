@@ -162,10 +162,6 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]interface{}) (s
 	return e.recallEnumerate(ctx, source, query, exact, cursor)
 }
 
-func (e *Engine) SetHeardHistory(read func(string, uint64, int) (string, error)) {
-	e.heardHistory = read
-}
-
 func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, limit int, decay string) (string, error) {
 	res, err := e.instruments.Recall(ctx, memory.Query{Text: query, Exact: exact, Limit: limit, Decay: decay, Reinforce: true})
 	if err != nil {

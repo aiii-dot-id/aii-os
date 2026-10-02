@@ -184,3 +184,15 @@ func (a *App) fillActivity(ctx context.Context, rows []dashboard.SendRow, sent [
 	}
 	return err
 }
+
+func (a *App) wireMessageHooks(h *dashboard.WSHandler) {
+	h.GetOutbox = a.outboxItems
+	h.Messages = a.messagesPage
+	h.HeldMail = a.heldMail
+	h.RepairMail = a.repairMail
+	h.InspectMail = a.inspectHeldMail
+	h.MarkDelivered = func(id string) error {
+		return a.engine.MarkDelivered(id, "dashboard")
+	}
+	h.PagesClosed = a.pokeOutbox
+}

@@ -160,8 +160,6 @@ func Info(category, format string, args ...any) { emit(slog.LevelInfo, category,
 
 func Debug(category, format string, args ...any) { emit(slog.LevelDebug, category, format, args...) }
 
-func Trace(category, format string, args ...any) { emit(LevelTrace, category, format, args...) }
-
 func ErrorCtx(ctx context.Context, category, format string, args ...any) {
 	emitCtx(ctx, slog.LevelError, category, format, args...)
 }
@@ -172,14 +170,6 @@ func WarnCtx(ctx context.Context, category, format string, args ...any) {
 
 func InfoCtx(ctx context.Context, category, format string, args ...any) {
 	emitCtx(ctx, slog.LevelInfo, category, format, args...)
-}
-
-func DebugCtx(ctx context.Context, category, format string, args ...any) {
-	emitCtx(ctx, slog.LevelDebug, category, format, args...)
-}
-
-func TraceCtx(ctx context.Context, category, format string, args ...any) {
-	emitCtx(ctx, LevelTrace, category, format, args...)
 }
 
 const PreviewRunes = 200

@@ -64,7 +64,7 @@ func (f *Facility) Rescan(pol Policy) {
 		set := make([]Observed, 0, len(f.instances))
 		for _, inst := range f.instances {
 			if inst.Desired.Active || inst.Package != "" {
-				set = append(set, Observed{ID: inst.ID, Package: inst.Package, Hash: inst.PackageHash, ManifestHash: inst.ManifestHash})
+				set = append(set, Observed{ID: inst.ID, Package: inst.Package, Hash: inst.PackageHash, ManifestHash: inst.ManifestHash, Family: inst.Family})
 			}
 		}
 		f.mu.Unlock()
@@ -129,7 +129,7 @@ func (f *Facility) Rescan(pol Policy) {
 			f.cfg.Log("plugin %s (%s): %s — present, verified, NOT loaded", id, memo.ev.Tier, why)
 			continue
 		}
-		set = append(set, Observed{ID: id, Dir: fd.Dir, Package: fd.Package, Hash: memo.ev.PackageHash, ManifestHash: memo.ev.ManifestHash})
+		set = append(set, Observed{ID: id, Dir: fd.Dir, Package: fd.Package, Hash: memo.ev.PackageHash, ManifestHash: memo.ev.ManifestHash, Family: memo.ev.Family})
 	}
 
 	for pkg := range f.verified {

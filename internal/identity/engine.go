@@ -34,8 +34,6 @@ func (e *Engine) SafeTranscript() []SafeTurn {
 	return out
 }
 
-func (e *Engine) SetTimers(t TimerSetter) { e.timers = t }
-
 func (e *Engine) NoteExternalFetch(url string) {
 	const maxFetches = 256
 	e.fetchMu.Lock()

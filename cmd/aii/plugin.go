@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
 	"io"
 
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 )
 
@@ -83,7 +83,7 @@ func runPluginCatalog(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("aii plugin catalog", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	platformPath := fs.String("platform-key", "", "pinned aiii platform_release public key envelope (required: the catalog is platform_release-signed)")
-	catalogDir := fs.String("catalog-dir", "", "local checkout of the plugin-catalog repository (holds "+pluginhost.CatalogFile+" and its .sig)")
+	catalogDir := fs.String("catalog-dir", "", "local checkout of the plugin-catalog repository (holds "+plugincatalog.CatalogFile+" and its .sig)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -96,7 +96,7 @@ func runPluginCatalog(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "platform-key: %v\n", err)
 		return 1
 	}
-	cat, err := pluginhost.LoadCatalog(*catalogDir, root)
+	cat, err := plugincatalog.LoadCatalog(*catalogDir, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1

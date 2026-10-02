@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
+	"io/fs"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -21,10 +22,12 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
+	"github.com/aiii-dot-id/aii-os/internal/filelock"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/quiesce"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 	"github.com/aiii-dot-id/aii-os/internal/version"
+	"github.com/aiii-dot-id/aii-os/internal/vulkancap"
 )
 
 var errNoRelease = errors.New("no release published yet (or the repository does not exist)")
@@ -270,7 +273,16 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	}
 	defer c.applying.Store(false)
 
-	if c.state.Snapshot("").NeedsRestart || unretiredSwap(c.dataDir) {
+	tgt, err := targetOf(exePath)
+	if err != nil {
+		return err
+	}
+	owner, err := ownerOf(c.dataDir)
+	if err != nil {
+		return fmt.Errorf("name this identity's data directory for the update record: %w", err)
+	}
+
+	if c.state.Snapshot("").NeedsRestart || unretiredSwap(c.dataDir) || tgt.claimedBy(owner) {
 		return ErrUpdatePending
 	}
 
@@ -284,12 +296,11 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 		return fmt.Errorf("no platform_release root pinned — cannot verify updates")
 	}
 
-	bundlePath, inBundle := bundleRoot(exePath)
 	assetName := assetName(available)
-	if inBundle {
+	if tgt.bundle {
 		assetName = bundleAssetName(available)
 	}
-	sigAssetName := assetName + ".platform.sig"
+	sigAssetName := SigAssetName(assetName)
 
 	c.mu.Lock()
 	release := c.cachedRelease
@@ -300,9 +311,9 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 
 	archiveURL, sigURL, err := findAssets(release, assetName, sigAssetName)
 	if err != nil {
-		if inBundle {
+		if tgt.bundle {
 
-			return fmt.Errorf("%w (%v)", errBareBinaryIntoBundle(bundlePath), err)
+			return fmt.Errorf("%w (%v)", errBareBinaryIntoBundle(tgt.path), err)
 		}
 		return fmt.Errorf("find assets: %w", err)
 	}
@@ -337,24 +348,46 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("update not installed: %w", err)
 	}
-	handled, err := applyIfBundle(exePath, archiveBytes)
+	handled, already, err := applyIfBundle(tgt, archiveBytes, owner)
 	if err != nil {
 		return fmt.Errorf("bundle update: %w", err)
 	}
 	if !handled {
-
-		newBinary, err := extractBinary(archiveBytes)
-		if err != nil {
-			return fmt.Errorf("extract binary from archive: %w", err)
-		}
-
-		if err := swapBinary(exePath, newBinary, c.dataDir); err != nil {
-			return fmt.Errorf("binary swap: %w", err)
+		if already, err = installBinary(tgt, archiveBytes, c.dataDir, owner); err != nil {
+			return err
 		}
 	}
 
 	c.state.SetInstalled(available)
+	if already {
+		logsink.Info("updates.decision", "%s is already the image on disk — nothing replaced, nothing backed up; restart to apply", available)
+		return nil
+	}
 	logsink.Info("updates.end", "installed %s — restart to apply", available)
+	return nil
+}
+
+func installBinary(tgt target, archiveBytes []byte, dataDir, owner string) (already bool, err error) {
+
+	newBinary, helper, err := extractBinary(archiveBytes)
+	if err != nil {
+		return false, fmt.Errorf("extract binary from archive: %w", err)
+	}
+	return tgt.replace(sha256hex(newBinary), func(string) error {
+		return swapWithHelper(tgt, newBinary, helper, dataDir, owner)
+	})
+}
+
+func swapWithHelper(tgt target, newBinary, helper []byte, dataDir, owner string) error {
+	if helper != nil {
+		if err := writeFileAtomic(vulkancap.HelperPath(tgt.path), helper, 0o755); err != nil {
+			return fmt.Errorf("install %s (%s not swapped): %w", vulkancap.Helper, filepath.Base(tgt.path), err)
+		}
+	}
+
+	if err := swapBinary(tgt, newBinary, dataDir, owner); err != nil {
+		return fmt.Errorf("binary swap: %w", err)
+	}
 	return nil
 }
 
@@ -660,10 +693,123 @@ type updatePending struct {
 	BackupSHA256 string `json:"backup_sha256"`
 
 	NewSHA256 string `json:"new_sha256"`
+
+	Owner string `json:"owner,omitempty"`
 }
 
+type target struct {
+	path   string
+	exe    string
+	bundle bool
+	lock   string
+	record string
+	backup string
+}
+
+func targetOf(exePath string) (target, error) {
+	if exePath == "" {
+
+		return target{}, errors.New("the running program's path is unknown")
+	}
+	exe, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return target{}, fmt.Errorf("resolve the running program %s: %w", exePath, err)
+	}
+	return targetAt(exe), nil
+}
+
+func Program() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate the running program: %w", err)
+	}
+	tgt, err := targetOf(exe)
+	if err != nil {
+		return "", err
+	}
+	return tgt.path, nil
+}
+
+func targetAt(exe string) target {
+	if app, ok := bundleRoot(exe); ok {
+		dir := filepath.Dir(app)
+		return target{path: app, exe: exe, bundle: true,
+			lock:   filepath.Join(dir, ".aii-os-update.lock"),
+			record: filepath.Join(dir, ".aii-os-update.json"),
+			backup: filepath.Join(dir, previousBundleName)}
+	}
+	dir, base := filepath.Split(exe)
+	return target{path: exe, exe: exe,
+		lock:   filepath.Join(dir, "."+base+".update.lock"),
+		record: filepath.Join(dir, "."+base+".update.json"),
+		backup: filepath.Join(dir, "."+base+".previous")}
+}
+
+func ownerOf(dataDir string) (string, error) {
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
+func lockTarget(tgt target) (release func(), err error) {
+	f, err := os.OpenFile(tgt.lock, os.O_CREATE|os.O_RDONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open the update lock: %w", err)
+	}
+	if err := filelock.Lock(f); err != nil {
+		f.Close()
+		if errors.Is(err, filelock.ErrHeld) {
+			return nil, fmt.Errorf("%w — another process is replacing %s (%s): %w", ErrAlreadyApplying, tgt.path, tgt.lock, err)
+		}
+		return nil, fmt.Errorf("lock %s: %w", tgt.lock, err)
+	}
+	return func() { f.Close() }, nil
+}
+
+func (tgt target) replace(newHash string, swap func(oldHash string) error) (already bool, err error) {
+	release, err := lockTarget(tgt)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	replaceStep("locked")
+	have, err := imageHash(tgt.path)
+	if err != nil {
+		return false, fmt.Errorf("read the installed image to compare: %w", err)
+	}
+	if have == newHash {
+		return true, nil
+	}
+	if err := tgt.unclaimed(); err != nil {
+		return false, err
+	}
+	return false, swap(have)
+}
+
+func (tgt target) unclaimed() error {
+	p, present, err := readClaim(tgt.record)
+	switch {
+	case !present:
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: the update record %s cannot be read (%v) — it is kept, since no identity can be shown to own it; once no update awaits a restart, remove it by hand", ErrUpdatePending, tgt.record, err)
+	default:
+		return fmt.Errorf("%w: it was installed by the identity whose data is at %s, and that identity's next healthy boot retires it", ErrUpdatePending, p.Owner)
+	}
+}
+
+func (tgt target) claimedBy(owner string) bool {
+	p, present, err := readClaim(tgt.record)
+	return present && err == nil && p.Owner == owner
+}
+
+var replaceStep = func(string) {}
+
 const (
-	markerFile   = ".boot_completed"
+	markerFile = ".boot_completed"
+
 	previousFile = "aii.previous"
 	pendingFile  = ".update_pending"
 
@@ -697,19 +843,9 @@ func stageFileDurably(target string, data []byte, mode os.FileMode) (string, err
 	return tmp, nil
 }
 
-func writeFileAtomic(path string, data []byte, mode os.FileMode) (retErr error) {
-	tmp, err := stageFileDurably(path, data, mode)
-	if err != nil {
-		return err
-	}
-	defer func() {
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 
-		if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-			retErr = errors.Join(retErr, err)
-		}
-	}()
-
-	published, err := atomicfile.Replace(tmp, path)
+	published, err := atomicfile.WriteReplace(path, data, mode)
 	if err != nil {
 		if published {
 			return fmt.Errorf("replace %s: published but not durable: %w", filepath.Base(path), err)
@@ -719,12 +855,34 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) (retErr error) 
 	return nil
 }
 
-func writePending(dataDir string, p updatePending) error {
+func writeRecord(path string, p updatePending) error {
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dataDir, pendingFile), raw, 0o644)
+	return writeFileAtomic(path, raw, 0o644)
+}
+
+func readRecord(path string) (p updatePending, present bool, err error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) && statRefusal(path, err) == nil {
+		return updatePending{}, false, nil
+	}
+	if err != nil {
+		return updatePending{}, true, err
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return updatePending{}, true, err
+	}
+	return p, true, nil
+}
+
+func readClaim(path string) (updatePending, bool, error) {
+	p, present, err := readRecord(path)
+	if present && err == nil && p.Owner == "" {
+		err = errors.New("it names no owner")
+	}
+	return p, present, err
 }
 
 func canStageBeside() (bool, string) {
@@ -732,7 +890,11 @@ func canStageBeside() (bool, string) {
 	if err != nil {
 		return false, "cannot locate the running binary: " + err.Error()
 	}
-	return canStageBesideAt(exe)
+	tgt, err := targetOf(exe)
+	if err != nil {
+		return false, err.Error()
+	}
+	return canStageBesideAt(tgt.path)
 }
 
 func canStageBesideAt(exe string) (bool, string) {
@@ -756,37 +918,32 @@ func unretiredSwap(dataDir string) bool {
 }
 
 func readPending(dataDir string) (updatePending, bool) {
-	raw, err := os.ReadFile(filepath.Join(dataDir, pendingFile))
-	if err != nil {
-		return updatePending{}, false
-	}
-	var p updatePending
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return updatePending{}, false
-	}
-	return p, true
+	p, present, err := readRecord(filepath.Join(dataDir, pendingFile))
+	return p, present && err == nil
 }
 
-func swapBinary(exePath string, newBinary []byte, dataDir string) error {
-	prevPath := filepath.Join(dataDir, previousFile)
-	pendPath := filepath.Join(dataDir, pendingFile)
-
-	currentBytes, err := os.ReadFile(exePath)
+func swapBinary(tgt target, newBinary []byte, dataDir, owner string) error {
+	currentBytes, err := os.ReadFile(tgt.path)
 	if err != nil {
 		return fmt.Errorf("read current binary for backup: %w", err)
 	}
-	if err := writeFileAtomic(prevPath, currentBytes, 0o755); err != nil {
-		return fmt.Errorf("write backup binary: %w", err)
-	}
 
-	if err := writePending(dataDir, updatePending{
+	if err := writeRecord(tgt.record, updatePending{
 		Attempts:     0,
 		BackupSHA256: sha256hex(currentBytes),
 		NewSHA256:    sha256hex(newBinary),
+		Owner:        owner,
 	}); err != nil {
-		os.Remove(prevPath)
-		return fmt.Errorf("write update tombstone: %w", err)
+
+		return errors.Join(fmt.Errorf("write update record: %w", err), withdraw(tgt.record))
 	}
+	replaceStep("recorded")
+
+	if err := writeFileAtomic(tgt.backup, currentBytes, 0o755); err != nil {
+
+		return errors.Join(fmt.Errorf("write backup binary: %w", err), withdraw(tgt.record))
+	}
+	replaceStep("backed-up")
 
 	markerRetired, retireErr := retireBootMarker(dataDir)
 
@@ -805,24 +962,23 @@ func swapBinary(exePath string, newBinary []byte, dataDir string) error {
 			}
 			return errors.Join(
 				fmt.Errorf("%s: %w", what, primary),
-				fmt.Errorf("boot marker %s — backup and tombstone kept so the next boot can still recover: %w", state, rerr))
+				fmt.Errorf("boot marker %s — backup and record kept so the next boot can still recover: %w", state, rerr))
 		}
-		os.Remove(prevPath)
-		os.Remove(pendPath)
-		return fmt.Errorf("%s: %w", what, primary)
+		return errors.Join(fmt.Errorf("%s: %w", what, primary), withdraw(tgt.backup), withdraw(tgt.record))
 	}
 
 	if retireErr != nil {
 		return retireSwapState(retireErr, "retire boot marker")
 	}
+	replaceStep("marker-retired")
 
-	tmpPath, err := stageFileDurably(exePath, newBinary, 0o755)
+	tmpPath, err := stageFileDurably(tgt.path, newBinary, 0o755)
 	if err != nil {
 
 		return retireSwapState(err, "write new binary")
 	}
 
-	published, err := atomicfile.ReplaceExecutable(tmpPath, exePath)
+	published, err := atomicfile.ReplaceExecutable(tmpPath, tgt.path)
 	if err != nil {
 		if !published {
 
@@ -830,15 +986,23 @@ func swapBinary(exePath string, newBinary []byte, dataDir string) error {
 			return retireSwapState(err, "rename new binary into place")
 		}
 
-		return fmt.Errorf("new binary published but not durable — backup and tombstone kept so the next boot can still roll back: %w", err)
+		return fmt.Errorf("new binary published but not durable — backup and record kept so the next boot can still roll back: %w", err)
 	}
-
+	replaceStep("published")
 	return nil
 }
 
-func extractBinary(archiveBytes []byte) ([]byte, error) {
+func withdraw(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("could not withdraw %s: %w", path, err)
+	}
+	return nil
+}
+
+func extractBinary(archiveBytes []byte) (binary, helper []byte, err error) {
 	if runtime.GOOS == "windows" {
-		return extractFromZip(archiveBytes)
+		binary, err = extractFromZip(archiveBytes)
+		return binary, nil, err
 	}
 	return extractFromTarGz(archiveBytes)
 }
@@ -885,10 +1049,71 @@ func rearmBootMarker(dataDir string) (back bool, err error) {
 
 var ErrBootRecoveryPending = errors.New("boot recovery remains armed; wait for boot completion before upgrading data paths")
 
+type recovery struct {
+	dataDir        string
+	backup, record string
+	tgt            target
+	legacy         bool
+}
+
+func recoveryOf(dataDir, exePath string) (r recovery, ok bool, err error) {
+	tgt, terr := targetOf(exePath)
+	if legacyStands(dataDir) {
+
+		return recovery{dataDir: dataDir, backup: filepath.Join(dataDir, previousFile), record: filepath.Join(dataDir, pendingFile), tgt: tgt, legacy: true}, true, nil
+	}
+	if terr != nil {
+		return recovery{}, false, terr
+	}
+	mine, _, err := claimOf(dataDir, tgt)
+	if !mine || tgt.bundle {
+		return recovery{}, false, err
+	}
+	return recovery{dataDir: dataDir, backup: tgt.backup, record: tgt.record, tgt: tgt}, true, nil
+}
+
+func legacyStands(dataDir string) bool {
+	prev := filepath.Join(dataDir, previousFile)
+	_, err := os.Stat(prev)
+	return err == nil || statRefusal(prev, err) != nil
+}
+
+func claimOf(dataDir string, tgt target) (mine bool, other string, err error) {
+	p, present, err := readClaim(tgt.record)
+	if !present {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("the update record %s cannot be read (%v) — no identity can be shown to own it, so no boot rolls it back or retires it, and it refuses every update of %s until it is removed by hand", tgt.record, err, tgt.path)
+	}
+	me, err := ownerOf(dataDir)
+	if err != nil {
+		return false, "", fmt.Errorf("cannot name this identity's data directory (%v) — the update record %s is left untouched", err, tgt.record)
+	}
+	if p.Owner != me {
+		return false, p.Owner, nil
+	}
+	return true, "", nil
+}
+
 func RequireSettledBootUpdate(dataDir string) error {
-	previous := filepath.Join(dataDir, previousFile)
-	if _, err := os.Stat(previous); err != nil {
-		return statRefusal(previous, err)
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the running program to read its update state: %w", err)
+	}
+	return requireSettledAt(dataDir, exePath)
+}
+
+func requireSettledAt(dataDir, exePath string) error {
+	r, ok, err := recoveryOf(dataDir, exePath)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(r.backup); err != nil {
+		return statRefusal(r.backup, err)
 	}
 	marker := filepath.Join(dataDir, markerFile)
 	if _, err := os.Stat(marker); err != nil {
@@ -901,16 +1126,49 @@ func RequireSettledBootUpdate(dataDir string) error {
 }
 
 func WriteBootMarker(dataDir string) {
+	exePath, err := os.Executable()
+	if err != nil {
+		logsink.Warn("updates.refusal", "cannot locate the running program (%v) — an update record beside it, if any, is left for a later boot", err)
+		exePath = ""
+	}
+	writeBootMarkerAt(dataDir, exePath)
+}
+
+func writeBootMarkerAt(dataDir, exePath string) {
 
 	if err := writeFileAtomic(filepath.Join(dataDir, markerFile), []byte("ok"), 0o644); err != nil {
 
 		logsink.Warn("updates.error", "could not write boot marker: %v", err)
 		return
 	}
+
 	os.Remove(filepath.Join(dataDir, pendingFile))
 	os.Remove(filepath.Join(dataDir, previousFile))
 
 	os.Remove(filepath.Join(dataDir, retiredMarkerFile))
+	if exePath == "" {
+		return
+	}
+	tgt, err := targetOf(exePath)
+	if err != nil {
+		logsink.Warn("updates.refusal", "%v — an update record beside it, if any, is left for a later boot", err)
+		return
+	}
+	mine, other, _ := claimOf(dataDir, tgt)
+	if !mine {
+		if other != "" {
+			logsink.Info("updates.decision", "the update of %s was applied by the identity whose data is at %s — this healthy boot leaves its backup and record alone; that identity's boot settles them", tgt.path, other)
+		}
+		return
+	}
+	var errs []error
+	if !tgt.bundle {
+		errs = append(errs, withdraw(tgt.backup))
+	}
+	errs = append(errs, withdraw(tgt.record))
+	if err := errors.Join(errs...); err != nil {
+		logsink.Warn("updates.error", "this healthy boot could not retire its update of %s: %v", tgt.path, err)
+	}
 }
 
 func CheckRollback(dataDir string) string {
@@ -923,37 +1181,90 @@ func CheckRollback(dataDir string) string {
 }
 
 func RollbackArmed(dataDir string) bool {
-	if _, err := os.Stat(filepath.Join(dataDir, previousFile)); err != nil {
+	exePath, err := os.Executable()
+	if err != nil {
+		exePath = ""
+	}
+	return rollbackArmedAt(dataDir, exePath)
+}
+
+func rollbackArmedAt(dataDir, exePath string) bool {
+	r, ok, _ := recoveryOf(dataDir, exePath)
+	if !ok {
+		return false
+	}
+	if _, err := os.Stat(r.backup); err != nil {
 		return false
 	}
 	markerPath := filepath.Join(dataDir, markerFile)
 	if _, err := os.Stat(markerPath); err == nil || statRefusal(markerPath, err) != nil {
 		return false
 	}
-	pend, ok := readPending(dataDir)
-	return ok && pend.Attempts >= 1
+	pend, present, err := readRecord(r.record)
+	return present && err == nil && pend.Attempts >= 1
 }
 
 func checkRollbackAt(dataDir, exePath string) string {
-	markerPath := filepath.Join(dataDir, markerFile)
-	prevPath := filepath.Join(dataDir, previousFile)
-	pendPath := filepath.Join(dataDir, pendingFile)
 
 	_ = os.Remove(exePath + ".old")
 
-	if _, err := os.Stat(prevPath); err != nil {
-		if refusal := statRefusal(prevPath, err); refusal != nil {
+	r, ok, err := recoveryOf(dataDir, exePath)
+	if ok {
+		return settleLocked(dataDir, exePath, r.tgt)
+	}
+	if err != nil {
+		logsink.Warn("updates.refusal", "rollback check: %v", err)
+	}
 
-			logsink.Warn("updates.refusal", "rollback check cannot stat %s: %v — leaving update state untouched", prevPath, refusal)
+	if !legacyStands(dataDir) {
+		os.Remove(filepath.Join(dataDir, pendingFile))
+	}
+	return ""
+}
+
+func settleLocked(dataDir, exePath string, tgt target) string {
+	if tgt.path != "" {
+		release, err := lockTarget(tgt)
+		if errors.Is(err, ErrAlreadyApplying) {
+			logsink.Info("updates.decision", "rollback check deferred — %v; this boot leaves the update state as it is, and the next boot settles it", err)
 			return ""
 		}
-		os.Remove(pendPath)
+		if err != nil {
+			logsink.Warn("updates.refusal", "rollback check deferred — %v; the update state is left as it is, and the next boot tries again", err)
+			return ""
+		}
+		defer release()
+	}
+	r, ok, err := recoveryOf(dataDir, exePath)
+	switch {
+	case err != nil:
+		logsink.Warn("updates.refusal", "rollback check: %v", err)
+		return ""
+	case !ok:
+		return ""
+	case r.tgt != tgt:
+		logsink.Warn("updates.refusal", "rollback check deferred — the running program resolved to %s, then to %s; the update state is left as it is, and the next boot tries again", tgt.path, r.tgt.path)
+		return ""
+	}
+	return r.settle()
+}
+
+func (r recovery) settle() string {
+	markerPath := filepath.Join(r.dataDir, markerFile)
+
+	if _, err := os.Stat(r.backup); err != nil {
+		if refusal := statRefusal(r.backup, err); refusal != nil {
+
+			logsink.Warn("updates.refusal", "rollback check cannot stat %s: %v — leaving update state untouched", r.backup, refusal)
+			return ""
+		}
+		os.Remove(r.record)
 		return ""
 	}
 	if _, err := os.Stat(markerPath); err == nil {
 
-		os.Remove(prevPath)
-		os.Remove(pendPath)
+		os.Remove(r.backup)
+		os.Remove(r.record)
 		return ""
 	} else if refusal := statRefusal(markerPath, err); refusal != nil {
 
@@ -961,16 +1272,21 @@ func checkRollbackAt(dataDir, exePath string) string {
 		return ""
 	}
 
-	pend, ok := readPending(dataDir)
-	if !ok {
+	pend, present, err := readRecord(r.record)
+	if !present || err != nil {
+		if !r.legacy {
 
-		prevBytes, err := os.ReadFile(prevPath)
-		if err != nil {
-			logsink.Warn("updates.decision", "unreadable backup with no tombstone — retiring it: %v", err)
-			os.Remove(prevPath)
+			logsink.Warn("updates.refusal", "the update record %s became unreadable (%v) — leaving update state untouched", r.record, err)
 			return ""
 		}
-		if err := writePending(dataDir, updatePending{
+
+		prevBytes, err := os.ReadFile(r.backup)
+		if err != nil {
+			logsink.Warn("updates.decision", "unreadable backup with no tombstone — retiring it: %v", err)
+			os.Remove(r.backup)
+			return ""
+		}
+		if err := writeRecord(r.record, updatePending{
 			Attempts:     1,
 			BackupSHA256: sha256hex(prevBytes),
 		}); err != nil {
@@ -982,22 +1298,28 @@ func checkRollbackAt(dataDir, exePath string) string {
 	if pend.Attempts == 0 {
 
 		pend.Attempts = 1
-		if err := writePending(dataDir, pend); err != nil {
+		if err := writeRecord(r.record, pend); err != nil {
 			logsink.Warn("updates.error", "could not record first boot attempt: %v", err)
 		}
 		return ""
 	}
 
-	return rollbackToPrev(dataDir, prevPath, exePath, pend)
+	return r.rollback(pend)
 }
 
-func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) string {
-
-	if ok, why := canStageBesideAt(exePath); !ok {
-		logsink.Warn("updates.refusal", "ROLLBACK DEFERRED \u2014 %s; the previous binary is kept at %s (restore it with your package manager, or from data/backups/)", why, prevPath)
+func (r recovery) rollback(pend updatePending) string {
+	exePath := r.tgt.exe
+	if exePath == "" {
+		logsink.Warn("updates.refusal", "ROLLBACK DEFERRED \u2014 the running program could not be resolved; the backup %s and its record are kept, and the next boot tries again", r.backup)
 		return ""
 	}
-	prevBytes, err := os.ReadFile(prevPath)
+
+	if ok, why := canStageBesideAt(exePath); !ok {
+		logsink.Warn("updates.refusal", "ROLLBACK DEFERRED — %s; the previous binary is kept at %s (restore it with your package manager, or from data/backups/)", why, r.backup)
+		return ""
+	}
+
+	prevBytes, err := os.ReadFile(r.backup)
 	if err != nil {
 		logsink.Error("updates.error", "ROLLBACK FAILED — cannot read backup binary: %v", err)
 		return ""
@@ -1012,8 +1334,8 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	if pend.NewSHA256 != "" {
 		if cur, err := os.ReadFile(exePath); err == nil && sha256hex(cur) != pend.NewSHA256 {
 			logsink.Info("updates.decision", "rollback skipped — the binary changed since the update (operator repair); retiring update state")
-			os.Remove(prevPath)
-			os.Remove(filepath.Join(dataDir, pendingFile))
+			os.Remove(r.backup)
+			os.Remove(r.record)
 			return ""
 		}
 	}
@@ -1032,17 +1354,70 @@ func rollbackToPrev(dataDir, prevPath, exePath string, pend updatePending) strin
 	if rerr != nil {
 
 		logsink.Error("updates.error", "ROLLBACK restored the previous binary but could not make the directory entry durable — keeping the backup: %v", rerr)
-		return prevPath
+		return r.backup
 	}
-	os.Remove(prevPath)
-	os.Remove(filepath.Join(dataDir, pendingFile))
+	os.Remove(r.backup)
+	os.Remove(r.record)
 	logsink.Warn("updates.end", "ROLLBACK — restored previous binary (update failed to boot)")
-	return prevPath
+	return r.backup
 }
 
 func sha256hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+func imageHash(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !fi.IsDir() {
+		return fileHash(path)
+	}
+	h := sha256.New()
+	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(path, p)
+		if err != nil {
+			return err
+		}
+		var content string
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			content, err = os.Readlink(p)
+		case info.Mode().IsRegular():
+			content, err = fileHash(p)
+		}
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(h, "%q %s %q\n", filepath.ToSlash(rel), info.Mode(), content)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func fileHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func StageRefusal() string {

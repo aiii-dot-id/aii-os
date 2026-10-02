@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
@@ -46,11 +47,13 @@ func (a *App) ownedCredentialPath(kind string, configured ...string) (string, er
 	if a.credentialPathRead != nil {
 		a.credentialPathRead()
 	}
-	ledgerPath := ""
+	var saved IdentityConfig
 	if a.cfg != nil {
-		ledgerPath = a.cfg.Identity.LedgerPath
+		saved = a.cfg.Identity
 	}
 	a.cfgMu.RUnlock()
+
+	ledgerPath := a.activeIdentity(saved).LedgerPath
 	if ledgerPath == "" {
 		return "", errNoIdentityDir
 	}
@@ -95,6 +98,17 @@ func (a *App) ownedCredential(kind string, configured ...string) (string, ownedS
 	}
 }
 
+type credentialCustody struct {
+	mu        sync.Mutex
+	signIns   map[string]*pendingSignIn
+	unrevoked map[string]bool
+}
+
+type credentialSources struct {
+	mu      sync.Mutex
+	credSrc map[string]*oauth.Source
+}
+
 type pendingSignIn struct {
 	profile *broker.AuthProfile
 	login   *oauth.Login
@@ -105,13 +119,6 @@ type pendingSignIn struct {
 	cancel  context.CancelFunc
 	claimed bool
 	view    dashboard.SignInView
-}
-
-func (a *App) signInBase() context.Context {
-	if a.bgCtx != nil {
-		return a.bgCtx
-	}
-	return context.Background()
 }
 
 func (a *App) signInDeadline() time.Duration {
@@ -149,7 +156,7 @@ func (a *App) startSignIn(key, kind, dest string, contract oauth.Provider, param
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(a.signInBase(), a.signInDeadline())
+	ctx, cancel := context.WithTimeout(a.lifetime(), a.signInDeadline())
 	p := &pendingSignIn{profile: profile, kind: kind, params: params, dest: dest, ctx: ctx, cancel: cancel, view: dashboard.SignInView{Status: "pending"}}
 	switch contract.SignIn {
 	case "openai_device", "device":
@@ -170,37 +177,41 @@ func (a *App) startSignIn(key, kind, dest string, contract oauth.Provider, param
 		cancel()
 		return "", fmt.Errorf("unknown sign_in method %q", contract.SignIn)
 	}
-	a.signInMu.Lock()
+	a.providers.custody.mu.Lock()
 	if profile != nil {
 		current, err := a.authProfile(strings.TrimPrefix(key, profileSignInPrefix))
 		if err != nil || !reflect.DeepEqual(current, *profile) {
-			a.signInMu.Unlock()
+			a.providers.custody.mu.Unlock()
 			cancel()
 			return "", errSignInSuperseded
 		}
 	}
-	if a.signIns == nil {
-		a.signIns = map[string]*pendingSignIn{}
+	if a.providers.custody.signIns == nil {
+		a.providers.custody.signIns = map[string]*pendingSignIn{}
 	}
 
-	for previousKey, prev := range a.signIns {
+	for previousKey, prev := range a.providers.custody.signIns {
 		if previousKey == key || prev.dest == dest {
 			prev.view.Status = "cancelled"
 			a.settleSignIn(previousKey, prev)
 		}
 	}
-	a.signIns[key] = p
-	a.signInMu.Unlock()
-	go func() {
+	a.providers.custody.signIns[key] = p
+	a.providers.custody.mu.Unlock()
+
+	if !a.runBackground(func() {
 		<-ctx.Done()
-		a.signInMu.Lock()
-		if a.signIns[key] == p && p.view.Status == "pending" {
+		a.providers.custody.mu.Lock()
+		if a.providers.custody.signIns[key] == p && p.view.Status == "pending" {
 			p.view.Status = "expired"
 			a.settleSignIn(key, p)
 		}
-		a.signInMu.Unlock()
+		a.providers.custody.mu.Unlock()
 		a.signInChanged()
-	}()
+	}) {
+		a.endSignIn(key, p, errStopping)
+		return "", fmt.Errorf("the sign-in did not start: %w", errStopping)
+	}
 	if p.login != nil {
 		a.signInChanged()
 		return p.login.URL, nil
@@ -236,9 +247,9 @@ func (a *App) startSignIn(key, kind, dest string, contract oauth.Provider, param
 		}
 	}
 	view := dashboard.DeviceCodeView{UserCode: d.UserCode, VerificationURI: d.VerificationURI, VerificationURIComplete: d.VerificationURIComplete, Expires: d.Expires.UTC().Format(time.RFC3339)}
-	a.signInMu.Lock()
-	if a.signIns[key] != p || ctx.Err() != nil {
-		a.signInMu.Unlock()
+	a.providers.custody.mu.Lock()
+	if a.providers.custody.signIns[key] != p || ctx.Err() != nil {
+		a.providers.custody.mu.Unlock()
 		return "", errSignInSuperseded
 	}
 	p.view.Device = &view
@@ -247,9 +258,9 @@ func (a *App) startSignIn(key, kind, dest string, contract oauth.Provider, param
 		p.view.URL = d.VerificationURI
 	}
 	resultURL := p.view.URL
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Unlock()
 	a.signInChanged()
-	go func() {
+	if !a.runBackground(func() {
 		var tokens *oauth.Tokens
 		var err error
 		if contract.SignIn == "openai_device" {
@@ -261,7 +272,10 @@ func (a *App) startSignIn(key, kind, dest string, contract oauth.Provider, param
 			err = a.publishSignIn(key, p, tokens)
 		}
 		a.endSignIn(key, p, err)
-	}()
+	}) {
+		a.endSignIn(key, p, errStopping)
+		return "", fmt.Errorf("the sign-in did not start: %w", errStopping)
+	}
 	return resultURL, nil
 }
 
@@ -272,9 +286,9 @@ func (a *App) signInChanged() {
 	}
 }
 func (a *App) signInView(key string) *dashboard.SignInView {
-	a.signInMu.Lock()
-	defer a.signInMu.Unlock()
-	if p := a.signIns[key]; p != nil {
+	a.providers.custody.mu.Lock()
+	defer a.providers.custody.mu.Unlock()
+	if p := a.providers.custody.signIns[key]; p != nil {
 		v := p.view
 		if v.Device != nil {
 			d := *v.Device
@@ -285,8 +299,8 @@ func (a *App) signInView(key string) *dashboard.SignInView {
 	return nil
 }
 func (a *App) endSignIn(key string, p *pendingSignIn, err error) {
-	a.signInMu.Lock()
-	if a.signIns[key] == p {
+	a.providers.custody.mu.Lock()
+	if a.providers.custody.signIns[key] == p {
 		if p.view.Status == "pending" {
 			if err == nil {
 				p.view.Status = "connected"
@@ -298,17 +312,15 @@ func (a *App) endSignIn(key string, p *pendingSignIn, err error) {
 		}
 		a.settleSignIn(key, p)
 	}
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Unlock()
 	if err == nil {
-		a.credMu.Lock()
-		a.credSrc = nil
-		a.credMu.Unlock()
+		a.providers.sources.mu.Lock()
+		a.providers.sources.credSrc = nil
+		a.providers.sources.mu.Unlock()
 		if strings.HasPrefix(key, profileSignInPrefix) {
 			a.profileChanged()
 		} else {
-			a.provMu.Lock()
-			delete(a.provStatus, strings.TrimPrefix(key, "provider:"))
-			a.provMu.Unlock()
+			a.clearProviderStatus(strings.TrimPrefix(key, "provider:"))
 		}
 	}
 	a.signInChanged()
@@ -323,9 +335,9 @@ func (a *App) publishSignIn(key string, p *pendingSignIn, tokens *oauth.Tokens) 
 			return fmt.Errorf("sign-in did not grant required scope %q; the existing credential was kept", required)
 		}
 	}
-	a.signInMu.Lock()
-	defer a.signInMu.Unlock()
-	if a.signIns[key] != p || p.ctx.Err() != nil {
+	a.providers.custody.mu.Lock()
+	defer a.providers.custody.mu.Unlock()
+	if a.providers.custody.signIns[key] != p || p.ctx.Err() != nil {
 		return errSignInSuperseded
 	}
 
@@ -343,7 +355,7 @@ func (a *App) publishSignIn(key string, p *pendingSignIn, tokens *oauth.Tokens) 
 	}
 	p.view.Status = "connected"
 	if p.profile != nil {
-		delete(a.unrevoked, strings.TrimPrefix(key, profileSignInPrefix))
+		delete(a.providers.custody.unrevoked, strings.TrimPrefix(key, profileSignInPrefix))
 	}
 	return nil
 }
@@ -352,16 +364,16 @@ func (a *App) OAuthCallback(code, state, authorityError string) error {
 	if state == "" {
 		return errNoSignIn
 	}
-	a.signInMu.Lock()
+	a.providers.custody.mu.Lock()
 	var key string
 	var p *pendingSignIn
-	for k, v := range a.signIns {
+	for k, v := range a.providers.custody.signIns {
 		if v.login != nil && v.login.State() == state {
 			key, p = k, v
 			break
 		}
 	}
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Unlock()
 	if p == nil {
 		return errNoSignIn
 	}
@@ -380,9 +392,9 @@ func (a *App) completeSignIn(name, input string) error {
 	if err != nil {
 		return err
 	}
-	a.signInMu.Lock()
-	p, ok := a.signIns[name]
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Lock()
+	p, ok := a.providers.custody.signIns[name]
+	a.providers.custody.mu.Unlock()
 	if !ok {
 		return errNoSignIn
 	}
@@ -410,9 +422,9 @@ func (a *App) claimSignIn(key string, login *oauth.Login, state string) (*pendin
 	if login == nil || state == "" || state != login.State() {
 		return nil, errors.New("state mismatch — this response is not for the current sign-in")
 	}
-	a.signInMu.Lock()
-	defer a.signInMu.Unlock()
-	p, ok := a.signIns[key]
+	a.providers.custody.mu.Lock()
+	defer a.providers.custody.mu.Unlock()
+	p, ok := a.providers.custody.signIns[key]
 	if !ok || p.login != login {
 		return nil, errSignInSuperseded
 	}
@@ -480,15 +492,15 @@ func validateSignInRedirect(method, raw string) error {
 
 func (a *App) CancelSignIn(name string) error { return a.cancelSignIn("provider:" + name) }
 func (a *App) cancelSignIn(name string) error {
-	a.signInMu.Lock()
-	if p := a.signIns[name]; p != nil && p.view.Status == "pending" {
+	a.providers.custody.mu.Lock()
+	if p := a.providers.custody.signIns[name]; p != nil && p.view.Status == "pending" {
 		p.cancel()
 		p.view.Status = "cancelled"
 		p.view.URL = ""
 		p.view.Device = nil
 		a.settleSignIn(name, p)
 	}
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Unlock()
 	a.signInChanged()
 	return nil
 }
@@ -502,5 +514,13 @@ func (a *App) settleSignIn(key string, p *pendingSignIn) {
 	v.URL = ""
 	v.Device = nil
 	v.Manual = false
-	a.signIns[key] = &pendingSignIn{view: v, cancel: p.cancel, ctx: p.ctx}
+	a.providers.custody.signIns[key] = &pendingSignIn{view: v, cancel: p.cancel, ctx: p.ctx}
+}
+
+func (a *App) wireSignInHooks(h *dashboard.WSHandler) {
+	h.SignInProvider = a.SignInProvider
+	h.CompleteSignIn = a.CompleteSignIn
+	h.CancelSignIn = a.CancelSignIn
+	h.CancelProfileSignIn = a.CancelProfileSignIn
+	h.OAuthCallback = a.OAuthCallback
 }

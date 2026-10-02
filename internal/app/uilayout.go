@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/fsdir"
@@ -32,7 +34,9 @@ var overlayShippedSeeds = []string{
 	"e4556fa91989d2e2b218bf50f306c897c62b85cf9a77d1958bc53d4e7d011a0b",
 	"2f070e93ad6f5502e0d06b5433d860dfbe234985c03f33100aedf864a0647375",
 	"074dfa9f1ac869859b0ae944a5f1d6186c617f006ed8d8bf1bb4c1c3592ec7cc",
-	"6c5c998f4c7d582d74d85926774ce315e8124221087ce40b0f913e4c74c7d180",
+	"fe9b2de4ffc019aebb5614d74dabdd55957667e953fcdc55cd6713507c3295a9",
+	"39120234b76fb07aa2f9b42f62d9105c841f8ade45fd81f1d4e6dfd61fedbc51",
+	"dcaa806c251ad13d0b385ee4f1723d2d304c6110ea1e74665f389c0d4b4b3311",
 }
 
 func (a *App) seedOverlayREADME() {
@@ -44,14 +48,31 @@ func (a *App) seedOverlayREADME() {
 	seedDoc(filepath.Join(dir, "README.md"), overlayREADME, nil, overlayShippedSeeds, "[ui-overlay] seed")
 }
 
+type dashState struct {
+	mu sync.Mutex
+
+	dashboardAccessToken string
+
+	uiLayoutRaw []byte
+
+	uiThemeRaw []byte
+
+	uiLayoutFilePath string
+	uiLayoutPathOnce sync.Once
+
+	overlayLast atomic.Pointer[string]
+
+	overlayToken atomic.Uint64
+}
+
 func (a *App) uiLayoutPath() string {
 	a.snapshotUILayoutPath(a.configSnapshot().Identity.LedgerPath)
-	return a.uiLayoutFilePath
+	return a.dash.uiLayoutFilePath
 }
 
 func (a *App) snapshotUILayoutPath(ledgerPath string) {
-	a.uiLayoutPathOnce.Do(func() {
-		a.uiLayoutFilePath = filepath.Join(filepath.Dir(ledgerPath), uiLayoutFile)
+	a.dash.uiLayoutPathOnce.Do(func() {
+		a.dash.uiLayoutFilePath = filepath.Join(filepath.Dir(ledgerPath), uiLayoutFile)
 	})
 }
 
@@ -109,10 +130,10 @@ func (a *App) loadUILayout(quiet bool) bool {
 			}
 		}
 	}
-	a.uiLayoutMu.Lock()
-	changed := string(a.uiLayoutRaw) != string(raw)
-	a.uiLayoutRaw = raw
-	a.uiLayoutMu.Unlock()
+	a.dash.mu.Lock()
+	changed := string(a.dash.uiLayoutRaw) != string(raw)
+	a.dash.uiLayoutRaw = raw
+	a.dash.mu.Unlock()
 	if changed && !quiet {
 		if raw == nil {
 			logsink.Info("layout.start", "file absent — frame-only (no sections laid out)")
@@ -124,9 +145,9 @@ func (a *App) loadUILayout(quiet bool) bool {
 }
 
 func (a *App) currentUILayout() []byte {
-	a.uiLayoutMu.Lock()
-	defer a.uiLayoutMu.Unlock()
-	return a.uiLayoutRaw
+	a.dash.mu.Lock()
+	defer a.dash.mu.Unlock()
+	return a.dash.uiLayoutRaw
 }
 
 func (a *App) watchUILayout() {

@@ -180,14 +180,14 @@ func selectModels(decls []ModelDecl, profile *AcceleratorProfile) ([]ModelDecl, 
 	return selected, nil
 }
 
-func loadModels(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest, profile *AcceleratorProfile) ([]ModelDecl, error) {
+func loadModels(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest, profile *AcceleratorProfile) ([]ModelDecl, error) {
 	if _, present := res.FileDigests[ModelsFile]; !present {
 		if profile != nil && len(profile.Models) > 0 {
 			return nil, &ModelsError{PluginID: m.ID, Detail: "the accelerator profile names models but the package declares none"}
 		}
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, ModelsFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, ModelsFile)
 	if err != nil {
 		return nil, err
 	}
@@ -342,85 +342,89 @@ func EnsureModels(ctx context.Context, pluginID string, decls []ModelDecl, dir s
 }
 
 func fetchModel(ctx context.Context, pluginID string, d ModelDecl, dir string, fetch ModelFetcher, logf func(string, ...interface{})) error {
+	final := modelFile(dir, d)
+	partial := final + modelPartialSuffx
+	if err := fetchVerified(ctx, pluginID, "model "+d.Name, d.URL, partial, d.Size, d.SHA256, fetch, logf); err != nil {
+		return err
+	}
+	if err := os.Chmod(partial, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(partial, final)
+}
+
+func fetchVerified(ctx context.Context, pluginID, what, url, partial string, size int64, sha string, fetch ModelFetcher, logf func(string, ...interface{})) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	final := modelFile(dir, d)
-	partial := final + modelPartialSuffx
 	var offset int64
 
 	if fi, err := os.Lstat(partial); err == nil {
 		if !fi.Mode().IsRegular() {
-			return fmt.Errorf("partial for %s is not a regular file", d.Name)
+			return fmt.Errorf("the partial %s is not a regular file", what)
 		}
 		offset = fi.Size()
-		if offset > d.Size {
+		if offset > size {
 			if err := os.Remove(partial); err != nil {
-				return fmt.Errorf("discard oversized partial for %s: %w", d.Name, err)
+				return fmt.Errorf("discard the oversized partial %s: %w", what, err)
 			}
 			offset = 0
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect partial for %s: %w", d.Name, err)
+		return fmt.Errorf("inspect the partial %s: %w", what, err)
 	}
 	var n int64
 
-	if offset < d.Size {
+	if offset < size {
 		if fetch == nil {
 
-			return fmt.Errorf("model %s is incomplete (%d of %d bytes): %w", d.Name, offset, d.Size, errNoDownloadPath)
+			return fmt.Errorf("%s has %d of %d bytes: %w", what, offset, size, errNoDownloadPath)
 		}
 		f, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 		if err != nil {
-			return fmt.Errorf("open partial: %w", err)
+			return fmt.Errorf("open the partial %s: %w", what, err)
 		}
 		if logf != nil {
-			logf("plugin %s: fetching model %s (%d of %d bytes present)", pluginID, d.Name, offset, d.Size)
+			logf("plugin %s: fetching %s (%d of %d bytes present)", pluginID, what, offset, size)
 		}
 
-		limited := &limitedWriter{w: f, remaining: d.Size - offset}
+		limited := &limitedWriter{w: f, remaining: size - offset}
 		var ferr error
-		n, ferr = fetch(ctx, d.URL, offset, limited)
+		n, ferr = fetch(ctx, url, offset, limited)
 		cerr := f.Close()
 		if cancelled := ctx.Err(); cancelled != nil {
 			return cancelled
 		}
 		if limited.overflow {
 			_ = os.Remove(partial)
-			return fmt.Errorf("fetch %s: the server sent more than the declared %d bytes", d.Name, d.Size)
+			return fmt.Errorf("fetch %s: the server sent more than the declared %d bytes", what, size)
 		}
 		if ferr != nil {
-			if offset > 0 && strings.Contains(ferr.Error(), "does not resume") {
+			if offset > 0 && errors.Is(ferr, ErrNoResume) {
 				_ = os.Remove(partial)
 			}
-			return fmt.Errorf("fetch %s: %w", d.Name, ferr)
+			return fmt.Errorf("fetch %s: %w", what, ferr)
 		}
 		if cerr != nil {
-			return fmt.Errorf("write %s: %w", d.Name, cerr)
+			return fmt.Errorf("write %s: %w", what, cerr)
 		}
 	}
-	sum, size, err := hashFileContext(ctx, partial)
+	sum, got, err := hashFileContext(ctx, partial)
 	if err != nil {
 		return err
 	}
-	if size != d.Size {
-		return fmt.Errorf("fetch %s: %d of %d bytes after %d more; the download will resume", d.Name, size, d.Size, n)
+	if got < size {
+		return fmt.Errorf("fetch %s: %d of %d bytes after %d more; the download will resume", what, got, size, n)
 	}
-	if sum != d.SHA256 {
+	if got > size || sum != sha {
 		_ = os.Remove(partial)
-		return fmt.Errorf("fetch %s: the bytes do not hash to the declared sha256 — discarded", d.Name)
+		return fmt.Errorf("fetch %s: the bytes do not hash to the declared sha256 digest — discarded", what)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.Chmod(partial, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(partial, final); err != nil {
-		return err
-	}
 	if logf != nil {
-		logf("plugin %s: model %s verified (%d bytes)", pluginID, d.Name, size)
+		logf("plugin %s: %s verified (%d bytes)", pluginID, what, got)
 	}
 	return nil
 }

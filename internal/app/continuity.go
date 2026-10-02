@@ -87,10 +87,10 @@ func (a *App) takeOnDemand(ctx context.Context, spaced bool, now time.Time) (pub
 		}
 	}
 
-	if !a.maintMu.TryLock() {
+	if !a.maint.mu.TryLock() {
 		return publishedSnapshot{}, refuseContinuity("busy", "a maintenance pass is running right now — it is taking a snapshot of you itself. recall source=continuity will show it when it is done")
 	}
-	defer a.maintMu.Unlock()
+	defer a.maint.mu.Unlock()
 	made, err := a.takeSnapshot(ctx, cfg, dir, true)
 	if err != nil {
 		a.recordPass(store.ContinuityStatus{Outcome: store.ContinuityFailed, OnDemand: true, Detail: err.Error()})
@@ -135,17 +135,17 @@ func (a *App) verifyKept(ctx context.Context, name string, spaced bool, now time
 			return "", refuseContinuity("unknown", "%q is not one of your snapshots; recall source=continuity query=snapshots lists them by name", name)
 		}
 	}
-	if !a.maintMu.TryLock() {
+	if !a.maint.mu.TryLock() {
 		return "", refuseContinuity("busy", "a maintenance pass is running right now; prove a snapshot when it is done")
 	}
-	defer a.maintMu.Unlock()
+	defer a.maint.mu.Unlock()
 
-	if spaced && !a.lastVerify.IsZero() {
-		if since := now.Sub(a.lastVerify); since >= 0 && since < onDemandSpacing(cfg) {
+	if spaced && !a.maint.lastVerify.IsZero() {
+		if since := now.Sub(a.maint.lastVerify); since >= 0 && since < onDemandSpacing(cfg) {
 			return "", refuseContinuity("spaced", "you proved one %s ago; the next proof can run in %s", roundAge(since), roundAge(onDemandSpacing(cfg)-since))
 		}
 	}
-	a.lastVerify = now
+	a.maint.lastVerify = now
 
 	if err := a.proveKept(ctx, cfg, dir, target); err != nil {
 

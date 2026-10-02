@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"io"
 	"os"
 	"path/filepath"
@@ -38,7 +39,7 @@ func runDashboardToken(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "dashboard-token: a new token is in the config file; the running identity applies it on its next configuration reload (SIGHUP, or any save from Settings), and every signed-in browser signs in again")
 		return 0
 	}
-	cfg, err := app.LoadConfig(path)
+	cfg, err := app.ReadConfig(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "dashboard-token: %v\n", err)
 		return 1
@@ -54,7 +55,7 @@ func runDashboardToken(args []string, stdout, stderr io.Writer) int {
 func operatorConfigPath(dir, config string) string {
 	switch {
 	case config == "":
-		return app.ConfigPathIn(dir)
+		return install.ConfigPathIn(dir)
 	case dir != "" && !filepath.IsAbs(config):
 		return filepath.Join(dir, config)
 	}

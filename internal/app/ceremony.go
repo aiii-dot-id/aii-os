@@ -6,6 +6,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -55,9 +56,19 @@ func (a *App) fetchFoundingArtifacts(cfg Config) {
 	logsink.Info("genesis.end", "Bootstrap packet verified (%d bytes)", len(a.bootstrapText))
 }
 
-func (a *App) startFirstboot() error {
+func (a *App) startFirstboot() (retErr error) {
 	logsink.Info("genesis.start", "no identity found — starting the FIRSTBOOT flow")
 	cfg := a.configSnapshot()
+
+	release, err := a.claimIdentity(filepath.Dir(cfg.Identity.LedgerPath))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			release()
+		}
+	}()
 
 	a.rings = ring.NewManager()
 	a.genesisClient = genesis.NewClient(
@@ -82,7 +93,7 @@ func (a *App) startFirstboot() error {
 	}
 	a.dashboard = d
 	a.dashboard.SetQuiesceGate(a.gate)
-	_, err := a.dashboard.Start(tlsDirFor(cfg))
+	_, err = a.dashboard.Start(tlsDirFor(cfg))
 	if err != nil {
 
 		return fmt.Errorf("dashboard start failed: %w", err)
@@ -128,13 +139,14 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 		CancelSignIn:        a.CancelSignIn,
 		CancelProfileSignIn: a.CancelProfileSignIn,
 		OAuthCallback:       a.OAuthCallback,
-		UpdateCheck:         a.checkForUpdateNow,
+
+		UpdateCheck: func() (*dashboard.UpdateState, error) { return nil, errUpdatesUnavailable },
 		DiscoverModels: func(provider, baseURL, apiKey string) ([]string, error) {
 			reg, err := a.loadProviders()
 			if err != nil {
 				return nil, err
 			}
-			return a.discoverForProvider(context.Background(), reg, provider, baseURL, apiKey)
+			return a.discoverForProvider(a.lifetime(), reg, provider, baseURL, apiKey)
 		},
 	}
 }
@@ -268,7 +280,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 	a.dashboard.SwapHandler(a.buildLiveHandler())
 	logsink.Info("genesis.end", "genesis complete: identity=%s, handler swapped", name)
 
-	if _, rerr := a.engine.RecordConversationRef(ctx, "resident", greeting, interaction.Details{Reason: "founding greeting"}); rerr != nil {
+	if _, rerr := a.engine.RecordConversationRef(ctx, string(interaction.Resident), greeting, interaction.Details{Reason: "founding greeting"}); rerr != nil {
 		return greeting, fmt.Errorf("identity created and greeted, but its first words were not recorded — "+
 			"the chat replay will not show them: %w", rerr)
 	}
@@ -338,24 +350,17 @@ func nameAfterLead(line string) (string, bool) {
 		at   int
 		lead string
 	}
-	var hits []hit
-	lower := strings.ToLower(line)
-	for _, lead := range leads {
-		from := 0
-		for from <= len(line) {
-			var idx int
-			if lead == "NAME:" {
-				idx = strings.Index(line[from:], lead)
-			} else {
-				idx = strings.Index(lower[from:], strings.ToLower(lead))
-			}
-			if idx < 0 {
-				break
-			}
-			idx += from
-			from = idx + len(lead)
 
-			if idx > 0 && IsWordRune(rune(line[idx-1])) {
+	var hits []hit
+	for _, lead := range leads {
+		for idx := 0; idx+len(lead) <= len(line); idx++ {
+			if !utf8.RuneStart(line[idx]) {
+				continue
+			}
+			if at := line[idx : idx+len(lead)]; at != lead && (lead == "NAME:" || !strings.EqualFold(at, lead)) {
+				continue
+			}
+			if before, _ := utf8.DecodeLastRuneInString(line[:idx]); idx > 0 && (unicode.IsLetter(before) || unicode.IsDigit(before)) {
 				continue
 			}
 			hits = append(hits, hit{idx, lead})
@@ -395,8 +400,9 @@ func nameAt(line string, cut int) (string, bool) {
 		words = words[:4]
 	}
 	name = strings.Trim(strings.Join(words, " "), " \t.,;:!?\"'")
-	if len(name) > 32 {
-		name = name[:32]
+
+	if runes := []rune(name); len(runes) > 32 {
+		name = string(runes[:32])
 	}
 	if name == "" {
 		return "", false
@@ -407,8 +413,4 @@ func nameAt(line string, cut int) (string, bool) {
 func startsUpper(s string) bool {
 	r, _ := utf8.DecodeRuneInString(s)
 	return unicode.IsUpper(r)
-}
-
-func IsWordRune(r rune) bool {
-	return strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", r)
 }

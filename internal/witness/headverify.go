@@ -59,33 +59,12 @@ func persistWitnessKey(ledgerDir, keyID string, manifestRaw, keyCanonical []byte
 	if existing, err := os.ReadFile(final); err == nil && bytes.Equal(existing, doc) {
 		return nil
 	}
-	tmp := filepath.Join(dir, "."+keyID+".tmp")
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(doc); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
 
-	if published, err := atomicfile.Replace(tmp, final); err != nil {
-		if !published {
-			os.Remove(tmp)
-		}
-		return err
+	published, err := atomicfile.WriteReplace(final, doc, 0o600)
+	if err != nil && published {
+		return fmt.Errorf("%s published but not durable: %w", filepath.Base(final), err)
 	}
-	return nil
+	return err
 }
 
 type WitnessKeyMaterial struct {
@@ -94,11 +73,17 @@ type WitnessKeyMaterial struct {
 	PublicKey   []byte
 	NotBefore   time.Time
 	ExpiresAt   time.Time
+	envelope    PublicKeyEnvelope
 }
 
 func LoadPlatformEnvelope(path string) (*PublicKeyEnvelope, error) {
 	if path == "" {
-		return genesis.PinnedRoot(), nil
+
+		root := genesis.PinnedRoot()
+		if err := sigenvelope.ValidWindow(root, time.Now()); err != nil {
+			return nil, fmt.Errorf("platform pubkey (the shipped root): %w", err)
+		}
+		return root, nil
 	}
 	raw, err := readFileTrimmed(path)
 	if err != nil {
@@ -167,7 +152,8 @@ func loadWitnessKeyFile(path, keyID string, platform *PublicKeyEnvelope) (*Witne
 	if env.KeyID != keyID {
 		return nil, fmt.Errorf("file is named %s but holds key %s", keyID, env.KeyID)
 	}
-	if err := sigenvelope.ValidatePublicKeyEnvelope(&env, ProfileRoot); err != nil {
+
+	if err := sigenvelope.ValidatePublicKeyEnvelopeShape(&env, ProfileRoot); err != nil {
 		return nil, fmt.Errorf("public key envelope: %w", err)
 	}
 	payload, err := verifyManifestBundle(doc.Manifest, platform, &env, false)
@@ -182,7 +168,7 @@ func loadWitnessKeyFile(path, keyID string, platform *PublicKeyEnvelope) (*Witne
 	if err != nil {
 		return nil, fmt.Errorf("witness key decode: %w", err)
 	}
-	km := &WitnessKeyMaterial{KeyID: keyID, Fingerprint: wm.PublicKeyFingerprint, PublicKey: pub}
+	km := &WitnessKeyMaterial{KeyID: keyID, Fingerprint: wm.PublicKeyFingerprint, PublicKey: pub, envelope: env}
 	if payload.NotBefore != "" {
 		nb, err := time.Parse(time.RFC3339, payload.NotBefore)
 		if err != nil {
@@ -272,68 +258,107 @@ type headReceipt struct {
 	WitnessSigB64                  string `json:"witness_sig_b64"`
 }
 
-func (h *HeadVerifier) VerifyHead(evt *ledger.Event) error {
+func (h *HeadVerifier) VerifyHead(evt *ledger.Event, hashAt func(seq uint64) (string, bool)) (uint64, error) {
 	if evt.Type != ledger.EventSystemWitnessed {
-		return fmt.Errorf("record %d is %s, not a witness head", evt.Seq, evt.Type)
+		return h.chainAt(), fmt.Errorf("record %d is %s, not a witness head", evt.Seq, evt.Type)
 	}
 	var payload struct {
 		Receipt      json.RawMessage `json:"receipt"`
 		BeforeRewrap json.RawMessage `json:"receipt_before_rewrap"`
 	}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
-		return fmt.Errorf("record %d: payload: %w", evt.Seq, err)
+		return h.chainAt(), fmt.Errorf("record %d: payload: %w", evt.Seq, err)
 	}
 	if len(payload.Receipt) == 0 {
 		if len(payload.BeforeRewrap) > 0 {
 
 			h.footnotes++
-			return nil
+			return h.chainAt(), nil
 		}
-		return fmt.Errorf("record %d: payload carries no receipt", evt.Seq)
+		return h.chainAt(), fmt.Errorf("record %d: payload carries no receipt", evt.Seq)
 	}
 	dec := json.NewDecoder(bytes.NewReader(payload.Receipt))
 	dec.DisallowUnknownFields()
 	var r headReceipt
 	if err := dec.Decode(&r); err != nil {
-		return fmt.Errorf("record %d: receipt: %w", evt.Seq, err)
+		return h.chainAt(), fmt.Errorf("record %d: receipt: %w", evt.Seq, err)
 	}
-	if r.LedgerOrdinal != int64(evt.Seq)-1 || evt.Seq == 0 {
-		return fmt.Errorf("record %d: receipt attests ordinal %d, not the record before the head", evt.Seq, r.LedgerOrdinal)
+	err := h.verifyReceipt(headPlace{seq: evt.Seq, prev: evt.Prev, sealed: evt.Sealed(), closing: evt.Closing(), hashAt: hashAt}, r)
+	return h.chainAt(), err
+}
+
+func (h *HeadVerifier) chainAt() uint64 {
+	if h.prevOrdinal < 0 {
+		return 0
 	}
-	if r.LedgerHash != evt.Prev {
-		return fmt.Errorf("record %d: receipt attests hash %s, the record before the head is %s", evt.Seq, r.LedgerHash, evt.Prev)
+	return uint64(h.prevOrdinal)
+}
+
+type headPlace struct {
+	seq             uint64
+	prev            string
+	sealed, closing bool
+	hashAt          func(seq uint64) (string, bool)
+}
+
+func (h *HeadVerifier) verifyReceipt(place headPlace, r headReceipt) error {
+	seq := place.seq
+	switch {
+	case seq > 0 && r.LedgerOrdinal == int64(seq)-1:
+		if r.LedgerHash != place.prev {
+			return fmt.Errorf("record %d: receipt attests hash %s, the record before the head is %s", seq, r.LedgerHash, place.prev)
+		}
+	case place.closing:
+		return fmt.Errorf("record %d: closes its segment and its receipt attests record %d, not the record before the head: a late head never closes a segment", seq, r.LedgerOrdinal)
+	case r.LedgerOrdinal <= h.prevOrdinal || r.LedgerOrdinal >= int64(seq):
+		return fmt.Errorf("record %d: receipt attests ordinal %d, neither the record before the head nor a record after the one the previous head attested (%d)", seq, r.LedgerOrdinal, h.prevOrdinal)
+	default:
+		var hash string
+		ok := false
+		if place.hashAt != nil {
+			hash, ok = place.hashAt(uint64(r.LedgerOrdinal))
+		}
+		if !ok {
+			return fmt.Errorf("record %d: receipt attests record %d, whose entry hash is not at hand to check it against", seq, r.LedgerOrdinal)
+		}
+		if r.LedgerHash != hash {
+			return fmt.Errorf("record %d: receipt attests hash %s for record %d, which is %s", seq, r.LedgerHash, r.LedgerOrdinal, hash)
+		}
 	}
 	if h.identityID == "" {
 		h.identityID = r.IdentityID
 	} else if r.IdentityID != h.identityID {
-		return fmt.Errorf("record %d: receipt names identity %s, earlier heads name %s", evt.Seq, r.IdentityID, h.identityID)
+		return fmt.Errorf("record %d: receipt names identity %s, earlier heads name %s", seq, r.IdentityID, h.identityID)
 	}
 	if r.PreviousWitnessedLedgerOrdinal != h.prevOrdinal || r.PreviousWitnessedLedgerHash != h.prevHash {
-		return fmt.Errorf("record %d: receipt continues from (%d, %s), the previous head attested (%d, %s)", evt.Seq,
+		return fmt.Errorf("record %d: receipt continues from (%d, %s), the previous head attested (%d, %s)", seq,
 			r.PreviousWitnessedLedgerOrdinal, r.PreviousWitnessedLedgerHash, h.prevOrdinal, h.prevHash)
 	}
 	h.prevOrdinal, h.prevHash = r.LedgerOrdinal, r.LedgerHash
 	km := h.keys[r.WitnessKeyID]
 	if km == nil {
 
-		if !evt.Sealed() {
+		if !place.sealed {
 			h.unverified++
 		}
-		return fmt.Errorf("record %d: %w (%s)", evt.Seq, ledger.ErrWitnessKeyUnknown, r.WitnessKeyID)
+		return fmt.Errorf("record %d: %w (%s)", seq, ledger.ErrWitnessKeyUnknown, r.WitnessKeyID)
 	}
 	at, err := time.Parse(time.RFC3339, r.WitnessedAt)
 	if err != nil {
-		return fmt.Errorf("record %d: witnessed_at: %w", evt.Seq, err)
+		return fmt.Errorf("record %d: witnessed_at: %w", seq, err)
 	}
 	if !km.NotBefore.IsZero() && at.Before(km.NotBefore) {
-		return fmt.Errorf("record %d: witnessed at %s, before key %s was valid", evt.Seq, r.WitnessedAt, km.KeyID)
+		return fmt.Errorf("record %d: witnessed at %s, before key %s was valid", seq, r.WitnessedAt, km.KeyID)
 	}
 	if !at.Before(km.ExpiresAt) {
-		return fmt.Errorf("record %d: witnessed at %s, after key %s expired", evt.Seq, r.WitnessedAt, km.KeyID)
+		return fmt.Errorf("record %d: witnessed at %s, after key %s expired", seq, r.WitnessedAt, km.KeyID)
+	}
+	if err := sigenvelope.ValidWindow(&km.envelope, at); err != nil {
+		return fmt.Errorf("record %d: witnessed at %s, outside key %s's own envelope: %w", seq, r.WitnessedAt, km.KeyID, err)
 	}
 	sig, err := base64.StdEncoding.DecodeString(r.WitnessSigB64)
 	if err != nil {
-		return fmt.Errorf("record %d: witness signature: %w", evt.Seq, err)
+		return fmt.Errorf("record %d: witness signature: %w", seq, err)
 	}
 	input := ReceiptSignatureInput(WitnessReceipt{
 		IdentityID:                     r.IdentityID,
@@ -344,7 +369,7 @@ func (h *HeadVerifier) VerifyHead(evt *ledger.Event) error {
 		WitnessedAt:                    r.WitnessedAt,
 	})
 	if err := crypto.Verify(km.PublicKey, input, sig); err != nil {
-		return fmt.Errorf("record %d: witness signature under %s: %w", evt.Seq, km.KeyID, err)
+		return fmt.Errorf("record %d: witness signature under %s: %w", seq, km.KeyID, err)
 	}
 	h.verified++
 	h.attestedOrdinal, h.attestedHash = r.LedgerOrdinal, r.LedgerHash

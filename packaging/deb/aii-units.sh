@@ -1,5 +1,5 @@
 aii_units() {
-  set -- # nothing yet
+  set --
   for home in /home/* /root; do
     [ -d "$home/.aii" ] || continue
     for slot in "$home"/.aii/identity-*; do

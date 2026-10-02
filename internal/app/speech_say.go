@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/speech"
 )
@@ -131,7 +131,7 @@ var errSpeakOff = errors.New("replies are not spoken: the voice mode's speak is 
 
 func (a *App) replyVoice() string {
 	name := strings.TrimSpace(a.configSnapshot().Speech.TTS.Provider)
-	if a.engineServes(name) {
+	if !a.speaksAsService(name) {
 
 		return ""
 	}
@@ -260,11 +260,7 @@ func (a *App) speakStart(r *spokenReply) {
 		return
 	}
 	r.started = true
-	base := a.bgCtx
-	if base == nil {
-		base = context.Background()
-	}
-	r.ctx, r.cancel = context.WithCancel(base)
+	r.ctx, r.cancel = context.WithCancel(a.lifetime())
 	r.mu.Unlock()
 
 	go func() {
@@ -356,7 +352,8 @@ func (a *App) speakPlay(ctx context.Context, id string, w io.Writer) error {
 			return ctx.Err()
 		}
 		if len(pieces) > 0 && !wrote {
-			if _, werr := w.Write(wavStreamHeader(rate, channels)); werr != nil {
+
+			if _, werr := w.Write(audio.WAVHeader(audio.Format{Rate: rate, Channels: max(channels, 1)}, audio.WAVStream)); werr != nil {
 				return werr
 			}
 			wrote = true
@@ -427,26 +424,4 @@ func speakID() (string, error) {
 func spokenKey(text string, tc TTSConfig) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{tc.Provider, tc.Model, tc.Voice, text}, "\x00")))
 	return hex.EncodeToString(sum[:])
-}
-
-func wavStreamHeader(rate, channels int) []byte {
-	if channels <= 0 {
-		channels = 1
-	}
-	const endless = 0xFFFFFFFF
-	out := make([]byte, 44)
-	copy(out[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(out[4:8], endless)
-	copy(out[8:12], "WAVE")
-	copy(out[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(out[16:20], 16)
-	binary.LittleEndian.PutUint16(out[20:22], 1)
-	binary.LittleEndian.PutUint16(out[22:24], uint16(channels))
-	binary.LittleEndian.PutUint32(out[24:28], uint32(rate))
-	binary.LittleEndian.PutUint32(out[28:32], uint32(rate*channels*2))
-	binary.LittleEndian.PutUint16(out[32:34], uint16(channels*2))
-	binary.LittleEndian.PutUint16(out[34:36], 16)
-	copy(out[36:40], "data")
-	binary.LittleEndian.PutUint32(out[40:44], endless)
-	return out
 }

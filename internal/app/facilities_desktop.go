@@ -6,23 +6,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aiii-dot-id/aii-os/internal/facility"
-	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
-func (a *App) hostFacilities() (*facility.Set, error) {
-	platform := packagefmt.HostPlatform()
-	return facility.NewSet(
-		facility.Facility{
-			Name:     facility.TransportLocal,
-			Provider: "bbb-stdio/in-process (" + platform + ")",
-		},
-		facility.Facility{
-			Name:     facility.OperatorPresenceFresh,
-			Provider: "dashboard-session (" + platform + ")",
-			Live:     a.operatorPresent,
-		},
-	)
+func hostFacilities() []string {
+	return []string{pluginhost.FacilityTransportLocal, pluginhost.FacilityOperatorPresenceFresh}
 }
 
 func (a *App) resolveWorkerBinary() (string, []string, error) {

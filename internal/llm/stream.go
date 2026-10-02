@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -119,7 +120,7 @@ func (c *Client) streamHTTPClient() *http.Client {
 	return c.streamClient
 }
 
-func (c *Client) chatOpenAI(ctx context.Context, body []byte) (*Response, error) {
+func (c *Client) chatOpenAI(ctx context.Context, body openAIBody) (*Response, error) {
 	from := streamOff
 	if !c.noStream {
 		from = c.streamMode.Load()
@@ -135,7 +136,11 @@ func (c *Client) chatOpenAI(ctx context.Context, body []byte) (*Response, error)
 		}
 		refusal = err
 	}
-	resp, err := c.chatOpenAIWhole(ctx, body)
+	whole, err := body.bytes()
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	resp, err := c.chatOpenAIWhole(ctx, whole)
 	if err == nil && refusal != nil {
 		c.stepDown(from, streamOff, refusal)
 	}
@@ -162,14 +167,14 @@ func (c *Client) stepDown(from, to int32, refusal error) {
 	}
 }
 
-func withStreamFields(body []byte, mode int32) ([]byte, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, err
+func withStreamFields(body openAIBody, mode int32) ([]byte, error) {
+	m := maps.Clone(body.members)
+	if m == nil {
+		m = body.req.members()
 	}
-	m["stream"] = json.RawMessage("true")
+	m["stream"] = true
 	if mode == streamWithUsage {
-		m["stream_options"] = json.RawMessage(`{"include_usage":true}`)
+		m["stream_options"] = map[string]bool{"include_usage": true}
 	} else {
 		delete(m, "stream_options")
 	}
@@ -180,7 +185,7 @@ func isEventStream(contentType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream")
 }
 
-func (c *Client) chatOpenAIStream(ctx context.Context, body []byte, mode int32) (resp *Response, refused bool, err error) {
+func (c *Client) chatOpenAIStream(ctx context.Context, body openAIBody, mode int32) (resp *Response, refused bool, err error) {
 	sbody, err := withStreamFields(body, mode)
 	if err != nil {
 		return nil, false, fmt.Errorf("stream request: %w", err)
@@ -270,6 +275,8 @@ func readChatStream(r io.Reader) (*Response, error) {
 	var content, reasoning strings.Builder
 	var role, finish, id, provider string
 	var calls []ToolCall
+
+	var args []*strings.Builder
 	byIndex := map[int]int{}
 	var usage Usage
 	done := false
@@ -323,6 +330,7 @@ func readChatStream(r io.Reader) (*Response, error) {
 				}
 				if pos < 0 {
 					calls = append(calls, ToolCall{})
+					args = append(args, new(strings.Builder))
 					pos = len(calls) - 1
 					if tc.Index != nil {
 						byIndex[*tc.Index] = pos
@@ -338,7 +346,7 @@ func readChatStream(r io.Reader) (*Response, error) {
 				if tc.Function.Name != "" && call.Function.Name == "" {
 					call.Function.Name = tc.Function.Name
 				}
-				call.Function.Arguments += tc.Function.Arguments
+				args[pos].WriteString(tc.Function.Arguments)
 			}
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				finish = *choice.FinishReason
@@ -361,6 +369,7 @@ func readChatStream(r io.Reader) (*Response, error) {
 		return nil, fmt.Errorf("tool_calls finish but 0 parsed from the stream")
 	}
 	for i := range calls {
+		calls[i].Function.Arguments = args[i].String()
 		if calls[i].Type == "" {
 			calls[i].Type = "function"
 		}

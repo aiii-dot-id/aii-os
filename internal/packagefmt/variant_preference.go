@@ -7,6 +7,8 @@ import (
 
 const VariantPreferenceMinHost = "0.1.12"
 
+const RuntimeExtentMinHost = "0.1.14"
+
 func ValidateVariantPreference(raw json.RawMessage, minHost string, variants map[string]bool) error {
 	var order []string
 	if json.Unmarshal(raw, &order) != nil || len(order) == 0 || len(order) > 64 {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
-	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,12 +61,6 @@ func NewLogin(p OAuthParams) (*Login, error) {
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 	q.Set("state", state)
-	if p.IDTokenAddOrganizations {
-		q.Set("id_token_add_organizations", "true")
-	}
-	if p.Originator != "" {
-		q.Set("originator", p.Originator)
-	}
 	for k, v := range p.AuthorizeParams {
 		if q.Has(k) {
 			return nil, fmt.Errorf("oauth_authorize_params may not set the protocol field %q", k)
@@ -123,37 +116,14 @@ func claimString(tok string, path []string) string {
 }
 
 func writePrivate(path string, raw []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-
-	if err := fileperm.RestrictToOwner(f); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(raw); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-
-	published, err := atomicfile.Replace(tmp, path)
+	published, err := atomicfile.WriteReplace(path, raw, 0o600)
 	if err != nil {
 		if published {
+
 			return fmt.Errorf("credential published but not durable: %w", err)
 		}
 		return err

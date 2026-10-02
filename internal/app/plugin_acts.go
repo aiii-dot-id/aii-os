@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -80,16 +81,21 @@ func (a *App) admitOperation(plugin, operation, effects string) error {
 	if !ok || !g.ReadOnly {
 		return nil
 	}
-	if strings.HasPrefix(effects, "read.") {
+	if declaredRead(effects) {
 		return nil
 	}
-	class := effects
-	if class == "" {
-		class = "an operation of no declared effect class"
-	} else {
-		class = "a " + class + " operation"
+	return fmt.Errorf("%s is %s and your operator granted %s read only — it may look, not act; ask your operator to widen the grant on the Plugins page if the work needs it", operation, effectClassPhrase(effects), plugin)
+}
+
+func declaredRead(effects string) bool {
+	return effects == broker.EffectsReadInternal || effects == broker.EffectsReadExternal
+}
+
+func effectClassPhrase(effects string) string {
+	if effects == "" {
+		return "an operation of no declared effect class"
 	}
-	return fmt.Errorf("%s is %s and your operator granted %s read only — it may look, not act; ask your operator to widen the grant on the Plugins page if the work needs it", operation, class, plugin)
+	return "a " + effects + " operation"
 }
 
 func hasOperation(list []string, operation string) bool {
@@ -159,7 +165,7 @@ func (a *App) proposeAct(prop pluginhost.ActProposal) (string, error) {
 	}
 	session, finals := actBindings(prop.Args)
 	if session != "" {
-		if _, live := a.voiceSessions.Load(session); !live {
+		if a.voiceHandle(session) == nil {
 			return "", fmt.Errorf("the arguments name session %q, which is not open", session)
 		}
 		for _, seq := range finals {
@@ -265,7 +271,7 @@ func (a *App) decideAct(ctx context.Context, pluginID, actID string, confirm boo
 	defer a.broadcastActs()
 	if !confirm {
 		logsink.Info("act.refusal", "the operator DENIED %s of %s (%s)", act.Operation, act.Plugin, act.ID)
-		return a.recordActOutcome(act, "denied", "")
+		return a.recordActOutcome(ctx, act, "denied", "")
 	}
 	return a.runAct(ctx, act, "confirmed")
 }
@@ -302,14 +308,14 @@ func (a *App) broadcastActs() {
 
 func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 	if act.Session != "" {
-		if _, live := a.voiceSessions.Load(act.Session); !live {
-			a.recordActOutcome(act, "refused", "the session it names has ended")
+		if a.voiceHandle(act.Session) == nil {
+			a.recordActOutcome(ctx, act, "refused", "the session it names has ended")
 			return fmt.Errorf("act %s names session %q, which has ended; nothing ran", act.ID, act.Session)
 		}
 	}
-	if reason, safe := a.SafeMode(); safe && act.Effects != "" && act.Effects != "read.internal" && act.Effects != "read.external" {
-		a.recordActOutcome(act, "refused", "SAFE holds ("+reason+")")
-		return fmt.Errorf("act %s is a %s operation and this identity is in SAFE (%s); nothing ran", act.ID, act.Effects, reason)
+	if reason, safe := a.SafeMode(); safe && !declaredRead(act.Effects) {
+		a.recordActOutcome(ctx, act, "refused", "SAFE holds ("+reason+")")
+		return fmt.Errorf("act %s is %s and this identity is in SAFE (%s); nothing ran", act.ID, effectClassPhrase(act.Effects), reason)
 	}
 	if a.toolReg == nil {
 		return fmt.Errorf("no tool registry; nothing ran")
@@ -335,25 +341,25 @@ func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 	}
 	durable, recordErr := record.recordToolDoneObservedDurable(turn, 1, act.Tool, string(raw), conversation.Observation{Text: text, Failed: failed, DurationMS: &duration, SessionReason: "operator act"})
 	if !durable {
-		recordErr = errors.Join(recordErr, a.recordActResultFallback(act, text, recordErr))
+		recordErr = errors.Join(recordErr, a.recordActResultFallback(ctx, act, text, recordErr))
 	}
 	a.emitPluginEvent(pluginhost.TopicToolCalled, map[string]interface{}{"tool": act.Tool, "failed": failed, "duration_ms": time.Since(started).Milliseconds(), "actor": "operator", "session": "", "act": act.ID})
 	switch {
 	case err != nil:
 		logsink.Warn("act.error", "the operator CONFIRMED %s of %s (%s) — the dispatch failed: %v", act.Operation, act.Plugin, act.ID, err)
-		noticeErr := a.recordActOutcome(act, word+", and the operation failed", "")
+		noticeErr := a.recordActOutcome(ctx, act, word+", and the operation failed", "")
 		return errors.Join(fmt.Errorf("act %s ran and failed: %v", act.ID, err), recordErr, noticeErr)
 	case res.Error != "":
 		logsink.Warn("act.refusal", "the operator CONFIRMED %s of %s (%s) — the operation refused: %s", act.Operation, act.Plugin, act.ID, res.Error)
-		noticeErr := a.recordActOutcome(act, word+", and the operation refused", "")
+		noticeErr := a.recordActOutcome(ctx, act, word+", and the operation refused", "")
 		return errors.Join(fmt.Errorf("act %s ran and was refused: %s", act.ID, res.Error), recordErr, noticeErr)
 	default:
 		logsink.Info("act.end", "the operator CONFIRMED %s of %s (%s) — ran once (%d bytes)", act.Operation, act.Plugin, act.ID, len(res.Text()))
-		return errors.Join(recordErr, a.recordActOutcome(act, word, ""))
+		return errors.Join(recordErr, a.recordActOutcome(ctx, act, word, ""))
 	}
 }
 
-func (a *App) recordActOutcome(act *pendingAct, outcome, detail string) error {
+func (a *App) recordActOutcome(ctx context.Context, act *pendingAct, outcome, detail string) error {
 	if a.engine == nil {
 		return nil
 	}
@@ -366,14 +372,14 @@ func (a *App) recordActOutcome(act *pendingAct, outcome, detail string) error {
 	if detail != "" {
 		text += " — " + detail
 	}
-	if _, err := a.engine.RecordConversationRef(interaction.WithTurn(context.Background(), "operator_act_"+act.ID), roleOperator, text, interaction.Details{Channel: "plugin", Actor: "operator", Tool: act.Tool, Reason: outcome}); err != nil {
+	if _, err := a.engine.RecordConversationRef(interaction.WithTurn(context.WithoutCancel(ctx), "operator_act_"+act.ID), string(interaction.Operator), text, interaction.Details{Channel: "plugin", Actor: "operator", Tool: act.Tool, Reason: outcome}); err != nil {
 		logsink.Warn("act.error", "outcome not recorded: %v", err)
 		return fmt.Errorf("operator act consumed, but outcome recording failed: %w", err)
 	}
 	return nil
 }
 
-func (a *App) recordActResultFallback(act *pendingAct, detail string, cause error) error {
+func (a *App) recordActResultFallback(ctx context.Context, act *pendingAct, detail string, cause error) error {
 	if a.engine == nil {
 		return fmt.Errorf("act %s result cannot be retained: no conversation recorder", act.ID)
 	}
@@ -385,6 +391,6 @@ func (a *App) recordActResultFallback(act *pendingAct, detail string, cause erro
 	if cause != nil {
 		details.RecordingError = cause.Error()
 	}
-	_, err := a.engine.RecordConversationRef(interaction.WithTurn(context.Background(), "operator_act_"+act.ID), "participant", text, details)
+	_, err := a.engine.RecordConversationRef(interaction.WithTurn(context.WithoutCancel(ctx), "operator_act_"+act.ID), string(interaction.Participant), text, details)
 	return err
 }

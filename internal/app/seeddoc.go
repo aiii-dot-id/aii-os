@@ -21,33 +21,9 @@ func docSeedKey(normalize func([]byte) []byte, b []byte) string {
 const sidecarSuffix = ".new"
 
 func publishDoc(path string, data []byte, label string) bool {
-	tmp := path + ".seed"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		logsink.Warn("seed.error", "%s: %v", label, err)
-		return false
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		logsink.Warn("seed.error", "%s: write %s: %v", label, tmp, err)
-		return false
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		logsink.Warn("seed.error", "%s: sync %s: %v", label, tmp, err)
-		return false
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		logsink.Warn("seed.error", "%s: close %s: %v", label, tmp, err)
-		return false
-	}
-	published, err := atomicfile.Replace(tmp, path)
+	published, err := atomicfile.WriteReplace(path, data, 0o644)
 	if err != nil {
 		if !published {
-			os.Remove(tmp)
 			logsink.Warn("seed.error", "%s: publish %s: %v", label, path, err)
 			return false
 		}

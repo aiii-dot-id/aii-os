@@ -2,10 +2,10 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
@@ -28,6 +28,37 @@ type turnSourceKey struct{}
 
 func withTurnSource(ctx context.Context, source string) context.Context {
 	return context.WithValue(ctx, turnSourceKey{}, source)
+}
+
+type turnState struct {
+	mu sync.Mutex
+
+	toolEmit func(kind, name, args string)
+	lastTurn string
+
+	turnCalls    int
+	turnReadOnly int
+	turnSpawned  int
+
+	turnHarvested int
+
+	turnPredicted int
+
+	turnPredictedOrdinal   int
+	turnIndependentOrdinal int
+
+	turnFirstPredicted int
+
+	turnDeclaredOrdinal int
+
+	turnIndependent int
+
+	contChain int
+
+	askYields     int
+	askFleetSpent bool
+
+	legMeters map[string]*legMeter
 }
 
 func (a *App) recordTurnCost(ctx context.Context, result conversation.Result) {
@@ -64,76 +95,70 @@ func (a *App) recordTurnCost(ctx context.Context, result conversation.Result) {
 
 	source, _ := ctx.Value(turnSourceKey{}).(string)
 	a.logTurnSummary(turnLoop{source: source, provider: a.currentProvider().Name, model: result.ModelID, usage: &u})
-	a.turnCostMu.Lock()
-	a.lastTurn = text
-	a.turnCostMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.lastTurn = text
+	a.turn.mu.Unlock()
 }
 
-func (a *App) countToolCall(name, argsJSON string) int {
-	ro := readOnlyToolCall(name, argsJSON)
-	a.turnMeterMu.Lock()
-	defer a.turnMeterMu.Unlock()
-	a.turnCalls++
+func (a *App) countToolCall(name string, args map[string]interface{}) int {
+	ro := readOnlyToolCall(name, args)
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	a.turn.turnCalls++
 	if ro {
-		a.turnReadOnly++
+		a.turn.turnReadOnly++
 	}
-	return a.turnCalls
+	return a.turn.turnCalls
 }
 
-func (a *App) countSuccessfulWorkCall(argsJSON string, ordinal int) {
-	spawned, predicted, independent := parseWorkDeclaration(argsJSON)
-	a.turnMeterMu.Lock()
-	defer a.turnMeterMu.Unlock()
+func (a *App) countSuccessfulWorkCall(args map[string]interface{}, ordinal int) {
+	spawned, predicted, independent := workDeclaration(args)
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
 	if spawned {
-		a.turnSpawned++
+		a.turn.turnSpawned++
 	}
 	if predicted > 0 {
-		if ordinal >= a.turnPredictedOrdinal {
-			a.turnPredicted = predicted
-			a.turnPredictedOrdinal = ordinal
+		if ordinal >= a.turn.turnPredictedOrdinal {
+			a.turn.turnPredicted = predicted
+			a.turn.turnPredictedOrdinal = ordinal
 		}
-		if a.turnDeclaredOrdinal == 0 || ordinal < a.turnDeclaredOrdinal {
-			a.turnDeclaredOrdinal = ordinal
+		if a.turn.turnDeclaredOrdinal == 0 || ordinal < a.turn.turnDeclaredOrdinal {
+			a.turn.turnDeclaredOrdinal = ordinal
 
-			a.turnFirstPredicted = predicted
+			a.turn.turnFirstPredicted = predicted
 		}
 	}
-	if independent > 0 && ordinal >= a.turnIndependentOrdinal {
-		a.turnIndependent = independent
-		a.turnIndependentOrdinal = ordinal
+	if independent > 0 && ordinal >= a.turn.turnIndependentOrdinal {
+		a.turn.turnIndependent = independent
+		a.turn.turnIndependentOrdinal = ordinal
 	}
 }
 
-func parseWorkDeclaration(argsJSON string) (spawned bool, predicted, independent int) {
-	var w struct {
-		Action string `json:"action"`
-
-		Steps       *float64 `json:"steps"`
-		Independent *float64 `json:"independent"`
-	}
-	if json.Unmarshal([]byte(argsJSON), &w) != nil {
-		return
-	}
-	if w.Action == "spawn" {
+func workDeclaration(args map[string]interface{}) (spawned bool, predicted, independent int) {
+	switch action, _ := args["action"].(string); action {
+	case "spawn":
 		spawned = true
-	}
-	if w.Action == "update" {
-		if w.Steps != nil && *w.Steps > 0 && *w.Steps == math.Trunc(*w.Steps) {
-			predicted = int(*w.Steps)
-		}
-		if w.Independent != nil && *w.Independent > 0 && *w.Independent == math.Trunc(*w.Independent) {
-			independent = int(*w.Independent)
-		}
+	case "update":
+		predicted, independent = declaredCount(args["steps"]), declaredCount(args["independent"])
 	}
 	return spawned, predicted, independent
 }
 
+func declaredCount(v interface{}) int {
+	f, ok := v.(float64)
+	if !ok || f <= 0 || f != math.Trunc(f) {
+		return 0
+	}
+	return int(f)
+}
+
 func (a *App) resetTurnMeter() {
-	a.turnMeterMu.Lock()
-	a.turnCalls, a.turnReadOnly, a.turnSpawned, a.turnHarvested, a.turnPredicted, a.turnIndependent, a.turnDeclaredOrdinal = 0, 0, 0, 0, 0, 0, 0
-	a.turnFirstPredicted = 0
-	a.turnPredictedOrdinal, a.turnIndependentOrdinal = 0, 0
-	a.turnMeterMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.turnCalls, a.turn.turnReadOnly, a.turn.turnSpawned, a.turn.turnHarvested, a.turn.turnPredicted, a.turn.turnIndependent, a.turn.turnDeclaredOrdinal = 0, 0, 0, 0, 0, 0, 0
+	a.turn.turnFirstPredicted = 0
+	a.turn.turnPredictedOrdinal, a.turn.turnIndependentOrdinal = 0, 0
+	a.turn.mu.Unlock()
 }
 
 type turnLoop struct {
@@ -143,10 +168,10 @@ type turnLoop struct {
 
 func (a *App) logTurnSummary(loop turnLoop) {
 
-	a.turnMeterMu.Lock()
-	calls, ro, spawned, harvested := a.turnCalls, a.turnReadOnly, a.turnSpawned, a.turnHarvested
-	predicted, independent, declaredAt := a.turnFirstPredicted, a.turnIndependent, a.turnDeclaredOrdinal
-	a.turnMeterMu.Unlock()
+	a.turn.mu.Lock()
+	calls, ro, spawned, harvested := a.turn.turnCalls, a.turn.turnReadOnly, a.turn.turnSpawned, a.turn.turnHarvested
+	predicted, independent, declaredAt := a.turn.turnFirstPredicted, a.turn.turnIndependent, a.turn.turnDeclaredOrdinal
+	a.turn.mu.Unlock()
 	rounds := 0
 	var usage *store.TurnUsage
 	if u := loop.usage; u != nil {
@@ -211,7 +236,7 @@ func (a *App) recordFacilityCall(facility, model string, u llm.Usage) {
 }
 
 func (a *App) lastTurnCost() string {
-	a.turnCostMu.Lock()
-	defer a.turnCostMu.Unlock()
-	return a.lastTurn
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	return a.turn.lastTurn
 }

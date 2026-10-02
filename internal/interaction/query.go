@@ -1,12 +1,13 @@
 package interaction
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,8 +83,8 @@ type ReadResult struct {
 	EOF         bool   `json:"eof"`
 }
 type Reader interface {
-	QueryInteractions(Query) (*Page, error)
-	ReadInteraction(ReadRequest) (*ReadResult, error)
+	QueryInteractions(context.Context, Query) (*Page, error)
+	ReadInteraction(context.Context, ReadRequest) (*ReadResult, error)
 }
 
 func (q *Query) Normalize() error {
@@ -258,18 +259,15 @@ func (q Query) Next(inc string, before uint64) string {
 	raw, _ := json.Marshal(cursor{inc, q.scope(), strconv.FormatUint(before, 10)})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
+
 func Strict(raw []byte, out any) error {
 	if _, err := canonicaljson.CanonicalizeV1(raw); err != nil {
 		return Invalid(err.Error())
 	}
-	d := json.NewDecoder(strings.NewReader(string(raw)))
-	d.DisallowUnknownFields()
-	if err := d.Decode(out); err != nil {
-		return Invalid(err.Error())
-	}
-	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
+	if err := canonicaljson.DecodeStrict(raw, out); errors.Is(err, canonicaljson.ErrTrailingContent) {
 		return Invalid("trailing or malformed JSON value")
+	} else if err != nil {
+		return Invalid(err.Error())
 	}
 	return nil
 }

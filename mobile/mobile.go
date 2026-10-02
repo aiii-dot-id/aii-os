@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/app"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 var BuildCommit = "devel"
@@ -50,12 +50,12 @@ func start(configPath, dataDir string, cold bool) (*Runtime, error) {
 
 		return nil, fmt.Errorf("mobile: cannot enter the app container %q: %w", dataDir, err)
 	}
+
+	load := app.LoadConfig
 	if !cold {
-		if _, err := os.Stat(configPath); err != nil {
-			return nil, fmt.Errorf("restart requires the existing config: %w", err)
-		}
+		load = app.ReadConfig
 	}
-	cfg, err := app.LoadConfig(configPath)
+	cfg, err := load(configPath)
 	if err != nil {
 		if !cold {
 			return nil, err
@@ -150,9 +150,7 @@ func (r *Runtime) SetWakeScheduler(s WakeScheduler) {
 	r.a.SetPlatformWake(wakeAdapter{s: s})
 }
 
-func (r *Runtime) Stop() { r.a.Stop() }
-
-func Version() string { return app.Version }
+func (r *Runtime) Shutdown() error { return r.a.Shutdown(context.Background()) }
 
 func rerootContainerPaths(cfg *app.Config, dataDir string) error {
 	if cfg == nil || dataDir == "" {
@@ -195,7 +193,7 @@ func rerootContainerPaths(cfg *app.Config, dataDir string) error {
 		default:
 			return fmt.Errorf("mobile: %s is ambiguous — %s all exist in this container; refusing to choose between identity records (recovery required)", name, strings.Join(found, " and "))
 		}
-		log.Printf("mobile: %s pointed outside this container (%s) — re-rooted to %s", name, was, *p)
+		logsink.Info("config.decision", "mobile: %s pointed outside this container (%s) — re-rooted to %s", name, was, *p)
 		moved = append(moved, resolution{name: name, dir: filepath.Dir(*p)})
 		return nil
 	}
@@ -218,14 +216,18 @@ func rerootContainerPaths(cfg *app.Config, dataDir string) error {
 }
 
 func quarantineUnreadableConfig(configPath string, cause error) (*app.Config, error) {
-	raw, _ := os.ReadFile(configPath)
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, cause
+	}
 	aside := configPath + ".unreadable-" + time.Now().UTC().Format("20060102T150405Z")
 	if rerr := os.Rename(configPath, aside); rerr != nil {
 
-		log.Printf("mobile: config is unreadable (%v) and could not be set aside (%v)", cause, rerr)
+		logsink.Warn("config.error", "mobile: config is unreadable (%v) and could not be set aside (%v)", cause, rerr)
 		return nil, cause
 	}
-	log.Printf("mobile: config was unreadable (%v) — set aside as %s and started from a default; "+
+	logsink.Warn("boot.refusal", "mobile: config was unreadable (%v) — set aside as %s and started from a default; "+
 		"the identity's record and key are untouched", cause, filepath.Base(aside))
 	cfg, err := app.LoadConfig(configPath)
 	if err != nil {
@@ -237,7 +239,7 @@ func quarantineUnreadableConfig(configPath string, cause error) (*app.Config, er
 
 			return nil, fmt.Errorf("mobile: identity locations were salvaged from the unreadable config but could not be persisted: %w", perr)
 		}
-		log.Printf("mobile: salvaged from the unreadable config: %s", strings.Join(adopted, ", "))
+		logsink.Info("config.decision", "mobile: salvaged from the unreadable config: %s", strings.Join(adopted, ", "))
 	}
 	return cfg, nil
 }
@@ -253,5 +255,3 @@ func (r *Runtime) SetForegroundNeedListener(l ForegroundNeedListener) {
 	}
 	r.a.SubscribeForegroundNeed(func(need bool, reason string) { l.Need(need, reason) })
 }
-
-func (r *Runtime) DashboardMintedToken() string { return r.a.DashboardMintedToken() }

@@ -10,8 +10,6 @@ let discoverRequestID = '';
 let selectedProvider = '';
 let userSelected = false;
 let connectedSignIn = '';
-// A local server is born on only at an address that has listed its models:
-// askedURL is where the latest discovery went, verifiedURL where one answered.
 let askedURL = '';
 let verifiedURL = '';
 
@@ -20,7 +18,6 @@ export function renderProviderOptions() {
   const sel = $('fb-provider');
   if (!sel || S.identityExists) return;
   sel.innerHTML = '<option value="">choose a provider…</option>' +
-    // Indexed by position, so a speech-only entry is skipped in place.
     S.providers.map((p, i) => p.chat === false ? '' :
       '<option value="' + i + '"' + ((selectedProvider ? p.name === selectedProvider : p.preselect) ? ' selected' : '') + '>' + esc(p.name) +
       '</option>').join('');
@@ -42,11 +39,6 @@ export function renderProviderOptions() {
     onProviderChange();
   };
 }
-// The line under the picker speaks for the selected provider only: why it
-// was preselected, why it cannot work, or nothing. Written from the
-// preselected entry on every render, it once named a claude-code
-// credential under ChatGPT. A local server's own answer is the one its
-// typed address gives, said in the hint below, not the probe's.
 function showWhy(p) {
   const why = $('fb-cred-why');
   if (!why) return;
@@ -64,7 +56,6 @@ function onProviderChange() {
   showWhy(p);
   if (!p) { setModelOptions([]); sub.style.display = 'none'; return; }
 
-  // A local server's models are the ones its typed address lists.
   if (p.local && !url.value.trim()) url.value = p.endpoint || '';
   setModelOptions(p.local ? [] : p.models || []);
 
@@ -88,8 +79,6 @@ function renderSignIn(p) {
   let row = $('fb-signin');
   if (!row) { row = document.createElement('div'); row.id = 'fb-signin'; $('fb-hint').after(row); }
   if (!p || !userSelected || !p.can_sign_in) { row.innerHTML = ''; return; }
-  // The rule Settings applies (signInWanted): progress whenever there is a
-  // sign-in to report, the button only when a valid token is not in hand.
   renderInto(row, signInProgress(p.signin, 'provider', p.name) +
     (signInWanted(p, S.skipSignInWithValidToken !== false) ? '<button class="btn" id="fb-signin-start">Sign in with ' + esc(p.name) + '</button>' : '') +
     (p.signin && p.signin.status === 'pending' ? '<button class="btn ghost" id="fb-signin-cancel">Cancel sign-in</button>' : ''));
@@ -105,8 +94,6 @@ export function acceptDiscoveryResponse(requestID, provider) {
   discoverRequestID = '';
   return true;
 }
-// discoveryAnswered takes the models the form's own discovery listed; the
-// address it asked is now one Birth may use, if it listed any.
 export function discoveryAnswered(models) {
   const p = S.providers[parseInt($('fb-provider').value, 10)];
   setModelOptions(models);
@@ -114,8 +101,6 @@ export function discoveryAnswered(models) {
   verifiedURL = models.length ? askedURL : '';
   fbHint('');
 }
-// discoveryFailed says plainly that nothing answered at a local server's
-// address, and answers false for any other entry.
 export function discoveryFailed(text) {
   const p = S.providers[parseInt($('fb-provider').value, 10)];
   if (!p || !p.local) return false;

@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -41,15 +40,6 @@ type speakerSegment struct {
 func (s speakerSegment) valid() bool {
 	return s.TrackID != "" && len(s.TrackID) <= 128 && s.StartSample != nil && s.EndSample != nil && *s.StartSample >= 0 && *s.StartSample < *s.EndSample
 }
-func declaresSpeakerTrack(raw json.RawMessage) bool {
-
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return false
-	}
-	_, declared := fields["track_id"]
-	return declared
-}
 func (s speakerSegment) same(b speakerSegment) bool {
 	return s.valid() && b.valid() && s.TrackID == b.TrackID && *s.StartSample == *b.StartSample && *s.EndSample == *b.EndSample
 }
@@ -63,14 +53,18 @@ func (o speakerObservation) validUUID() bool {
 		(o.Continuity == "matched" || o.Continuity == "new_profile" || o.Continuity == "provisional")
 }
 
-func (o speakerObservation) filterID() string {
+func (o speakerObservation) filterIDs() []string {
+	var ids []string
 	if o.SpeakerUUID != "" {
-		if o.validUUID() && o.Continuity != "provisional" {
-			return o.SpeakerUUID
+		if !o.validUUID() || o.Continuity == "provisional" {
+			return nil
 		}
-		return ""
+		ids = append(ids, o.SpeakerUUID)
 	}
-	return o.knownID()
+	if id := o.knownID(); id != "" {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (o speakerObservation) knownID() string {
@@ -81,7 +75,7 @@ func (o speakerObservation) knownID() string {
 }
 
 func (o speakerObservation) attribution() string {
-	if o.Reason == "speaker_profile_pending" && o.filterID() == "" {
+	if o.Reason == "speaker_profile_pending" && len(o.filterIDs()) == 0 {
 		return "speaker identification pending (awaiting corroborating speech; not authentication)"
 	}
 	if o.validUUID() {
@@ -130,13 +124,13 @@ func (a *App) tagSpokenTurn(seq uint64, msg string) {
 	}
 }
 
-func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
+func (a *App) noteSpeakerObservation(ev voiceFrame, safe bool) {
 	if safe {
 		a.voiceSafeDropped.Add(1)
 		return
 	}
-	var body speakerObservation
-	if json.Unmarshal(ev.Raw, &body) != nil || body.RefersTo == 0 || a.store == nil {
+	body := ev.observation()
+	if ev.err != nil || body.RefersTo == 0 || a.store == nil {
 		return
 	}
 
@@ -163,7 +157,7 @@ func (a *App) noteSpeakerObservation(ev pluginhost.Event, safe bool) {
 	seq, ok, err := a.store.TurnSeqByAnnotation(annotationVoice, key)
 	if err != nil || !ok {
 
-		if _, live := a.voiceSessions.Load(ev.SessionID); live {
+		if a.voiceHandle(ev.SessionID) != nil || a.wordsQueued(key) {
 			a.speakerPending.Store(key, string(payload))
 			logsink.Debug("voice.decision", "speaker observation for %s arrived before its turn — held", key)
 
@@ -197,11 +191,33 @@ func (a *App) adoptPendingObservation(seq uint64, key string) {
 func (a *App) forgetPendingObservations(session string) {
 	prefix := session + "/"
 	a.speakerPending.Range(func(k, _ any) bool {
-		if key, ok := k.(string); ok && strings.HasPrefix(key, prefix) {
+		if key, ok := k.(string); ok && strings.HasPrefix(key, prefix) && !a.wordsQueued(key) {
 			a.speakerPending.Delete(key)
 		}
 		return true
 	})
+}
+
+func (a *App) wordsQueued(key string) bool {
+	a.turnMu.Lock()
+	defer a.turnMu.Unlock()
+	for _, e := range a.steers {
+		if e.voice.ref() == key {
+			return true
+		}
+	}
+	for _, b := range a.turnVoice {
+		if b.ref() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) retirePendingObservation(b *voiceBinding) {
+	if key := b.ref(); key != "" {
+		a.speakerPending.Delete(key)
+	}
 }
 
 func speakerAttribution(speaker, decision, reason string, score *float64) string {

@@ -5,18 +5,15 @@ package fileperm
 import (
 	"fmt"
 	"os"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 func RestrictToOwner(f *os.File) error {
-	tok, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return fmt.Errorf("open process token: %w", err)
-	}
-	defer tok.Close()
-	user, err := tok.GetTokenUser()
+
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return fmt.Errorf("read process user: %w", err)
 	}
@@ -72,14 +69,67 @@ func IsRestrictedToOwner(path string) (bool, error) {
 		return true, nil
 	}
 
-	tok, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return false, fmt.Errorf("open process token: %w", err)
-	}
-	defer tok.Close()
-	user, err := tok.GetTokenUser()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return false, fmt.Errorf("read process user: %w", err)
 	}
 	return sid.Equals(user.User.Sid), nil
+}
+
+func IsClosedToOthers(path string) (bool, error) {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false, err
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return false, err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return false, err
+	}
+	if dacl == nil {
+		return false, nil
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return false, fmt.Errorf("read process user: %w", err)
+	}
+	trusted := []*windows.SID{user.User.Sid}
+	for _, known := range []windows.WELL_KNOWN_SID_TYPE{windows.WinLocalSystemSid, windows.WinBuiltinAdministratorsSid} {
+		sid, err := windows.CreateWellKnownSid(known)
+		if err != nil {
+			return false, err
+		}
+		trusted = append(trusted, sid)
+	}
+	if !slices.ContainsFunc(trusted, owner.Equals) {
+		return false, nil
+	}
+	for _, known := range []windows.WELL_KNOWN_SID_TYPE{windows.WinCreatorOwnerSid, windows.WinCreatorOwnerRightsSid} {
+		sid, err := windows.CreateWellKnownSid(known)
+		if err != nil {
+			return false, err
+		}
+		trusted = append(trusted, sid)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return false, err
+		}
+		switch ace.Header.AceType {
+		case windows.ACCESS_DENIED_ACE_TYPE:
+			continue
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+		default:
+			return false, nil
+		}
+		if sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)); !slices.ContainsFunc(trusted, sid.Equals) {
+			return false, nil
+		}
+	}
+	return true, nil
 }

@@ -2,125 +2,332 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
-type grepResult struct {
-	path    string
-	lineNum int
-	text    string
+type grepQuery struct {
+	re      *regexp.Regexp
+	literal bool
+	include string
+	context int
+	output  string
+	offset  int
+	limit   int
 }
 
-type grepScan struct {
-	results   []grepResult
-	capped    bool
+const (
+	maxGrepContext = 100
+	maxGrepLine    = 500
+)
+
+func grepQueryOf(args map[string]interface{}) (grepQuery, error) {
+	var q grepQuery
+	var err error
+	pattern, _ := args["pattern"].(string)
+	if q.literal, err = boolArg(args, "literal"); err != nil {
+		return q, err
+	}
+	ignoreCase, err := boolArg(args, "ignore_case")
+	if err != nil {
+		return q, err
+	}
+	expr := pattern
+	if q.literal {
+		expr = regexp.QuoteMeta(pattern)
+	}
+	if ignoreCase {
+		expr = "(?i)" + expr
+	}
+	if q.re, err = regexp.Compile(expr); err != nil {
+		return q, fmt.Errorf("invalid pattern: %w", err)
+	}
+	if q.include, err = stringArg(args, "include"); err != nil {
+		return q, err
+	}
+	if q.include != "" {
+		if err := globError("include", q.include); err != nil {
+			return q, err
+		}
+	}
+	if q.context, err = intArg(args, "context", 0); err != nil {
+		return q, fmt.Errorf("context: %w", err)
+	}
+	if q.context < 0 || q.context > maxGrepContext {
+		return q, fmt.Errorf("context must be between 0 and %d lines, got %d", maxGrepContext, q.context)
+	}
+	if q.output, err = stringArg(args, "output"); err != nil {
+		return q, err
+	}
+	switch q.output {
+	case "":
+		q.output = "content"
+	case "content", "files", "count":
+	default:
+		return q, fmt.Errorf("output must be content, files or count, got %q", q.output)
+	}
+	q.offset, q.limit, err = pageArgs(args)
+	return q, err
+}
+
+type walkCoverage struct {
 	skipped   int
-	partial   bool
 	excluded  int
 	binary    int
 	denied    int
 	cancelled bool
+	cut       int
+	depth     int
 }
 
-func grepWalk(ctx context.Context, pattern, root string, maxResults int, deny func(string) bool) (grepScan, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return grepScan{}, fmt.Errorf("invalid pattern: %w", err)
-	}
+type grepScan struct {
+	walkCoverage
+	partial  bool
+	matches  int
+	files    int
+	included int
+	page     grepPage
+}
 
-	var scan grepScan
-	results := scan.results
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+type grepPage struct {
+	out      strings.Builder
+	shown    int
+	full     bool
+	clipped  bool
+	lastPath string
+	lastLine int
+}
+
+type grepLine struct {
+	num     int
+	text    string
+	clipped bool
+}
+
+func grepWalk(ctx context.Context, q grepQuery, root string, deny func(string) bool) grepScan {
+	var s grepScan
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			scan.skipped++
+			s.skipped++
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" {
+			if skipTree(path, root, d) {
 
-				scan.excluded++
+				s.excluded++
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if len(results) >= maxResults {
-			scan.capped = true
-			return filepath.SkipAll
-		}
 		select {
 		case <-ctx.Done():
 
-			scan.cancelled = true
+			s.cancelled = true
 			return filepath.SkipAll
 		default:
 		}
-
-		info, err := d.Info()
-		if err != nil {
-			scan.skipped++
+		if !d.Type().IsRegular() {
 			return nil
 		}
-		if !info.Mode().IsRegular() {
-			return nil
+		if q.include != "" {
+			if !globMatch(q.include, walkRel(root, path)) {
+				return nil
+			}
+			s.included++
 		}
 		if deny != nil && deny(path) {
 
-			scan.denied++
+			s.denied++
 			return nil
 		}
-
-		f, err := os.Open(path)
-		if err != nil {
-			scan.skipped++
-			return nil
-		}
-		defer f.Close()
-
-		probe := make([]byte, 1024)
-		n, _ := f.Read(probe)
-		for i := 0; i < n; i++ {
-			if probe[i] == 0 {
-
-				scan.binary++
-				return nil
-			}
-		}
-		if _, err := f.Seek(0, 0); err != nil {
-			scan.skipped++
-			return nil
-		}
-
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		lineNum := 0
-		for scanner.Scan() {
-			lineNum++
-			if re.MatchString(scanner.Text()) {
-				results = append(results, grepResult{path: path, lineNum: lineNum, text: scanner.Text()})
-				if len(results) >= maxResults {
-					scan.capped = true
-					return nil
-				}
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			scan.partial = true
-		}
+		s.file(q, path)
 		return nil
 	})
-	scan.results = results
-	if err != nil {
-		return scan, err
+	return s
+}
+
+func skipTree(path, root string, d fs.DirEntry) bool {
+	name := d.Name()
+	return path != root && (name == ".git" || name == "node_modules")
+}
+
+func walkRel(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return filepath.Base(path)
 	}
-	return scan, nil
+	return rel
+}
+
+func (s *grepScan) file(q grepQuery, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		s.skipped++
+		return
+	}
+	defer f.Close()
+
+	probe := make([]byte, 1024)
+	n, _ := f.Read(probe)
+	if bytes.IndexByte(probe[:n], 0) >= 0 {
+
+		s.binary++
+		return
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		s.skipped++
+		return
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var held []grepLine
+	num, found, after := 0, 0, 0
+	content := q.output == "content"
+	for scanner.Scan() {
+		num++
+		line := scanner.Bytes()
+		if q.re.Match(line) {
+			k := s.matches
+			s.matches++
+			found++
+			if q.output == "files" {
+				break
+			}
+			if content && s.page.wants(q, k) {
+				s.page.match(q, path, num, line, held)
+				after = q.context
+			} else if k >= q.offset+q.limit {
+				after = 0
+			}
+		} else if after > 0 {
+			s.page.context(path, num, line)
+			after--
+		}
+		if q.context > 0 && content && !s.page.full && s.matches < q.offset+q.limit {
+			text, clipped := shownLine(line, nil, num)
+			if held = append(held, grepLine{num, text, clipped}); len(held) > q.context {
+				held = held[1:]
+			}
+		}
+	}
+
+	if scanner.Err() != nil {
+		s.partial = true
+	}
+	if found == 0 {
+		return
+	}
+	k := s.files
+	s.files++
+	if !content && s.page.wants(q, k) {
+		entry := path
+		if q.output == "count" {
+			entry += ":" + strconv.Itoa(found)
+		}
+		if s.page.add(entry + "\n") {
+			s.page.shown++
+		}
+	}
+}
+
+func (p *grepPage) wants(q grepQuery, k int) bool {
+	return !p.full && k >= q.offset && k < q.offset+q.limit
+}
+
+func (p *grepPage) add(line string) bool {
+	if p.out.Len()+len(line) > pageBytes {
+		p.full = true
+		return false
+	}
+	p.out.WriteString(line)
+	return true
+}
+
+func (p *grepPage) match(q grepQuery, path string, num int, line []byte, held []grepLine) {
+	group := make([]grepLine, 0, len(held)+1)
+	for _, h := range held {
+		if path != p.lastPath || h.num > p.lastLine {
+			group = append(group, h)
+		}
+	}
+	text, clipped := shownLine(line, q.re, num)
+	group = append(group, grepLine{num, text, clipped})
+	render := func() string {
+		var b strings.Builder
+		if q.context > 0 && p.out.Len() > 0 && (path != p.lastPath || group[0].num > p.lastLine+1) {
+			b.WriteString("--\n")
+		}
+		for i, g := range group {
+			sep := "-"
+			if i == len(group)-1 {
+				sep = ":"
+			}
+			fmt.Fprintf(&b, "%s%s%d%s%s\n", path, sep, g.num, sep, g.text)
+		}
+		return b.String()
+	}
+	out := render()
+	for p.out.Len()+len(out) > pageBytes {
+		if p.shown > 0 {
+			p.full = true
+			return
+		}
+		if len(group) == 1 {
+			break
+		}
+		group = group[1:]
+		out = render()
+	}
+	p.out.WriteString(out)
+	for _, g := range group {
+		p.clipped = p.clipped || g.clipped
+	}
+	p.shown++
+	p.lastPath, p.lastLine = path, num
+}
+
+func (p *grepPage) context(path string, num int, line []byte) {
+	if p.full {
+		return
+	}
+	text, clipped := shownLine(line, nil, num)
+	if p.add(fmt.Sprintf("%s-%d-%s\n", path, num, text)) {
+		p.clipped = p.clipped || clipped
+		p.lastPath, p.lastLine = path, num
+	}
+}
+
+func shownLine(line []byte, re *regexp.Regexp, num int) (string, bool) {
+	if len(line) <= maxGrepLine {
+		return string(line), false
+	}
+	start := 0
+	if re != nil {
+		if loc := re.FindIndex(line); loc != nil {
+			start = max(0, min(loc[0]-maxGrepLine/5, len(line)-maxGrepLine))
+		}
+	}
+	for start > 0 && !utf8.RuneStart(line[start]) {
+		start--
+	}
+	end := min(start+maxGrepLine, len(line))
+	for end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
+	}
+	text := string(line[start:end])
+	if start > 0 {
+		text = "…" + text
+	}
+	return text + fmt.Sprintf("…[clipped: line %d is %d bytes; read offset=%d shows it]", num, len(line), num), true
 }
 
 func dialectHint(pattern string) string {
@@ -137,50 +344,44 @@ func dialectHint(pattern string) string {
 func (t *GrepTool) Execute(ctx context.Context, args map[string]interface{}) (Result, error) {
 	pattern, _ := args["pattern"].(string)
 	path, _ := args["path"].(string)
-	if path == "" {
-		path = "."
-	}
 	if pattern == "" {
-		return Result{Error: "pattern is required"}, nil
+		return Refusal(ReasonArgumentsRequired, "pattern is required"), nil
 	}
-
-	const maxResults = 500
-	scan, err := grepWalk(ctx, pattern, path, maxResults, t.deny)
-	results := scan.results
-	if err != nil && len(results) == 0 {
+	q, err := grepQueryOf(args)
+	if err != nil {
 		return Result{Error: err.Error()}, nil
 	}
-	if len(results) == 0 {
+	scan := grepWalk(ctx, q, path, t.deny)
+	trouble := scan.partial || scan.cancelled || scan.skipped > 0
+	if scan.matches == 0 {
 
 		out := "no matches for " + pattern + " under " + path
+		if q.include != "" {
+
+			out += " in " + counted(scan.included, "file", "files") + " matching include=" + q.include
+		}
 		if n := scan.skipped; n > 0 {
 			out += fmt.Sprintf(" (%d path(s) could not be read)", n)
 		}
 		if scan.partial {
 			out += " (a file could not be scanned to the end)"
 		}
-		return Result{Output: out + coverageNote(scan) + dialectHint(pattern), Truncated: scan.partial || scan.cancelled || scan.skipped > 0}, nil
-	}
-
-	var sb strings.Builder
-	truncated := false
-	for _, r := range results {
-		line := fmt.Sprintf("%s:%d:%s\n", r.path, r.lineNum, r.text)
-		if sb.Len()+len(line) > 51200 {
-			truncated = true
-			break
+		hint := ""
+		if !q.literal {
+			hint = dialectHint(pattern)
 		}
-		sb.WriteString(line)
+		return Result{Output: out + coverageNote(scan.walkCoverage, "searched") + hint, Truncated: trouble}, nil
 	}
-	out := sb.String()
-	shown := strings.Count(out, "\n")
 
-	if truncated {
-		out += fmt.Sprintf("…[%d of %d collected matches shown — output byte cap]\n", shown, len(results))
+	count := scan.matches
+	total := counted(scan.matches, "match", "matches") + " in " + counted(scan.files, "file", "files")
+	if q.output != "content" {
+		count, total = scan.files, counted(scan.files, "file", "files")+" with matches"
+		if q.output == "count" {
+			total += " (" + counted(scan.matches, "match", "matches") + ")"
+		}
 	}
-	if scan.capped {
-		out += fmt.Sprintf("…[collection stopped at %d matches — more may exist]\n", maxResults)
-	}
+	out := scan.page.out.String() + pageNote(q.offset, scan.page.shown, count, total, scan.cancelled, scan.page.full)
 	if scan.skipped > 0 {
 		out += fmt.Sprintf("…[%d path(s) could not be read]\n", scan.skipped)
 	}
@@ -190,25 +391,31 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 	if scan.cancelled {
 		out += "…[the search was cancelled before the tree was fully walked]\n"
 	}
-	return Result{Output: out + coverageNote(scan), Truncated: truncated || scan.capped || scan.partial || scan.cancelled || scan.skipped > 0}, nil
+
+	more := q.offset+scan.page.shown < count
+	return Result{Output: out + coverageNote(scan.walkCoverage, "searched"),
+		Truncated: more || scan.page.full || scan.page.clipped || trouble}, nil
 }
 
-func coverageNote(scan grepScan) string {
+func coverageNote(c walkCoverage, verb string) string {
 	var why []string
-	if scan.cancelled {
-		why = append(why, "the search was cancelled before the tree was fully walked")
+	if c.cancelled {
+		why = append(why, "the walk was cancelled before the tree was fully walked")
 	}
-	if scan.excluded > 0 {
-		why = append(why, fmt.Sprintf("%d directory tree(s) skipped by policy (.git, node_modules)", scan.excluded))
+	if c.excluded > 0 {
+		why = append(why, fmt.Sprintf("%d directory tree(s) skipped by policy (.git, node_modules)", c.excluded))
 	}
-	if scan.binary > 0 {
-		why = append(why, fmt.Sprintf("%d binary file(s) not searched", scan.binary))
+	if c.binary > 0 {
+		why = append(why, fmt.Sprintf("%d binary file(s) not %s", c.binary, verb))
 	}
-	if scan.skipped > 0 {
-		why = append(why, fmt.Sprintf("%d path(s) could not be read", scan.skipped))
+	if c.skipped > 0 {
+		why = append(why, fmt.Sprintf("%d path(s) could not be read", c.skipped))
 	}
-	if scan.denied > 0 {
-		why = append(why, fmt.Sprintf("%d path(s) protected by the substrate floor were not searched", scan.denied))
+	if c.denied > 0 {
+		why = append(why, fmt.Sprintf("%d path(s) protected by the substrate floor were not %s", c.denied, verb))
+	}
+	if c.cut > 0 {
+		why = append(why, fmt.Sprintf("%d directory(ies) at depth %d not entered; a larger depth lists what they hold", c.cut, c.depth))
 	}
 	if len(why) == 0 {
 		return ""

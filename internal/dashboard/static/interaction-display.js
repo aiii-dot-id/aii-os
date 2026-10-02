@@ -1,4 +1,3 @@
-// A bounded projection of the reader's current pages, never another history.
 export const locationKey = (source, page, id) => JSON.stringify([page.identity || '', source, page.incarnation || '', id]);
 
 export function displayInteractions(pages) {
@@ -21,8 +20,6 @@ export function displayInteractions(pages) {
     const { row, source, page } = entry;
     if (row.kind !== 'tool_call' && row.kind !== 'tool_result') continue;
     let start = row.kind === 'tool_call' ? entry : starts.get(locationKey(source, page, row.related_id));
-    // SAFE completions may explicitly name a durable start. Neither a bare ID
-    // across retired snapshots nor similar text can establish that relationship.
     const durable = pages.get('recorded');
     if (!start && row.kind === 'tool_result' && source === 'transient' && row.details?.origin === 'safe_tool' &&
         page.identity && page.identity === durable?.identity && !page.stale && !page.error && !durable.stale && !durable.error) {
@@ -44,12 +41,6 @@ export function displayInteractions(pages) {
   for (const entry of entries) {
     const group = owner.get(entry.key);
     if (!group) {
-      // An annotation about another row is that row's own fact — the voice
-      // it came in, who spoke it — which the row already carries
-      // (row.annotations). It joins that row's records, one click away
-      // under its details, and is never an item of its own: not an empty
-      // line in the thread, not a break in a stretch of work. About a row
-      // not in view, it waits with that row.
       if (entry.row.kind === 'annotation' && entry.row.related_id) {
         const subject = locationKey(entry.source, entry.page, entry.row.related_id);
         (owner.get(subject) || items.get(subject))?.records.push(entry);
@@ -70,29 +61,12 @@ export function displayInteractions(pages) {
   return out;
 }
 
-// ── A stretch of work, one receipt ──
-//
-// The thread holds what was said. Between one words row and the next, the
-// executions and notices that happened — the turn's own, a sub-agent's
-// interleaved with them, a notice the substrate wrote with no turn at all
-// — fold into ONE receipt that sits exactly where they sat: never before
-// an earlier row, never after a later one, so the recorded order is the
-// drawn order. A steering message in the middle of a turn splits its work
-// into two receipts; a notice about a words row (related_id names it, "the
-// reply above is incomplete") keeps its own row beside it, while an
-// annotation about one is that row's own record (displayInteractions); imported
-// history keeps its rows. Nothing is dropped and nothing is invented:
-// every item lands exactly once, in the thread or inside exactly one
-// receipt, in its recorded order.
 const SPEAKERS = new Set(['operator', 'participant', 'resident']);
 export function isWords(item) {
   const r = item.anchor.row;
   return !item.tool && (r.kind === 'message' || r.kind === 'outbound_message' || (r.kind === 'legacy' && SPEAKERS.has(r.role)));
 }
 const when = r => Date.parse(r.recorded_at || r.created_at || '');
-// An execution folds when it belongs to a turn (a turnless one is history
-// from before turns were recorded, and keeps its row); a notice or an
-// annotation folds unless it is about a words row.
 export function isWork(item) {
   const r = item.anchor.row;
   if (item.tool) return !!r.turn_id;
@@ -120,8 +94,6 @@ export function foldTurns(items, page = {}) {
       replied: !!reply,
       start: times.length ? Math.min(...times) : NaN,
       end: !isNaN(end) ? end : times.length ? Math.max(...times) : NaN,
-      // The stretch may continue beyond the loaded window: then its counts
-      // and span are what is in view, and the label says so.
       startOutside: run.first === 0 && !!page.has_older,
       endOutside: run.last === items.length - 1 && !!page.has_newer,
     });

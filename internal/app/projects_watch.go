@@ -21,7 +21,7 @@ func (a *App) watchProjects() {
 	}
 	last := a.projectsSnapshotMap()
 	marker := "ready"
-	a.projectsLast.Store(&marker)
+	a.project.projectsLast.Store(&marker)
 	w := fsdir.New(a.bgCtx, a.gate, root, fsdir.Options{Heartbeat: a.watcherInterval(), Depth: 1})
 	for {
 		select {

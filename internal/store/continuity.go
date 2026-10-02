@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -83,11 +84,9 @@ func ParseContinuityStatus(raw string) (ContinuityStatus, bool, error) {
 	return st, true, nil
 }
 
-func ReadContinuityStatus(db interface {
-	QueryRow(query string, args ...any) *sql.Row
-}) (ContinuityStatus, bool, error) {
+func ReadContinuityStatus(ctx context.Context, db Reader) (ContinuityStatus, bool, error) {
 	var raw string
-	err := db.QueryRow(`SELECT value FROM runtime_meta WHERE key = ?`, ContinuityStatusKey).Scan(&raw)
+	err := db.QueryRowContext(ctx, `SELECT value FROM runtime_meta WHERE key = ?`, ContinuityStatusKey).Scan(&raw)
 	if err == sql.ErrNoRows || (err == nil && raw == "") {
 		return ContinuityStatus{}, false, nil
 	}

@@ -1,5 +1,3 @@
--- provenance: every table declares who builds it, as the first line of
-
 CREATE TABLE IF NOT EXISTS public_name (
     -- provenance: derived, clear-order 10
     singleton_id TEXT PRIMARY KEY CHECK (singleton_id = 'current'),
@@ -9,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public_name (
     claimed_seq  INTEGER NOT NULL REFERENCES ledger(seq),
     claimed_at   TEXT NOT NULL
 ) STRICT;
+CREATE INDEX IF NOT EXISTS public_name_claimed_seq_idx ON public_name (claimed_seq);
 
 CREATE TABLE IF NOT EXISTS ledger (
     -- provenance: derived, clear-order 11
@@ -18,8 +17,7 @@ CREATE TABLE IF NOT EXISTS ledger (
     type     TEXT NOT NULL,
     ring     INTEGER CHECK (ring IS NULL OR (ring >= 0 AND ring <= 3)),
     payload  TEXT NOT NULL CHECK (json_valid(payload)),
-    content  TEXT NOT NULL,
-    sig      TEXT NOT NULL
+    content  TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS beliefs (
@@ -36,6 +34,8 @@ CREATE TABLE IF NOT EXISTS beliefs (
     last_seq     INTEGER NOT NULL REFERENCES ledger(seq),
     superseded_by TEXT REFERENCES beliefs(id)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS beliefs_first_seq_idx ON beliefs (first_seq);
+CREATE INDEX IF NOT EXISTS beliefs_last_seq_idx ON beliefs (last_seq);
 
 CREATE TABLE IF NOT EXISTS self_model_synthesis (
     -- provenance: derived, clear-order 7
@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS self_model_synthesis (
     created_seq           INTEGER NOT NULL REFERENCES ledger(seq),
     created_at            TEXT NOT NULL
 ) STRICT;
+CREATE INDEX IF NOT EXISTS self_model_synthesis_created_seq_idx ON self_model_synthesis (created_seq);
 
 CREATE TABLE IF NOT EXISTS experiences (
     -- provenance: derived, clear-order 6
@@ -92,11 +93,6 @@ CREATE TABLE IF NOT EXISTS conversations (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_conversations_turn_seq ON conversations(turn_seq DESC);
 
--- The identity's raw reasoning, one row per reply, keyed by the reply's
--- own turn_seq (store/reasoning.go). Ephemeral like the conversation it
--- sits beside: never ledgered, and reached only when
--- the identity names it (recall source=reasoning). Not a memory store and
--- not indexed: it is read by turn, or scanned for words when named.
 CREATE TABLE IF NOT EXISTS reasoning (
     -- provenance: ephemeral
     turn_seq    INTEGER PRIMARY KEY,
@@ -137,11 +133,11 @@ CREATE TABLE IF NOT EXISTS work_sessions (
     evidence TEXT NOT NULL DEFAULT '',
     evidence_readback TEXT NOT NULL DEFAULT '',
     harvested_ms INTEGER,
-    -- delivered_at: wall-clock (unix-ms) a delivery landed, incl. the boot
-    -- sweep. NULL for pre-repair rows; the measurement window uses it so
-    -- Ring-4 deliveries (created_seq=0) can be dated at all.
     delivered_at INTEGER
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS work_sessions_created_seq_idx ON work_sessions (created_seq);
+CREATE INDEX IF NOT EXISTS work_sessions_updated_seq_idx ON work_sessions (updated_seq);
 
 CREATE TABLE IF NOT EXISTS curiosity_cue (
     -- provenance: ephemeral
@@ -164,6 +160,8 @@ CREATE TABLE IF NOT EXISTS intentions (
     created_seq INTEGER NOT NULL REFERENCES ledger(seq),
     updated_seq INTEGER REFERENCES ledger(seq)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS intentions_created_seq_idx ON intentions (created_seq);
+CREATE INDEX IF NOT EXISTS intentions_updated_seq_idx ON intentions (updated_seq);
 
 CREATE TABLE IF NOT EXISTS commitments (
     -- provenance: derived, clear-order 3
@@ -177,6 +175,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     created_seq    INTEGER NOT NULL REFERENCES ledger(seq),
     updated_seq    INTEGER REFERENCES ledger(seq)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS commitments_created_seq_idx ON commitments (created_seq);
+CREATE INDEX IF NOT EXISTS commitments_updated_seq_idx ON commitments (updated_seq);
 
 CREATE TABLE IF NOT EXISTS edges (
     -- provenance: derived, clear-order 4
@@ -193,7 +193,9 @@ CREATE TABLE IF NOT EXISTS edges (
     created_seq INTEGER NOT NULL REFERENCES ledger(seq),
     UNIQUE(from_id, to_id, edge_type)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS edges_created_seq_idx ON edges (created_seq);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id) WHERE archived = 0;
+CREATE INDEX IF NOT EXISTS idx_edges_contradicts ON edges (created_seq) WHERE edge_type = 'CONTRADICTS' AND archived = 0;
 
 CREATE TABLE IF NOT EXISTS alarms (
     -- provenance: ephemeral
@@ -251,33 +253,16 @@ CREATE TABLE IF NOT EXISTS outbox (
     created_seq  INTEGER REFERENCES ledger(seq),
     delivered_at TEXT,
     created_ms   INTEGER NOT NULL DEFAULT 0,
-    -- The delivery record:
-    -- how many times an adapter was asked, what the last one answered
-    -- and when, whether the row is parked (asked no more), and the
-    -- effect class of the last send — performed once delivered,
-    -- unknown when the host cannot tell whether it left (never
-    -- retried, never handed to a secondary).
     attempts        INTEGER NOT NULL DEFAULT 0,
     last_error      TEXT NOT NULL DEFAULT '',
     last_attempt_ms INTEGER NOT NULL DEFAULT 0,
     parked          INTEGER NOT NULL DEFAULT 0,
     effect          TEXT NOT NULL DEFAULT '' CHECK (effect IN ('', 'performed', 'unknown')),
-    -- The dispatch claim (C2): when the host last took the row to hand
-    -- it to an adapter; NULL, never. A claim is taken only on a row not
-    -- in flight, and every outcome write sets last_attempt_ms to at
-    -- least its claim's value, so a row is in flight exactly while
-    -- dispatched_ms > last_attempt_ms (outbox.go). Nullable, so an
-    -- older binary drops it without loss until a send is claimed
-    -- (docs/KNOWN_LIMITATIONS.md).
     dispatched_ms   INTEGER
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS turn_metrics (
     -- provenance: ephemeral
-    -- One row per turn that reached a provider, and one per call a
-    -- cognitive facility made, keyed by the millisecond it ended; a row
-    -- whose millisecond is taken takes the next free one
-    -- (InsertTurnMetric).
     ts_ms    INTEGER PRIMARY KEY,
     calls    INTEGER NOT NULL,
     read_only INTEGER NOT NULL,
@@ -286,25 +271,10 @@ CREATE TABLE IF NOT EXISTS turn_metrics (
     predicted INTEGER NOT NULL DEFAULT 0,
     declared_ordinal INTEGER NOT NULL DEFAULT 0,
     independent INTEGER NOT NULL DEFAULT 0,
-    -- rounds is the turn's provider calls, answered or not: the call
-    -- count of the usage below as well as the batch factor's divisor.
     rounds INTEGER NOT NULL DEFAULT 0,
-    -- The path that opened the turn, and the provider entry and model
-    -- that served it. NULL is unknown. A source 'facility:<name>' is a
-    -- facility's call, not a turn: its rounds is 1 and its tool counts
-    -- 0, and every reader of the resident's turns excludes it (mainTurns
-    -- in turnmetrics.go).
     source   TEXT,
     provider TEXT,
     model    TEXT,
-    -- What the turn's provider calls reported, summed by the loop. NULL
-    -- is a row written before usage was kept: unknown, never zero. The
-    -- totals are exact only when every call reported — rounds > 0,
-    -- silent_calls = 0, unknown_attempts = 0, the rule
-    -- conversation.TurnUsage.Complete owns — and a floor otherwise.
-    -- source through silent_calls are nullable on purpose: an older
-    -- binary's schema engine drops them silently while every value is
-    -- NULL, and refuses once one holds data (docs/KNOWN_LIMITATIONS.md).
     prompt_tokens         INTEGER,
     completion_tokens     INTEGER,
     total_tokens          INTEGER,
@@ -331,14 +301,14 @@ CREATE TABLE IF NOT EXISTS speech_usage (
 
 CREATE TABLE IF NOT EXISTS skill_proposals (
     -- provenance: ephemeral
+    -- retired-column: status
+    -- retired-column: decided_ms
+    -- retired-column: verified
     id         TEXT PRIMARY KEY,
     ts_ms      INTEGER NOT NULL,
     title      TEXT NOT NULL,
     delta      TEXT NOT NULL,
-    evidence   TEXT NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','promoted','rejected')),
-    decided_ms INTEGER NOT NULL DEFAULT 0,
-    verified   TEXT NOT NULL DEFAULT 'none'
+    evidence   TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS standing_state (
@@ -361,30 +331,10 @@ CREATE TABLE IF NOT EXISTS subagent_metrics (
     legs       INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS tool_events (
-    -- provenance: ephemeral
-    -- replaces-legacy-when-column: phase
-    execution_id TEXT PRIMARY KEY,
-    turn_id      TEXT NOT NULL,
-    ordinal      INTEGER NOT NULL,
-    actor        TEXT NOT NULL,
-    model        TEXT NOT NULL DEFAULT '',
-    provider_call_id TEXT NOT NULL DEFAULT '',
-    tool         TEXT NOT NULL,
-    args_record  TEXT NOT NULL,
-    state        TEXT NOT NULL CHECK (state IN ('started','done','abandoned')),
-    failed       INTEGER NOT NULL DEFAULT 0,
-    truncated    INTEGER NOT NULL DEFAULT 0,
-    result_record TEXT NOT NULL DEFAULT '',
-    started_ms   INTEGER NOT NULL,
-    finished_ms  INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (turn_id, ordinal)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS tool_events_started_idx ON tool_events (started_ms);
-CREATE INDEX IF NOT EXISTS tool_events_turn_idx ON tool_events (turn_id);
+-- retired-table: tool_events
 
 CREATE INDEX IF NOT EXISTS outbox_undelivered_idx ON outbox (delivered, created_seq);
+CREATE INDEX IF NOT EXISTS outbox_created_seq_idx ON outbox (created_seq);
 
 CREATE TABLE IF NOT EXISTS relationships (
     -- provenance: derived, clear-order 9
@@ -404,9 +354,9 @@ CREATE TABLE IF NOT EXISTS relationships (
     created_seq       INTEGER NOT NULL REFERENCES ledger(seq),
     updated_seq       INTEGER REFERENCES ledger(seq)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS relationships_created_seq_idx ON relationships (created_seq);
+CREATE INDEX IF NOT EXISTS relationships_updated_seq_idx ON relationships (updated_seq);
 
--- The communications owner preserves these rows in runtime_meta before
--- retirement, translates recipient IDs, and carries requested channels.
 -- retired-table: outbox_route
 -- retired-table: reach
 -- retired-table: correspondents
@@ -485,13 +435,6 @@ CREATE TABLE IF NOT EXISTS runtime_meta (
     updated_at TEXT NOT NULL
 ) STRICT;
 
--- ─── Memory instruments ─────────────────────────────────────────────
---
--- Access is one ephemeral table keyed by store and id: how often a
--- memory was consciously recalled, when last, and a bounded history of
--- those times, so every decay policy computes from the same rows. Only
--- an act of recall writes it; rendering a memory never does.
-
 CREATE TABLE IF NOT EXISTS memory_access (
     -- provenance: ephemeral
     store    TEXT NOT NULL,
@@ -502,11 +445,6 @@ CREATE TABLE IF NOT EXISTS memory_access (
     PRIMARY KEY (store, id)
 ) STRICT;
 
--- The meaning layer: one quantized unit vector per
--- recallable row under a basis (provider/model), keyed like
--- memory_access. Ephemeral: only the runtime can reach the provider
--- that makes a vector, so a replay leaves this table alone; a basis
--- change drops what the old basis made and the backfill refills it.
 CREATE TABLE IF NOT EXISTS memory_vectors (
     -- provenance: ephemeral
     store       TEXT NOT NULL,
@@ -521,11 +459,6 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_memory_vectors_basis ON memory_vectors (store, basis);
 
--- The decision log of the unconscious side: the salience
--- filter's class for every candidate weighed, the rhythm's run, defer
--- or skip per facility per pass. Linked to the ledger seq a decision
--- produced (0 when nothing), bounded at write — a record, never a
--- backlog, read by no one to act.
 CREATE TABLE IF NOT EXISTS memory_decisions (
     -- provenance: ephemeral
     id          INTEGER PRIMARY KEY,
@@ -538,12 +471,6 @@ CREATE TABLE IF NOT EXISTS memory_decisions (
     record      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(record))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_memory_decisions_kind ON memory_decisions (kind, id);
-
--- A plugin's own memories: its working record, indexed by the same
--- sidecars as the identity's stores. Provenance is stamped by the host,
--- never supplied by the caller; superseded_by is the state a correction
--- leaves, so the old memory stays for audit and surfaces only through
--- its successor. Never identity truth: promotion is the identity's act.
 
 CREATE TABLE IF NOT EXISTS plugin_memories (
     -- provenance: ephemeral
@@ -564,30 +491,11 @@ CREATE TABLE IF NOT EXISTS plugin_memories (
 CREATE INDEX IF NOT EXISTS idx_plugin_memories_plugin ON plugin_memories(plugin_id, superseded_by);
 CREATE INDEX IF NOT EXISTS idx_plugin_memories_activation ON plugin_memories(plugin_id, activation, overrides, superseded_by);
 
--- A temporary replacement's supersession effect ends with it.
--- Splice surviving predecessors past the expired node: a later permanent
--- successor remains effective; a terminal temporary override restores its
--- persistent predecessor. Keep the FK and all surviving memory payloads.
 CREATE TRIGGER IF NOT EXISTS plugin_memories_expire_link AFTER DELETE ON plugin_memories
 WHEN old.temp = 1 BEGIN
     UPDATE plugin_memories SET superseded_by = old.superseded_by
     WHERE plugin_id = old.plugin_id AND superseded_by = old.id;
 END;
-
--- Full-text sidecars: one per searchable store, with a trigram twin for
--- substring and fuzzy matches. A sidecar is FTS5 over the base's own
--- rows (content= the base, or a view over it), keyed by the base's
--- rowid, so it copies no text; the base's triggers keep it atomic with
--- every write, a replay's clear and the materializer's inserts rebuild
--- it through those triggers, and FTS5's own rebuild fills it when a
--- boot finds it holding fewer rows than its content. Each declares its
--- provenance on the line before it: sidecar of <base>. Neither derived
--- nor ephemeral — f(base) — and never a writer's target.
---
--- The resident's, the operator's and a participant's words are
--- searchable. Operator-authorized tool results retain the recall/intake
--- visibility previously supplied by the mixed operator report, without copying
--- their payload or giving it operator authorship. Ordinary tool rows stay out.
 
 CREATE VIEW IF NOT EXISTS conversations_searchable AS
     SELECT rowid AS rowid, id, content,

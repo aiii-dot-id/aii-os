@@ -511,6 +511,9 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command) {
 		refuse(StageMaterial, err)
 		return
 	}
+	if p.Selection != nil {
+		e.emit(Event{PluginID: e.id, Gen: gen, Kind: EventPrepared, Version: c.version, Selection: copySelection(p.Selection), At: e.now()})
+	}
 	if !p.Present {
 		progress := func(m MaterialStatus) {
 			e.emit(Event{PluginID: e.id, Gen: gen, Kind: EventProgress, Version: c.version, Material: &m, At: e.now()})
@@ -526,7 +529,9 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command) {
 
 	var admission *Admission
 	if e.deps.Admit != nil {
+		waited := false
 		release, sentence, aerr := e.deps.Admit(ctx, gen, p, func(why string) {
+			waited = true
 			e.emit(Event{PluginID: e.id, Gen: gen, Kind: EventAdmitting, Version: c.version,
 				Admission: &Admission{HostBytes: p.HostBytes, DeviceBytes: p.DeviceBytes, Backend: p.Backend, Sentence: why}, At: e.now()})
 		})
@@ -540,6 +545,10 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command) {
 			return
 		}
 		admission = &Admission{HostBytes: p.HostBytes, DeviceBytes: p.DeviceBytes, Backend: p.Backend, Sentence: sentence}
+		if waited {
+
+			e.emit(Event{PluginID: e.id, Gen: gen, Kind: EventAdmitted, Version: c.version, Admission: admission, At: e.now()})
+		}
 	}
 	running, err := e.deps.Runtime.Start(ctx, p, act.Lease)
 	took(StageStart)

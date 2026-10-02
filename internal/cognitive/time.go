@@ -13,12 +13,10 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/quiesce"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 const (
-	DreamCadence          int64 = 5
-	ConsolidateCadence    int64 = 10
 	SelfModelCadence      int64 = 50
 	IdentityReviewCadence int64 = 100
 )
@@ -37,7 +35,7 @@ type SafePassEnder interface {
 }
 
 type DuePager interface {
-	DueAlarmsAfter(clock string, nowOrLess, afterDeadline int64, afterID string, limit int) ([]store.Alarm, error)
+	DueAlarmsAfter(clock string, nowOrLess, afterDeadline int64, afterID string, limit int) ([]rows.Alarm, error)
 }
 
 const safePageSize = 100
@@ -71,7 +69,7 @@ type SetAlarmer interface {
 	SetAlarm(alarmID, ownerName, clock string, deadline int64, repeatEvery *int64, payload string) error
 	EnsureAlarm(alarmID, ownerName, clock string, deadline int64, repeatEvery *int64, payload string) error
 	CancelAlarm(ownerName, alarmID string) error
-	DueAlarms(clock string, nowOrLess int64, limit int) ([]store.Alarm, error)
+	DueAlarms(clock string, nowOrLess int64, limit int) ([]rows.Alarm, error)
 	DeleteAlarm(alarmID string) error
 
 	UpdateAlarmDeadlineCAS(alarmID string, expectedDeadline, newDeadline int64) (bool, error)
@@ -158,7 +156,7 @@ type TIME struct {
 }
 
 type AlarmEnqueuer interface {
-	EnqueueAlarm(alarm store.Alarm) error
+	EnqueueAlarm(alarm rows.Alarm) error
 }
 
 func NewTIME(store SetAlarmer, lifetime LifetimeTicker) *TIME {
@@ -662,7 +660,7 @@ func (t *TIME) signalResched() {
 	}
 }
 
-func (t *TIME) dispatchPass(ctx context.Context, clock string, alarms []store.Alarm) {
+func (t *TIME) dispatchPass(ctx context.Context, clock string, alarms []rows.Alarm) {
 	t.dispatchMu.Lock()
 	defer t.dispatchMu.Unlock()
 
@@ -683,7 +681,7 @@ func (t *TIME) inSafe() bool {
 	return safe != nil && safe()
 }
 
-func (t *TIME) safeDue(a store.Alarm) int64 {
+func (t *TIME) safeDue(a rows.Alarm) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if m, ok := t.safeMarks[a.AlarmID]; ok && m.durable == a.Deadline {
@@ -692,7 +690,7 @@ func (t *TIME) safeDue(a store.Alarm) int64 {
 	return a.Deadline
 }
 
-func (t *TIME) safeWalk(clock string, nowOrLess int64, visit func(store.Alarm)) (last store.Alarm, n int, complete bool, err error) {
+func (t *TIME) safeWalk(clock string, nowOrLess int64, visit func(rows.Alarm)) (last rows.Alarm, n int, complete bool, err error) {
 	pager, ok := t.store.(DuePager)
 	if !ok {
 		rows, err := t.store.DueAlarms(clock, nowOrLess, safePageSize)
@@ -729,8 +727,8 @@ func (t *TIME) safePass(ctx context.Context, clock string, now int64) error {
 		return nil
 	}
 	seen := map[string]struct{}{}
-	var due []store.Alarm
-	_, _, complete, err := t.safeWalk(clock, now, func(a store.Alarm) {
+	var due []rows.Alarm
+	_, _, complete, err := t.safeWalk(clock, now, func(a rows.Alarm) {
 		seen[a.AlarmID] = struct{}{}
 		if t.safeDue(a) <= now {
 			due = append(due, a)
@@ -792,7 +790,7 @@ type safeTally struct {
 	example string
 }
 
-func (s *safeTally) add(a store.Alarm) {
+func (s *safeTally) add(a rows.Alarm) {
 	if s.by == nil {
 		s.by = map[string]int{}
 		s.example = fmt.Sprintf("%s@%d", a.AlarmID, a.Deadline)
@@ -810,7 +808,7 @@ func (s *safeTally) owners() string {
 	return strings.Join(out, ", ")
 }
 
-func (t *TIME) safeFire(ctx context.Context, a store.Alarm, now int64) (fired bool) {
+func (t *TIME) safeFire(ctx context.Context, a rows.Alarm, now int64) (fired bool) {
 	deadline := t.safeDue(a)
 	t.mu.Lock()
 	owner, registered := t.owners[a.OwnerName]
@@ -847,7 +845,7 @@ func (t *TIME) safeNextWake(clock string, now int64) (int64, bool) {
 			best, has = at, true
 		}
 	}
-	last, n, complete, err := t.safeWalk(clock, now, func(a store.Alarm) { note(t.safeDue(a)) })
+	last, n, complete, err := t.safeWalk(clock, now, func(a rows.Alarm) { note(t.safeDue(a)) })
 	if err != nil {
 		logsink.Warn("time.error", "next durable wake unavailable (SAFE): %v", err)
 		return best, has
@@ -885,7 +883,7 @@ func declinedRetryAfterMS(clock string) int64 {
 	return int64(pendingDispatchRetryAfter / time.Millisecond)
 }
 
-func (t *TIME) dispatchAlarm(ctx context.Context, alarm store.Alarm) {
+func (t *TIME) dispatchAlarm(ctx context.Context, alarm rows.Alarm) {
 
 	t.mu.Lock()
 	enq := t.enqueue
@@ -921,7 +919,7 @@ func (t *TIME) clearPendingDispatch(alarmID string) {
 	t.signalResched()
 }
 
-func (t *TIME) applyTransitions(alarm store.Alarm, result AlarmResult) error {
+func (t *TIME) applyTransitions(alarm rows.Alarm, result AlarmResult) error {
 	defer t.clearPendingDispatch(alarm.AlarmID)
 	var currentClock int64
 	if alarm.Clock == "wall" {
@@ -968,15 +966,15 @@ func (t *TIME) OwnerFor(name string) (AlarmOwner, bool) {
 
 func (t *TIME) ClearPendingDispatch(alarmID string) { t.clearPendingDispatch(alarmID) }
 
-func (t *TIME) InvokeAlarmOwner(ctx context.Context, owner AlarmOwner, alarm store.Alarm) AlarmResult {
+func (t *TIME) InvokeAlarmOwner(ctx context.Context, owner AlarmOwner, alarm rows.Alarm) AlarmResult {
 	return t.invokeOwner(ctx, owner, alarm)
 }
 
-func (t *TIME) ApplyAlarmTransitions(alarm store.Alarm, result AlarmResult) error {
+func (t *TIME) ApplyAlarmTransitions(alarm rows.Alarm, result AlarmResult) error {
 	return t.applyTransitions(alarm, result)
 }
 
-func (t *TIME) invokeOwner(ctx context.Context, owner AlarmOwner, alarm store.Alarm) (result AlarmResult) {
+func (t *TIME) invokeOwner(ctx context.Context, owner AlarmOwner, alarm rows.Alarm) (result AlarmResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			logsink.Error("time.error", "owner %q PANICKED on alarm %s (contained, treated as declined): %v\n%s",
@@ -1004,7 +1002,7 @@ func (t *TIME) SetFireObserver(fn func(owner, alarmID string, accepted bool)) {
 	t.onFire = fn
 }
 
-func (t *TIME) applyCAS(alarm store.Alarm, newDeadline int64) error {
+func (t *TIME) applyCAS(alarm rows.Alarm, newDeadline int64) error {
 	ok, err := t.store.UpdateAlarmDeadlineCAS(alarm.AlarmID, alarm.Deadline, newDeadline)
 	if err != nil {
 		return fmt.Errorf("alarm %s reschedule failed (the old deadline stands and will fire again): %w", alarm.AlarmID, err)

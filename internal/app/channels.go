@@ -10,10 +10,13 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
@@ -28,8 +31,6 @@ const (
 
 	receiveFloor = time.Second
 )
-
-var stopGrace = 5 * time.Second
 
 var channelNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
 
@@ -46,6 +47,16 @@ type channelRoute struct {
 	Hook bool
 
 	Acknowledges bool
+}
+
+type channelState struct {
+	mu sync.Mutex
+
+	routes         atomic.Pointer[map[string]channelRoute]
+	routesFP       string
+	routesComplete bool
+
+	held map[string][]string
 }
 
 type describeReply struct {
@@ -79,20 +90,36 @@ func (a *App) channelFingerprint() (string, []*pluginhost.ActivePlugin) {
 }
 
 func (a *App) channelRoutes(ctx context.Context) map[string]channelRoute {
-	routes, _ := a.routesFor(ctx)
+	routes, _ := a.routesFor(ctx, false)
 	return routes
 }
 
-func (a *App) routesFor(ctx context.Context) (map[string]channelRoute, bool) {
+func (a *App) routesFor(ctx context.Context, retry bool) (map[string]channelRoute, bool) {
 	if a.toolReg == nil {
 		return map[string]channelRoute{}, true
 	}
 	fp, installed := a.channelFingerprint()
-	a.routesMu.Lock()
-	defer a.routesMu.Unlock()
-	if fp == a.routesFP {
-		return a.describedRoutes(), true
+	a.channels.mu.Lock()
+	described, complete := a.channels.routes.Load() != nil && a.channels.routesFP == fp, a.channels.routesComplete
+	a.channels.mu.Unlock()
+	if described && (complete || !retry) {
+		if !complete {
+			a.wakeSweep()
+		}
+		return a.describedRoutes(), complete
 	}
+	routes, complete := a.describeRoutes(ctx, installed)
+
+	if now, _ := a.channelFingerprint(); now == fp {
+		a.channels.mu.Lock()
+		a.channels.routes.Store(&routes)
+		a.channels.routesFP, a.channels.routesComplete = fp, complete
+		a.channels.mu.Unlock()
+	}
+	return copyRoutes(routes), complete
+}
+
+func (a *App) describeRoutes(ctx context.Context, installed []*pluginhost.ActivePlugin) (map[string]channelRoute, bool) {
 	routes := map[string]channelRoute{}
 	contested := map[string]bool{}
 	complete := true
@@ -133,13 +160,7 @@ func (a *App) routesFor(ctx context.Context) (map[string]channelRoute, bool) {
 			Acknowledges: reply.Acknowledges,
 		}
 	}
-	a.routes.Store(&routes)
-	if complete {
-		a.routesFP = fp
-	} else {
-		a.routesFP = ""
-	}
-	return copyRoutes(routes), complete
+	return routes, complete
 }
 
 func copyRoutes(in map[string]channelRoute) map[string]channelRoute {
@@ -423,10 +444,7 @@ func (a *App) waitingFor(m store.OutboxMessage) waitReason {
 	if len(ways) == 0 {
 		return waitNoContact
 	}
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := a.lifetime()
 	routes := a.channelRoutes(ctx)
 	for _, w := range ways {
 		if _, installed := routes[w.Channel]; installed && (m.RequestedChannel == "" || w.Channel == m.RequestedChannel) {
@@ -515,16 +533,20 @@ func (a *App) listen(ctx context.Context, l *channelListener) {
 func (a *App) stopListener(l *channelListener) {
 	close(l.stop)
 	wait := l.route.Budget + stopGrace
-	go func() {
+	if !a.runBackground(func() {
+		budget := time.NewTimer(wait)
+		defer budget.Stop()
 		select {
 		case <-l.done:
-		case <-time.After(wait):
+		case <-a.lifetime().Done():
+		case <-budget.C:
 			logsink.Warn("channel.budget", "%s: receive did not return within its budget (%s) plus grace — cancelling, which kills the adapter's process", l.route.Channel, l.route.Budget)
-			l.cancel()
-			<-l.done
 		}
 		l.cancel()
-	}()
+		<-l.done
+	}) {
+		l.cancel()
+	}
 }
 
 func (a *App) receiveFrom(ctx context.Context, r channelRoute, recorded []string) (fresh int, held []string, err error) {
@@ -631,19 +653,15 @@ func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 		who, mayWake = "", false
 	}
 	framed := frameArrival(r, who, in.From, in.Body)
-	recordCtx := a.bgCtx
-	if recordCtx == nil {
-		recordCtx = context.Background()
-	}
-	recordCtx = context.WithValue(recordCtx, inboundRecordKey{}, rowID)
+	recordCtx := context.WithValue(a.lifetime(), inboundRecordKey{}, rowID)
 	if !mayWake {
-		if _, err := a.steerObserved(roleParticipant, framed, nil, recordCtx); err != nil && !errors.Is(err, dashboard.ErrBusyInternal) {
+		if _, err := a.steer(string(interaction.Participant), framed, nil, recordCtx); err != nil && !errors.Is(err, dashboard.ErrBusyInternal) {
 			logsink.Info("channel.refusal", "%s: %s not steered (%v) — the next turn carries it", r.Channel, rowID, err)
 		}
 		return
 	}
 
-	steered, err := a.admitObserved(roleParticipant, framed, nil, recordCtx)
+	steered, err := a.admit(string(interaction.Participant), framed, nil, recordCtx)
 	if err != nil {
 		logsink.Info("channel.refusal", "%s: %s not admitted (%v) — the next turn carries it", r.Channel, rowID, err)
 		return
@@ -659,7 +677,10 @@ func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 				logsink.Error("channel.error", "%s: the wake for %s PANICKED (contained; message kept): %v\n%s", r.Channel, rowID, p, debug.Stack())
 			}
 		}()
-		if _, err := a.wakeParticipant(recordCtx, framed); err != nil {
+		if reply, err := a.wakeParticipant(recordCtx, framed); err != nil && reply != "" {
+
+			logsink.Warn("channel.error", "%s: woke for %s and answered, but %v", r.Channel, rowID, err)
+		} else if err != nil {
 
 			logsink.Warn("channel.error", "%s: could not wake for %s (message kept): %v", r.Channel, rowID, err)
 		}
@@ -673,7 +694,7 @@ func (a *App) wakeParticipant(ctx context.Context, framed string) (string, error
 	if a.wakeParticipantFn != nil {
 		return a.wakeParticipantFn(ctx, framed)
 	}
-	return a.wake(withTurnSource(ctx, turnSourceArrival), "participant", framed)
+	return a.wake(withTurnSource(ctx, turnSourceArrival), string(interaction.Participant), framed)
 }
 
 func (a *App) channelPlugins() []*pluginhost.ActivePlugin {
@@ -693,7 +714,7 @@ func (a *App) convergeChannels(ctx context.Context) {
 	if fp == a.listeningFP {
 		return
 	}
-	routes, complete := a.routesFor(ctx)
+	routes, complete := a.routesFor(ctx, true)
 	if complete {
 		a.listeningFP = fp
 	}

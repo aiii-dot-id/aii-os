@@ -58,11 +58,16 @@ func (h *Holds) enqueueEdgeLocked(reason string) {
 	}
 }
 
-func (h *Holds) deliver() {
-	for range h.wake {
+func (h *Holds) deliver(wake chan struct{}) {
+	for range wake {
 		for {
 			h.mu.Lock()
 			if len(h.queue) == 0 {
+				if h.sub == nil {
+					h.wake = nil
+					h.mu.Unlock()
+					return
+				}
 				h.mu.Unlock()
 				break
 			}
@@ -99,7 +104,18 @@ func (h *Holds) Subscribe(fn func(needed bool, reason string)) {
 	if fn != nil && h.wake == nil {
 
 		h.wake = make(chan struct{}, 1)
-		go h.deliver()
+		go h.deliver(h.wake)
+	}
+	if fn == nil {
+
+		h.queue = nil
+	}
+	if fn == nil && h.wake != nil {
+
+		select {
+		case h.wake <- struct{}{}:
+		default:
+		}
 	}
 	if fn != nil {
 

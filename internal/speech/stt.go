@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/audio"
 )
 
 type Config struct {
@@ -83,7 +84,7 @@ func (c *Client) Transcribe(ctx context.Context, pcm []byte, sampleRate, channel
 		return Result{}, fmt.Errorf("speech: invalid format %d Hz / %d channel(s)", sampleRate, channels)
 	}
 
-	wav := wrapWAV(pcm, sampleRate, channels)
+	wav := append(audio.WAVHeader(audio.Format{Rate: sampleRate, Channels: channels}, uint32(len(pcm))), pcm...)
 	svc := c.cfg.Service.effective(STT)
 	v := values{"model": c.cfg.Model, "language": c.cfg.Language}
 
@@ -276,30 +277,3 @@ const (
 
 	maxErrorDetail = 512
 )
-
-func wrapWAV(pcm []byte, sampleRate, channels int) []byte {
-	const (
-		bitsPerSample = 16
-		headerSize    = 44
-		fmtChunkSize  = 16
-		pcmFormat     = 1
-	)
-	blockAlign := channels * bitsPerSample / 8
-	byteRate := sampleRate * blockAlign
-
-	buf := make([]byte, 0, headerSize+len(pcm))
-	buf = append(buf, "RIFF"...)
-	buf = binary.LittleEndian.AppendUint32(buf, uint32(headerSize-8+len(pcm)))
-	buf = append(buf, "WAVE"...)
-	buf = append(buf, "fmt "...)
-	buf = binary.LittleEndian.AppendUint32(buf, fmtChunkSize)
-	buf = binary.LittleEndian.AppendUint16(buf, pcmFormat)
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(channels))
-	buf = binary.LittleEndian.AppendUint32(buf, uint32(sampleRate))
-	buf = binary.LittleEndian.AppendUint32(buf, uint32(byteRate))
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(blockAlign))
-	buf = binary.LittleEndian.AppendUint16(buf, bitsPerSample)
-	buf = append(buf, "data"...)
-	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(pcm)))
-	return append(buf, pcm...)
-}

@@ -128,20 +128,12 @@ func (s *Store) getRuntimeMeta(key string) (string, error) {
 
 const transcriptArgsLimit = 200
 
-func (s *Store) RecordToolEvent(tool, args, result string) error {
-
-	_, err := s.RecordConversation(context.Background(), "system", toolExcerpt(tool, args, result), "", interaction.Details{Reason: "legacy tool excerpt", Tool: tool})
-	return err
-}
-
 func heardRecall(tool, args string) bool {
 	if tool != "recall" {
 		return false
 	}
-	var call struct {
-		Source string `json:"source"`
-	}
-	return json.Unmarshal([]byte(args), &call) == nil && call.Source == "heard"
+	var call map[string]any
+	return json.Unmarshal([]byte(args), &call) == nil && call["source"] == "heard"
 }
 
 func (s *Store) GetLatestOperatorTurn() (*ConversationTurn, error) {
@@ -188,65 +180,9 @@ func (s *Store) ConversationTurnCount() (int, error) {
 	return n, err
 }
 
-func (s *Store) GetTurnBefore(seq uint64) (*ConversationTurn, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var t ConversationTurn
-	err := s.db.QueryRow(
-		`SELECT id, session_id, role, content, turn_seq, created_at
-		 FROM conversations WHERE turn_seq < ? AND role != 'system' AND `+s.dialogueSelection()+`
-		 ORDER BY turn_seq DESC LIMIT 1`, seq,
-	).Scan(&t.ID, &t.SessionID, &t.Role, &t.Content, &t.TurnSeq, &t.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
-}
-
 func (s *Store) AddConversationTurn(role, content string) error {
 	_, err := s.AddConversationTurnSeq(role, content)
 	return err
-}
-
-func (s *Store) SearchTurns(q string, beforeSeq uint64, limit int) ([]ConversationTurn, int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var total int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM conversations WHERE role IN ('operator','resident') AND ` + s.dialogueSelection() + ``,
-	).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	rows, err := s.db.Query(
-		`SELECT id, session_id, role, content, turn_seq, created_at
-		 FROM conversations
-		 WHERE role IN ('operator','resident') AND `+s.dialogueSelection()+`
-		   AND turn_seq < ?
-		   AND (? = '' OR INSTR(LOWER(content), LOWER(?)) > 0)
-		 ORDER BY turn_seq DESC
-		 LIMIT ?`,
-		beforeSeq, q, q, limit,
-	)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	var out []ConversationTurn
-	for rows.Next() {
-		var t ConversationTurn
-		if err := rows.Scan(&t.ID, &t.SessionID, &t.Role, &t.Content, &t.TurnSeq, &t.CreatedAt); err != nil {
-			return nil, 0, err
-		}
-		out = append(out, t)
-	}
-	return out, total, rows.Err()
 }
 
 func (s *Store) RecentTurns(n int) ([]ConversationTurn, error) {

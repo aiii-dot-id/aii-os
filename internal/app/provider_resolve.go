@@ -5,9 +5,29 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"reflect"
+	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
+
+type providerState struct {
+	runtime providerRuntime
+	custody credentialCustody
+	sources credentialSources
+}
+
+type providerRuntime struct {
+	mu sync.RWMutex
+
+	activeProvider providerEntry
+
+	activeBudget       int
+	activeBudgetSource budgetSource
+
+	substrateCap substrateCapability
+
+	provStatus map[string]providerProbe
+}
 
 func sameProviderRuntime(a, b providerEntry, modelPinned bool) bool {
 	a.SubscribeURL, b.SubscribeURL = "", ""
@@ -21,9 +41,9 @@ func sameProviderRuntime(a, b providerEntry, modelPinned bool) bool {
 }
 
 func (a *App) clearProviderStatus(name string) {
-	a.provMu.Lock()
-	delete(a.provStatus, name)
-	a.provMu.Unlock()
+	a.providers.runtime.mu.Lock()
+	delete(a.providers.runtime.provStatus, name)
+	a.providers.runtime.mu.Unlock()
 }
 
 func (a *App) resolveLLM() (llm.ClientConfig, providerEntry, error) {
@@ -233,22 +253,20 @@ func promptBudgetFor(entry providerEntry, promptBudget int) (int, budgetSource) 
 
 func (a *App) rememberPromptBudget(entry providerEntry, maxPromptTokens int) int {
 	budget, source := promptBudgetFor(entry, maxPromptTokens)
-	a.activeProviderMu.Lock()
-	a.activeBudget, a.activeBudgetSource = budget, source
-	a.activeProviderMu.Unlock()
+	a.providers.runtime.mu.Lock()
+	a.providers.runtime.activeBudget, a.providers.runtime.activeBudgetSource = budget, source
+	a.providers.runtime.mu.Unlock()
 	return budget
 }
 
 func (a *App) currentPromptBudget() (int, budgetSource) {
-	a.activeProviderMu.RLock()
-	defer a.activeProviderMu.RUnlock()
-	return a.activeBudget, a.activeBudgetSource
+	a.providers.runtime.mu.RLock()
+	defer a.providers.runtime.mu.RUnlock()
+	return a.providers.runtime.activeBudget, a.providers.runtime.activeBudgetSource
 }
 
 func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPromptTokens int) {
-	a.activeProviderMu.Lock()
-	a.activeProvider = entry
-	a.activeProviderMu.Unlock()
+	a.adoptProvider(entry)
 	promptBudget := a.rememberPromptBudget(entry, maxPromptTokens)
 	if a.composer != nil {
 		a.composer.SetMaxTokens(promptBudget)
@@ -270,10 +288,16 @@ func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPro
 	}
 }
 
+func (a *App) adoptProvider(entry providerEntry) {
+	a.providers.runtime.mu.Lock()
+	a.providers.runtime.activeProvider = entry
+	a.providers.runtime.mu.Unlock()
+}
+
 func (a *App) currentProvider() providerEntry {
-	a.activeProviderMu.RLock()
-	defer a.activeProviderMu.RUnlock()
-	return a.activeProvider
+	a.providers.runtime.mu.RLock()
+	defer a.providers.runtime.mu.RUnlock()
+	return a.providers.runtime.activeProvider
 }
 
 func (a *App) providerRuntimeMatches(reg *providerRegistry) bool {

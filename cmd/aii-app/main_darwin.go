@@ -11,8 +11,6 @@ import (
 
 func openURL(url string) error { return exec.Command("open", url).Run() }
 
-func startService(string) bool { return false }
-
 func alert(msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	script := fmt.Sprintf(`display alert "AII OS could not start" message %q as critical giving up after 120`, msg)

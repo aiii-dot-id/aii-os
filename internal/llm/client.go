@@ -81,8 +81,6 @@ type CredentialSource interface {
 	Stale(ctx context.Context, gen uint64) error
 }
 
-func (c *Client) SetCredentialSource(s CredentialSource) { c.creds = s }
-
 func (c *Client) credential(ctx context.Context) (Credential, error) {
 	if c.creds != nil {
 		cr, err := c.credentialSource(ctx)
@@ -377,14 +375,11 @@ func New(cfg *ClientConfig) *Client {
 	}
 }
 
-func (c *Client) mergeExtra(body []byte) ([]byte, error) {
+func (c *Client) mergeExtra(body *openAIBody) {
 	if len(c.extra) == 0 {
-		return body, nil
+		return
 	}
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, fmt.Errorf("merge extra: %w", err)
-	}
+	m := body.add()
 	for k, v := range c.extra {
 		if (k == "max_tokens" && c.maxCompletionTokens) || (k == "max_completion_tokens" && !c.maxCompletionTokens) {
 			if _, warned := c.extraWarned.LoadOrStore(k, true); !warned {
@@ -400,11 +395,6 @@ func (c *Client) mergeExtra(body []byte) ([]byte, error) {
 		}
 		m[k] = v
 	}
-	merged, err := json.Marshal(m)
-	if err != nil {
-		return nil, fmt.Errorf("merge extra: %w", err)
-	}
-	return merged, nil
 }
 
 const DefaultMaxOutputTokens = 8192
@@ -432,6 +422,51 @@ func wireMessages(messages []Message) []wireMessage {
 		wire[i] = wireMessage{m, m.Reasoning}
 	}
 	return wire
+}
+
+func (r ChatRequest) members() map[string]any {
+	m := map[string]any{"model": r.Model, "messages": r.Messages}
+	if len(r.Tools) > 0 {
+		m["tools"] = r.Tools
+	}
+	if r.ToolChoice != "" {
+		m["tool_choice"] = r.ToolChoice
+	}
+	if r.MaxTokens != 0 {
+		m["max_tokens"] = r.MaxTokens
+	}
+	if r.MaxCompletionTokens != 0 {
+		m["max_completion_tokens"] = r.MaxCompletionTokens
+	}
+	if r.Temperature != nil {
+		m["temperature"] = r.Temperature
+	}
+	if r.TopP != nil {
+		m["top_p"] = r.TopP
+	}
+	if r.ReasoningEffort != "" {
+		m["reasoning_effort"] = r.ReasoningEffort
+	}
+	return m
+}
+
+type openAIBody struct {
+	req     ChatRequest
+	members map[string]any
+}
+
+func (b *openAIBody) add() map[string]any {
+	if b.members == nil {
+		b.members = b.req.members()
+	}
+	return b.members
+}
+
+func (b openAIBody) bytes() ([]byte, error) {
+	if b.members == nil {
+		return json.Marshal(b.req)
+	}
+	return json.Marshal(b.members)
 }
 
 const maxResponseBytes = 32 << 20
@@ -547,15 +582,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 		req.MaxCompletionTokens = req.MaxTokens
 		req.MaxTokens = 0
 	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-	if body, err = c.mergeExtra(body); err != nil {
-		return nil, err
-	}
-
-	body, err = c.applyOpenAICache(body, messages)
+	body, err := c.requestBody(req, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -565,6 +592,15 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 		resp.CallID = callID
 	}
 	return c.withReplay(resp), err
+}
+
+func (c *Client) requestBody(req ChatRequest, messages []Message) (openAIBody, error) {
+	body := openAIBody{req: req}
+	c.mergeExtra(&body)
+	if err := c.applyOpenAICache(&body, messages); err != nil {
+		return openAIBody{}, err
+	}
+	return body, nil
 }
 
 func (c *Client) chatOpenAIWhole(ctx context.Context, body []byte) (*Response, error) {

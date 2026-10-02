@@ -2,10 +2,10 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/fuse"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 	graphNodeBound = 2000
 )
 
-func graphBoost(ctx context.Context, db *sql.DB, fused []fuse.Fused) (map[fuse.Key]float64, error) {
+func graphBoost(ctx context.Context, db store.Reader, fused []fuse.Fused) (map[fuse.Key]float64, error) {
 	boosts := make(map[fuse.Key]float64, len(fused))
 	for _, fz := range fused {
 		boosts[fz.Key] = 1
@@ -98,7 +98,7 @@ func graphBoost(ctx context.Context, db *sql.DB, fused []fuse.Fused) (map[fuse.K
 	return boosts, nil
 }
 
-func walkEdges(ctx context.Context, db *sql.DB, seeds map[string]float64) (map[string][]string, error) {
+func walkEdges(ctx context.Context, db store.Reader, seeds map[string]float64) (map[string][]string, error) {
 	adjacency := map[string][]string{}
 	visited := map[string]bool{}
 	frontier := make([]string, 0, len(seeds))

@@ -1,6 +1,3 @@
-// The native shell answers only its own top-level dashboard origin. No bearer
-// is cached: each refused cookie asks the running owner again, then the caller
-// uses the ordinary server login route. Desktop browsers have no such bridge.
 export function hasShellAuth() {
   return !!(window.aiiDashboardAuth || window.webkit?.messageHandlers?.aiiDashboardAuth);
 }

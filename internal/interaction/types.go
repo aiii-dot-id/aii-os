@@ -224,7 +224,7 @@ func Validate(in Input) error {
 		if in.Kind == ToolCall && in.Outcome != "" {
 			return Invalid("attempt is not an outcome")
 		}
-		if in.Kind == ToolResult && (in.RelatedID == "" || (in.Outcome != Succeeded && in.Outcome != Failed && in.Outcome != Unknown)) {
+		if in.Kind == ToolResult && (in.RelatedID == "" || (in.Outcome != Succeeded && in.Outcome != Failed && in.Outcome != Unknown && in.Outcome != Cancelled && in.Outcome != Refused)) {
 			return Invalid("tool outcome requires its call")
 		}
 	case Notice:

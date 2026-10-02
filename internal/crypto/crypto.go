@@ -10,10 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
-	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 	slh "github.com/trailofbits/go-slh-dsa/slh_dsa"
 )
 
@@ -113,43 +111,15 @@ func SaveKeyPair(kp *KeyPair, path string) (published bool, retErr error) {
 	return PublishKeyFile(data, path)
 }
 
-func PublishKeyFile(data []byte, path string) (published bool, retErr error) {
+func PublishKeyFile(data []byte, path string) (bool, error) {
 	if path == "" {
 		return false, errors.New("key path is required")
 	}
 	if _, err := ParseKeyPair(data); err != nil {
 		return false, fmt.Errorf("refusing to publish: %w", err)
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return false, fmt.Errorf("key temp create: %w", err)
-	}
-	tmp := f.Name()
-	closed := false
-	defer func() {
-		if !closed {
-			retErr = errors.Join(retErr, f.Close())
-		}
-		if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove key temp: %w", err))
-		}
-	}()
 
-	if err := fileperm.RestrictToOwner(f); err != nil {
-		return false, fmt.Errorf("key temp permissions: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		return false, fmt.Errorf("key temp write: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return false, fmt.Errorf("key temp sync: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		closed = true
-		return false, fmt.Errorf("key temp close: %w", err)
-	}
-	closed = true
-	published, err = atomicfile.PublishNew(tmp, path)
+	published, err := atomicfile.WriteNew(path, data, 0o600)
 	if err == nil {
 		return true, nil
 	}

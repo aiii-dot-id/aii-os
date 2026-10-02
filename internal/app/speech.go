@@ -136,16 +136,28 @@ func (a *App) engineServes(provider string) bool {
 	if strings.TrimSpace(provider) == "" {
 		return false
 	}
-	_, serves, _ := speechEngineServes(provider, a.speechEngines())
-	return serves
+	return a.speechEngineFor(provider) != nil
+}
+
+func (a *App) engineInstalled(provider string) bool {
+	if a.engineServes(provider) {
+		return true
+	}
+	id := strings.TrimSpace(provider)
+	if id == "" {
+		return false
+	}
+	for _, v := range a.pluginFacility().Snapshot().Instances {
+		if v.ID == id && v.Wanted && v.Family == "voice_interface" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) checkSpeech(cfg *Config, reg *providerRegistry, input, output bool) error {
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if input && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineServes(cfg.Speech.STT.Provider) {
+	ctx := a.lifetime()
+	if input && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineInstalled(cfg.Speech.STT.Provider) {
 		c, entry, err := transcriberFor(cfg.Speech.STT, reg)
 		if err != nil {
 			return fmt.Errorf("voice input refused: %w", err)
@@ -162,7 +174,7 @@ func (a *App) checkSpeech(cfg *Config, reg *providerRegistry, input, output bool
 		a.speechTrouble.clear()
 		pushVoiceStatus(a)
 	}
-	if output && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineServes(cfg.Speech.TTS.Provider) {
+	if output && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineInstalled(cfg.Speech.TTS.Provider) {
 		s, entry, err := synthesizerFor(cfg.Speech.TTS, reg)
 		if err != nil {
 			return fmt.Errorf("voice replies refused: %w", err)
@@ -292,7 +304,7 @@ func (a *App) VoiceStatus() (state, reason, source string) {
 	sc := a.configSnapshot().Speech.STT
 	chosen := strings.TrimSpace(sc.Provider)
 
-	if id := activeVoicePlugin(a); id != "" && (chosen == "" || chosen == id) {
+	if id := activeVoicePlugin(a, sc.Provider); id != "" {
 		return "plugin", "", id
 	}
 	if chosen == "" {
@@ -315,14 +327,14 @@ func (a *App) VoiceStatus() (state, reason, source string) {
 	return "cloud", "", source
 }
 
-var activeVoicePlugin = func(a *App) string {
-	if p := a.voicePlugin(); p != nil {
+func defaultActiveVoicePlugin(a *App, provider string) string {
+	if p := a.speechEngineFor(provider); p != nil {
 		return p.ID
 	}
 	return ""
 }
 
-var pushVoiceStatus = func(a *App) {
+func defaultPushVoiceStatus(a *App) {
 	if a.dashboard != nil {
 		a.dashboard.BroadcastStatus()
 	}

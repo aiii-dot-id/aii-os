@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -191,7 +192,39 @@ func VerifyPayload(bundleBytes []byte, pubkey *PublicKeyEnvelope, expectedKind s
 	return bundle.Payload, nil
 }
 
+var ErrOutsideWindow = errors.New("key envelope outside its validity window")
+
 func ValidatePublicKeyEnvelope(env *PublicKeyEnvelope, acceptedProfiles ...string) error {
+	if err := ValidatePublicKeyEnvelopeShape(env, acceptedProfiles...); err != nil {
+		return err
+	}
+	return ValidWindow(env, time.Now())
+}
+
+func ValidWindow(env *PublicKeyEnvelope, at time.Time) error {
+	at = at.UTC()
+	if env.NotBefore != "" {
+		nb, err := time.Parse(time.RFC3339, env.NotBefore)
+		if err != nil {
+			return fmt.Errorf("not_before unparseable: %w", err)
+		}
+		if at.Before(nb) {
+			return fmt.Errorf("key envelope not yet valid (not_before %s, clock %s): %w", env.NotBefore, at.Format(time.RFC3339), ErrOutsideWindow)
+		}
+	}
+	if env.ExpiresAt != "" {
+		exp, err := time.Parse(time.RFC3339, env.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("expires_at unparseable: %w", err)
+		}
+		if !at.Before(exp) {
+			return fmt.Errorf("key envelope expired at %s (clock %s): %w", env.ExpiresAt, at.Format(time.RFC3339), ErrOutsideWindow)
+		}
+	}
+	return nil
+}
+
+func ValidatePublicKeyEnvelopeShape(env *PublicKeyEnvelope, acceptedProfiles ...string) error {
 	if env.V != 1 {
 		return fmt.Errorf("v must be 1, got %d", env.V)
 	}
@@ -205,23 +238,14 @@ func ValidatePublicKeyEnvelope(env *PublicKeyEnvelope, acceptedProfiles ...strin
 		return fmt.Errorf("no keys in envelope")
 	}
 
-	now := time.Now().UTC()
 	if env.NotBefore != "" {
-		nb, err := time.Parse(time.RFC3339, env.NotBefore)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, env.NotBefore); err != nil {
 			return fmt.Errorf("not_before unparseable: %w", err)
-		}
-		if now.Before(nb) {
-			return fmt.Errorf("key envelope not yet valid (not_before %s)", env.NotBefore)
 		}
 	}
 	if env.ExpiresAt != "" {
-		exp, err := time.Parse(time.RFC3339, env.ExpiresAt)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, env.ExpiresAt); err != nil {
 			return fmt.Errorf("expires_at unparseable: %w", err)
-		}
-		if !now.Before(exp) {
-			return fmt.Errorf("key envelope expired at %s", env.ExpiresAt)
 		}
 	}
 

@@ -2,21 +2,13 @@ import { S } from '../state.js';
 import { $, esc } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
+import { holdReloadWhile } from '../overlay.js';
 
-// Settings → Backups & Keys: what is kept, a snapshot now, the proof that a
-// kept one restores, how many are kept, and the escrow of the keys. A person
-// does all of it here; nothing on this page needs a terminal.
-//
-// The page holds one thing the server does not: the passphrase, between
-// making the escrow file and picking the saved file back. It lives in this
-// module's memory only, is never rendered, and is cleared the moment the
-// check is answered or the person leaves the step.
-
-let said = null;      // { kind: 'good'|'bad', text, at } — the last answer, shown in the card that asked
-let step = 1;         // the escrow card: 1 = make the file, 2 = pick it back
-let held = '';        // the passphrase, step 1 → step 2
+let said = null;
+let step = 1;
+let held = '';
 let savedAs = '';
-let plan = null;      // the restore being considered: what it will cost, before it is confirmed
+let plan = null;
 let restarting = false;
 const actionReply = pendingSlot();
 const preferenceReply = pendingSlot();
@@ -24,12 +16,11 @@ function busyAction() {
   const pending = actionReply.waiting();
   return pending ? pending.action === 'verify' ? 'verify:' + pending.name : pending.action : null;
 }
-// Retain actual controls, including picked files, only in this form's owner.
-// Passwords never enter markup/storage; leaving the form clears them below.
 const controls = new Map();
 let focus = null;
 let reader = null;
 const valueOf = el => el.type === 'checkbox' ? el.checked : el.value;
+holdReloadWhile(() => !!held || [...controls.values()].some(f => valueOf(f.el) !== f.saved));
 function clearControls(predicate) {
   controls.forEach((field, id) => {
     if (!predicate(id)) return;
@@ -67,8 +58,6 @@ function rerender() { if (S.renderBackups) S.renderBackups(); if (S.renderIdenti
 
 export function requestBackups() { send({ type: 'backups', backups: { action: 'status' } }); }
 
-// applyBackups takes the server's answer. It returns nothing the page has
-// to keep beyond the view: a saved file is handed to the browser at once.
 export function applyBackups(reply, requestID) {
   if (!reply) return;
   if (reply.action !== 'status') {
@@ -80,7 +69,6 @@ export function applyBackups(reply, requestID) {
   if (act === 'restore_plan' && reply.plan) { clearControls(id => id === 'bk-confirm'); plan = reply.plan; said = null; rerender(); return; }
   if (act === 'restore' && reply.restarting) { restarting = true; said = null; rerender(); return; }
   if (reply.error) {
-    // A file that does not open keeps the person on step 2, to pick another.
     said = { kind: 'bad', text: reply.error, at };
   } else if (reply.action === 'take') {
     said = { kind: 'good', text: 'A snapshot was taken and proved to restore.', at };
@@ -151,7 +139,6 @@ export function backupsHTML() {
   const waiting = !!busy || !!reader;
   let html = '';
 
-  // --- what is kept ---
   html += '<div class="card" data-card="kept"><h3>BACKUPS — WHAT IS KEPT</h3>';
   if (!v.enabled) html += '<div class="bad-text" data-off style="margin-bottom:8px">The maintenance pass is switched off: nothing is verified and no snapshot is made. Switch it on below.</div>';
   if (v.safe) html += '<div class="bad-text" style="margin-bottom:8px">This start is SAFE: the record is walked every day and no snapshot is made.</div>';
@@ -177,7 +164,6 @@ export function backupsHTML() {
 
   html += restoreHTML(v);
 
-  // --- how many, and whether ---
   html += '<div class="card" data-card="keep"><h3>WHAT IS KEPT, AND WHETHER</h3>' +
     '<label class="f" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bk-enabled"' + (v.enabled ? ' checked' : '') + '> VERIFY AND BACK UP EVERY DAY (04:00)</label>' +
     '<label class="f">DAILY SNAPSHOTS TO KEEP</label><input type="number" id="bk-keep" min="1" max="365" value="' + esc(v.backup_keep) + '">' +
@@ -185,7 +171,6 @@ export function backupsHTML() {
     '<div class="dim-note" style="margin-top:6px">Each snapshot holds the whole database. Applies at once.</div>' +
     '<div style="margin-top:10px"><button class="btn" id="bk-save"' + (preferenceReply.waiting() ? ' disabled' : '') + '>' + (preferenceReply.waiting() ? 'Saving…' : 'Save') + '</button></div>' + saidHTML('keep') + '</div>';
 
-  // --- the keys ---
   html += '<div class="card" data-card="escrow"><h3>KEYS — THE ESCROW</h3>';
   html += '<div class="kv"><span>snapshots</span><b data-encrypting>' + (v.encrypting ? 'encrypted before they can leave this machine' : '<span class="bad-text">NOT encrypted</span>') + '</b></div>';
   if (!v.encrypting && v.unencrypted_text) html += '<div class="dim-note" data-why style="margin:6px 0 10px">' + esc(v.unencrypted_text) + '</div>';
@@ -222,9 +207,6 @@ function size(bytes) {
   return Math.max(1, Math.round(bytes / 1024)) + ' KB';
 }
 
-// The restore card: what a restore will cost, in exact numbers, before the
-// person is asked to confirm it; and what earlier restores set aside, each
-// with where it is — "never deleted" must not become "never found again".
 function restoreHTML(v) {
   const busy = busyAction();
   const sets = v.set_aside || [];
@@ -325,7 +307,6 @@ export function wireBackups(root) {
   root.querySelectorAll('[data-restore]').forEach(btn => { btn.onclick = () => ask('restore_plan', { name: btn.dataset.restore, source: btn.dataset.source }); });
   const confirmBox = $('bk-confirm'), doRestore = $('bk-restore');
   if (confirmBox && doRestore && plan) {
-    // The button arms only on an exact match; the host compares again.
     confirmBox.oninput = () => { doRestore.disabled = !!busyAction() || confirmBox.value.trim() !== plan.confirm_text; };
     confirmBox.oninput();
     doRestore.onclick = () => ask('restore', { name: plan.name, source: plan.source, confirm: confirmBox.value.trim() });
@@ -373,14 +354,12 @@ export function wireBackups(root) {
   };
 }
 
-// For the tests, and for leaving the page: nothing of the passphrase stays.
 export function forgetBackupsSecrets() {
   clearEscrow(); clearControls(id => id === 'bk-confirm');
   actionReply.drop(); said = null; plan = null; restarting = false;
 }
 export function acceptBackupPreferences(requestID) {
   const saved = S.config?.maintenance;
-  // Config broadcasts update saved facts, but only our reply retires edits.
   if (S.backups && saved) S.backups = { ...S.backups, enabled: saved.enabled, backup_keep: saved.backup_keep };
   const asked = preferenceReply.claim(requestID);
   if (!asked) return false;
@@ -410,6 +389,5 @@ export function backupsConnectionLost() {
   if (action || preferences) said = {kind:'bad', text:'Connection lost — completion is unknown. Review current state before trying again; nothing is automatically retried.', at:action ? actionCard(action.action) : 'keep'};
   rerender();
 }
-// The socket came back: whatever restart was under way is over.
 export function backupsReconnected() { if (S.backups) { restarting = false; plan = null; clearControls(id => id === 'bk-confirm'); requestBackups(); } }
 export function backupsHolding() { return { step, holding: held !== '', busy: busyAction() }; }

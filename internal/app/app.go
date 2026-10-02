@@ -32,14 +32,15 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/googleoidc"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
+	"github.com/aiii-dot-id/aii-os/internal/memory/attention"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
-	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
@@ -54,18 +55,11 @@ import (
 )
 
 type App struct {
-	dashboardAccessToken string
-	dashboardTokenMu     sync.Mutex
+	dash dashState
 
 	embeddedAuthentication bool
 
-	mintedTokenMu sync.Mutex
-	mintedToken   string
-
 	cfg *Config
-
-	uiLayoutFilePath string
-	uiLayoutPathOnce sync.Once
 
 	dashboard *dashboard.Server
 
@@ -85,6 +79,8 @@ type App struct {
 	bootstrapText string
 	genesisClient *genesis.GenesisClient
 
+	identityClaim *os.File
+
 	keyPair      *crypto.KeyPair
 	ledger       *ledger.Ledger
 	store        *store.Store
@@ -96,8 +92,8 @@ type App struct {
 	llmClient    *llm.Client
 	toolReg      *tools.Registry
 
-	plugins       []*pluginhost.ActivePlugin
-	retiring      []*pluginhost.ActivePlugin
+	pluginState
+
 	audio         *audio.Plane
 	audioOnce     sync.Once
 	voiceSeq      atomic.Uint64
@@ -133,74 +129,29 @@ type App struct {
 	speechReservedHeard     time.Duration
 	voiceObs                map[*pluginhost.VoiceSession]bool
 	voiceObsMu              sync.Mutex
-	pluginLife              map[string]pluginLifecycle
-	pluginMu                sync.Mutex
-	activeMeta              map[string]activePkgMeta
 	sweepPoke               chan struct{}
 	restartCh               chan struct{}
 	restartOnce             sync.Once
 	restarting              atomic.Bool
-	stageOnce               sync.Once
-	stageWhy                string
+	stage                   stageProbe
 	pluginToolReg           *tools.Registry
-	facility                *pluginfacility.Facility
-	facilityOnce            sync.Once
-	policyRev               uint64
-	policyFinger            string
-	trustGen                uint64
 
-	subMu       sync.RWMutex
-	subscribers map[string]*pluginSubscriber
-	pluginOpts  *pluginhost.Options
-	catalog     plugincatalog.Catalog
-	pkgFetch    packageFetch
-	modelFetch  pluginhost.ModelFetcher
+	pluginOpts *pluginhost.Options
+	catalog    plugincatalog.Catalog
+	pkgFetch   packageFetch
+	modelFetch pluginhost.ModelFetcher
 
 	trustDir    string
 	trustGuard  packagefmt.EpochGuard
 	trustFinger string
 
-	sections    *sections.Registry
-	sectionActs []*sections.Section
-	uiLayoutMu  sync.Mutex
-	uiLayoutRaw []byte
+	sections *sections.Registry
 
-	uiThemeMu  sync.Mutex
-	uiThemeRaw []byte
-
-	toolEmitMu sync.Mutex
-	turnCostMu sync.Mutex
-	lastTurn   string
-	toolEmit   func(kind, name, args string)
-
-	turnMeterMu sync.Mutex
-
-	contChain int
-
-	turnContinuation bool
+	turn turnState
 
 	planningBrief bool
 
-	askMu         sync.Mutex
-	askYields     int
-	askFleetSpent bool
-
-	legMu     sync.Mutex
-	legMeters map[string]*legMeter
-
-	queueWake    func()
-	turnCalls    int
-	turnReadOnly int
-	turnSpawned  int
-
-	turnHarvested int
-
-	turnPredicted int
-
-	turnPredictedOrdinal   int
-	turnIndependentOrdinal int
-
-	turnFirstPredicted int
+	queueWake func()
 
 	composedInterrupted bool
 
@@ -212,41 +163,29 @@ type App struct {
 
 	bootSwept []store.WorkSession
 
-	maintMu sync.Mutex
-
-	lastVerify time.Time
+	maint maintenanceState
 
 	bootChain string
 
 	bootAttested     int64
 	bootAttestedHash string
 
-	turnDeclaredOrdinal int
-
-	turnIndependent int
-
 	cfgMu sync.RWMutex
 
 	credentialPathRead func()
 
-	credMu  sync.Mutex
-	credSrc map[string]*oauth.Source
+	keyOrigin atomic.Pointer[string]
 
-	signInMu      sync.Mutex
-	signIns       map[string]*pendingSignIn
 	signInTimeout time.Duration
-
-	unrevoked map[string]bool
 
 	oauthTransport  http.RoundTripper
 	oauthGuard      func(context.Context, string) error
 	brokerTransport http.RoundTripper
 	brokerGuard     func(context.Context, string) error
 
-	provMu sync.Mutex
+	providers providerState
 
-	projectMu  sync.Mutex
-	provStatus map[string]providerProbe
+	project projectState
 
 	turnGate chan struct{}
 
@@ -261,12 +200,7 @@ type App struct {
 	listening   map[string]*channelListener
 	listeningFP string
 
-	routesMu sync.Mutex
-	routes   atomic.Pointer[map[string]channelRoute]
-	routesFP string
-
-	heldMu sync.Mutex
-	held   map[string][]string
+	channels channelState
 
 	scheduling map[string]*scheduleRunner
 
@@ -304,15 +238,6 @@ type App struct {
 
 	llmSwap *swappableLLM
 
-	activeProviderMu sync.RWMutex
-	activeProvider   providerEntry
-
-	activeBudget       int
-	activeBudgetSource budgetSource
-
-	capMu        sync.RWMutex
-	substrateCap substrateCapability
-
 	modalities modalityMemo
 
 	speechTrouble speechTrouble
@@ -340,27 +265,20 @@ type App struct {
 
 	runtimeRoots *pluginhost.RuntimeRoots
 
-	consolidateFacility atomic.Pointer[cognitive.ConsolidateFacility]
+	cognition cognitionFacilities
 
-	reviewFacility atomic.Pointer[cognitive.IdentityReviewFacility]
-	bgCtx          context.Context
-	bgCancel       context.CancelFunc
-	bgMu           sync.Mutex
-	bgWG           sync.WaitGroup
-	stopping       bool
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgMu     sync.Mutex
+	bgWG     sync.WaitGroup
+	stopping bool
 
 	gate *quiesce.Gate
 
 	watchEvery time.Duration
 
-	overlayLast atomic.Pointer[string]
-
-	projectsLast atomic.Pointer[string]
-
 	projectsPush     func(id string, ws *dashboard.WorkspaceState)
 	projectsListPush func()
-
-	overlayToken atomic.Uint64
 
 	wakeMu       sync.Mutex
 	platformWake cognitive.PlatformWake
@@ -369,7 +287,7 @@ type App struct {
 	stopDone chan struct{}
 	stopErr  error
 
-	live bool
+	live atomic.Bool
 }
 
 func New(cfg *Config) *App {
@@ -382,7 +300,9 @@ func New(cfg *Config) *App {
 		restartCh:    make(chan struct{}),
 		cfg:          cfg, gate: quiesce.NewGate(), turnGate: turnGate,
 		outboxPoke: make(chan struct{}, 1), listening: map[string]*channelListener{}, scheduling: map[string]*scheduleRunner{},
-		bgCtx: bgCtx, bgCancel: bgCancel,
+
+		sweepPoke: make(chan struct{}, 1),
+		bgCtx:     bgCtx, bgCancel: bgCancel,
 		googleOIDC: googleoidc.New(&http.Client{Timeout: 15 * time.Second}),
 	}
 	if cfg != nil {
@@ -409,17 +329,17 @@ func (a *App) acquireTurnOr(ctx context.Context, wake <-chan struct{}) (bool, er
 	case <-wake:
 		return false, nil
 	case <-a.turnGate:
+
+		a.turnTaken()
 		if err := ctx.Err(); err != nil {
 			a.releaseTurn()
 			return false, err
 		}
-		a.holdTurnForeground()
-		a.emitPluginEvent(pluginhost.TopicTurnStarted, nil)
 		return true, nil
 	}
 }
 
-func (a *App) holdTurnForeground() {
+func (a *App) turnTaken() {
 	rel := a.fg.Acquire("turn")
 	a.turnMu.Lock()
 	if a.turnFgRelease != nil {
@@ -427,6 +347,7 @@ func (a *App) holdTurnForeground() {
 	}
 	a.turnFgRelease = rel
 	a.turnMu.Unlock()
+	a.emitPluginEvent(pluginhost.TopicTurnStarted, nil)
 }
 
 func (a *App) SubscribeForegroundNeed(fn func(needed bool, reason string)) {
@@ -449,6 +370,7 @@ func (a *App) releaseTurn() {
 	}
 	for _, b := range unanswered {
 		b.release("the turn ended without answering")
+		a.retirePendingObservation(b)
 	}
 	a.turnGate <- struct{}{}
 
@@ -467,13 +389,14 @@ func (a *App) releaseTurn() {
 		return
 	}
 	if !a.runBackground(func() { a.runLeftoverSteerTurn(leftovers) }) {
-		refuseSteers(leftovers, "runtime stopped before the queued words could run")
+		a.refuseSteers(leftovers, "runtime stopped before the queued words could run")
 	}
 }
 
-func refuseSteers(entries []steerEntry, why string) {
+func (a *App) refuseSteers(entries []steerEntry, why string) {
 	releaseVoice(entries, why)
 	for _, e := range entries {
+		a.retirePendingObservation(e.voice)
 		dashboard.ChatNotRecorded(e.recordCtx, why)
 	}
 }
@@ -482,18 +405,14 @@ func (a *App) runLeftoverSteerTurn(entries []steerEntry) {
 
 	if a.conv == nil || a.engine == nil || a.store == nil {
 		logsink.Warn("steering.refusal", "%d leftover message(s) arrived before the runtime could run turns — dropped", len(entries))
-		refuseSteers(entries, "dropped: the runtime could not run turns")
+		a.refuseSteers(entries, "dropped: the runtime could not run turns")
 		return
 	}
-	parent := a.bgCtx
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 15*time.Minute)
 	defer cancel()
 	if err := a.acquireTurn(ctx); err != nil {
 		logsink.Warn("steering.error", "%d leftover message(s) could not open their turn: %v", len(entries), err)
-		refuseSteers(entries, "the turn could not open: "+err.Error())
+		a.refuseSteers(entries, "the turn could not open: "+err.Error())
 		return
 	}
 	defer a.releaseTurn()
@@ -512,9 +431,12 @@ func (a *App) runLeftoverSteerTurn(entries []steerEntry) {
 	parts := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if a.engine != nil {
-			_, err := a.recordConversationForReceipt(ctx, e.recordCtx, e.role, e.content)
+			ref, err := a.recordConversationForReceipt(ctx, e.recordCtx, e.role, e.content)
 			if err != nil {
 				logsink.Warn("steering.error", "leftover turn not recorded: %v", err)
+			} else {
+
+				a.annotateVoiceTurn(ref.Sequence, e.voice)
 			}
 		}
 		parts = append(parts, e.content)
@@ -527,7 +449,15 @@ func (a *App) runLeftoverSteerTurn(entries []steerEntry) {
 	if err != nil {
 		logsink.Warn("steering.error", "leftover turn failed: %v", err)
 		if a.dashboard != nil {
-			a.dashboard.BroadcastResponse("system", "Your queued message could not run: "+err.Error())
+			why := "Your queued message could not run: "
+			if resp != "" {
+
+				if !a.voiceReplyShown.Swap(false) {
+					a.dashboard.BroadcastResponse("identity", resp)
+				}
+				why = "Your queued message was answered, but "
+			}
+			a.dashboard.BroadcastResponse("system", why+err.Error())
 		}
 		return
 	}
@@ -542,6 +472,15 @@ func (a *App) pokeOutbox() {
 	default:
 	}
 }
+
+func (a *App) lifetime() context.Context {
+	if a.bgCtx != nil {
+		return a.bgCtx
+	}
+	return context.Background()
+}
+
+var errStopping = errors.New("the identity is stopping")
 
 func (a *App) runBackground(run func()) bool {
 	a.bgMu.Lock()
@@ -622,16 +561,6 @@ func (a *App) SetForeground(live bool) {
 	}
 }
 
-func (a *App) operatorPresent() bool {
-	if a.pulseSource != nil {
-		return a.pulseSource.Live()
-	}
-	if a.dashboard != nil {
-		return a.dashboard.SessionLive()
-	}
-	return false
-}
-
 func (a *App) Run() {
 
 	home, herr := filepath.Abs(filepath.Dir(a.cfg.Identity.LedgerPath))
@@ -677,8 +606,8 @@ func (a *App) Run() {
 	}
 
 	if err := a.Shutdown(context.Background()); err != nil {
-		logsink.Error("boot.error", "shutdown did not complete cleanly; restart refused: %v", err)
-		return
+		logsink.Error("boot.error", "shutdown did not complete cleanly: %v", err)
+		os.Exit(1)
 	}
 	if a.restarting.Load() {
 		relaunch()
@@ -693,14 +622,6 @@ func (a *App) Restart() error {
 		}
 	})
 	return nil
-}
-
-func (a *App) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := a.Shutdown(ctx); err != nil {
-		logsink.Warn("boot.error", "shutdown: %v", err)
-	}
 }
 
 type ShutdownPending struct{ Cause error }
@@ -769,8 +690,11 @@ func (a *App) stop() error {
 		return fmt.Errorf("resident turn did not quiesce: %w", err)
 	}
 	err := a.closeLiveResources()
+
+	a.releaseIdentityClaim()
 	a.releaseTurn()
 
+	a.fg.Subscribe(nil)
 	if a.logSink != nil {
 		a.logSink.Close()
 		a.logSink = nil
@@ -796,8 +720,11 @@ func (a *App) closeLiveResources() error {
 		a.timerOwner = nil
 	}
 
-	if a.facility != nil {
-		a.facility.Close()
+	a.pluginMu.Lock()
+	f := a.facility
+	a.pluginMu.Unlock()
+	if f != nil {
+		f.Close()
 	}
 
 	a.pluginMu.Lock()
@@ -813,14 +740,14 @@ func (a *App) closeLiveResources() error {
 	var errs []error
 
 	for _, ap := range retiring {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pluginStopBudget)
 		if err := ap.CloseQuiet(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("stop pinned predecessor %s: %w", ap.ID, err))
 		}
 		cancel()
 	}
 	for _, ap := range plugins {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pluginStopBudget)
 		if err := ap.Deactivate(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("deactivate plugin %s: %w", ap.ID, err))
 		}
@@ -846,7 +773,7 @@ func (a *App) closeLiveResources() error {
 		}
 		a.ledger = nil
 	}
-	a.live = false
+	a.live.Store(false)
 	return errors.Join(errs...)
 }
 
@@ -911,8 +838,35 @@ func schemaRefusal(err error, armed bool) (string, bool) {
 	return detail, true
 }
 
+func (a *App) newToolRegistry(cfg Config) (*tools.Registry, error) {
+	reg := tools.NewRegistry(cfg.Tools.CWD, a.ensureRing5Policy(), tools.Timeouts{
+		ShellSeconds:    cfg.Tools.ShellTimeoutSeconds,
+		WebFetchSeconds: cfg.Tools.WebFetchTimeoutSeconds,
+	})
+	if err := checkNameOwners(reg); err != nil {
+		return nil, err
+	}
+	a.applyLocalFetch(cfg, reg)
+
+	reg.SetSafeSource(a.SafeMode)
+	if err := applyDisabledTools(reg, cfg.Tools.Disabled); err != nil {
+		return nil, err
+	}
+	return reg, nil
+}
+
 func (a *App) startLive() (retErr error) {
 	cfg := a.configSnapshot()
+
+	release, err := a.claimIdentity(filepath.Dir(cfg.Identity.LedgerPath))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			release()
+		}
+	}()
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Join(retErr, a.closeLiveResources())
@@ -920,8 +874,13 @@ func (a *App) startLive() (retErr error) {
 	}()
 
 	if sr := hostcap.Can(hostcap.SelfReplace); sr.Available {
-		if err := afterRollback(updates.CheckRollback(filepath.Dir(cfg.Identity.LedgerPath)), reexecSelf); err != nil {
+		rolled := updates.CheckRollback(filepath.Dir(cfg.Identity.LedgerPath))
+		if err := afterRollback(rolled, a.releaseIdentityClaim, reexecSelf); err != nil {
 			return err
+		}
+		if rolled != "" {
+
+			os.Exit(0)
 		}
 	} else {
 		logsink.Info("updates.decision", "rollback machinery idle on this host — %s", sr.Reason)
@@ -932,6 +891,8 @@ func (a *App) startLive() (retErr error) {
 		return fmt.Errorf("load identity key: %w", err)
 	}
 	a.keyPair = kp
+	keyOrigin := cfg.Identity.KeyPath
+	a.keyOrigin.Store(&keyOrigin)
 
 	if err := a.performPendingRestore(context.Background(), cfg, kp); err != nil {
 		logsink.Error("boot.refusal", "A RESTORE DID NOT FINISH — entering BOOT-SAFE (minimal, read-only): %v", err)
@@ -944,76 +905,9 @@ func (a *App) startLive() (retErr error) {
 		return a.startSafeBoot(safeRestore, err.Error())
 	}
 
-	heads, err := a.bootHeadVerifier(cfg)
-	if err != nil {
-		logsink.Error("boot.refusal", "BESIDE THE LEDGER DO NOT VERIFY — entering BOOT-SAFE (minimal, read-only): %v", err)
-		return a.startSafeBoot(safeRecord, fmt.Sprintf("witness keys beside the ledger do not verify: %v", err))
-	}
-
-	var tail *witness.LocalTail
-	var tailErr error
-	var tailCheck *witness.TailCheck
-
-	lg, verified, err := ledger.OpenVerified(cfg.Identity.LedgerPath, kp.PublicKeyBytes(), heads, func(evt *ledger.Event) error {
-		if tailCheck == nil {
-			tail, tailErr = witness.ReadLocalTail(filepath.Dir(cfg.Identity.LedgerPath))
-			tailCheck = witness.NewTailCheck(tail)
-		}
-		return tailCheck.Visit(evt)
-	}, func(through uint64) error {
-		if tailErr == nil {
-			tailErr = tailCheck.Held()
-		}
-		if tailErr != nil {
-			return tailErr
-		}
-		return store.CheckAcknowledgedPrefix(cfg.Identity.DBPath, through)
-	})
-	if err != nil {
-
-		var pathErr *os.PathError
-		var systemErr syscall.Errno
-		if errors.As(err, &pathErr) || errors.As(err, &systemErr) || errors.Is(err, ledger.ErrLedgerInUse) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("open verified ledger: %w", err)
-		}
-		var ahead *store.MirrorAheadError
-		var unreadable *store.MirrorReadError
-		if errors.As(err, &ahead) {
-			return a.startSafeBoot(safeRecord, ahead.Error())
-		}
-		if errors.As(err, &unreadable) {
-			return a.startSafeBoot(safeRecord, fmt.Sprintf("projection mirror could not be read before ledger replay: %v", unreadable))
-		}
-		var verification *ledger.VerifyFailure
-		if tailErr != nil && !errors.As(err, &verification) {
-			return a.startSafeBoot(safeRecord, fmt.Sprintf("witness-tail check failed at startup: %v", tailErr))
-		}
-		if errors.Is(err, ledger.ErrRecordUnreadable) {
-			return a.startSafeBoot(safeRecord, fmt.Sprintf("the ledger could not be read at startup: %v", err))
-		}
-		if !errors.As(err, &verification) && !errors.Is(err, ledger.ErrRecordUnreadable) && !errors.Is(err, ledger.ErrTailConflict) && !errors.Is(err, ledger.ErrSegmentSet) {
-			return fmt.Errorf("open verified ledger: %w", err)
-		}
-
-		logsink.Error("boot.refusal", "LEDGER CHAIN VERIFICATION FAILED — entering BOOT-SAFE (minimal, read-only): %v; witness: %s", err, heads.Summary())
-		return a.startSafeBoot(safeRecord, fmt.Sprintf("chain verification failed at startup: %v; witness: %s", err, heads.Summary()))
-	}
-
-	a.ledger = lg
-	if heads.Unverified() > 0 {
-		logsink.Warn("boot.refusal", "%d witness heads in the tail carry receipts under keys not persisted beside the ledger — accepted on the identity's proof; they will not seal", heads.Unverified())
-	}
-
-	a.bootChain = fmt.Sprintf("verified at boot through record %d", verified)
-	a.bootAttested = -1
-	if seq, hash, ok := heads.Attested(); ok {
-		a.bootAttested, a.bootAttestedHash = int64(seq), hash
-		a.bootChain += fmt.Sprintf("; witnessed through record %d", seq)
-	} else {
-		a.bootChain += "; no record witnessed"
-	}
-	if tail != nil {
-		a.bootChain += fmt.Sprintf("; holds record %d, the last the witness's tail names", tail.LedgerOrdinal)
+	lg, err := a.openVerifiedRecord(cfg, kp)
+	if lg == nil {
+		return err
 	}
 
 	if a.ring5Content == "" {
@@ -1134,23 +1028,15 @@ func (a *App) startLive() (retErr error) {
 	}
 	lg.SetModelID(cc.Model)
 
+	a.adoptProvider(llmEntry)
 	promptBudget := a.rememberPromptBudget(llmEntry, cfg.Prompt.MaxTokens)
 	_, budgetSrc := a.currentPromptBudget()
 
 	a.llmClient = a.newLLMClient(cc, promptBudget)
 	a.llmSwap = newSwappableLLM(a.llmClient)
 
-	toolReg := tools.NewRegistry(cfg.Tools.CWD, a.ensureRing5Policy(), tools.Timeouts{
-		ShellSeconds:    cfg.Tools.ShellTimeoutSeconds,
-		WebFetchSeconds: cfg.Tools.WebFetchTimeoutSeconds,
-	})
-	if err := checkNameOwners(toolReg); err != nil {
-		return err
-	}
-	a.applyLocalFetch(cfg, toolReg)
-
-	toolReg.SetSafeSource(a.SafeMode)
-	if err := applyDisabledTools(toolReg, cfg.Tools.Disabled); err != nil {
+	toolReg, err := a.newToolRegistry(cfg)
+	if err != nil {
 		return err
 	}
 	a.toolReg = toolReg
@@ -1162,13 +1048,12 @@ func (a *App) startLive() (retErr error) {
 		a.bootInterrupted = names
 	}
 
-	a.turnContinuation = agencyOn(cfg.Agency.TurnContinuation)
 	a.planningBrief = planningBriefEnabled(cfg)
 	planState, fanoutState, predictedNow, calibration := a.residentLoopHooks(cfg)
-	a.safeTools = &safeToolRecord{owner: a.engine}
+	a.safeTools = &safeToolRecord{}
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
 		appTranscript{st: st, safe: a.safeTools}, appEmitter{a: a}, conversation.Config{
-			MaxIterations:      cfg.Agency.MaxToolRounds,
+
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
 
 			ContextBudgetTokens: promptBudget,
@@ -1177,7 +1062,6 @@ func (a *App) startLive() (retErr error) {
 
 			ContextBudgetFallback: budgetSrc == budgetFallback,
 			ThinkingBudget:        llmEntry.ThinkingBudget,
-			TurnTokenBudget:       cfg.Agency.TurnTokenBudget,
 			BreadthNudge:          cfg.Agency.BreadthNudge,
 
 			HeuristicNudges: heuristicNudgesOn(cfg.Agency.HeuristicNudges),
@@ -1234,6 +1118,34 @@ func (a *App) startLive() (retErr error) {
 	}
 	a.door = door
 
+	witnessClient := witness.New(cfg.Witness.URL, cfg.Witness.TLSSPKISHA256)
+	a.witnessProbe = witnessClient
+
+	witnessClient.SetGenesisURL(cfg.Genesis.ServerURL)
+	anchorer := witness.NewAnchorer(witnessClient, lg, witness.AsIdentityKey(kp), a.store, a.store,
+		witnessMinter{door: door},
+		cfg.Witness.IntervalEvents, cfg.Witness.PlatformPubkeyPath)
+
+	anchorer.SetSealer(lg)
+
+	anchorer.SetAppendPause(door)
+	anchorer.SetOnIntegrityConflict(func(ce *witness.ConflictError) {
+
+		logsink.Error("witness.refusal", "WITNESS INTEGRITY CONFLICT — entering SAFE MODE: %v", ce)
+		a.enterSafeFor(safeWitnessConflict, fmt.Sprintf("witness rollback/fork conflict: %v", ce))
+	})
+	if cfg.Witness.URL != "" {
+		a.anchorer = anchorer
+	}
+
+	if _, safe := a.SafeMode(); !safe {
+		if err := anchorer.SettlePending(); errors.Is(err, witness.ErrPendingReceiptRefused) {
+			logsink.Error("witness.refusal", "the witness receipt pending beside the ledger was refused at boot — anchoring is refused until it is settled: %v", err)
+		} else if err != nil {
+			logsink.Error("witness.error", "the witness receipt pending beside the ledger was not settled at boot — the next anchor pass tries again first: %v", err)
+		}
+	}
+
 	pluginOpts, err := a.buildPluginOptions(st, toolReg, door)
 	if err != nil {
 
@@ -1263,22 +1175,38 @@ func (a *App) startLive() (retErr error) {
 		}
 	}
 
-	a.engine = identity.NewEngine(st, door, a.rings, toolDiscovererAdapter{toolReg})
+	a.executor = cognitive.NewExecutor(st)
+	a.executor.SetHolds(a.fg)
+	a.executor.SetWorkers(cfg.Agency.QueueWorkers)
+	a.executor.SetQuiesceGate(a.gate)
+	a.executor.RegisterHandler(&alarmHandler{time: a.timeFac})
+	a.executor.RegisterHandler(&timerWakeHandler{a: a})
 
-	projRoot := cfg.Projects.Root
-	if projRoot == "" {
-		projRoot = filepath.Join(cfg.Tools.CWD, "projects")
-	}
-	a.projects = project.NewManager(projRoot)
-	a.wireProjectInteractionRecorder()
-	a.engine.SetProjects(projectsAdapter{a})
-	a.engine.SetVoice(voiceModeAdapter{a})
-	a.engine.SetHeardHistory(a.recallHeard)
-	a.engine.SetContinuity(continuityAdapter{a})
+	a.store.SetClaimLimit(identity.TimerWakeWorkKind, 1)
+	a.executor.RegisterHandler(&subagentHandler{a: a})
+	a.queueWake = a.executor.Wake
+
+	a.wireProjects(cfg)
+	a.adoptEngine(identity.NewEngine(st, door, a.rings, toolDiscovererAdapter{toolReg}, identity.Ports{
+		Projects:     projectsAdapter{a},
+		Voice:        voiceModeAdapter{a},
+		HeardHistory: a.recallHeard,
+		Continuity:   continuityAdapter{a},
+		Timers:       appTimers{time: a.timeFac, read: identity.NewStoreTimers(st)},
+		Embedder:     memoryEmbedder{a},
+		Reachable:    func(name string) bool { return len(a.reachFor(name)) > 0 },
+		AskProposer:  a.proposeAsk,
+		WorkWake:     a.executor.Wake,
+		YieldGate:    a.yieldGate,
+		RouteIsLocal: a.routeIsLocal,
+	}))
+	a.applyAgency(cfg.Agency)
 
 	if p, why := a.activeOpenProject(); p == nil && why != "" {
 		logsink.Info("project.decision", "restored project focus dropped — %s", why)
-		_ = a.store.SetActiveProject("")
+		if err := a.store.SetActiveProject(""); err != nil {
+			logsink.Error("project.error", "the dropped focus could not be cleared, and the next start meets it again: %v", err)
+		}
 	}
 
 	a.timeFac.SetFireObserver(func(owner, alarmID string, accepted bool) {
@@ -1298,10 +1226,6 @@ func (a *App) startLive() (retErr error) {
 	timerOwner.OnSafeWake = a.drainSafeWakes
 	a.timerOwner = timerOwner
 	a.timeFac.RegisterOwner(timerOwner)
-	a.engine.SetTimers(appTimers{time: a.timeFac, read: identity.NewStoreTimers(st)})
-	a.engine.SetEmbedder(memoryEmbedder{a})
-	a.engine.SetReachable(func(name string) bool { return len(a.reachFor(name)) > 0 })
-	a.engine.SetAskProposer(a.proposeAsk)
 
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)
 
@@ -1315,6 +1239,23 @@ func (a *App) startLive() (retErr error) {
 		logsink.Info("work.decision", "closed %d work session(s) orphaned by a previous shutdown", len(swept))
 		a.bootSwept = swept
 	}
+
+	a.updateChecker = updates.NewChecker(
+		func() *sigenvelope.PublicKeyEnvelope {
+			root, err := packagefmt.PinnedOrShipped(a.configSnapshot().Plugins.PlatformRoot, packagefmt.KeyTypePlatformRelease)
+			if err != nil {
+				return nil
+			}
+			return root
+		},
+		func() string { return Current() },
+		func() bool { return a.configSnapshot().Updates.Automatic },
+		func() string { return a.configSnapshot().Updates.Repo },
+		a.gate,
+		filepath.Dir(cfg.Identity.LedgerPath),
+	)
+
+	a.updateChecker.SetRunner(a.runBackground)
 
 	startDashboard := a.dashboard == nil
 	if startDashboard {
@@ -1361,72 +1302,12 @@ func (a *App) startLive() (retErr error) {
 	a.store.OnOutboxWrite(a.pokeOutboxForNotices)
 	a.wireInteractionView()
 
-	witnessClient := witness.New(cfg.Witness.URL, cfg.Witness.TLSSPKISHA256)
-	a.witnessProbe = witnessClient
-
-	witnessClient.SetGenesisURL(cfg.Genesis.ServerURL)
-	anchorer := witness.NewAnchorer(witnessClient, lg, witness.AsIdentityKey(kp), a.store, a.store,
-		witnessMinter{door: door},
-		cfg.Witness.IntervalEvents, cfg.Witness.PlatformPubkeyPath)
-
-	anchorer.SetSealer(lg)
-	anchorer.SetOnIntegrityConflict(func(ce *witness.ConflictError) {
-
-		logsink.Error("witness.refusal", "WITNESS INTEGRITY CONFLICT — entering SAFE MODE: %v", ce)
-		a.enterSafeFor(safeWitnessConflict, fmt.Sprintf("witness rollback/fork conflict: %v", ce))
-	})
-	if cfg.Witness.URL != "" {
-		a.anchorer = anchorer
-	}
-
 	bgCtx := a.bgCtx
-	if bgCtx == nil {
-		bgCtx, a.bgCancel = context.WithCancel(context.Background())
-		a.bgCtx = bgCtx
-	}
 	a.warnTempHome(cfg.Identity.LedgerPath)
 	a.snapshotUILayoutPath(cfg.Identity.LedgerPath)
 
-	a.executor = cognitive.NewExecutor(st)
-	a.executor.SetHolds(a.fg)
-	a.executor.SetWorkers(cfg.Agency.QueueWorkers)
-	a.executor.SetQuiesceGate(a.gate)
-	a.executor.RegisterHandler(&alarmHandler{time: a.timeFac})
-	a.executor.RegisterHandler(&timerWakeHandler{a: a})
-
-	a.store.SetClaimLimit(identity.TimerWakeWorkKind, 1)
-	a.executor.RegisterHandler(&subagentHandler{a: a})
-	a.engine.SetWorkWake(a.executor.Wake)
-	a.queueWake = a.executor.Wake
-	if agencyOn(cfg.Agency.YieldAnswer) {
-		a.engine.SetYieldGate(a.yieldGate)
-	}
-	a.engine.SetSpawnQueue(agencyOn(cfg.Agency.SpawnQueue))
-	a.engine.SetSpawnBudget(cfg.Agency.SubagentMaxToolRounds, cfg.Agency.SubagentMaxToolCalls, cfg.Agency.SubagentMaxLegs)
-	if agencyOn(cfg.Agency.SpawnQueue) {
-		a.store.SetClaimLimit(identity.SubagentWorkKind, cfg.Agency.MaxParallelSubagents)
-	}
-	a.engine.SetAgencyLimits(cfg.Agency.MaxSubagentDepth, cfg.Agency.MaxParallelSubagents, cfg.Agency.SubagentMaxMints, cfg.Agency.SubagentWallSeconds)
-	a.engine.SetLocalSpawnWall(cfg.Agency.SubagentWallSecondsLocal)
-	a.engine.SetRouteIsLocal(a.routeIsLocal)
 	a.timeFac.SetAlarmEnqueuer(alarmEnqueuerAdapter{ex: a.executor})
 
-	a.updateChecker = updates.NewChecker(
-		func() *sigenvelope.PublicKeyEnvelope {
-			root, err := packagefmt.PinnedOrShipped(a.configSnapshot().Plugins.PlatformRoot, packagefmt.KeyTypePlatformRelease)
-			if err != nil {
-				return nil
-			}
-			return root
-		},
-		func() string { return Current() },
-		func() bool { return a.configSnapshot().Updates.Automatic },
-		func() string { return a.configSnapshot().Updates.Repo },
-		a.gate,
-		filepath.Dir(cfg.Identity.LedgerPath),
-	)
-
-	a.updateChecker.SetRunner(a.runBackground)
 	a.installPlatformWake()
 	if err := a.wireCognitive(bgCtx, anchorer, door, cfg); err != nil {
 		return err
@@ -1437,11 +1318,8 @@ func (a *App) startLive() (retErr error) {
 	a.startPluginSweep(bgCtx)
 	a.runBackground(func() { a.catalog.Run(bgCtx, a.catalogChanged) })
 	a.runBackground(func() { a.runOutbox(bgCtx) })
-	a.runBackground(func() {
-		a.updateChecker.Run(bgCtx, func() bool { _, s := a.SafeMode(); return s }, func() bool { return packagefmt.HostTopology() == "mobile_app_host" })
-	})
 
-	a.live = true
+	a.live.Store(true)
 
 	if err := a.wirePublicName(cfg); err != nil {
 		logsink.Warn("route.refusal", "%v — the name is claimed and the dashboard serves the local certificate until this is fixed", err)
@@ -1450,6 +1328,7 @@ func (a *App) startLive() (retErr error) {
 	if a.dashboard != nil {
 		bootCfg := cfg
 		a.runBackground(func() {
+			a.learnServiceZone()
 			a.autoClaimPublicName(bootCfg)
 
 			a.signalRoute()
@@ -1468,8 +1347,88 @@ func (a *App) startLive() (retErr error) {
 
 	updates.WriteBootMarker(filepath.Dir(cfg.Identity.LedgerPath))
 
+	a.runBackground(func() {
+		a.updateChecker.Run(bgCtx, func() bool { _, s := a.SafeMode(); return s }, func() bool { return packagefmt.HostTopology() == "mobile_app_host" })
+	})
+
 	a.executor.Wake()
 	return nil
+}
+
+func (a *App) openVerifiedRecord(cfg Config, kp *crypto.KeyPair) (*ledger.Ledger, error) {
+
+	heads, err := a.bootHeadVerifier(cfg)
+	if err != nil {
+		logsink.Error("boot.refusal", "BESIDE THE LEDGER DO NOT VERIFY — entering BOOT-SAFE (minimal, read-only): %v", err)
+		return nil, a.startSafeBoot(safeRecord, fmt.Sprintf("witness keys beside the ledger do not verify: %v", err))
+	}
+
+	var tail *witness.LocalTail
+	var tailErr error
+	var tailCheck *witness.TailCheck
+
+	lg, verified, err := ledger.OpenVerified(cfg.Identity.LedgerPath, kp.PublicKeyBytes(), heads, func(evt *ledger.Event) error {
+		if tailCheck == nil {
+			tail, tailErr = witness.ReadLocalTail(filepath.Dir(cfg.Identity.LedgerPath))
+			tailCheck = witness.NewTailCheck(tail)
+		}
+		return tailCheck.Visit(evt)
+	}, func(through uint64) error {
+		if tailErr == nil {
+			tailErr = tailCheck.Held()
+		}
+		if tailErr != nil {
+			return tailErr
+		}
+		return store.CheckAcknowledgedPrefix(cfg.Identity.DBPath, through)
+	})
+	if err != nil {
+
+		var pathErr *os.PathError
+		var systemErr syscall.Errno
+		if errors.As(err, &pathErr) || errors.As(err, &systemErr) || errors.Is(err, ledger.ErrLedgerInUse) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("open verified ledger: %w", err)
+		}
+		var ahead *store.MirrorAheadError
+		var unreadable *store.MirrorReadError
+		if errors.As(err, &ahead) {
+			return nil, a.startSafeBoot(safeRecord, ahead.Error())
+		}
+		if errors.As(err, &unreadable) {
+			return nil, a.startSafeBoot(safeRecord, fmt.Sprintf("projection mirror could not be read before ledger replay: %v", unreadable))
+		}
+		var verification *ledger.VerifyFailure
+		if tailErr != nil && !errors.As(err, &verification) {
+			return nil, a.startSafeBoot(safeRecord, fmt.Sprintf("witness-tail check failed at startup: %v", tailErr))
+		}
+		if errors.Is(err, ledger.ErrRecordUnreadable) {
+			return nil, a.startSafeBoot(safeRecord, fmt.Sprintf("the ledger could not be read at startup: %v", err))
+		}
+		if !errors.As(err, &verification) && !errors.Is(err, ledger.ErrRecordUnreadable) && !errors.Is(err, ledger.ErrTailConflict) && !errors.Is(err, ledger.ErrSegmentSet) {
+			return nil, fmt.Errorf("open verified ledger: %w", err)
+		}
+
+		logsink.Error("boot.refusal", "LEDGER CHAIN VERIFICATION FAILED — entering BOOT-SAFE (minimal, read-only): %v; witness: %s", err, heads.Summary())
+		return nil, a.startSafeBoot(safeRecord, fmt.Sprintf("chain verification failed at startup: %v; witness: %s", err, heads.Summary()))
+	}
+
+	a.ledger = lg
+	if heads.Unverified() > 0 {
+		logsink.Warn("boot.refusal", "%d witness heads in the tail carry receipts under keys not persisted beside the ledger — accepted on the identity's proof; they will not seal", heads.Unverified())
+	}
+
+	a.bootChain = fmt.Sprintf("verified at boot through record %d", verified)
+	a.bootAttested = -1
+	if seq, hash, ok := heads.Attested(); ok {
+		a.bootAttested, a.bootAttestedHash = int64(seq), hash
+		a.bootChain += fmt.Sprintf("; witnessed through record %d", seq)
+	} else {
+		a.bootChain += "; no record witnessed"
+	}
+	if tail != nil {
+		a.bootChain += fmt.Sprintf("; holds record %d, the last the witness's tail names", tail.LedgerOrdinal)
+	}
+	return lg, nil
 }
 
 func dreamConfig(cfg Config) cognitive.DreamConfig {
@@ -1519,7 +1478,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	consolidateFac.SetOutcomes(stAdapt)
 	consolidateFac.SetDecisionLog(a.store)
 	a.timeFac.RegisterOwner(consolidateFac)
-	a.consolidateFacility.Store(consolidateFac)
+	a.cognition.consolidateFacility.Store(consolidateFac)
 	a.reconcileRing3(consolidateFac)
 	selfModelFac := cognitive.NewSelfModel(stAdapt, llmAdapt, selfModelCommitter{engine: a.engine})
 	selfModelFac.SetAuthority(ringAuthority{a.promptGate, a.store})
@@ -1529,7 +1488,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	})
 	a.timeFac.RegisterOwner(reviewFac)
 
-	a.reviewFacility.Store(reviewFac)
+	a.cognition.reviewFacility.Store(reviewFac)
 	a.briefFacility = cognitive.NewMorningBrief(stAdapt, llmAdapt, briefWriter, cognitive.MorningBriefConfig{
 		LocalTime: "07:00",
 		Timezone:  cfg.Timezone,
@@ -1537,7 +1496,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	a.briefFacility.SetAuthority(ringAuthority{a.promptGate, a.store})
 	a.briefFacility.SetTurnGate(facilityGate{a})
 	a.briefFacility.SetAttention(func(ctx context.Context) ([]memory.AttentionItem, error) {
-		return a.engine.Instruments().Attention(ctx, time.Now())
+		return a.engine.Instruments().Attention(ctx, time.Now(), attention.CostLow)
 	})
 	a.timeFac.RegisterOwner(a.briefFacility)
 
@@ -1594,10 +1553,14 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	return nil
 }
 
+func (a *App) armRhythm(seconds int) error {
+	every := int64(seconds) * 1000
+	return a.timeFac.SetAlarm("rhythm", "rhythm", "wall", time.Now().UTC().UnixMilli()+every, &every, "")
+}
+
 func (a *App) armFacilityAlarms(cfg Config) error {
 
-	rhythmMs := int64(cfg.Agency.RhythmSeconds) * 1000
-	if err := a.timeFac.SetAlarm("rhythm", "rhythm", "wall", time.Now().UTC().UnixMilli()+rhythmMs, &rhythmMs, ""); err != nil {
+	if err := a.armRhythm(cfg.Agency.RhythmSeconds); err != nil {
 		return fmt.Errorf("arm cognitive rhythm: %w", err)
 	}
 
@@ -1632,175 +1595,29 @@ func (a *App) armFacilityAlarms(cfg Config) error {
 }
 
 func (a *App) buildLiveHandler() *dashboard.WSHandler {
-	return &dashboard.WSHandler{
-		Background:    a.runBackground,
-		Speaker:       "identity",
-		GetStats:      a.statsState,
-		HandleMessage: a.handleMessage,
-		GetOutbox:     a.outboxItems,
-		HeldMail:      a.heldMail,
-		Messages:      a.messagesPage,
-		RepairMail:    a.repairMail,
-		InspectMail:   a.inspectHeldMail,
-		MarkDelivered: func(id string) error {
-			return a.engine.MarkDelivered(id, "dashboard")
-		},
-		PagesClosed:  a.pokeOutbox,
-		RecentTurns:  a.recentTurnViews,
-		Interactions: a,
-		ObserveChat:  a.observeChat,
-
-		HearUtterance:    a.HearUtterance,
-		VoiceConfigured:  a.VoiceConfigured,
-		VoiceStatus:      a.VoiceStatus,
-		VoiceMode:        a.VoiceMode,
-		AudioPlane:       a.AudioPlane,
-		VoiceEngine:      a.VoiceEngine,
-		VoiceSessionOpen: a.OpenVoiceSession,
-
-		AdmitChat:   a.admitOperatorChat,
-		ReleaseTurn: a.EndTurn,
-		GetAsks:     a.askViews,
-		AnswerAsk:   a.answerAsk,
-		GradeResult: a.gradeResult,
-		AcquireTurn: a.acquireTurn,
-
-		TurnActive:    a.TurnActive,
-		Steer:         a.Steer,
-		CancelTurn:    a.CancelTurn,
-		PendingSteers: a.PendingSteers,
-
-		GetIdentity: a.identityState,
-
-		Recall: a.recallForDashboard,
-
-		GetContinuity: a.continuityState,
-
-		GetProviders:          a.providerDirectory,
-		SignInProvider:        a.SignInProvider,
-		CompleteSignIn:        a.CompleteSignIn,
-		CancelSignIn:          a.CancelSignIn,
-		CancelProfileSignIn:   a.CancelProfileSignIn,
-		OAuthCallback:         a.OAuthCallback,
-		SignInProfile:         a.SignInProfile,
-		CompleteProfileSignIn: a.CompleteProfileSignIn,
-		DeviceSignInProfile:   a.DeviceSignInProfile,
-		DisconnectProfile:     a.DisconnectProfile,
-		SetAuthProfile:        a.SetAuthProfile,
-		SetPluginKey:          a.SetPluginSecret,
-		ClearPluginKey:        a.ClearPluginSecret,
-		SettingChoices:        a.PluginSettingChoices,
-		DeleteAuthProfile:     a.DeleteAuthProfile,
-		UpdateCheck:           a.checkForUpdateNow,
-		Continuity:            a.continuityHooks(),
-		PublicNameClaim:       a.claimPublicName,
-		PublicNameRetry:       a.retryPublicCertificate,
-		PublicNameMove:        a.movePublicName,
-		PublicNameState:       a.publicNameState,
-		SetProvider:           a.setProviderInfo,
-		SetEffort:             a.setActiveEffort,
-		DeleteProvider:        a.deleteProvider,
-		RepairProvider:        a.repairBrokenProvider,
-		RemoveBrokenProvider:  a.removeBrokenProvider,
-		SetSpeechService:      a.setSpeechService,
-		SpeechLists:           a.speechLists,
-		SpeakMint:             a.speakMint,
-		SpeakPlay:             a.speakPlay,
-		SpeakAhead:            a.speakAhead,
-		ReplyVoice:            a.replyVoice,
-		SpeakerPolicy:         a.speakerPolicyState,
-		DashboardToken:        a.dashboardToken,
-		RotateDashboardToken:  a.rotateDashboardAccess,
-		RequireDashboardToken: a.requireDashboardAccess,
-
-		DiscoverModels: func(provider, baseURL, apiKey string) ([]string, error) {
-			reg, err := a.loadProviders()
-			if err != nil {
-				return nil, err
-			}
-
-			return a.discoverForProvider(context.Background(), reg, provider, baseURL, apiKey)
-		},
-
-		GetWork:        a.workQueueState,
-		GetSandbox:     a.sandboxState,
-		SetSandbox:     a.setSandboxRoots,
-		GetProjects:    a.projectsState,
-		GetWorkspace:   a.getProjectWorkspace,
-		GetProjectRoot: a.getProjectRoot,
-		PluginAct: func(req dashboard.PluginAction) error {
-			switch req.Action {
-			case "install":
-				return a.InstallFromCatalog(a.bgCtx, req.ID)
-			case "uninstall":
-				return a.UninstallPlugin(req.ID)
-			case "retry":
-				return a.RetryPlugin(req.ID)
-			case "confirm", "deny":
-				return a.decideAct(context.Background(), req.ID, req.Act, req.Action == "confirm")
-			case "always":
-				return a.alwaysAct(context.Background(), req.ID, req.Act)
-			default:
-				return fmt.Errorf("unknown plugin action %q", req.Action)
-			}
-		},
-		Restart: a.Restart,
-		CatalogRefresh: func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-
-			err := a.catalog.Refresh(ctx)
-			a.catalogChanged()
-			return err
-		},
-		ProjectAct: func(req dashboard.ProjectRequest) error {
-			contract := projectContractFromDashboard(req.Contract)
-			switch req.Action {
-			case "create":
-				_, err := a.projects.Create(req.Name, descriptionDeref(req.Description), "operator", req.Parent, contract, derefAttrs(req.Attributes))
-				return err
-			case "update":
-				_, err := a.projects.ApplyPatch(req.ID, namePatch(req.Name), req.Description, req.Focus, req.Parent, contract, derefAttrs(req.Attributes))
-				return err
-			case "close":
-				_, err := a.closeOrReopen(req.ID, "closed")
-				return err
-			case "reopen":
-				_, err := a.closeOrReopen(req.ID, "open")
-				return err
-			case "archive":
-				_, err := a.closeOrReopen(req.ID, "archived")
-				return err
-			case "unarchive":
-				_, err := a.closeOrReopen(req.ID, "open")
-				return err
-			case "delete":
-				return a.deleteProject(req.ID)
-			case "select":
-				_, err := a.selectProject(req.ID)
-				return err
-			case "deselect":
-				_, err := a.deselectProject()
-				return err
-			default:
-				return fmt.Errorf("unknown project action %q", req.Action)
-			}
-		},
-		GetConfig:      func() (*dashboard.ConfigState, error) { return a.configState(), nil },
-		DatabaseExport: a.exportDatabase,
-		SetConfig:      a.applyConfigChange,
-		ListLogs:       a.listLogs,
-		TailLogs:       a.tailLogs,
-		GetTools: func() ([]dashboard.ToolState, error) {
-			states := a.toolReg.ToolStates()
-			out := make([]dashboard.ToolState, len(states))
-			for i, ts := range states {
-				out[i] = dashboard.ToolState{Name: ts.Name, Description: ts.Description, Enabled: ts.Enabled}
-			}
-			return out, nil
-		},
-		SetToolFunc: a.setToolEnabled,
+	h := &dashboard.WSHandler{
+		Background: a.runBackground,
+		Speaker:    "identity",
+		GetStats:   a.statsState,
+		Restart:    a.Restart,
 	}
+	a.wireTurnHooks(h)
+	a.wireAskHooks(h)
+	a.wireWorkHooks(h)
+	a.wireInteractionHooks(h)
+	a.wireVoiceHooks(h)
+	a.wireMessageHooks(h)
+	a.wireIdentityViewHooks(h)
+	a.wireContinuityHooks(h)
+	a.wirePublicNameHooks(h)
+	a.wireProviderHooks(h)
+	a.wireSignInHooks(h)
+	a.wireAuthProfileHooks(h)
+	a.wirePluginHooks(h)
+	a.wireProjectHooks(h)
+	a.wireSettingsHooks(h)
+	a.wireDashboardAccessHooks(h)
+	return h
 }
 
 const continuationTurnBudget = 45 * time.Minute
@@ -1842,12 +1659,12 @@ func (a *App) sweepDeliveriesAfterTurn() {
 
 func (a *App) scheduleContinuation(capped, byPressure bool) bool {
 	if !capped {
-		a.turnMeterMu.Lock()
-		a.contChain = 0
-		a.turnMeterMu.Unlock()
+		a.turn.mu.Lock()
+		a.turn.contChain = 0
+		a.turn.mu.Unlock()
 		return false
 	}
-	if !a.turnContinuation {
+	if !agencyOn(a.configSnapshot().Agency.TurnContinuation) {
 		return false
 	}
 
@@ -1855,10 +1672,10 @@ func (a *App) scheduleContinuation(capped, byPressure bool) bool {
 	if err != nil || ws == nil {
 		return false
 	}
-	a.turnMeterMu.Lock()
-	a.contChain++
-	leg := a.contChain
-	a.turnMeterMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.contChain++
+	leg := a.turn.contChain
+	a.turn.mu.Unlock()
 	if leg > maxContinuationChain {
 		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s — standing down so the operator can look", leg-1, ws.ID)
 		return false
@@ -1884,27 +1701,27 @@ func (m *legMeter) get() int {
 
 func (a *App) registerLegMeter(sessionID string) (*legMeter, func()) {
 	m := &legMeter{}
-	a.legMu.Lock()
-	if a.legMeters == nil {
-		a.legMeters = map[string]*legMeter{}
+	a.turn.mu.Lock()
+	if a.turn.legMeters == nil {
+		a.turn.legMeters = map[string]*legMeter{}
 	}
-	a.legMeters[sessionID] = m
-	a.legMu.Unlock()
+	a.turn.legMeters[sessionID] = m
+	a.turn.mu.Unlock()
 	return m, func() {
-		a.legMu.Lock()
-		delete(a.legMeters, sessionID)
-		a.legMu.Unlock()
+		a.turn.mu.Lock()
+		delete(a.turn.legMeters, sessionID)
+		a.turn.mu.Unlock()
 	}
 }
 
-func (a *App) noteSubagentWorkCall(sessionID, argsJSON string) {
-	_, predicted, _ := parseWorkDeclaration(argsJSON)
+func (a *App) noteSubagentWorkCall(sessionID string, args map[string]interface{}) {
+	_, predicted, _ := workDeclaration(args)
 	if predicted <= 0 {
 		return
 	}
-	a.legMu.Lock()
-	m := a.legMeters[sessionID]
-	a.legMu.Unlock()
+	a.turn.mu.Lock()
+	m := a.turn.legMeters[sessionID]
+	a.turn.mu.Unlock()
 	if m == nil {
 		return
 	}
@@ -1914,34 +1731,37 @@ func (a *App) noteSubagentWorkCall(sessionID, argsJSON string) {
 }
 
 func (a *App) resetAsk() {
-	a.askMu.Lock()
-	a.askYields, a.askFleetSpent = 0, false
-	a.askMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.askYields, a.turn.askFleetSpent = 0, false
+	a.turn.mu.Unlock()
 }
 
 func (a *App) noteYield(yielded bool) {
 	if !yielded {
 		return
 	}
-	a.askMu.Lock()
-	a.askYields++
-	a.askMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.askYields++
+	a.turn.mu.Unlock()
 }
 
 func (a *App) markFleetSpent() {
-	a.askMu.Lock()
-	a.askFleetSpent = true
-	a.askMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.askFleetSpent = true
+	a.turn.mu.Unlock()
 }
 
 func (a *App) yieldGate() (bool, string) {
-	a.askMu.Lock()
-	defer a.askMu.Unlock()
-	if a.askFleetSpent {
+	if !agencyOn(a.configSnapshot().Agency.YieldAnswer) {
+		return false, ""
+	}
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	if a.turn.askFleetSpent {
 		return true, "a sub-agent has ended unfinished or failed since the operator last spoke, and the operator has no answer yet"
 	}
-	if a.askYields >= 2 {
-		return true, fmt.Sprintf("this would be yield %d against the operator's open ask with no answer yet", a.askYields+1)
+	if a.turn.askYields >= 2 {
+		return true, fmt.Sprintf("this would be yield %d against the operator's open ask with no answer yet", a.turn.askYields+1)
 	}
 	return false, ""
 }
@@ -1952,7 +1772,7 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 		return
 	}
 	defer a.releaseTurn()
-	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(context.Background(), turnSourceContinuation), continuationTurnBudget)
+	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceContinuation), continuationTurnBudget)
 	defer cancelTurn()
 	how := "at its declared tool budget"
 	if byPressure {
@@ -1967,7 +1787,14 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 			fact += "\n\n" + card
 		}
 	}
-	spoken, recorded, err := a.wakeRecorded(turnCtx, "system", fact)
+	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), fact)
+
+	if spoken != "" {
+		wakeID := fmt.Sprintf("wake_cont_%d", time.Now().UTC().UnixNano())
+		if derr := a.deliverReply(wakeID, spoken, recorded); derr != nil {
+			logsink.Warn("continuation.error", "outbox write failed: %v", derr)
+		}
+	}
 	if err != nil {
 		logsink.Warn("continuation.error", "turn failed for %s (leg %d): %v", sessionID, leg, err)
 		return
@@ -1975,17 +1802,7 @@ func (a *App) continueCappedTurn(sessionID string, leg int, byPressure bool) {
 	if spoken == "" {
 		return
 	}
-	wakeID := fmt.Sprintf("wake_cont_%d", time.Now().UTC().UnixNano())
-	if err := a.store.AddOutboxMessageForInteraction(wakeID, "operator", "", spoken, recorded); err != nil {
-		logsink.Warn("continuation.error", "outbox write failed: %v", err)
-	}
 	logsink.Info("continuation.end", "CONTINUATION: leg %d on %s spoke (%d chars)", leg, sessionID, len(spoken))
-}
-
-func (a *App) turnCancelRegistered() bool {
-	a.turnMu.Lock()
-	defer a.turnMu.Unlock()
-	return a.turnCancel != nil
 }
 
 type dashboardPulse struct {
@@ -2022,15 +1839,6 @@ func (d *dashboardPulse) Live() bool {
 	return d.active(window)
 }
 
-func rebuildRemedy(cfg Config) string {
-	db := cfg.Identity.DBPath
-	if db == "" {
-		db = filepath.Join("data", "aii.db")
-	}
-	return fmt.Sprintf(" The projection rebuilds from the ledger: stop the identity, delete %s* and start it again."+
-		" The ledger, key and projects are untouched; conversation history lives only in the projection and does not survive the rebuild.", db)
-}
-
 func (a *App) warnTempHome(ledgerPath string) {
 	home := filepath.Dir(ledgerPath)
 	abs, err := filepath.Abs(home)
@@ -2064,9 +1872,6 @@ type activePkgMeta struct {
 	dir string
 	pkg string
 
-	hash string
-	kind string
-
 	owner *running
 }
 
@@ -2081,8 +1886,7 @@ func (a *App) updateStateView() *dashboard.UpdateState {
 		Enabled:        a.updateChecker.Armed(),
 		Automatic:      a.configSnapshot().Updates.Automatic,
 	}
-	a.stageOnce.Do(func() { a.stageWhy = updates.StageRefusal() })
-	view.StageRefusal = a.stageWhy
+	view.StageRefusal = a.stage.refusal()
 
 	if v := snap.AvailableVersion; v != "" || snap.InstalledVersion != "" {
 		if v == "" {
@@ -2115,10 +1919,8 @@ func (a *App) credentialSource(kind string, opts map[string]string, contracts ..
 	if len(contracts) > 0 {
 		contract = contracts[0]
 	}
-	params, perr := oauth.OverrideParams(contract.Params(), opts)
-	if perr != nil {
-		return nil, perr
-	}
+
+	params := contract.Params()
 
 	ownedPath, ownedSt := "", ownedAbsent
 	if _, named := opts["file"]; !named {
@@ -2144,9 +1946,9 @@ func (a *App) credentialSource(kind string, opts map[string]string, contracts ..
 			key += "\x00" + k + "=" + opts[k]
 		}
 	}
-	a.credMu.Lock()
-	defer a.credMu.Unlock()
-	if s, ok := a.credSrc[key]; ok {
+	a.providers.sources.mu.Lock()
+	defer a.providers.sources.mu.Unlock()
+	if s, ok := a.providers.sources.credSrc[key]; ok {
 		return s, nil
 	}
 
@@ -2164,16 +1966,16 @@ func (a *App) credentialSource(kind string, opts map[string]string, contracts ..
 		return nil, err
 	}
 	if ownedSt == ownedPresent {
-		client, err := a.authorityClient(params.TokenURL)
+		client, err := a.authorityClient(s.OAuth().TokenURL)
 		if err != nil {
 			return nil, err
 		}
 		s.SetHTTPClient(client)
 	}
-	if a.credSrc == nil {
-		a.credSrc = map[string]*oauth.Source{}
+	if a.providers.sources.credSrc == nil {
+		a.providers.sources.credSrc = map[string]*oauth.Source{}
 	}
-	a.credSrc[key] = s
+	a.providers.sources.credSrc[key] = s
 	return s, nil
 }
 
@@ -2184,9 +1986,9 @@ func (a *App) residentLoopHooks(cfg Config) (
 	calibration func() (int, int, int),
 ) {
 	predictedNow = func() int {
-		a.turnMeterMu.Lock()
-		defer a.turnMeterMu.Unlock()
-		return a.turnPredicted
+		a.turn.mu.Lock()
+		defer a.turn.mu.Unlock()
+		return a.turn.turnPredicted
 	}
 	if heuristicNudgesOn(cfg.Agency.HeuristicNudges) && planNudgeEnabled(cfg.Agency.PlanNudge) {
 
@@ -2215,9 +2017,9 @@ func (a *App) planState() (planned, active bool) {
 }
 
 func (a *App) fanoutState() (declared, spawned int) {
-	a.turnMeterMu.Lock()
-	defer a.turnMeterMu.Unlock()
-	return a.turnIndependent, a.turnSpawned
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	return a.turn.turnIndependent, a.turn.turnSpawned
 }
 
 func planNudgeEnabled(v *bool) bool { return agencyOn(v) }

@@ -1,15 +1,18 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"sort"
 
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 )
 
-func (a *App) QueryInteractions(q interaction.Query) (*interaction.Page, error) {
+func (a *App) QueryInteractions(ctx context.Context, q interaction.Query) (*interaction.Page, error) {
 	if err := q.Normalize(); err != nil {
 		return nil, err
 	}
@@ -19,7 +22,7 @@ func (a *App) QueryInteractions(q interaction.Query) (*interaction.Page, error) 
 		if a.store == nil {
 			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "recorded history unavailable"}
 		}
-		p, err = a.store.QueryInteractions(q)
+		p, err = a.store.QueryInteractions(ctx, q)
 	} else {
 		if a.engine == nil {
 			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "transient owner unavailable"}
@@ -36,7 +39,7 @@ func (a *App) QueryInteractions(q interaction.Query) (*interaction.Page, error) 
 	interaction.Seal(p)
 	return p, nil
 }
-func (a *App) ReadInteraction(req interaction.ReadRequest) (*interaction.ReadResult, error) {
+func (a *App) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (*interaction.ReadResult, error) {
 	if err := interaction.ValidateRead(&req); err != nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func (a *App) ReadInteraction(req interaction.ReadRequest) (*interaction.ReadRes
 		if a.store == nil {
 			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "recorded history unavailable"}
 		}
-		return a.store.ReadInteraction(req)
+		return a.store.ReadInteraction(ctx, req)
 	}
 	if a.engine == nil {
 		return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "transient owner unavailable"}
@@ -100,13 +103,26 @@ func (a *App) transientInteractions() (string, []interaction.Record, uint64) {
 					kind = interaction.Notice
 				}
 			}
-			outcome := interaction.Succeeded
-			if e.Failed {
-				outcome = interaction.Failed
-			}
+			outcome := e.Outcome
 			rows = append(rows, interaction.Record{ID: id + "_result", RelatedID: parent, Sequence: e.DoneSequence, Kind: kind, Role: interaction.System, TurnID: e.TurnID, CreatedAt: e.DoneAt, RecordedAt: e.DoneAt, Outcome: outcome, Details: details})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Sequence < rows[j].Sequence })
 	return inc, rows, lost + t.lost
+}
+
+func observedOutcome(obs conversation.Observation) interaction.Outcome {
+	switch {
+	case obs.Refused:
+		return interaction.Refused
+	case obs.Cancelled:
+		return interaction.Cancelled
+	case obs.Failed:
+		return interaction.Failed
+	}
+	return interaction.Succeeded
+}
+
+func (a *App) wireInteractionHooks(h *dashboard.WSHandler) {
+	h.Interactions = a
 }

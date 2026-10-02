@@ -4,16 +4,6 @@ import (
 	"database/sql"
 )
 
-type Intention struct {
-	ID        string
-	Statement string
-	State     string
-
-	Outcome    string
-	CreatedSeq uint64
-	UpdatedSeq uint64
-}
-
 func (s *Store) ListIntentions() ([]Intention, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -82,13 +72,6 @@ func (s *Store) ListCommitments(activeOnly bool) ([]Commitment, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
-}
-
-type StaleIntention struct {
-	ID         string
-	Statement  string
-	Gap        uint64
-	UpdatedSeq uint64
 }
 
 func (s *Store) StaleActiveIntentions(minGap uint64) ([]StaleIntention, error) {

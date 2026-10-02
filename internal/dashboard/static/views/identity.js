@@ -8,8 +8,6 @@ import { openBackups } from './settings.js';
 let askedBackups = false;
 S.renderIdentityView = () => { if (S.view === 'identity') renderIdentity(); };
 
-// Two lines and a way there: whether there is a way back, and whether the
-// keys are escrowed. The page that does something about either is Settings.
 function backupsLines() {
   const v = S.backups;
   if (!v) {
@@ -52,11 +50,6 @@ export function renderIdentity() {
   st.querySelectorAll('[data-open-backups]').forEach(a => { a.onclick = e => { e.preventDefault(); openBackups(); go('settings'); }; });
 }
 
-// THE OPERATOR'S OWN WORDS, FIRST IN THE CHARTER'S CARD. The record cites
-// them as the approval of the charter below, and the operator reading them
-// here is the check, so every state is said in words: words that are cut,
-// that the conversation no longer holds or holds otherwise, that were never
-// cited, or that could not be read — never an empty place.
 function approvalHTML(a) {
   a = a || { state: 'unreadable', error: 'the runtime sent no account of them' };
   const note = (words, bad) => '<div class="dim-note' + (bad ? ' bad-text' : '') + '" data-approval-note>' + words + '</div>';

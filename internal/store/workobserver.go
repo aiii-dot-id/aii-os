@@ -38,8 +38,8 @@ func (s *Store) notifyWork(ev **WorkEvent) {
 	}
 }
 
-func workActor(description string) string {
-	if strings.HasPrefix(description, subagentDescriptionPrefix) {
+func workActor(child bool) string {
+	if child {
 		return "subagent"
 	}
 	return "main"
@@ -57,7 +57,8 @@ func outcomeClass(result string) string {
 	return ""
 }
 
-func (s *Store) workRow(id string) (project, description string) {
-	_ = s.db.QueryRow(`SELECT project_id, description FROM work_sessions WHERE id=?`, id).Scan(&project, &description)
-	return project, description
+func (s *Store) workRow(id string) (project string, child bool) {
+	_ = s.db.QueryRow(`SELECT project_id, `+queuedChild("")+` FROM work_sessions WHERE id=?`,
+		SubagentWorkKind, SubagentWorkKind, id).Scan(&project, &child)
+	return project, child
 }

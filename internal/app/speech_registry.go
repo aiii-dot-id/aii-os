@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -108,10 +109,7 @@ func fillEmbeddedSpeech(reg *providerRegistry) {
 			continue
 		}
 		e.Speech = cloneSpeech(b)
-		if reg.filledSpeech == nil {
-			reg.filledSpeech = map[string]bool{}
-		}
-		reg.filledSpeech[e.Name] = true
+		reg.lentTo(e.Name).speech = true
 	}
 }
 
@@ -160,11 +158,9 @@ func speechInfo(e providerEntry) *dashboard.ProviderSpeech {
 }
 
 func scaffoldProviders() []byte {
-	var reg providerRegistry
-	if err := json.Unmarshal(embeddedProviders, &reg); err != nil {
-		return embeddedProviders
-	}
+	reg := *embeddedRegistry()
 	reg.OAuth = nil
+	reg.Providers = slices.Clone(reg.Providers)
 	for i := range reg.Providers {
 		reg.Providers[i].Speech = nil
 	}

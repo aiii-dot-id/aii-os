@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || android
 
 package pluginhost
 
@@ -72,7 +72,7 @@ func checkNamespace(ctx context.Context, bwrap string) error {
 	}
 	probe, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(probe, bwrap, "--unshare-all", "--ro-bind", "/", "/", truth).CombinedOutput()
+	out, err := exec.CommandContext(probe, bwrap, "--unshare-all", "--ro-bind", "/", "/", "--proc", "/proc", truth).CombinedOutput()
 	if err == nil {
 		namespaceProven.Store(true)
 		return nil

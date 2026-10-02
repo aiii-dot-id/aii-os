@@ -33,24 +33,18 @@ type substrateCapability struct {
 }
 
 func (a *App) setSubstrateCapability(c substrateCapability) {
-	a.capMu.Lock()
-	a.substrateCap = c
-	a.capMu.Unlock()
-}
-
-func (a *App) substrateCapabilityRecord() substrateCapability {
-	a.capMu.RLock()
-	defer a.capMu.RUnlock()
-	return a.substrateCap
+	a.providers.runtime.mu.Lock()
+	a.providers.runtime.substrateCap = c
+	a.providers.runtime.mu.Unlock()
 }
 
 func (a *App) substrateCapabilityFor(provider, model string) substrateCapability {
-	a.capMu.RLock()
-	defer a.capMu.RUnlock()
-	if a.substrateCap.provider != provider || a.substrateCap.model != model {
+	a.providers.runtime.mu.RLock()
+	defer a.providers.runtime.mu.RUnlock()
+	if a.providers.runtime.substrateCap.provider != provider || a.providers.runtime.substrateCap.model != model {
 		return substrateCapability{provider: provider, model: model}
 	}
-	c := a.substrateCap
+	c := a.providers.runtime.substrateCap
 	mods, _ := a.modalities.get(c.modalityURL)
 	c.inputModalities, c.outputModalities = mods.in, mods.out
 	return c

@@ -84,7 +84,3 @@ func IdentityIDMaterial(mlDsaFingerprint, canonicalKeyHash string) string {
 	return fmt.Sprintf("AIII-WITNESS-IDENTITY-ID\nidentity_public_key_fingerprint:%s\nidentity_public_key_hash:%s\n",
 		mlDsaFingerprint, canonicalKeyHash)
 }
-
-func FingerprintMaterial(alg, keyID, publicKeyB64 string) string {
-	return fmt.Sprintf("AIII-PUBLIC-KEY-FINGERPRINT-V1\nalg:%s\nkey_id:%s\npublic_key_b64:%s\n", alg, keyID, publicKeyB64)
-}

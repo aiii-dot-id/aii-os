@@ -1,10 +1,3 @@
-// ONE RENDERER FOR A PLUGIN'S DECLARED SETTING, wherever it is shown.
-// A package declares each setting's SCOPE — hearing, speaking, or
-// neither — and the host puts it where that says: the ones about
-// hearing and speaking beside those halves of Settings -> Speech, the
-// rest on the plugin's own card. Two renderers would have meant the
-// same declaration drawn two ways, and an operator learning the control
-// twice.
 import { S } from '../state.js';
 import { esc } from '../util.js';
 
@@ -12,10 +5,6 @@ const CHOICE_FILTER_FROM = 12;
 
 export function settingHTML(id, s) {
   const attrs = ' data-pset-plugin="' + esc(id) + '" data-pset-key="' + esc(s.key) + '" data-pset-type="' + esc(s.type) + '"';
-  // A VALUE THIS RELEASE NO LONGER OFFERS. Kept from an earlier one and
-  // read by nothing: there is nothing to edit, so the only control is
-  // forgetting it. Unticked it is left exactly as it is — an upgrade
-  // that drops a setting must not quietly discard what was chosen.
   if (s.undeclared) {
     return '<div class="store-setting setting-orphan">' +
       '<label class="f"><input type="checkbox" data-pset-plugin="' + esc(id) + '" data-pset-key="' + esc(s.key) + '" data-pset-type="forget"> forget ' + esc(s.key) + '</label>' +
@@ -28,15 +17,7 @@ export function settingHTML(id, s) {
   } else if (s.type === 'enum') {
     const labels = s.labels || {};
     const values = (s.values || []).slice();
-    // A stored choice this release no longer offers stays visible AS
-    // the stored choice, named as such, so the operator sees what they
-    // chose and chooses again; saving it unchanged is refused by the
-    // host by name, never silently replaced.
     const stale = s.invalid && s.value !== undefined && s.value !== null && !values.includes(String(s.value));
-    // The name is what the person chooses by; the stable value is what
-    // is stored, shown on hover and never appended to the name (the
-    // voice platform: a label may change, the selection
-    // must not).
     const name = v => labels[v] ? labels[v] : v;
     field = '<label class="f">' + esc(s.title) + (values.length > CHOICE_FILTER_FROM ? ' <span class="store-hint">— ' + values.length + ' choices</span>' : '') + '</label>' +
       (values.length > CHOICE_FILTER_FROM ? '<input type="search" class="choice-filter" data-choice-filter-for="' + esc(s.key) + '" placeholder="filter the ' + values.length + ' choices…" aria-label="filter ' + esc(s.title) + '">' : '') +
@@ -59,20 +40,11 @@ export function settingHTML(id, s) {
   const meta = [];
   if (s.required) meta.push('required');
   if (s.default !== undefined && s.default !== null && s.type !== 'boolean') meta.push('default ' + esc(shown(s, s.default)));
-  // The stored value against what the plugin reads: when the stored
-  // value no longer holds to this release's declaration the page says
-  // so and names what is in effect instead — never a quiet default.
   const stale = s.invalid ? '<div class="store-hint setting-stale">your saved value ' + esc(JSON.stringify(s.value)) + ' ' + esc(s.invalid) + ' — in effect: ' +
     (s.effective !== undefined && s.effective !== null ? esc(shown(s, s.effective)) : 'nothing') + ' until you choose again</div>' : '';
   return '<div class="store-setting">' + field +
     (s.description || meta.length ? '<div class="store-hint">' + esc(s.description || '') + (meta.length ? ' (' + meta.join(', ') + ')' : '') + '</div>' : '') + stale + '</div>';
 }
-// A SECRET IS PASTED HERE AND NEVER SHOWN AGAIN. The page says whether a
-// key is kept and the one host it may ride to; the field is always empty
-// when drawn. What the operator has pasted but not yet saved lives only in
-// keyDrafts, so a re-render does not lose it, and is dropped the moment it
-// is sent. A connection that is not private is not offered the field at
-// all — the server refuses a key from one anyway.
 export const keyDrafts = new Map();
 export function keyDraftKey(id, key) { return id + '\u0000' + key; }
 function secretHTML(id, s, current) {
@@ -98,22 +70,13 @@ function secretHTML(id, s, current) {
   }
   return html;
 }
-// AN ACCOUNT, CONNECTED ON THE CARD. A secret whose package asks for
-// an OAuth account names one the operator connected; the host lists the
-// accounts of that authority, says which can be chosen and why not, and
-// whether the stored choice is granted. The choice rides the card's own
-// Save; saving grants the plugin its handle and the one host its signed
-// package declares, and the card says exactly that before Save. Remove
-// forgets the choice and takes the handle back. There is no key field: the
-// package says the credential comes from an authority.
 function accountHTML(id, s, current) {
   const a = s.account || {};
-  const host = (a.hosts || []).join(', '); // every host the signed package declares
+  const host = (a.hosts || []).join(', ');
   const saved = typeof current === 'string' ? current : '';
   const ids = ' data-pkey-plugin="' + esc(id) + '" data-pkey-key="' + esc(s.key) + '"';
   const remove = saved || s.key_kept ? '<button class="btn ghost" data-pkey-remove' + ids + ' data-pkey-account="' + esc(saved) + '" data-account-host="' + esc(host) + '">Remove</button>' : '';
   let html = '<label class="f">' + esc(s.title) + '</label>';
-  // Nothing can be connected here; what was stored before can still go.
   if (!host) return html + '<div class="store-hint" data-pacct-not>an account cannot be connected here: ' + esc(a.not || 'the host did not say why') +
     (saved ? ' — ' + esc(saved) + ' is stored for it' : '') + '</div>' + (remove ? '<div class="pkey-row">' + remove + '</div>' : '');
   const offers = a.offers || [];
@@ -135,7 +98,6 @@ function accountHTML(id, s, current) {
   }
   return html;
 }
-// What the stored choice is now, in the card's words.
 function accountState(saved, mine, granted) {
   if (!saved) return 'no account chosen yet';
   if (!mine) return saved + ' no longer exists on this identity: choose another account, or Remove';
@@ -145,12 +107,7 @@ function accountState(saved, mine, granted) {
   if (mine.state === 'expired') return saved + '\'s sign-in has expired: connect it again under Connected accounts below';
   return saved + ' — ' + mine.state;
 }
-// THE DISCLOSURE: exactly what saving the chosen account grants, before
-// Save — which plugin, which handle, which host — or that saving it again
-// changes nothing. chosen is "" when no account that can be used is picked.
 export function accountDisclosure(id, host, chosen, saved, granted) {
-  // One host, or several joined by ", ": the package signs for every one, and
-  // saving grants every one.
   const many = host.includes(', ');
   const hosts = (many ? 'hosts ' : 'host ') + host, ones = many ? 'the ones' : 'the one';
   if (!chosen) return 'Saving grants ' + id + ' the handle of the account you choose and the ' + hosts + ', ' + ones + ' its signed package declares — nothing else.';
@@ -158,11 +115,6 @@ export function accountDisclosure(id, host, chosen, saved, granted) {
   return 'Saving grants ' + id + ' the handle ' + chosen + ' and the ' + hosts + ', ' + ones + ' its signed package declares: ' + id + ' will call ' + host + ' as ' + chosen +
     (saved && saved !== chosen ? ', in place of ' + saved : '') + '.';
 }
-// CHOICES THE PLUGIN LOOKS UP. The card asks the plugin once when it is
-// first drawn and again on Refresh; the answer is kept here, per setting.
-// Until it arrives, and when the lookup fails, the field is the plain text
-// box with the value as saved, so a Save can never blank it. The list is
-// an offer: a saved value it no longer holds stays visible as saved.
 export const choiceCache = new Map();
 export function choiceKey(id, key) { return id + '\u0000' + key; }
 export function applySettingChoices(reply) {
@@ -189,8 +141,6 @@ function lookedUpHTML(id, s, current, attrs) {
     entry.choices.map(c => '<option value="' + esc(c.value) + '" title="' + esc(c.value) + '"' + (c.value === value ? ' selected' : '') + '>' + esc(c.label || c.value) + '</option>').join('') +
     '</select>' + refresh + '</div>';
 }
-// shown renders a value the way the page names it: an enum value under
-// its label when the declaration gives one.
 export function shown(s, v) {
   if (s.type === 'enum' && s.labels && s.labels[v]) return s.labels[v];
   return v;

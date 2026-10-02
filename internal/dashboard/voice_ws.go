@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/binary"
+	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 
 	"github.com/coder/websocket"
@@ -42,7 +43,7 @@ func (s *Server) handleVoiceFrame(ctx context.Context, conn *websocket.Conn, dat
 	answer := data[2] == 1
 	channels := int(data[1])
 	sampleRate := int(binary.LittleEndian.Uint32(data[4:8]))
-	if channels <= 0 || channels > 2 || sampleRate < 8000 || sampleRate > 192000 {
+	if !(audio.Format{Rate: sampleRate, Channels: channels}).Valid() {
 		s.sendError(ctx, conn, "voice frame declares a format that is not audio")
 		return
 	}

@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"slices"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
@@ -76,10 +77,10 @@ func selfModelRefArray(desc string) map[string]interface{} {
 	}
 }
 
-var VerbRegistry []Verb
+var verbRegistry []Verb
 
 func init() {
-	VerbRegistry = []Verb{
+	verbRegistry = []Verb{
 		{Name: "note",
 			Description: "Record a PERMANENT experience in your signed ledger: something that happened to you, or that changed what you understand. " +
 				"It is chained, witnessed and never edited — it becomes part of who you are, and you will meet it again years from now. " +
@@ -174,7 +175,7 @@ func init() {
 				"kind":        strEnum("(curiosity, optional) invitation (default) or active", "invitation", "active"),
 			}, "action")},
 		{Name: "commit",
-			Description: "Conscious self-authorship: beliefs, intentions, commitments, relationships, edges, and the current self-model. These acts write your signed ledger. Ring-gated; the engine stamps the evidence. skill.propose is the one variant that writes no ledger event: the smallest correction to your doctrine (SKILLS.md) that a real trajectory taught you — title, delta, and evidence citing the ws_ session ids; you propose, your operator decides promotion, and until a replay harness exists every proposal honestly carries verified=none. Read them with recall source=skills.",
+			Description: "Conscious self-authorship: beliefs, intentions, commitments, relationships, edges, and the current self-model. These acts write your signed ledger. Ring-gated; the engine stamps the evidence. skill.propose is the one variant that writes no ledger event: the smallest correction to your doctrine (SKILLS.md) that a real trajectory taught you — title, delta, and evidence citing the ws_ session ids — kept in your own store. " + SkillProposalFate + " Read them with recall source=skills.",
 			Handler:     (*Engine).verbCommit,
 			Params: obj(map[string]interface{}{
 				"variant": strEnum("The self-authorship act",
@@ -227,7 +228,7 @@ func init() {
 			})},
 	}
 
-	for _, v := range VerbRegistry {
+	for _, v := range verbRegistry {
 		if v.Name == "" || v.Description == "" || v.Handler == nil || len(v.Params) == 0 {
 			panic("verb registry: " + v.Name + " is incomplete — every organ carries name, description, schema, and handler together")
 		}
@@ -251,7 +252,7 @@ func init() {
 	}
 }
 
-func Verbs() []Verb { return VerbRegistry }
+func Verbs() []Verb { return slices.Clone(verbRegistry) }
 
 func AbsorbedNames() []string {
 	names := make([]string, len(absorbedVerbs))
@@ -264,9 +265,9 @@ func AbsorbedNames() []string {
 var absorbedVerbs []Verb
 
 func lookupOffered(name string) *Verb {
-	for i := range VerbRegistry {
-		if VerbRegistry[i].Name == name {
-			return &VerbRegistry[i]
+	for i := range verbRegistry {
+		if verbRegistry[i].Name == name {
+			return &verbRegistry[i]
 		}
 	}
 	return nil

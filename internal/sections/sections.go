@@ -42,11 +42,17 @@ func (e *DeclError) Error() string {
 	return fmt.Sprintf("sections: section.json %s: %s", e.Field, e.Reason)
 }
 
+func (e *DeclError) WaitsOnPackage() bool { return true }
+
 type TamperError struct {
 	Member string
 	Want   string
 	Got    string
+
+	Err error
 }
+
+func (e *TamperError) Unwrap() error { return e.Err }
 
 func (e *TamperError) Error() string {
 	if e.Got == "" {

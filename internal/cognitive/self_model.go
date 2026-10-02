@@ -9,7 +9,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type SelfModelFacility struct {
@@ -24,7 +24,7 @@ type SelfModelFacility struct {
 func (s *SelfModelFacility) SetDoor(d LedgerWriter) { s.door = d }
 
 type BeliefStore interface {
-	ListBeliefs() ([]store.Belief, error)
+	ListBeliefs() ([]rows.Belief, error)
 }
 
 const (
@@ -34,12 +34,12 @@ const (
 
 type SelfModelStore interface {
 	BeliefStore
-	ListExperiences(n int) ([]store.Experience, error)
+	ListExperiences(n int) ([]rows.Experience, error)
 
-	ListExperiencesByProvenance(provenances []string, n int) ([]store.Experience, error)
-	ListIntentions() ([]store.Intention, error)
-	CurrentSelfModel() (*store.SelfModelSynthesis, error)
-	CurrentOperatorRelationship() (*store.Relationship, error)
+	ListExperiencesByProvenance(provenances []string, n int) ([]rows.Experience, error)
+	ListIntentions() ([]rows.Intention, error)
+	CurrentSelfModel() (*rows.SelfModelSynthesis, error)
+	CurrentOperatorRelationship() (*rows.Relationship, error)
 	StandingSource
 }
 

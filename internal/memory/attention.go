@@ -2,8 +2,8 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -17,8 +17,6 @@ const (
 
 	FollowupAfter = 30 * 24 * time.Hour
 
-	ConsolidationBacklog = 3
-
 	AttentionLimit = 12
 
 	SnapshotStaleAfter = 48 * time.Hour
@@ -28,80 +26,46 @@ const (
 
 type AttentionItem = attention.AttentionItem
 
-func (f *Facility) Attention(ctx context.Context, now time.Time) ([]AttentionItem, error) {
+func (f *Facility) Attention(ctx context.Context, now time.Time, want string) ([]AttentionItem, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	type source struct {
+		what string
+		read func(context.Context, store.Reader, time.Time) ([]AttentionItem, error)
+		can  []string
+	}
+	sources := []source{
+		{"decay alerts", fadingBeliefs, []string{attention.CostLow}},
+		{"contradictions", openTensions, []string{attention.CostMedium}},
+		{"follow-ups", untouchedIntentions, []string{attention.CostLow}},
+		{"continuity", continuityItems, []string{attention.CostMedium, attention.CostLow}},
+	}
 	var items []AttentionItem
-	err := f.st.ReadWith(func(db *sql.DB) error {
-		fading, err := fadingBeliefs(ctx, db, now)
-		if err != nil {
-			return fmt.Errorf("decay alerts: %w", err)
-		}
-		items = append(items, fading...)
-		tensions, err := openTensions(ctx, db, now)
-		if err != nil {
-			return fmt.Errorf("contradictions: %w", err)
-		}
-		items = append(items, tensions...)
-		followups, err := untouchedIntentions(ctx, db, now)
-		if err != nil {
-			return fmt.Errorf("follow-ups: %w", err)
-		}
-		items = append(items, followups...)
-		var raw int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM experiences WHERE raw = 1 AND private = 0`).Scan(&raw); err != nil {
-			return fmt.Errorf("consolidation: %w", err)
-		}
-		continuity, err := continuityItems(db, now)
-		if err != nil {
-			return fmt.Errorf("continuity: %w", err)
-		}
-		items = append(items, continuity...)
-		if raw >= ConsolidationBacklog {
-			items = append(items, AttentionItem{Kind: attention.AttentionConsolidation, Cost: attention.CostSilent, Priority: float64(raw),
-				Text: fmt.Sprintf("%d experiences await the unconscious (consolidation runs capacity-gated)", raw)})
+	err := f.st.ReadWith(ctx, func(db store.Reader) error {
+		for _, src := range sources {
+			if !slices.Contains(src.can, want) {
+				continue
+			}
+			got, err := src.read(ctx, db, now)
+			if err != nil {
+				return fmt.Errorf("%s: %w", src.what, err)
+			}
+			items = append(items, attention.OfCost(got, want)...)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if ci, cj := costRank(items[i].Cost), costRank(items[j].Cost); ci != cj {
-			return ci > cj
-		}
-		return items[i].Priority > items[j].Priority
-	})
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Priority > items[j].Priority })
 	if len(items) > AttentionLimit {
 		items = items[:AttentionLimit]
 	}
 	return items, nil
 }
 
-func costRank(c string) int {
-	switch c {
-	case attention.CostHigh:
-		return 3
-	case attention.CostMedium:
-		return 2
-	case attention.CostLow:
-		return 1
-	}
-	return 0
-}
-
-func AtMost(items []AttentionItem, cost string) []AttentionItem {
-	var out []AttentionItem
-	for _, it := range items {
-		if costRank(it.Cost) <= costRank(cost) {
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-func fadingBeliefs(ctx context.Context, db *sql.DB, now time.Time) ([]AttentionItem, error) {
+func fadingBeliefs(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
 	rows, err := db.QueryContext(ctx, `SELECT b.id, b.statement, b.ring, b.evidence_count,
 		COALESCE((SELECT l.ts FROM ledger l WHERE l.seq = b.first_seq), ''),
 		COALESCE((SELECT a.count FROM memory_access a WHERE a.store = 'beliefs' AND a.id = b.id), 0),
@@ -141,14 +105,16 @@ func fadingBeliefs(ctx context.Context, db *sql.DB, now time.Time) ([]AttentionI
 	return out, rows.Err()
 }
 
-func openTensions(ctx context.Context, db *sql.DB, now time.Time) ([]AttentionItem, error) {
-	rows, err := db.QueryContext(ctx, `SELECT e.id, e.from_id, e.to_id,
+const openTensionsSQL = `SELECT e.id, e.from_id, e.to_id,
 		COALESCE((SELECT statement FROM beliefs WHERE id = e.from_id), ''),
 		COALESCE((SELECT statement FROM beliefs WHERE id = e.to_id), ''),
 		COALESCE((SELECT l.ts FROM ledger l WHERE l.seq = e.created_seq), '')
 		FROM edges e WHERE e.edge_type = 'CONTRADICTS' AND e.archived = 0
 		AND NOT EXISTS (SELECT 1 FROM beliefs r WHERE r.id IN (e.from_id, e.to_id) AND (r.archived = 1 OR r.superseded_by IS NOT NULL))
-		ORDER BY e.created_seq`)
+		ORDER BY e.created_seq`
+
+func openTensions(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
+	rows, err := db.QueryContext(ctx, openTensionsSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +142,7 @@ func openTensions(ctx context.Context, db *sql.DB, now time.Time) ([]AttentionIt
 	return out, rows.Err()
 }
 
-func untouchedIntentions(ctx context.Context, db *sql.DB, now time.Time) ([]AttentionItem, error) {
+func untouchedIntentions(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
 	rows, err := db.QueryContext(ctx, `SELECT i.id, i.statement,
 		COALESCE((SELECT l.ts FROM ledger l WHERE l.seq = i.updated_seq), (SELECT l.ts FROM ledger l WHERE l.seq = i.created_seq), '')
 		FROM intentions i WHERE i.state = 'active' ORDER BY i.updated_seq`)
@@ -201,8 +167,8 @@ func untouchedIntentions(ctx context.Context, db *sql.DB, now time.Time) ([]Atte
 	return out, rows.Err()
 }
 
-func continuityItems(db *sql.DB, now time.Time) ([]AttentionItem, error) {
-	st, ok, err := store.ReadContinuityStatus(db)
+func continuityItems(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
+	st, ok, err := store.ReadContinuityStatus(ctx, db)
 	if err != nil || !ok {
 		return nil, err
 	}

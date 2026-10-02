@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/store/compressvfs"
 	"modernc.org/sqlite"
@@ -71,11 +72,7 @@ func (s *Store) ForeignKeyCheck() error {
 	return nil
 }
 
-func (s *Store) Housekeep() (string, error) {
-	return s.HousekeepContext(context.Background())
-}
-
-func (s *Store) HousekeepContext(ctx context.Context) (string, error) {
+func (s *Store) Housekeep(ctx context.Context) (string, error) {
 	return s.HousekeepOptimized(ctx, CompressionOptimization{})
 }
 
@@ -94,6 +91,13 @@ func (s *Store) HousekeepOptimized(ctx context.Context, optimization Compression
 	}
 	defer conn.Close()
 
+	pruneNote := ""
+	if n, perr := prunePluginReceipts(ctx, conn, time.Now()); perr != nil {
+		pruneNote = fmt.Sprintf(", plugin receipts prune FAILED: %v", perr)
+	} else if n > 0 {
+		pruneNote = fmt.Sprintf(", plugin receipts pruned %d", n)
+	}
+
 	if _, err := conn.ExecContext(ctx, "PRAGMA analysis_limit=400"); err != nil {
 		return "", fmt.Errorf("analysis_limit: %w", err)
 	}
@@ -106,13 +110,6 @@ func (s *Store) HousekeepOptimized(ctx context.Context, optimization Compression
 		Scan(&busy, &logPages, &checkpointed); err != nil {
 
 		return "", fmt.Errorf("wal checkpoint: %w", err)
-	}
-
-	pruneNote := ""
-	if n, perr := pruneToolEventsOn(connExecer{conn}); perr != nil {
-		pruneNote = fmt.Sprintf(", tool_events prune FAILED: %v", perr)
-	} else if n > 0 {
-		pruneNote = fmt.Sprintf(", tool_events pruned %d", n)
 	}
 
 	sidecarNote := sidecarHousekeeping(conn)
@@ -152,8 +149,13 @@ func (s *Store) HousekeepOptimized(ctx context.Context, optimization Compression
 	return fmt.Sprintf("optimize ok, wal checkpointed (%d pages)%s%s%s", checkpointed, pruneNote, sidecarNote, compactionNote), nil
 }
 
-type connExecer struct{ conn *sql.Conn }
+const pluginReceiptRetention = 90 * 24 * time.Hour
 
-func (c connExecer) Exec(query string, args ...any) (sql.Result, error) {
-	return c.conn.ExecContext(context.Background(), query, args...)
+func prunePluginReceipts(ctx context.Context, conn *sql.Conn, now time.Time) (int64, error) {
+	res, err := conn.ExecContext(ctx, `DELETE FROM plugin_receipts WHERE julianday(created_at) < julianday(?)`,
+		now.Add(-pluginReceiptRetention).UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

@@ -410,7 +410,7 @@ type MemoryConfig struct {
 
 func applyDefaults(cfg *Config) {
 	if cfg.Memory.Salience.Version == "" {
-		cfg.Memory.Salience = salience.DefaultSalience
+		cfg.Memory.Salience = salience.DefaultSalience()
 	}
 
 	d := packagefmt.DefaultTreeLimits

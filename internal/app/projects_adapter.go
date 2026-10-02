@@ -6,12 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/project"
 )
+
+func (a *App) wireProjects(cfg Config) {
+	root := cfg.Projects.Root
+	if root == "" {
+		root = filepath.Join(cfg.Tools.CWD, "projects")
+	}
+	a.projects = project.NewManager(root)
+	a.wireProjectInteractionRecorder()
+}
 
 type projectsAdapter struct{ a *App }
 
@@ -119,10 +130,15 @@ func (x projectsAdapter) SetState(id, state string) (identity.ProjectInfo, error
 	return info(p), nil
 }
 
+type projectState struct {
+	mu           sync.Mutex
+	projectsLast atomic.Pointer[string]
+}
+
 func (a *App) closeOrReopen(id, state string) (*project.Project, error) {
 
-	a.projectMu.Lock()
-	defer a.projectMu.Unlock()
+	a.project.mu.Lock()
+	defer a.project.mu.Unlock()
 
 	refocus := ""
 	if state != "open" && a.store.ActiveProjectID() == id {
@@ -148,8 +164,8 @@ func (a *App) closeOrReopen(id, state string) (*project.Project, error) {
 }
 
 func (a *App) deleteProject(id string) error {
-	a.projectMu.Lock()
-	defer a.projectMu.Unlock()
+	a.project.mu.Lock()
+	defer a.project.mu.Unlock()
 	if a.store.ActiveProjectID() == id {
 		if err := a.store.SetActiveProject(""); err != nil {
 			return fmt.Errorf("focus not cleared, so the project was NOT deleted: %w", err)
@@ -245,8 +261,8 @@ func (a *App) activeOpenProject() (*project.Project, string) {
 }
 
 func (a *App) deselectProject() (string, error) {
-	a.projectMu.Lock()
-	defer a.projectMu.Unlock()
+	a.project.mu.Lock()
+	defer a.project.mu.Unlock()
 	prev := a.store.ActiveProjectID()
 	if prev == "" {
 		return "", nil
@@ -264,8 +280,8 @@ func (a *App) deselectProject() (string, error) {
 }
 
 func (a *App) selectProject(id string) (identity.ProjectInfo, error) {
-	a.projectMu.Lock()
-	defer a.projectMu.Unlock()
+	a.project.mu.Lock()
+	defer a.project.mu.Unlock()
 	p, err := a.projects.Load(id)
 	if err != nil {
 		return identity.ProjectInfo{}, err
@@ -298,5 +314,44 @@ func projectContractFromDashboard(c *dashboard.ProjectContract) *project.Contrac
 		Outcome:     c.Outcome,
 		Acceptance:  c.Acceptance,
 		Constraints: c.Constraints,
+	}
+}
+
+func (a *App) wireProjectHooks(h *dashboard.WSHandler) {
+	h.GetProjects = a.projectsState
+	h.GetWorkspace = a.getProjectWorkspace
+	h.GetProjectRoot = a.getProjectRoot
+	h.ProjectAct = func(req dashboard.ProjectRequest) error {
+		contract := projectContractFromDashboard(req.Contract)
+		switch req.Action {
+		case "create":
+			_, err := a.projects.Create(req.Name, descriptionDeref(req.Description), "operator", req.Parent, contract, derefAttrs(req.Attributes))
+			return err
+		case "update":
+			_, err := a.projects.ApplyPatch(req.ID, namePatch(req.Name), req.Description, req.Focus, req.Parent, contract, derefAttrs(req.Attributes))
+			return err
+		case "close":
+			_, err := a.closeOrReopen(req.ID, "closed")
+			return err
+		case "reopen":
+			_, err := a.closeOrReopen(req.ID, "open")
+			return err
+		case "archive":
+			_, err := a.closeOrReopen(req.ID, "archived")
+			return err
+		case "unarchive":
+			_, err := a.closeOrReopen(req.ID, "open")
+			return err
+		case "delete":
+			return a.deleteProject(req.ID)
+		case "select":
+			_, err := a.selectProject(req.ID)
+			return err
+		case "deselect":
+			_, err := a.deselectProject()
+			return err
+		default:
+			return fmt.Errorf("unknown project action %q", req.Action)
+		}
 	}
 }

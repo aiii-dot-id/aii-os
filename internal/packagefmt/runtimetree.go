@@ -23,6 +23,8 @@ type TreeLimits struct {
 	MaxInventoryBytes int64 `json:"max_inventory_bytes,omitempty"`
 }
 
+const MaxRuntimeDepth = (maxMemberPathBytes - 1) / 2
+
 var DefaultTreeLimits = TreeLimits{
 	MaxInstalledBytes:  1 << 30,
 	MaxFiles:           32768,

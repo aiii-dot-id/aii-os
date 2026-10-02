@@ -60,15 +60,14 @@ func (a *App) secretDecl(id, key string) (*pluginhost.ActivePlugin, error) {
 	if ap == nil {
 		return nil, fmt.Errorf("no active plugin %q", id)
 	}
-	for _, d := range ap.Settings {
-		if d.Key == key {
-			if d.Type != pluginhost.SettingSecret {
-				return nil, fmt.Errorf("plugin %s's setting %q is a %s, not a secret", id, key, d.Type)
-			}
-			return ap, nil
-		}
+	d := ap.Setting(key)
+	if d == nil {
+		return nil, fmt.Errorf("plugin %s declares no setting %q", id, key)
 	}
-	return nil, fmt.Errorf("plugin %s declares no setting %q", id, key)
+	if d.Type != pluginhost.SettingSecret {
+		return nil, fmt.Errorf("plugin %s's setting %q is a %s, not a secret", id, key, d.Type)
+	}
+	return ap, nil
 }
 
 func (a *App) keyView(c Config, ap *pluginhost.ActivePlugin, key string) (kept bool, host, why string) {
@@ -120,7 +119,7 @@ func (a *App) SetPluginSecret(id, key, secret string) error {
 		return fmt.Errorf("store the key: %w", err)
 	}
 	hostPort := host + ":" + strconv.Itoa(port)
-	err = a.commitPluginConfig(orig, func(c *Config) {
+	err = a.commitConfig(orig, func(c *Config) {
 		profiles := make(map[string]broker.AuthProfile, len(c.Plugins.AuthProfiles)+1)
 		for k, v := range c.Plugins.AuthProfiles {
 			profiles[k] = v
@@ -134,7 +133,7 @@ func (a *App) SetPluginSecret(id, key, secret string) error {
 		grants[id] = g
 		c.Plugins.Grants = grants
 		c.Plugins.Settings = withSetting(c.Plugins.Settings, id, key, name)
-	})
+	}, nil, nil)
 	if err != nil {
 		if fresh {
 			os.Remove(path)
@@ -150,7 +149,7 @@ func (a *App) ClearPluginSecret(id, key string) error {
 	if err != nil {
 		return err
 	}
-	account := asksForAccount(settingDecl(ap, key))
+	account := asksForAccount(ap.Setting(key))
 	dir, err := a.credentialsDir()
 	if err != nil {
 		return err
@@ -161,7 +160,7 @@ func (a *App) ClearPluginSecret(id, key string) error {
 	prof, ours := orig.Plugins.AuthProfiles[name]
 	ours = ours && samePath(prof.SecretFile, path)
 	previous, _ := orig.Plugins.Settings[id][key].(string)
-	err = a.commitPluginConfig(orig, func(c *Config) {
+	err = a.commitConfig(orig, func(c *Config) {
 		c.Plugins.Settings = withSetting(c.Plugins.Settings, id, key, "")
 		if ours {
 			profiles := make(map[string]broker.AuthProfile, len(c.Plugins.AuthProfiles))
@@ -183,7 +182,7 @@ func (a *App) ClearPluginSecret(id, key string) error {
 		if account && previous != "" {
 			releaseAccount(c, id, previous)
 		}
-	})
+	}, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -194,35 +193,6 @@ func (a *App) ClearPluginSecret(id, key string) error {
 	}
 	logsink.Info("config.decision", "plugin %s: key for %s forgotten", id, key)
 	return nil
-}
-
-func (a *App) commitPluginConfig(orig Config, mutate func(*Config)) error {
-	candidate := orig
-	mutate(&candidate)
-	published := false
-	err := func() error {
-		a.signInMu.Lock()
-		defer a.signInMu.Unlock()
-		a.cfgMu.Lock()
-		defer a.cfgMu.Unlock()
-		if !reflectEqualConfig(*a.cfg, orig) {
-			return errors.New("the configuration changed while the key was being kept; save it again")
-		}
-		var perr error
-		published, perr = saveConfig(&candidate)
-		if perr != nil && !published {
-			return fmt.Errorf("persist config: %w", perr)
-		}
-		*a.cfg = candidate
-		if perr != nil {
-			return fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", perr)
-		}
-		return nil
-	}()
-	if published {
-		a.profileChanged()
-	}
-	return err
 }
 
 func samePath(a, b string) bool {

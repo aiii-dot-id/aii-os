@@ -3,6 +3,7 @@
 package install
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 )
 
@@ -46,7 +48,10 @@ func Register(slot string) (started bool, notes []string, err error) {
 		exe = resolved
 	}
 
-	if err := os.WriteFile(path, []byte(agentPlist(label, exe, dir)), 0o644); err != nil {
+	if published, err := atomicfile.WriteReplace(path, []byte(agentPlist(label, exe, dir)), 0o644); err != nil {
+		if published {
+			return false, nil, fmt.Errorf("write %s: published but not durable: %w", path, err)
+		}
 		return false, nil, fmt.Errorf("write %s: %w", path, err)
 	}
 
@@ -71,10 +76,8 @@ func Unregister(slot string) error {
 	}
 	label := Unit + slot
 	domain := "gui/" + strconv.Itoa(os.Getuid())
-	if out, err := run("launchctl", "bootout", domain+"/"+label); err != nil {
-		if !strings.Contains(out, "not find") && !strings.Contains(out, "No such") {
-			return fmt.Errorf("unload %s: %v: %s", label, err, out)
-		}
+	if out, err := run("launchctl", "bootout", domain+"/"+label); err != nil && exitStatus(err) != launchctlNothingThere {
+		return fmt.Errorf("unload %s: %v: %s", label, err, out)
 	}
 	if err := os.Remove(filepath.Join(home, agentDirRel, label+".plist")); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove plist: %w", err)
@@ -131,10 +134,20 @@ func Stop(slot string) error {
 	label := Unit + slot
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	if out, err := run("launchctl", "kill", "SIGTERM", domain+"/"+label); err != nil {
-		if strings.Contains(out, "not find") || strings.Contains(out, "No such") {
-			return nil
+		if exitStatus(err) == launchctlNothingThere {
+			return ErrNotRunning
 		}
 		return fmt.Errorf("stop %s: %v: %s", label, err, out)
 	}
 	return nil
+}
+
+const launchctlNothingThere = 3
+
+func exitStatus(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }

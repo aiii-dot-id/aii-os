@@ -12,11 +12,11 @@ import (
 )
 
 func (a *App) snapshotKeyPath(cfg Config) string {
-	return escrow.SnapshotKeyPath(cfg.Identity.KeyPath)
+	return escrow.SnapshotKeyPath(a.activeIdentity(cfg.Identity).KeyPath)
 }
 
 func (a *App) escrowReceiptPath(cfg Config) string {
-	return escrow.ReceiptPath(cfg.Identity.KeyPath)
+	return escrow.ReceiptPath(a.activeIdentity(cfg.Identity).KeyPath)
 }
 
 func (a *App) ensureSnapshotKey(cfg Config) {

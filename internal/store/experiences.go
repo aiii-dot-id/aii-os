@@ -8,17 +8,6 @@ import (
 	"time"
 )
 
-type Experience struct {
-	ID         string
-	Content    string
-	Category   string
-	Raw        int
-	Private    int
-	Provenance string
-	CreatedSeq uint64
-	CreatedAt  string
-}
-
 func (s *Store) ListExperiences(n int) ([]Experience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -96,8 +85,6 @@ func (s *Store) ListRawExperiences(n int) ([]Experience, error) {
 	return scanExperiences(rows)
 }
 
-const OutcomeObservationPrefix = "exp_outcome_"
-
 func (s *Store) ListRawExperiencesExcept(n int, idPrefix string) ([]Experience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -106,42 +93,6 @@ func (s *Store) ListRawExperiencesExcept(n int, idPrefix string) ([]Experience, 
 		 FROM experiences WHERE raw = 1 AND substr(id, 1, ?) != ? ORDER BY created_seq ASC LIMIT ?`,
 		len(idPrefix), idPrefix, n,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanExperiences(rows)
-}
-
-func (s *Store) ListExperiencesBefore(n int, beforeSeq uint64) ([]Experience, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rows, err := s.db.Query(
-		`SELECT id, content, category, raw, private, provenance, created_seq, created_at
-		 FROM experiences WHERE created_seq < ? ORDER BY created_seq DESC LIMIT ?`, beforeSeq, n,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanExperiences(rows)
-}
-
-func (s *Store) SearchExperiencesBefore(n int, beforeSeq uint64, match string) ([]Experience, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	q := `SELECT id, content, category, raw, private, provenance, created_seq, created_at
-	      FROM experiences WHERE private = 0 AND created_seq < ?`
-	args := []interface{}{beforeSeq}
-	if match != "" {
-
-		q += ` AND LOWER(content) LIKE '%' || LOWER(?) || '%'`
-		args = append(args, match)
-	}
-	q += ` ORDER BY created_seq DESC LIMIT ?`
-	args = append(args, n)
-	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

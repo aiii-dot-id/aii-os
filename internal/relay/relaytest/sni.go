@@ -1,4 +1,4 @@
-package relay
+package relaytest
 
 import (
 	"bytes"
@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-var errPeeked = errors.New("relay: peeked")
+var errPeeked = errors.New("relaytest: peeked")
 
-func PeekServerName(c net.Conn, within time.Duration) (string, net.Conn, error) {
+func peekServerName(c net.Conn, within time.Duration) (string, net.Conn, error) {
 	_ = c.SetReadDeadline(time.Now().Add(within))
 	rec := &recorder{r: c}
 	var sni string
@@ -23,7 +23,7 @@ func PeekServerName(c net.Conn, within time.Duration) (string, net.Conn, error) 
 	}).Handshake()
 	_ = c.SetReadDeadline(time.Time{})
 	if sni == "" {
-		return "", nil, errors.New("relay: no server name in the client hello")
+		return "", nil, errors.New("relaytest: no server name in the client hello")
 	}
 	return sni, &replayConn{Conn: c, head: bytes.NewReader(rec.buf.Bytes())}, nil
 }

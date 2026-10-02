@@ -2,6 +2,7 @@
 import { S } from '../state.js';
 import { $, esc } from '../util.js';
 import { send } from '../ws.js';
+import { holdReloadWhile } from '../overlay.js';
 
 export function workSectionHTML() {
   if (!(S.work && ((S.work.live || []).length || S.work.queued > 0 || (S.work.delivered || []).length))) return '';
@@ -18,14 +19,7 @@ export function workSectionHTML() {
   return html;
 }
 
-// THE OPERATOR'S WORD ON A RESULT (seam 2).
-// Three chips and a line, offered beside every delivered result and
-// never asked for: no card, no prompt, no count of ungraded results.
-// A grade already given is shown in its place — the operator's own
-// words back, not a tick.
 const GRADES = [['served', 'Served'], ['partial', 'Partly'], ['unserved', 'Not served']];
-// Edits and the one outstanding request belong to the session, not a DOM
-// node: a status push may redraw Home while the request is out.
 const grades = new Map();
 function gradeHTML(w) {
   if (w.grade) {
@@ -86,6 +80,7 @@ function sendGrade(session, grade, comment) {
   d.note = id ? 'Recording…' : 'Not sent: the dashboard is not connected. Try again once it reconnects.';
   paintGrade(session);
 }
+holdReloadWhile(() => [...grades.values()].some(d => d.requestID || (d.comment.trim() && !d.uncertain)));
 S.gradeAnswered = (id, error) => {
   const found = [...grades].find(([, d]) => id && d.requestID === id);
   if (!found) return false;
@@ -100,7 +95,6 @@ S.gradesLost = () => {
     paintGrade(session);
   }
 };
-// An authoritative work snapshot resolves uncertainty without replaying a save.
 S.gradesRead = work => {
   for (const w of work?.delivered || []) {
     const d = grades.get(w.id); if (!d || d.requestID) continue;

@@ -20,9 +20,5 @@ func reexecSelf() error {
 	if !consolewin.Visible() {
 		consolewin.Hide(cmd)
 	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	os.Exit(0)
-	return nil
+	return cmd.Start()
 }

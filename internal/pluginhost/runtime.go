@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,6 +34,9 @@ type RuntimeDecl struct {
 	InstalledBytes  int64  `json:"installed_bytes"`
 	Files           int    `json:"files"`
 	InventorySHA256 string `json:"inventory_sha256"`
+
+	LargestFileBytes *int64 `json:"largest_file_bytes,omitempty"`
+	Depth            *int   `json:"depth,omitempty"`
 }
 
 type RuntimeError struct {
@@ -57,6 +61,8 @@ type RuntimeMissingError struct {
 	Cause    error
 }
 
+func (e *RuntimeMissingError) Unwrap() error { return e.Cause }
+
 func (e *RuntimeMissingError) Error() string {
 	return fmt.Sprintf("plugin %s: its runtime tree is not installed and cannot be fetched now (%v) — the activation refuses rather than run without it", e.PluginID, e.Cause)
 }
@@ -68,6 +74,13 @@ func ParseRuntimes(raw []byte) ([]RuntimeDecl, error) {
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+
+	var members struct {
+		Runtimes []map[string]json.RawMessage `json:"runtimes"`
+	}
+	if err := json.Unmarshal(raw, &members); err != nil {
 		return nil, err
 	}
 	if len(doc.Runtimes) == 0 || len(doc.Runtimes) > MaxRuntimes {
@@ -91,21 +104,54 @@ func ParseRuntimes(raw []byte) ([]RuntimeDecl, error) {
 		if d.Size <= 0 || d.InstalledBytes <= 0 || d.Files <= 0 {
 			return nil, fmt.Errorf("runtime %d: size, installed_bytes and files are positive", i)
 		}
+		if err := checkRuntimeExtent(d, members.Runtimes[i]); err != nil {
+			return nil, fmt.Errorf("runtime %d: %w", i, err)
+		}
 	}
 	return doc.Runtimes, nil
 }
 
-func loadRuntime(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest, variantID string) (*RuntimeDecl, error) {
-	if _, present := res.FileDigests[RuntimesFile]; !present {
-		return nil, nil
+func checkRuntimeExtent(d RuntimeDecl, members map[string]json.RawMessage) error {
+	for name, value := range members {
+		if (strings.EqualFold(name, "largest_file_bytes") || strings.EqualFold(name, "depth")) && string(bytes.TrimSpace(value)) == "null" {
+			return fmt.Errorf("%s is null: declare the extent or leave out both members", name)
+		}
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, RuntimesFile)
+	switch {
+	case d.LargestFileBytes == nil && d.Depth == nil:
+		return nil
+	case d.LargestFileBytes == nil || d.Depth == nil:
+		return errors.New("largest_file_bytes and depth are declared together or not at all")
+	}
+	mean := d.InstalledBytes / int64(d.Files)
+	if d.InstalledBytes%int64(d.Files) != 0 {
+		mean++
+	}
+	if largest := *d.LargestFileBytes; largest < mean || largest > d.InstalledBytes {
+		return fmt.Errorf("largest_file_bytes %d is outside %d (the mean file) to %d (the whole tree)", largest, mean, d.InstalledBytes)
+	}
+	if depth := *d.Depth; depth < 1 || depth > packagefmt.MaxRuntimeDepth {
+		return fmt.Errorf("depth %d is outside 1 to %d", depth, packagefmt.MaxRuntimeDepth)
+	}
+	return nil
+}
+
+func runtimeExtentFloor(decls []RuntimeDecl, minHost string) error {
+	for _, d := range decls {
+		if d.LargestFileBytes == nil {
+			continue
+		}
+		if !packagefmt.ValidHostBound(minHost) || packagefmt.CompareHostBounds(minHost, packagefmt.RuntimeExtentMinHost) < 0 {
+			return fmt.Errorf("runtime %s declares its extent, which requires aiios_min_version >= %s", d.VariantID, packagefmt.RuntimeExtentMinHost)
+		}
+	}
+	return nil
+}
+
+func loadRuntime(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest, variantID string) (*RuntimeDecl, error) {
+	decls, err := loadRuntimes(pkgPath, res, held, m)
 	if err != nil {
 		return nil, err
-	}
-	decls, err := ParseRuntimes(raw)
-	if err != nil {
-		return nil, &RuntimeError{PluginID: m.ID, Detail: "runtime declaration", Cause: err, Declared: true}
 	}
 	for i := range decls {
 		if decls[i].VariantID == variantID {
@@ -113,6 +159,24 @@ func loadRuntime(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest,
 		}
 	}
 	return nil, nil
+}
+
+func loadRuntimes(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) ([]RuntimeDecl, error) {
+	if _, present := res.FileDigests[RuntimesFile]; !present {
+		return nil, nil
+	}
+	raw, err := loadVerifiedMember(pkgPath, res, held, RuntimesFile)
+	if err != nil {
+		return nil, err
+	}
+	decls, err := ParseRuntimes(raw)
+	if err == nil {
+		err = runtimeExtentFloor(decls, m.AiiosMinVersion)
+	}
+	if err != nil {
+		return nil, &RuntimeError{PluginID: m.ID, Detail: "runtime declaration", Cause: err, Declared: true}
+	}
+	return decls, nil
 }
 
 type RuntimeRoots struct {
@@ -291,13 +355,22 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 	}
 	defer unlock()
 	if _, err := os.Stat(root); err == nil {
-		if verr := verifyRuntimeRoot(ctx, root, d, entry, limits); verr != nil {
+		inv, verr := verifyRuntimeRoot(ctx, root, d, entry, limits)
+		if verr != nil {
 			if cancelled := ctx.Err(); cancelled != nil {
 				return "", cancelled
 			}
 			return "", &RuntimeError{PluginID: pluginID, Detail: "the installed runtime does not verify", Cause: verr}
 		}
+
+		if detail := declarationMismatch(d, inv); detail != "" {
+			return "", &RuntimeError{PluginID: pluginID, Detail: detail, Declared: true}
+		}
 		return root, nil
+	}
+
+	if over := runtimeDeclarationRefusals(*d, limits); len(over) > 0 {
+		return "", &RuntimeError{PluginID: pluginID, Detail: "the declaration exceeds the operator's ceilings: " + strings.Join(ceilingWords(over), ", ")}
 	}
 	archive, err := ensureArchive(ctx, pluginID, d, dir, fetch, logf)
 	if err != nil {
@@ -338,6 +411,11 @@ func EnsureRuntime(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 		abandon()
 
 		return "", &RuntimeError{PluginID: pluginID, Detail: "inventory", Cause: perr}
+	}
+	if detail := extentMismatch(d, inv); detail != "" {
+		abandon()
+		_ = os.Remove(archive)
+		return "", &RuntimeError{PluginID: pluginID, Detail: detail, Declared: true}
 	}
 	if err := placeEntrypoint(pluginID, partial, inv, entry); err != nil {
 		abandon()
@@ -390,7 +468,7 @@ func ensureArchive(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 	}
 
 	partial := path + ".partial"
-	if err := fetchArchive(ctx, pluginID, d, partial, fetch, logf); err != nil {
+	if err := fetchVerified(ctx, pluginID, "runtime archive", d.URL, partial, d.Size, d.SHA256, fetch, logf); err != nil {
 		if cancelled := ctx.Err(); cancelled != nil {
 			return "", cancelled
 		}
@@ -405,79 +483,27 @@ func ensureArchive(ctx context.Context, pluginID string, d *RuntimeDecl, dir str
 	return path, nil
 }
 
-func fetchArchive(ctx context.Context, pluginID string, d *RuntimeDecl, path string, fetch ModelFetcher, logf func(string, ...interface{})) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func extentMismatch(d *RuntimeDecl, inv *packagefmt.Inventory) string {
+	if d.LargestFileBytes == nil || d.Depth == nil {
+		return ""
 	}
-	var offset int64
-	if st, err := os.Lstat(path); err == nil {
-		if !st.Mode().IsRegular() {
-			return fmt.Errorf("runtime partial is not a regular file")
-		}
-		offset = st.Size()
-		if offset > d.Size {
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("discard oversized runtime partial: %w", err)
-			}
-			offset = 0
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect runtime partial: %w", err)
+	var largest int64
+	depth := 0
+	for _, f := range inv.Files {
+		largest = max(largest, f.Size)
+		depth = max(depth, strings.Count(f.Path, "/")+1)
 	}
+	if largest == *d.LargestFileBytes && depth == *d.Depth {
+		return ""
+	}
+	return fmt.Sprintf("the declaration's extent (largest %d, depth %d) is not its inventory's (largest %d, depth %d)", *d.LargestFileBytes, *d.Depth, largest, depth)
+}
 
-	if offset < d.Size {
-		if fetch == nil {
-			if offset == 0 {
-				return fmt.Errorf("offline: no download path")
-			}
-			return fmt.Errorf("offline: runtime partial has %d of %d bytes; no download path", offset, d.Size)
-		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		lw := &limitedWriter{w: f, remaining: d.Size - offset}
-		_, ferr := fetch(ctx, d.URL, offset, lw)
-		cerr := f.Close()
-		if cancelled := ctx.Err(); cancelled != nil {
-			return cancelled
-		}
-		if lw.overflow {
-			_ = os.Remove(path)
-			return fmt.Errorf("the archive is larger than its declared %d bytes", d.Size)
-		}
-		if ferr != nil {
-			if strings.Contains(ferr.Error(), "does not resume") {
-				_ = os.Remove(path)
-			}
-			return ferr
-		}
-		if cerr != nil {
-			return cerr
-		}
+func declarationMismatch(d *RuntimeDecl, inv *packagefmt.Inventory) string {
+	if len(inv.Files) != d.Files || inv.InstalledBytes != d.InstalledBytes {
+		return fmt.Sprintf("the inventory holds %d files / %d bytes, the declaration says %d / %d", len(inv.Files), inv.InstalledBytes, d.Files, d.InstalledBytes)
 	}
-	sum, n, err := hashFileContext(ctx, path)
-	if err != nil {
-		return err
-	}
-	if n != d.Size {
-		if n < d.Size {
-			return fmt.Errorf("the archive is incomplete (%d of %d bytes); resume later", n, d.Size)
-		}
-		_ = os.Remove(path)
-		return fmt.Errorf("the archive is %d bytes, the declaration says %d", n, d.Size)
-	}
-	if sum != d.SHA256 {
-		_ = os.Remove(path)
-		return fmt.Errorf("the archive does not match its declared digest")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if logf != nil {
-		logf("plugin %s: runtime archive verified (%d bytes)", pluginID, n)
-	}
-	return nil
+	return extentMismatch(d, inv)
 }
 
 func placeEntrypoint(pluginID, root string, inv *packagefmt.Inventory, entry entrypointSpec) error {
@@ -497,27 +523,23 @@ func placeEntrypoint(pluginID, root string, inv *packagefmt.Inventory, entry ent
 	return os.WriteFile(target, entry.Bytes, 0o700)
 }
 
-func VerifyRuntimeRoot(root string, d *RuntimeDecl, entry entrypointSpec, limits packagefmt.TreeLimits) error {
-	return verifyRuntimeRoot(context.Background(), root, d, entry, limits)
-}
-
-func verifyRuntimeRoot(ctx context.Context, root string, d *RuntimeDecl, entry entrypointSpec, limits packagefmt.TreeLimits) error {
+func verifyRuntimeRoot(ctx context.Context, root string, d *RuntimeDecl, entry entrypointSpec, limits packagefmt.TreeLimits) (*packagefmt.Inventory, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	rec, err := readRecord(root)
 	if err != nil {
-		return fmt.Errorf("root record: %w", err)
+		return nil, fmt.Errorf("root record: %w", err)
 	}
 	if rec.VariantID != d.VariantID || rec.InventorySHA256 != d.InventorySHA256 || rec.Entrypoint != entry.Name || rec.EntrypointSHA256 != entry.Digest {
-		return fmt.Errorf("the root record names another release (variant %s, carrier %s)", rec.VariantID, rec.Entrypoint)
+		return nil, fmt.Errorf("the root record names another release (variant %s, carrier %s)", rec.VariantID, rec.Entrypoint)
 	}
 	if got := packagefmt.InventoryDigest(rec.Inventory); got != "sha256:"+d.InventorySHA256 {
-		return fmt.Errorf("the inventory record digests %s, the declaration pins sha256:%s", got, d.InventorySHA256)
+		return nil, fmt.Errorf("the inventory record digests %s, the declaration pins sha256:%s", got, d.InventorySHA256)
 	}
 	inv, err := packagefmt.ParseInventory(rec.Inventory, limits)
 	if err != nil {
-		return fmt.Errorf("inventory record: %w", err)
+		return nil, fmt.Errorf("inventory record: %w", err)
 	}
 	expected := map[string]packagefmt.InventoryEntry{}
 	for _, e := range inv.Files {
@@ -584,17 +606,17 @@ func verifyRuntimeRoot(ctx context.Context, root string, d *RuntimeDecl, entry e
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !seen[entry.Name] {
-		return fmt.Errorf("the carrier %s is missing", entry.Name)
+		return nil, fmt.Errorf("the carrier %s is missing", entry.Name)
 	}
 	for path := range expected {
 		if !seen[path] {
-			return fmt.Errorf("%s is missing", path)
+			return nil, fmt.Errorf("%s is missing", path)
 		}
 	}
-	return nil
+	return inv, nil
 }
 
 func runtimeSpawnCheck(root string, d *RuntimeDecl, entry entrypointSpec) func() error {

@@ -6,17 +6,7 @@ import (
 	"time"
 )
 
-type MemoryDecision struct {
-	Kind      string
-	Facility  string
-	Decision  string
-	Seq       uint64
-	Score     float64
-	Record    map[string]interface{}
-	DecidedAt time.Time
-}
-
-var memoryDecisionsKeep = 5000
+const memoryDecisionsKeep = 5000
 
 func (s *Store) RecordMemoryDecision(d MemoryDecision) error {
 	if d.Kind != "salience" && d.Kind != "rhythm" {
@@ -52,26 +42,4 @@ func (s *Store) RecordMemoryDecision(d MemoryDecision) error {
 		_, err = s.w().Exec(`DELETE FROM memory_decisions WHERE kind = ? AND id IN (SELECT id FROM memory_decisions WHERE kind = ? ORDER BY id ASC LIMIT ?)`, d.Kind, d.Kind, n-memoryDecisionsKeep)
 	}
 	return err
-}
-
-func (s *Store) RecentMemoryDecisions(kind string, n int) ([]MemoryDecision, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rows, err := s.db.Query(`SELECT decided_at, kind, facility, decision, seq, score, record FROM memory_decisions WHERE kind = ? ORDER BY id DESC LIMIT ?`, kind, n)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []MemoryDecision
-	for rows.Next() {
-		var d MemoryDecision
-		var at, record string
-		if err := rows.Scan(&at, &d.Kind, &d.Facility, &d.Decision, &d.Seq, &d.Score, &record); err != nil {
-			return nil, err
-		}
-		d.DecidedAt, _ = time.Parse(time.RFC3339Nano, at)
-		_ = json.Unmarshal([]byte(record), &d.Record)
-		out = append(out, d)
-	}
-	return out, rows.Err()
 }

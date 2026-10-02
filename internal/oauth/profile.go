@@ -102,9 +102,6 @@ func exchange(ctx context.Context, client *http.Client, p OAuthParams, fields ma
 	if j.ExpiresIn > 0 {
 		t.Expires = time.Now().Add(time.Duration(j.ExpiresIn * float64(time.Second)))
 	}
-	if len(p.AccountClaim) > 0 && claimString(t.Access, p.AccountClaim) == "" {
-		return nil, fmt.Errorf("access token lacks required claim %s", strings.Join(p.AccountClaim, "."))
-	}
 	for _, path := range p.ClaimHeaders {
 		if claimString(t.Access, path) == "" {
 			return nil, fmt.Errorf("access token lacks required claim %s", strings.Join(path, "."))

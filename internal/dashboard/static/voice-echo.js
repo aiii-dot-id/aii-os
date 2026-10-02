@@ -1,5 +1,3 @@
-// Device processing belongs to this browser, like its microphone selection.
-// Persist only on Save; a live capture keeps the mode it opened with.
 export const echoModes = [
   ['browser', 'Browser cancellation'],
   ['combined', 'Browser + native cancellation'],
@@ -11,7 +9,7 @@ export function echoMode() {
   try {
     const saved = localStorage.getItem(storageKey);
     if (echoModes.some(([key]) => key === saved)) return saved;
-  } catch (e) { /* Reading unavailable storage keeps the safe default. */ }
+  } catch (e) { }
   return 'browser';
 }
 export function setEchoMode(value) {

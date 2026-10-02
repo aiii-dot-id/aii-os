@@ -9,6 +9,7 @@ import { spokenAudio } from '../say.js';
 import { echoMode, echoModes, setEchoMode } from '../voice-echo.js';
 import { sandboxCardHTML, wireSandboxCard } from '../sandbox.js';
 import { pendingSlot } from '../pending.js';
+import { holdReloadWhile } from '../overlay.js';
 import { providerModels } from './model-picker.js';
 import { backupsHTML, wireBackups, requestBackups, forgetBackupsSecrets } from './backups.js';
 import { mailRepairHTML, wireMailRepair, requestHeldMail, mailRepairDisconnected } from './mail-repair.js';
@@ -23,23 +24,18 @@ let sec = 'substrate';
 let provOpen = null;
 const NEW_PROVIDER = Symbol('new provider');
 const prov = pendingSlot();
-const provBroken = pendingSlot(); // a Repair or Remove of a broken entry, until the runtime answers
+const provBroken = pendingSlot();
 let provResult = null;
 const config = pendingSlot();
 let configResult = null;
 const speechAdd = pendingSlot();
 
-// Unsaved Settings and Plugin controls belong to their form, never to S.config or storage.
-// Keep their DOM values (including password/partially typed number state), not
-// a second configuration. Keys name the section and actual provider, not a row
-// position. Server readback still renders everything outside these controls.
 const edits = new Map();
 const fieldBase = new WeakMap();
+holdReloadWhile(() => edits.size > 0 || keyDrafts.size > 0 || draft.stt !== null || draft.tts !== null);
 function editorFields(root) {
   return [...root.querySelectorAll('input,textarea,select')].filter(el =>
     !el.readOnly && el.type !== 'file' && (el.id || el.dataset.psetKey || el.dataset.grantField || (el.type === 'radio' && el.closest('.profile-form'))) && !el.id.startsWith('sp-provider-') &&
-    // Backup/restore, pasted plugin keys and immediate-action controls keep
-    // their own clearing rules. Profile passwords remain DOM-only drafts.
     (el.closest('[data-provider-editor]') || el.closest('.profile-form') || el.closest('#speech-form') || el.closest('.card')?.querySelector('[data-save]')));
 }
 function fieldValue(el) { return (el.type === 'checkbox' || el.type === 'radio') ? el.checked : el.value; }
@@ -58,9 +54,6 @@ function captureEdits(root, changed = null) {
   editorFields(root).forEach(el => {
     if (!fieldBase.has(el)) return;
     const key = fieldKey(el);
-    // Returning to an older value is still an edit: an earlier Save may be
-    // in flight. Only its matching acknowledgement or explicit Cancel retires
-    // intent; a coincidentally equal readback cannot do so.
     if (el === changed || edits.has(key) || fieldValue(el) !== fieldBase.get(el) || (el.validity && el.validity.badInput)) edits.set(key, el);
   });
 }
@@ -101,7 +94,7 @@ function finishEditor(editor, secretsOnly = false) {
     if (fieldValue(el) !== sent || (el.validity && el.validity.badInput)) { newer = true; return; }
     edits.delete(key);
     if (el.type === 'password') el.value = '';
-    fieldBase.set(el, fieldValue(el)); // don't recapture the acknowledged edit
+    fieldBase.set(el, fieldValue(el));
   });
   return newer;
 }
@@ -111,7 +104,6 @@ function restoreEditors(root, active) {
     const held = edits.get(key) || (active && active.key === key && active.el);
     if (!held) { fieldBase.set(fresh, saved); return; }
     const value = fieldValue(held), dirty = edits.has(key);
-    // Refresh attributes/choices, never serialize a typed value into markup.
     [...held.attributes].forEach(a => { if (!['value', 'checked'].includes(a.name) && !fresh.hasAttribute(a.name)) held.removeAttribute(a.name); });
     [...fresh.attributes].forEach(a => { if (!['value', 'checked'].includes(a.name) && held.getAttribute(a.name) !== a.value) held.setAttribute(a.name, a.value); });
     if (held.tagName === 'SELECT') {
@@ -126,7 +118,6 @@ function restoreEditors(root, active) {
   });
 }
 
-// Shared draft mechanics; save/readback still belongs to each operation.
 export function captureForm(root) {
   captureEdits(root);
   const el = document.activeElement;
@@ -187,11 +178,6 @@ function modelField(id, providerName, current) {
     '<datalist id="' + id + '-list">' + models.map(m => '<option value="' + esc(m) + '"></option>').join('') + '</datalist>';
 }
 
-// The window the identity is actually thinking inside, and where the number
-// came from. A fallback printed as a bare figure reads as the model's own
-// window — which is how an identity runs for hours inside a default nobody
-// chose — so it says so, and says what to set. A dash means nothing is known
-// yet, never a silent fallback.
 function contextSummary(llm) {
   const source = llm.prompt_budget_source || '';
   const figure = llm.context_length || llm.prompt_budget || 0;
@@ -229,19 +215,6 @@ function substrateHTML(c) {
     savebarHTML('llm', 'applies live after inference check') + '</div>';
 }
 
-// Settings → Speech, in the shape every speech settings page shares: one
-// engine picker per direction listing the services by name, and only the
-// chosen engine's fields. Save makes the service ready — added, keyed,
-// pointed at its server — and then has it answer one real request before
-// anything changes.
-//
-// THE VENDOR IS THE ONLY SOURCE. Models, voices and languages are asked of
-// the service when the operator chooses it, followed to the end of its
-// paging and searched where it searches; this release ships no catalogue of
-// any vendor's anything, and a direction a vendor cannot list is a
-// direction it is not offered for. What the operator already chose survives
-// a list that narrowed under it, and an id typed by hand is always
-// reachable: the picker accelerates, it never gates.
 const SPEECH_DIRS = {
   stt: {
     title: 'VOICE INPUT — SPEECH TO TEXT', kind: 'transcription model',
@@ -252,16 +225,12 @@ const SPEECH_DIRS = {
     title: 'VOICE REPLIES — TEXT TO SPEECH', kind: 'model',
     none: 'Browser voice', off: 'Replies are spoken with your browser\'s built-in voice.',
     unsetProvider: 'Replies are spoken with your browser\'s built-in voice.',
+    note: 'Speaks every reply — to what you type, and to what you say in a conversation. With nothing chosen, the engine that hears a conversation answers in its own voice. Another engine speaks a conversation\'s replies only where a page holds its speaker open; elsewhere, and whenever the voice chosen cannot speak, the browser\'s own voice does.',
   },
 };
-// OWN_SERVER is the engine for the operator's own OpenAI-compatible server,
-// BY_ID the choice to type an id the list does not hold.
 const OWN_SERVER = 'own-server:';
 const BY_ID = 'by-id:';
 
-// draft is the engine the operator has chosen but not yet saved. The card
-// is drawn for THAT engine — its fields, its lists — while the readback
-// keeps saying what is still in force underneath.
 const draft = { stt: null, tts: null };
 export function speechDraftSaved(section, choice) {
   if (section === 'speech') { ['stt', 'tts'].forEach(dir => { if (draft[dir] === choice?.[dir]) draft[dir] = null; }); return; }
@@ -276,10 +245,6 @@ function speechService(value, sp) {
   return ((sp && sp.services) || []).find(s => s.name === value) || null;
 }
 
-// speechOffer is what the chosen engine reads in one direction: which
-// fields its API takes, and whether it lists them. A new OpenAI-compatible
-// server, or a pointer at an entry with no speech block, speaks OpenAI's
-// dialect: a model both ways, and a voice when it speaks.
 function speechOffer(dir, value, sp) {
   if (!value) return null;
   const svc = value === OWN_SERVER ? null : speechService(value, sp);
@@ -290,9 +255,6 @@ function ownServer(value, sp) {
   const svc = speechService(value, sp);
   return value === OWN_SERVER || !!(svc && svc.custom);
 }
-// ownServerName names an OpenAI-compatible server by where it answers, so
-// the same server chosen twice is one entry and a name never outlives its
-// address. An address that is not http(s) with a host names nothing.
 function ownServerName(url) {
   try {
     const u = new URL(url);
@@ -300,9 +262,6 @@ function ownServerName(url) {
   } catch (e) { return ''; }
 }
 
-// hinted says on hover what a blank field means — the field itself cannot
-// show it. wireUnsetHints keeps the hover in step as the field fills, so
-// any Settings field can carry one.
 function hinted(value, hint) {
   return ' data-unset-hint="' + esc(hint) + '"' + (String(value || '').trim() ? '' : ' title="' + esc(hint) + '"');
 }
@@ -314,14 +273,9 @@ function wireUnsetHints(root) {
   root.querySelectorAll('[data-unset-hint]').forEach(syncUnsetHint);
 }
 
-// keyFacts is what the key field says for the chosen engine: whether a key
-// is stored, where a typed one is kept — shared with a chat provider of the
-// same name — and the environment fallback.
 function keyFacts(value, sp) {
   if (!value) return { label: 'API KEY', hint: '', note: '' };
   if (value === OWN_SERVER) return { label: 'API KEY (OPTIONAL)', hint: 'Leave blank for a server that asks for no key.', note: 'Kept with the server\'s entry in providers.json.' };
-  // A pointer at a provider that is not a speech service still has its
-  // entry's key facts.
   const entry = (S.providers || []).find(p => p.name === value);
   const svc = speechService(value, sp) || { name: value, added: !!entry, has_key: !!(entry && entry.has_key), chats: !!(entry && entry.chat) };
   const stored = !!svc.has_key;
@@ -338,36 +292,20 @@ function keyFacts(value, sp) {
   };
 }
 
-// --- what the service answered, and what is still being asked ---
-
-// live holds one answer per engine and direction, and the question it
-// answers: a narrowed list is not the whole list, and the two must never be
-// confused (a choice already made is never judged against a partial list).
 const live = {};
 const asking = {};
-// asked keeps the last question put to each engine and direction after its
-// answer came: an older answer landing later still names a question that
-// is not this one (review of 0.1.5, finding 6).
 const asked = {};
 const listKey = (value, dir) => value + '|' + dir;
 
 function askSpeechLists(dir, value, sp, ask) {
-  // An engine installed here lists nothing over the network: what it
-  // offers it declares, and the page already has it.
   const local = speechService(value, sp);
   if (local && local.plugin) return;
   if (!value || value === OWN_SERVER) return;
   const o = speechOffer(dir, value, sp);
   if (!o || !(o.lists_models || o.lists_voices)) return;
-  // A KEY THE OPERATOR HAS TYPED IS A KEY THE SERVICE CAN BE ASKED WITH.
-  // Waiting for a save before the lists fill makes the operator prove the
-  // key twice: once to see anything, once to keep it. It is carried for
-  // this question only and stored by nothing.
   const typed = $('sp-key-' + dir) ? $('sp-key-' + dir).value.trim() : '';
   const want = { search: (ask && ask.search) || '', language: (ask && ask.language) || '', typed: typed };
   const key = listKey(value, dir), had = live[key] || asking[key];
-  // An answer carries the question it answers; a question with nothing in
-  // it carries nothing, so the two are compared as the same emptiness.
   if (had && (had.search || '') === want.search && (had.language || '') === want.language && (had.typed || '') === typed) return;
   const request = query('speech_lists', { provider: value, direction: dir, search: want.search, language: want.language, api_key: typed });
   if (request) {
@@ -382,15 +320,10 @@ function listed(dir, value) {
 function isAsking(dir, value) {
   return !!asking[listKey(value, dir)];
 }
-// forgetSpeechLists drops what a service answered, so the next render asks
-// it again — after a key is stored, or a connection came back.
 function forgetSpeechLists(name) {
   ['stt', 'tts'].forEach(dir => { delete live[listKey(name, dir)]; delete asking[listKey(name, dir)]; delete asked[listKey(name, dir)]; });
 }
 
-// languagesOf and itemsOf read one answer. An item the service did not name
-// for the chosen language is left out here only when the service did not
-// narrow the list itself.
 function languagesOf(got) {
   return (got && got.languages) || [];
 }
@@ -401,15 +334,7 @@ function itemsOf(got, kind, language) {
   return narrowed.length ? narrowed : items;
 }
 
-// --- the picker ---
-
-// pickerHTML is one field the vendor fills: its own value first so a
-// choice already made is never lost, then what the service listed, then the
-// way to type an id the list does not hold.
 function optionsHTML(items, value) {
-  // The operator's own choice comes first and stays, even when a narrowed
-  // list no longer holds it; every other row reads as the vendor's name for
-  // it, with what the vendor says about it behind.
   const known = items.some(i => i.id === value);
   return (value ? '' : '<option value="" selected>— none —</option>') +
     (value && !known ? '<option value="' + esc(value) + '" selected>' + esc(value) + '</option>' : '') +
@@ -424,8 +349,6 @@ function pickerHTML(id, label, value, items, hint) {
     '<input type="text" id="' + id + '-typed" hidden placeholder="the id the service knows it by" autocomplete="off">';
 }
 
-// pickedValue is what a picker's field sends: the id typed by hand when the
-// operator is typing one, and what they chose otherwise.
 function pickedValue(id) {
   const typed = $(id + '-typed'), pick = $(id);
   if (typed && !typed.hidden) return typed.value.trim();
@@ -433,8 +356,6 @@ function pickedValue(id) {
   return chosen === BY_ID ? '' : chosen;
 }
 
-// wirePicker lets the last option open a plain text box, so a voice minted
-// a minute ago is reachable before any list has heard of it.
 function wirePicker(root, id) {
   const pick = root.querySelector('#' + id), typed = root.querySelector('#' + id + '-typed');
   if (!pick || !typed) return;
@@ -446,12 +367,6 @@ function wirePicker(root, id) {
   };
 }
 
-// playSample lets the operator HEAR the voice they are picking, before
-// they decide to keep it: the service is asked with exactly what is on the
-// card — engine, model, voice, and a key that may only have been typed.
-// A refusal stands beside the button in the service's own words; nothing
-// falls back to the browser's voice, which would answer a question about
-// this service with a different one.
 function playSample(button, provider) {
   const state = $('sp-sample-state');
   const said = m => { if (state) state.textContent = m; };
@@ -469,24 +384,17 @@ function playSample(button, provider) {
   }).then(() => { said('Playing ' + provider + '.'); done(); }, err => { said((err && err.message) || String(err)); done(); });
 }
 
-// spentLine is what this direction cost this month, by service, and what
-// is left of any ceiling. An operator who tried three voices sees what
-// each one cost; "nothing yet" is an answer, not an empty space.
 function spentLine(dir, sp, ceiling) {
   const spent = (sp.spent || []).filter(u => u.direction === dir);
   const total = spent.reduce((n, u) => n + (dir === 'stt' ? (u.seconds || 0) : (u.characters || 0)), 0);
   const each = spent.map(u => u.provider + ' ' + amount(dir, dir === 'stt' ? u.seconds : u.characters) +
     ' over ' + u.requests + ' ' + (dir === 'stt' ? (u.requests === 1 ? 'utterance' : 'utterances') : (u.requests === 1 ? 'reply' : 'replies'))).join(' · ');
-  // The ceiling is in minutes for listening and the meter in seconds.
   const cap = dir === 'stt' ? ceiling * 60 : ceiling;
   const left = ceiling ? ' · ' + amount(dir, Math.max(0, cap - total)) + ' of the ceiling left' : '';
   const resets = sp.resets ? ' · resets ' + sp.resets : '';
   return 'This month: ' + (each || 'nothing yet') + left + resets;
 }
 
-// amount says a count the way its bill does: seconds as a clock, and
-// characters in full — a rounded character count is not a bill — grouped
-// by our own hand, so the number reads the same on every machine.
 function amount(dir, n) {
   n = n || 0;
   if (dir !== 'stt') return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' characters';
@@ -495,9 +403,6 @@ function amount(dir, n) {
   return m + 'm ' + (n % 60) + 's';
 }
 
-// stateLine says where a field's choices came from, or why there are none:
-// the three states worth distinguishing are no key yet, a service that
-// refused, and a list that came back narrowed.
 function stateLine(dir, value, kind) {
   const got = listed(dir, value);
   if (!value) return '';
@@ -517,8 +422,6 @@ function stateLine(dir, value, kind) {
 function speechCard(dir, sp) {
   const d = SPEECH_DIRS[dir], inForce = sp[dir] || {};
   const provider = draft[dir] !== null ? draft[dir] : (inForce.provider || '');
-  // Values belong to the engine they were saved for: a model or a voice
-  // from the last engine means nothing to this one.
   const cur = provider === (inForce.provider || '') ? inForce : { provider: provider };
   const services = speechServices(dir, sp);
   const known = !provider || services.some(s => s.name === provider);
@@ -542,11 +445,6 @@ function speechCard(dir, sp) {
     '<input type="password" id="sp-key-' + dir + '" autocomplete="off"' + hinted('', k.hint) + '>' +
     '<div id="sp-key-note-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:6px">' + esc(k.note) + '</div></div>';
 
-  // The language the service itself named, narrowing the voices under it.
-  // THE ROW ALWAYS EXISTS, hidden until a service names languages: the
-  // first answer that names them used to redraw the whole card, which
-  // emptied the key the operator had just typed and asked again without
-  // it.
   const languages = languagesOf(got);
   const language = '<div id="sp-language-row-' + dir + '"' + (languages.length ? '' : ' hidden') + '><label class="f">LANGUAGE</label>' +
     '<select id="sp-language-' + dir + '">' + languageOptionsHTML(languages, cur.language || '') + '</select></div>';
@@ -569,21 +467,11 @@ function speechCard(dir, sp) {
     ? { key: 'monthly_minutes', unit: 'minutes', of: 'listening', note: 'the microphone stops until the month turns over' }
     : { key: 'monthly_characters', unit: 'characters', of: 'speaking', note: 'replies are read by the browser\'s own voice until the month turns over' };
   const ceilingValue = (dir === 'stt' ? inForce.monthly_minutes : inForce.monthly_characters) || 0;
-  // AN ENGINE ON THIS MACHINE SENDS NO BILL. A monthly ceiling is a
-  // spending control over somebody else's service; offering one beside
-  // an engine that runs here would be a control over nothing.
   const ceiling = isPlugin ? '' : '<label class="f">MONTHLY CEILING</label>' +
     '<input type="number" id="sp-ceiling-' + dir + '" min="0" step="1" value="' + (ceilingValue || '') + '" placeholder="no ceiling"' +
     hinted(ceilingValue ? String(ceilingValue) : '', 'The most ' + d2.unit + ' of ' + d2.of + ' this identity may buy in a calendar month. Reached, ' + d2.note + '. Empty is no ceiling.') + '>' +
     '<div id="sp-spent-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:6px">' + esc(spentLine(dir, sp, ceilingValue)) + '</div>';
 
-  // WHAT IS IN FORCE AND WHAT IS ONLY CHOSEN ARE DIFFERENT THINGS. A
-  // sample plays the engine on the card while this line still names the
-  // one behind it, and nothing said so.
-  // WHAT IT DECLARED BELONGS BESIDE THIS HALF. The package says which
-  // of its settings are about hearing and which about speaking; those
-  // are drawn here, in the same control its own card draws, and
-  // everything it scoped as neither stays there.
   const wantScope = dir === 'stt' ? 'hearing' : 'speaking';
   const tunables = isPlugin ? (svc.settings || []).filter(x => x.scope === wantScope) : [];
   const engineSettings = tunables.length
@@ -602,12 +490,9 @@ function speechCard(dir, sp) {
     : inForce.error
       ? '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:#c0392b;margin-top:8px">pointer does not resolve: ' + esc(inForce.error) + unsaved + '</div>'
       : '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6">in force: <span style="font-family:var(--mono)">' + esc(inForce.endpoint || '') + '</span> · key ' + esc(inForce.api_key_masked || 'none') + unsaved + '</div>';
-  return '<div class="card" data-speech-section="speech_' + dir + '" data-edit-scope="' + esc('speech:' + dir + ':' + provider) + '"><h3>' + d.title + '</h3>' + engine + base + key + language + model + voice + engineSettings + readback +
+  const note = d.note ? '<p class="muted" id="sp-note-' + dir + '">' + esc(d.note) + '</p>' : '';
+  return '<div class="card" data-speech-section="speech_' + dir + '" data-edit-scope="' + esc('speech:' + dir + ':' + provider) + '"><h3>' + d.title + '</h3>' + note + engine + base + key + language + model + voice + engineSettings + readback +
     ceiling +
-      // A SAMPLE IS A SERVICE SPEAKING ONE LINE ON REQUEST. The engine
-      // installed on this machine speaks inside a voice session and has
-      // no such request to answer, so the control is not offered for it
-      // rather than offered and refused.
       (dir === 'tts' ? '<button class="btn ghost" id="sp-sample-tts"' + (provider && provider !== OWN_SERVER && !isPlugin ? '' : ' disabled') + '>Play sample</button>' +
         '<span class="savesay" id="sp-sample-state" role="status" aria-live="polite"></span>' : '') + '</div>';
 }
@@ -621,12 +506,6 @@ function speechHTML(c) {
     voiceModeCard(sp) + speakersCard(sp) + speechCard('stt', sp) + speechCard('tts', sp) + '</div>';
 }
 
-// voiceModeCard is what the microphone does and whether replies are
-// spoken: ONE pair with one owner, shown as the two halves the host
-// stores. The microphone control in the composer draws the same pair and
-// changes the same value — this is where it is named in full, where the
-// mode the cycle does not reach can be chosen, and where the operator can
-// hand either half back to the default.
 function voiceModeCard(sp) {
   const m = sp.mode || { listen: 'interactive', speak: 'auto', revision: 0, name: 'interactive', set: false };
   const listen = m.listen || 'interactive';
@@ -659,9 +538,6 @@ export function voiceModeReadback(m) {
     (m.set ? '' : ' · nothing chosen: the default is in force');
 }
 
-// speakersCard is whose words the identity receives: one policy, read back
-// with its revision and what it withheld. Ids are the speech engine's stable
-// UUIDs or enrolled ids; a name is never an id.
 function speakersCard(sp) {
   const p = sp.speakers || { mode: 'all', uids: [], unidentified: 'deliver', revision: 0 };
   const mode = p.mode || 'all';
@@ -688,12 +564,7 @@ export function speakersReadback(p) {
   return heard + ' · revision ' + (p.revision || 0) + ' · withheld since start: ' + f + ' final' + (f === 1 ? '' : 's') + ', ' + q + ' partial' + (q === 1 ? '' : 's');
 }
 
-// wireSpeech asks each chosen engine what it offers, follows a change of
-// engine without re-rendering, and lets the operator search the vendor's own
-// library rather than what happened to arrive first.
 function wireSpeech(root) {
-  // The Speakers card shows the rows its mode reads: a list for only and
-  // ignore, the unidentified rule for ignore.
   const modeSel = root.querySelector('#sp-speakers-mode');
   if (modeSel) modeSel.onchange = () => {
     const m = modeSel.value;
@@ -707,15 +578,10 @@ function wireSpeech(root) {
     if (!sel) return;
     const sp = () => (S.config && S.config.speech) || {};
     const cur = () => (sp()[dir] || {});
-    // A drafted engine starts from its own answers; the language in force
-    // belongs to the engine in force.
     const adding = speechAdd.waiting();
     if (!adding || adding.section !== 'speech_' + dir) {
       askSpeechLists(dir, sel.value, sp(), { language: draft[dir] !== null ? '' : cur().language });
     }
-    // Asking is itself worth saying: the fields were drawn before the
-    // question went out, and a picker that fills a moment later is only
-    // honest if the wait for it was visible.
     ['model', 'voice'].forEach(kind => {
       const state = root.querySelector('#sp-' + kind + '-state-' + dir);
       if (state) state.textContent = stateLine(dir, sel.value, kind === 'voice' ? 'voices' : 'models');
@@ -728,9 +594,6 @@ function wireSpeech(root) {
       typed.oninput = () => {
         clearTimeout(keyTimer);
         keyTimer = setTimeout(() => {
-          // The card this key belongs to may be gone by now — an engine
-          // change redraws it — and its question must not be asked for
-          // the card that replaced it.
           if ($('sp-provider-' + dir) !== sel) return;
           askSpeechLists(dir, sel.value, sp(), { language: language ? language.value : '' });
           renderSpeechChoices(dir, sel.value, language ? language.value : '');
@@ -744,8 +607,6 @@ function wireSpeech(root) {
       let timer = 0;
       find.oninput = () => {
         clearTimeout(timer);
-        // The vendor does the searching, after the operator stops typing:
-        // a library of thousands is never dragged here to be filtered.
         timer = setTimeout(() => {
           if ($('sp-provider-' + dir) === sel) askSpeechLists(dir, sel.value, sp(), { search: find.value.trim(), language: cur().language });
         }, 300);
@@ -759,29 +620,19 @@ function wireSpeech(root) {
         renderSpeechChoices(dir, sel.value, chosen);
       };
     }
-    // A NEW ENGINE STARTS FROM ITS OWN ANSWERS: which fields it reads at
-    // all differ, so the card is drawn again for it — and the engine the
-    // operator just chose is what it is drawn for, not what is in force.
     sel.onchange = () => {
       draft[dir] = sel.value;
-      // The new card asks for itself once it is drawn, with its own key
-      // field — never with the one typed for the engine before it, which
-      // is another service's credential.
       renderSettings();
     };
   });
 }
 
-// languageOptionsHTML is the language picker's rows: any language first,
-// then what the service named.
 function languageOptionsHTML(languages, chosen) {
   return '<option value=""' + (chosen ? '' : ' selected') + '>Any language the service hears</option>' +
     languages.map(l => '<option value="' + esc(l.id) + '"' + (l.id === chosen ? ' selected' : '') + '>' +
       esc(l.name ? l.name + ' (' + l.id + ')' : l.id) + '</option>').join('');
 }
 
-// renderSpeechChoices refills one card's pickers in place, so an answer
-// that arrives while the operator is typing never moves what is under them.
 function renderSpeechChoices(dir, value, language) {
   const got = listed(dir, value);
   const model = $('sp-model-' + dir), voice = dir === 'tts' ? $('sp-voice-tts') : null;
@@ -803,23 +654,14 @@ function renderSpeechChoices(dir, value, language) {
   fill(voice, itemsOf(got, 'voices', language), 'voices');
 }
 
-// acceptSpeechLists takes one answer from a service. It belongs to the
-// question it was asked; an answer to an older question is kept but changes
-// nothing on screen, and an engine no longer chosen changes nothing either.
 export function acceptSpeechLists(got) {
   if (!got || !got.provider || !SPEECH_DIRS[got.direction]) return false;
   const dir = got.direction, key = listKey(got.provider, dir);
   const pending = asking[key], question = pending || asked[key];
-  // AN ANSWER TO AN OLDER QUESTION CHANGES NOTHING — while the newer one
-  // is still being asked, and after it was answered. Each question is
-  // answered on its own goroutine, so a broad search can land after the
-  // narrow one it was replaced by, and even after that one's answer; kept,
-  // it would fill the picker with the wrong list under the words in the
-  // box.
   if (question && ((question.search || '') !== (got.search || '') || (question.language || '') !== (got.language || ''))) return true;
   live[key] = got;
   if (pending) {
-    got.typed = pending.typed; // the answer belongs to the key it was asked with
+    got.typed = pending.typed;
     delete asking[key];
   }
   const sel = $('sp-provider-' + dir);
@@ -829,9 +671,6 @@ export function acceptSpeechLists(got) {
   return true;
 }
 
-// rejectSpeechLists takes the refusal of one question, so the card says
-// so instead of "Asking…" for the rest of the connection, and the same
-// question can be asked again.
 export function rejectSpeechLists(requestID, text) {
   for (const key of Object.keys(asking)) {
     if (asking[key].request !== requestID) continue;
@@ -845,10 +684,6 @@ export function rejectSpeechLists(requestID, text) {
   return false;
 }
 
-// A service is made ready first — added when this install has no entry for
-// it, pointed at the operator's own server, given the key the operator
-// typed — and the settings follow once it is in the directory: two acts,
-// each through its own door.
 function readySpeechService(section, name, key, baseURL, ch, editor = submittedEditor(section), remaining = [], echo) {
   configResult = null;
   const requestID = send({ type: 'speech_service', provider: name, api_key: key, base_url: baseURL });
@@ -868,15 +703,7 @@ function dashboardWarnHTML(host, tls) {
 const TOKEN_EYE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></svg>';
 const TOKEN_COPY = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.5v-.3A1.7 1.7 0 0 0 8.8 1.5H4.2a1.7 1.7 0 0 0-1.7 1.7v4.6a1.7 1.7 0 0 0 1.7 1.7h.3"/></svg>';
 const TOKEN_COPIED = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>';
-// THE TOKEN IS ASKED FOR, NEVER CARRIED. The config frame reaches every
-// socket on every save; the field is drawn empty and filled only when the
-// eye is pressed, by a question the host answers to this screen alone.
 let tokenAsk = '', tokenShown = '';
-// SETTINGS' TOKEN ACTS ARE HTTP EXCHANGES: only an answer can carry this
-// browser's new cookie. Rotate is offered while a token is asked for; Ask for
-// an access token while none is, and it is never undone here. Each is offered
-// only where the server says the connection is private; the server refuses
-// either anywhere else regardless.
 let tokenBusy = '', tokenSaid = null;
 const TOKEN_OFF_WHERE = '<div class="muted" data-token-off-where style="font-size:12px;margin-top:6px">Asking for a token stops only in config.json on this machine (dashboard.require_token: false), never from this page \u2014 and a dashboard other machines can reach always asks.</div>';
 function tokenActHTML(act, label, busyLabel, secretsOK, privateNote) {
@@ -900,7 +727,6 @@ function dashboardTokenHTML(required, secretsOK) {
     TOKEN_OFF_WHERE;
 }
 
-// The two acts, as the person is asked about them and told what happened.
 const TOKEN_ACTS = {
   rotate: {
     confirm: 'Rotate the access token? Every other browser and device signed in to this dashboard signs in again with the new token; this one stays signed in.',
@@ -918,12 +744,9 @@ async function runTokenAct(act) {
   const a = TOKEN_ACTS[act];
   if (window.confirm && !window.confirm(a.confirm)) return;
   tokenBusy = act; tokenSaid = null; renderSettings();
-  // ws.js owns sign-in recovery, so the exchange is its.
   const res = await (act === 'rotate' ? S.rotateAccessToken() : S.requireAccessToken());
   tokenBusy = '';
   if (res.ok) {
-    // The token this page may have shown is the old one; and the host has
-    // answered that a token is asked for now, whatever the last frame said.
     tokenAsk = ''; tokenShown = '';
     if (S.config && S.config.dashboard) S.config.dashboard.require_token = true;
     tokenSaid = { act, kind: 'good', text: a.done };
@@ -931,7 +754,6 @@ async function runTokenAct(act) {
   if (S.view === 'settings' && sec === 'dashboard') renderSettings();
 }
 
-// acceptDashboardToken takes the host's answer to the eye.
 export function acceptDashboardToken(requestID, token) {
   if (!tokenAsk || requestID !== tokenAsk) return false;
   tokenAsk = '';
@@ -967,7 +789,6 @@ function wireDashboardToken(root) {
   const copy = root.querySelector('[data-token-copy]');
   reveal.onclick = () => {
     if (!field.value) {
-      // Not yet asked for: ask, and the answer fills the field.
       tokenAsk = query('dashboard_token') || '';
       return;
     }
@@ -1134,10 +955,6 @@ function providerEditor(p, tag) {
     '</div>';
 }
 
-// THE ROW SAYS WHERE A SIGN-IN STANDS whenever there is one to report, and
-// offers the button only when a valid token is not in hand (signInWanted in
-// signin.js, the rule the birth form shares): a valid token is announced by
-// the credential's own line and offers nothing to press.
 function signInRow(p) {
   const progress = signInProgress(p.signin, 'provider', p.name);
   if (!signInWanted(p, S.skipSignInWithValidToken !== false)) return progress ? '<div class="signin">' + progress + '</div>' : '';
@@ -1181,10 +998,6 @@ export function wireThemeChoice(root) {
   root.querySelectorAll('[data-theme-choice]').forEach(sel => { sel.onchange = () => { if (typeof S.setThemeChoice === 'function') S.setThemeChoice(sel.value); }; });
 }
 
-// THE ROUTE: what the name points at, chosen from what the certificate
-// service advertises, over a private connection only. A relay carries the
-// public internet to this dashboard, so it is offered only while the
-// dashboard asks for its access token; the host refuses it otherwise.
 function routeHTML(p, c) {
   if (!p || !p.name) return '';
   const mode = p.route_mode || 'direct';
@@ -1253,8 +1066,6 @@ export function wireUpdateCheck(root) {
   root.querySelectorAll('[data-update-check]').forEach(btn => { btn.onclick = () => { btn.disabled = true; send({ type: 'update_check' }); }; });
   root.querySelectorAll('[data-update-restart]').forEach(btn => { btn.onclick = () => { btn.disabled = true; btn.textContent = 'Relaunching\u2026'; send({ type: 'restart' }); }; });
 }
-// The way into a section from elsewhere on the page: the microphone opens
-// Speech with its service field focused.
 S.openSettings = (section, focusID) => {
   sec = section;
   provOpen = null;
@@ -1270,17 +1081,12 @@ S.renderBackups = () => { if (S.view === 'settings' && sec === 'backups') render
 S.renderSandbox = () => { if (S.view === 'settings' && sec === 'sandbox') renderSettings(); };
 S.renderMailRepair = () => { if (S.view === 'settings' && sec === 'held-mail') renderSettings(); };
 S.renderMessages = () => { if (S.view === 'settings' && sec === 'messages') renderSettings(); };
-// The Identity page's link, and anything else that means "take me there".
 export function openBackups() { sec = 'backups'; }
-// The section named by the address (#/settings/<section>): true when it
-// moved. A name that is not a section changes nothing.
 S.settingsSection = name => {
   if (!SECTIONS.some(([id]) => id === name) || sec === name) return false;
   sec = name; provOpen = null;
   return true;
 };
-// Selection may precede connection. The frame requests the selected section
-// on entry and reconnect; restoring an address itself performs no I/O.
 S.requestSettingsSection = () => {
   if (!S.connected) return;
   if (sec === 'backups') requestBackups();
@@ -1288,8 +1094,6 @@ S.requestSettingsSection = () => {
   if (sec === 'messages') requestMessages();
 };
 S.settingsAddress = () => '#/settings/' + sec;
-// The address follows the section shown, in place: a reload returns to it,
-// and switching sections adds no history entries.
 function addressSection() {
   if (S.view !== 'settings') return;
   const want = S.settingsAddress();
@@ -1410,10 +1214,6 @@ function providersHTML() {
   if (prov.waiting()) html += '<div class="config-result" data-announce>Saving ' + esc(prov.waiting().name) + '… waiting for the runtime to confirm.</div>';
   else if (provBroken.waiting()) html += '<div class="config-result" data-announce>' + (provBroken.waiting().type === 'provider_repair' ? 'Repairing ' : 'Removing ') + esc(provBroken.waiting().label) + '… waiting for the runtime to confirm.</div>';
   else if (provResult) html += '<div class="config-result ' + provResult.kind + '" data-announce>' + esc(provResult.text) + '</div>';
-  // SPEECH-ONLY SERVICES ARE NOT LISTED HERE. They have nothing to think
-  // with; their place is Settings → Speech, where their keys are entered and
-  // their models and voices asked for. The row index stays the entry's
-  // index in the file, so editing and removal keep addressing the right one.
   const speechOnly = S.providers.filter(p => p.chat === false);
   const chatRows = S.providers.map((p, i) => {
       if (p.chat === false) return '';
@@ -1441,12 +1241,6 @@ function providersHTML() {
   html += '</div>';
   return html;
 }
-// A BROKEN ENTRY IS SHOWN, NOT HIDDEN. providers.json is admitted entry by
-// entry; an entry the runtime refused is kept in the file as written and used
-// by nothing. Its row says why, and offers Remove and, when the runtime knows
-// one small change that admits it, Repair, named for what it changes. Each
-// action names the entry by its position and digest, so an entry edited by
-// hand since the page was drawn is refused rather than guessed at.
 function brokenProvidersHTML() {
   const broken = S.brokenProviders || [];
   if (!broken.length) return '';
@@ -1510,7 +1304,6 @@ function commitProvider(tag) {
       diagnostics: !!$('pv-cache-diag-' + tag)?.checked,
     },
     default: $('pv-def-' + tag).checked,
-    // This card edits chat providers; a save here declares the entry chats.
     chat: true,
   };
   const temp = fnum('pv-temp-' + tag);
@@ -1539,7 +1332,7 @@ export function acceptProviderSave(requestID) {
   if (added) {
     const got = S.providers.find(p => p.name === added.name);
     if (got && (!added.sentKey || got.has_key)) {
-      if (added.sentKey) forgetSpeechLists(added.name); // its lists are asked again with the key
+      if (added.sentKey) forgetSpeechLists(added.name);
       if (added.remaining.length) {
         const [next, ...remaining] = added.remaining;
         readySpeechService(added.section, next.provider, next.key, next.baseURL, added.changes, added.editor, remaining, added.echo);
@@ -1581,15 +1374,6 @@ export function rejectProviderSave(message, requestID) {
   return true;
 }
 
-// FOCUS OUTLIVES A REBUILD. Every answer rebuilds this page, and the control
-// that had focus went with the old one, leaving focus on the page itself: the
-// next key started again from the top. The control is found again by what
-// names it (its tag and id, or its tag and data attributes, and which of those
-// alike it was) and given focus back with its text selection. A control that
-// is disabled until its answer comes cannot hold focus, whether a rebuild or
-// its own press disabled it: focus that falls from it to nothing is owed to
-// it, and the rebuild that enables it again gives it back, unless focus has
-// gone somewhere else meanwhile.
 let focusOwed = null;
 const controlName = el => el.tagName + (el.id ? '#' + el.id
   : [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => '[' + a.name + '=' + a.value + ']').join(''));
@@ -1641,8 +1425,6 @@ export function renderSettings() {
   else if (sec === 'updates') html += updateCardHTML(S.update || null);
   else if (sec === 'sandbox') html += sandboxCardHTML() || '<div class="card"><div class="empty">loading sandbox…</div></div>';
   else if (sec === 'tools') html += toolsHTML();
-  // A rebuild that changes what a status line says is news; opening another
-  // section is not (announce.js).
   renderInto(st, html, st.dataset.section !== sec);
   st.dataset.section = sec;
   restoreEditors(st, active);
@@ -1654,8 +1436,6 @@ export function renderSettings() {
     captureEdits(st, e.target);
     showDraftNotice(st);
   };
-  // Do not interrupt an IME composition; one redraw after it ends uses the
-  // latest host state. No timer, network operation or replayed save is added.
   st.oncompositionstart = () => { st.settingsComposing = true; };
   st.oncompositionend = () => {
     st.settingsComposing = false;
@@ -1706,7 +1486,7 @@ export function renderSettings() {
   st.querySelectorAll('[data-prov-cancel]').forEach(btn => { btn.onclick = () => {
     const editor = btn.closest('[data-provider-editor]');
     editorFields(editor).forEach(el => edits.delete(fieldKey(el)));
-    editor.remove(); // do not recapture discarded or invalid input on redraw
+    editor.remove();
     provOpen = null; renderSettings();
   }; });
   wireUpdateCheck(st);
@@ -1743,9 +1523,6 @@ export function renderSettings() {
   focusAfter(st, had);
   addressSection();
 }
-// THE ADDRESS BOOK IS EDITED WHOLE. The page holds one draft of every
-// line, in order, and the configuration door keeps all of it or none;
-// order is preference. A refusal leaves the draft as it was.
 let contactDraft = null;
 const contactLine = c => ({ name: c.name || '', channel: c.channel || '', address: c.address || '', wake: !!c.wake, operator: !!c.operator });
 const contactLines = () => contactDraft || ((S.config && S.config.contacts) || []).map(contactLine);
@@ -1788,9 +1565,6 @@ function saveContacts() {
   const card = document.querySelector('#settings-stack [data-contacts]');
   if (card) contactDraft = readContacts(card);
   const sent = cleanContacts(contactLines());
-  // Acknowledged by this save's own answer: the draft retires only if it
-  // is still what was sent, and the lists below are read again, since
-  // who a sender is may have changed.
   sendConfigChanges('contacts', { contacts: sent }, { fields: new Map(), saved() {
     const newer = !!contactDraft && JSON.stringify(cleanContacts(contactDraft)) !== JSON.stringify(sent);
     if (!newer) contactDraft = null;
@@ -1829,8 +1603,6 @@ function saveSettings(section, collecting = false) {
   } else if (section === 'updates') {
     ch['updates.automatic'] = !!$('cfg-uauto').checked;
   } else if (section.startsWith('grants:')) {
-    // One plugin's boolean grants (plugins.js grantsHTML): every box is
-    // sent, so an unchecked one withdraws.
     const id = section.slice('grants:'.length);
     document.querySelectorAll('[data-grant-plugin="' + id.replace(/"/g, '\\"') + '"]').forEach(el => {
       ch['plugins.grants.' + id + '.' + el.dataset.grantField] = !!el.checked;
@@ -1841,14 +1613,9 @@ function saveSettings(section, collecting = false) {
     document.querySelectorAll('[data-pset-plugin="' + id.replace(/"/g, '\\"') + '"]').forEach(el => {
       const key = 'plugins.settings.' + id + '.' + el.dataset.psetKey;
       const type = el.dataset.psetType;
-      // A forget box sends a clear ONLY when it is ticked: an untouched
-      // orphan is left alone, never discarded by saving the card.
       if (type === 'forget') { if (el.checked) ch[key] = null; }
       else if (type === 'boolean') ch[key] = !!el.checked;
       else if (type === 'number' || type === 'integer') {
-        // An integer is sent as the number typed, whole or not: the
-        // host holds it to the declaration and names a fraction by
-        // key, the same refusal a value outside its bounds gets.
         const n = el.value.trim() === '' ? NaN : Number(el.value); ch[key] = isNaN(n) ? null : n;
       }
       else if (type === 'secret') { const v = accountChoice(el); if (v !== undefined) ch[key] = v; }
@@ -1859,31 +1626,19 @@ function saveSettings(section, collecting = false) {
     const sp = (S.config && S.config.speech) || {};
     const chosen = $('sp-provider-' + dir).value, own = ownServer(chosen, sp);
     const baseURL = own ? $('sp-base-' + dir).value.trim() : '';
-    // The operator's own server is named by where it answers: a new
-    // address is a new entry, and one already added is reused.
     const provider = own ? ownServerName(baseURL) : chosen;
     if (own && !provider) { configResult = { kind: 'bad', section: section, text: 'An OpenAI-compatible engine needs the address its server answers at, such as http://localhost:8000/v1.' }; return; }
     const svc = speechService(provider, sp);
     ch['speech.' + dir + '.provider'] = provider;
-    // A field this engine does not read is not a field it keeps: the model
-    // Cartesia never asked for is cleared, not carried from the last engine.
     ch['speech.' + dir + '.model'] = pickedValue('sp-model-' + dir);
     if (dir === 'stt') ch['speech.stt.language'] = $('sp-language-stt') ? $('sp-language-stt').value.trim() : '';
     else ch['speech.tts.voice'] = pickedValue('sp-voice-tts');
     const ceiling = $('sp-ceiling-' + dir);
     if (ceiling) {
-      // A number field may carry 1e6, which parseInt reads as 1: the
-      // value is read as a number, and only a whole one is a ceiling.
       const n = ceiling.value.trim() === '' ? 0 : Number(ceiling.value);
       if (!Number.isInteger(n) || n < 0) { configResult = { kind: 'bad', section: section, text: 'A monthly ceiling is a whole number, or empty for none.' }; return; }
       ch['speech.' + dir + '.' + (dir === 'stt' ? 'monthly_minutes' : 'monthly_characters')] = n;
     }
-    // THE ENGINE'S OWN TUNABLES SAVE WITH THE HALF THEY BELONG TO. The
-    // package declared them as being about hearing or speaking, so
-    // Save here is what an operator expects to put them in force —
-    // having to find the plugin's own card afterwards would make this
-    // card a display rather than a control. They travel under the same
-    // key its own card uses, because it is the same setting.
     const box = $('sp-engine-settings-' + dir);
     if (box && svc && svc.plugin) {
       box.querySelectorAll('[data-pset-plugin]').forEach(el => {
@@ -1905,17 +1660,12 @@ function saveSettings(section, collecting = false) {
       else { readySpeechService(section, provider, key, baseURL, ch); return; }
     }
   } else if (section === 'speech_speakers') {
-    // The whole policy, as one object: the host accepts it whole or not at all.
     const mode = $('sp-speakers-mode').value;
     const uids = mode === 'all' ? [] : [...new Set($('sp-speakers-uids').value.trim().split(/[\s,]+/).filter(Boolean))];
     const pol = { mode: mode, uids: uids };
     if (mode === 'ignore') pol.unidentified = $('sp-speakers-unid').value;
     ch['speech.speakers'] = pol;
   } else if (section === 'speech_mode') {
-    // THE PAIR IS ONE VALUE, so both halves travel every time: a change
-    // that named one half would set the other back to the default, and
-    // the operator changing what the microphone does would silently
-    // change whether replies are spoken.
     ch['speech.mode'] = { listen: $('sp-mode-listen').value, speak: $('sp-mode-speak').value };
   } else if (section === 'route') {
     const v = $('cfg-route').value;
@@ -1943,19 +1693,12 @@ function saveSettings(section, collecting = false) {
   sendConfigChanges(section, ch, submittedEditor(section));
 }
 
-// A PLUGIN'S ACCOUNT is sent as a change, or to grant a stored
-// choice not yet granted — never as a copy of a choice the host can no
-// longer hold, which would refuse the card's other settings with it.
-// Remove, not Save, forgets one. undefined sends nothing.
 function accountChoice(el) {
   const picked = el.selectedOptions && el.selectedOptions[0];
   if (!el.value || !picked || picked.disabled) return undefined;
   return el.value !== (el.dataset.psetSaved || '') || el.dataset.psetGranted !== 'true' ? el.value : undefined;
 }
 
-// One user action, one configuration transaction. Provider credentials still
-// use their existing door first; no partial speech configuration is sent if
-// either service refuses. Echo is a device preference saved after host readback.
 function saveSpeechSettings() {
   if (config.waiting() || speechAdd.waiting()) return;
   const changes = {}, services = [];
@@ -1972,9 +1715,6 @@ function saveSpeechSettings() {
   } else sendConfigChanges('speech', changes, editor, echo);
 }
 
-// sendConfigChanges sends one config_set and arms the pending slot, so
-// the reply lands on the section that asked — the page's own saves and
-// the plugins page's revoke of a standing confirmation use the same path.
 export function sendConfigChanges(section, ch, editor = null, echo) {
   if (config.waiting() || speechAdd.waiting()) return;
   configResult = null;
@@ -1983,8 +1723,6 @@ export function sendConfigChanges(section, ch, editor = null, echo) {
   sendConfigStep({ section, changes: ch, editor, echo, keys, keysSaved: false });
 }
 
-// Keep the existing credential door and confirm it before the settings door.
-// A later failure never claims that earlier successful key writes rolled back.
 function sendConfigStep(pending) {
   delete pending.requestID;
   pending.key = pending.keys.shift() || null;
@@ -1997,25 +1735,17 @@ function sendConfigStep(pending) {
   }
   if (key) {
     if (keyDrafts.get(key.draftKey) === key.value) keyDrafts.delete(key.draftKey);
-    delete key.value; // sent secrets are not retained in request bookkeeping
+    delete key.value;
   }
   config.arm(pending, id);
 }
 
 export function saveConfigSection(section) { saveSettings(section); }
-// configFeedbackHTML is the page-wide line, and it now carries only what
-// belongs to no section — everything a Save button asked for is answered
-// beside that button instead (savebarHTML).
 export function configFeedbackHTML() {
   if (configResult && !configResult.section) return '<div class="config-result ' + configResult.kind + '" data-announce>' + esc(configResult.text) + '</div>';
   return '';
 }
 
-// savebarHTML puts the answer where the hand is. A button that has been
-// pressed says it is working and refuses a second press; what came back
-// stands beside it. The operator who saved the second card of a long page
-// was reading the top of that page for an answer that had already
-// arrived — under their thumb, out of sight.
 export function savebarHTML(section, note, more) {
   const owns = s => s === section || (section === 'speech' && s?.startsWith('speech_'));
   const adding = speechAdd.waiting() && owns(speechAdd.waiting().section) ? speechAdd.waiting() : null;
@@ -2025,10 +1755,6 @@ export function savebarHTML(section, note, more) {
     : checking ? '<span class="savesay" data-announce>Checking and saving… the current configuration remains active.</span>'
     : said ? '<span class="config-result ' + said.kind + '" data-said="' + esc(section) + '" data-announce>' + esc(said.text) + '</span>'
     : note ? '<span class="savesay">' + esc(note) + '</span>' : '';
-  // ONE SAVE AT A TIME. The pending slots are one per kind; a second save
-  // while the first is being checked would take its place and orphan it
-  // — its key stored and its pointer never sent. Every bar waits, and only
-  // the one that asked says it is working.
   const mine = !!adding || checking;
   const busy = mine || !!speechAdd.waiting() || !!config.waiting();
   return '<div class="savebar"><button class="btn" data-save="' + esc(section) + '"' + (busy ? ' disabled' : '') + '>' +
@@ -2039,7 +1765,6 @@ export function settingsConnectionLost() {
   mailRepairDisconnected();
   messagesDisconnected();
   let changed = false;
-  // A question asked on the lost connection is never answered: ask again.
   Object.keys(asking).forEach(k => delete asking[k]);
   const lostProv = prov.drop();
   if (lostProv) {
@@ -2071,19 +1796,10 @@ function configValue(state, path) {
   return v;
 }
 
-// A plugin's settings and grants come back on its card, not at the
-// dotted path they were sent under (the plugin id itself has dots):
-// plugins.settings.<id>.<key> is installed[id].settings[key].value and
-// plugins.grants.<id>.<field> is installed[id].grants[field]. The
-// read-back looks where the state puts them (found live:
-// every plugin-settings save said "did not come back as saved" while
-// the card showed the saved values).
 function savedValue(state, path) {
   if (path === 'identity.db_format') return state && state.database && state.database.preferred;
   if (path === 'certificate.route_mode') return state?.public_name?.route_mode;
   if (path === 'certificate.relay_endpoint') return state?.public_name?.relay_endpoint;
-  // These readbacks include status metadata. Compare only the submitted
-  // policy fields, using the same Automatic spelling as the Voice mode card.
   if (path === 'speech.mode' && state?.speech?.mode) {
     const mode = state.speech.mode;
     return { ...mode, speak: mode.speak === 'auto' ? '' : mode.speak };
@@ -2107,7 +1823,6 @@ function savedValue(state, path) {
   if (g) return g.plugin && g.plugin.grants ? g.plugin.grants[g.key] : undefined;
   return configValue(state, path);
 }
-// A cleared value comes back absent: null sent and nothing saved agree.
 function sameSaved(saved, sent) {
   if (saved === sent) return true;
   if (Array.isArray(sent)) return Array.isArray(saved) && saved.length === sent.length && sent.every((v, i) => sameSaved(saved[i], v));
@@ -2133,7 +1848,6 @@ export function acceptSettingsConfig(requestID) {
   const missed = Object.keys(pending.changes).filter(p => {
     let sent = pending.changes[p], saved = savedValue(S.config, p);
     if (p === 'speech.speakers' && sent && saved) {
-      // IDs are a set; the form removes duplicates, the host returns them sorted.
       sent = { ...sent, uids: [...new Set(sent.uids || [])].sort() };
       saved = { ...saved, uids: [...(saved.uids || [])].sort() };
     }

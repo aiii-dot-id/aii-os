@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
-	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
 
 const (
@@ -250,12 +248,14 @@ func Wipe(b []byte) {
 	}
 }
 
-func PublishSecret(data []byte, path string) (published bool, retErr error) {
-	return publish(data, path, false)
+func PublishSecret(data []byte, path string) (bool, error) {
+	published, err := atomicfile.WriteNew(path, data, 0o600)
+	return published, publishErr(published, err)
 }
 
-func PublishReplacing(data []byte, path string) (published bool, retErr error) {
-	return publish(data, path, true)
+func PublishReplacing(data []byte, path string) (bool, error) {
+	published, err := atomicfile.WriteReplace(path, data, 0o600)
+	return published, publishErr(published, err)
 }
 
 func SnapshotKeyPath(identityKeyPath string) string {
@@ -266,46 +266,12 @@ func ReceiptPath(identityKeyPath string) string {
 	return filepath.Join(filepath.Dir(identityKeyPath), ReceiptFileName)
 }
 
-func publish(data []byte, path string, replacing bool) (published bool, retErr error) {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return false, fmt.Errorf("temp create: %w", err)
-	}
-	tmp := f.Name()
-	closed := false
-	defer func() {
-		if !closed {
-			retErr = errors.Join(retErr, f.Close())
-		}
-		if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove temp: %w", err))
-		}
-	}()
-	if err := fileperm.RestrictToOwner(f); err != nil {
-		return false, fmt.Errorf("temp permissions: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		return false, fmt.Errorf("temp write: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return false, fmt.Errorf("temp sync: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		closed = true
-		return false, fmt.Errorf("temp close: %w", err)
-	}
-	closed = true
-
-	if replacing {
-		published, err = atomicfile.Replace(tmp, path)
-	} else {
-		published, err = atomicfile.PublishNew(tmp, path)
-	}
+func publishErr(published bool, err error) error {
 	if err == nil {
-		return true, nil
+		return nil
 	}
 	if published {
-		return true, fmt.Errorf("published, but directory durability is unconfirmed: %w", err)
+		return fmt.Errorf("published, but directory durability is unconfirmed: %w", err)
 	}
-	return false, fmt.Errorf("publish: %w", err)
+	return fmt.Errorf("publish: %w", err)
 }

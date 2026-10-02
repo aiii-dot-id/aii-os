@@ -39,7 +39,6 @@ const (
 type Stage string
 
 const (
-	StageDiscover  Stage = "discover"
 	StageVerify    Stage = "verify"
 	StagePolicy    Stage = "policy"
 	StageMaterial  Stage = "material"
@@ -89,7 +88,6 @@ type Refusal struct {
 	Remedy   string
 	Evidence string
 	At       time.Time
-	Attempt  int
 }
 
 func (r *Refusal) Error() string {

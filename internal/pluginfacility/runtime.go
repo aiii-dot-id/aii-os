@@ -56,6 +56,32 @@ type Prepared struct {
 	DeviceBytes *int64
 
 	Backend string
+
+	Selection *Selection
+}
+
+type Selection struct {
+	Variant string
+
+	Kept bool
+
+	Excluded []Exclusion
+}
+
+type Exclusion struct {
+	Variant string
+	Reasons []string
+}
+
+func copySelection(s *Selection) *Selection {
+	if s == nil {
+		return nil
+	}
+	c := &Selection{Variant: s.Variant, Kept: s.Kept}
+	for _, e := range s.Excluded {
+		c.Excluded = append(c.Excluded, Exclusion{Variant: e.Variant, Reasons: append([]string(nil), e.Reasons...)})
+	}
+	return c
 }
 
 type MaterialStatus struct {
@@ -74,6 +100,7 @@ type EventKind string
 
 const (
 	EventStarted    EventKind = "started"
+	EventPrepared   EventKind = "prepared"
 	EventProgress   EventKind = "progress"
 	EventActive     EventKind = "active"
 	EventRefused    EventKind = "refused"
@@ -81,7 +108,7 @@ const (
 	EventReaskEnded EventKind = "reask-ended"
 	EventRetired    EventKind = "retired"
 	EventAdmitting  EventKind = "admitting"
-	EventSuperseded EventKind = "superseded"
+	EventAdmitted   EventKind = "admitted"
 )
 
 type Event struct {
@@ -92,6 +119,7 @@ type Event struct {
 
 	Intent     string
 	Refusal    *Refusal
+	Selection  *Selection
 	Material   *MaterialStatus
 	Retirement *Retirement
 

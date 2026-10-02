@@ -108,18 +108,14 @@ func (a *App) setSandboxRoots(roots []string) error {
 	defer a.cfgMu.Unlock()
 	candidate := *a.cfg
 	candidate.Tools.ExtraRoots = normalized
-	published, persistErr := saveConfig(&candidate)
-	if persistErr != nil && !published {
-		return fmt.Errorf("persist sandbox roots: %w", persistErr)
-	}
+	published, err := a.persistLocked(&candidate, saveConfig)
 	if published {
-		*a.cfg = candidate
 		a.toolReg.SetExtraRoots(normalized)
 		a.loadRing5()
 		logsink.Info("ring.decision", "extra sandbox roots -> %v (operator setting, floor updated live)", normalized)
 	}
-	if persistErr != nil {
-		return fmt.Errorf("sandbox roots were published and applied live, but directory durability is unconfirmed: %w", persistErr)
+	if err != nil {
+		return fmt.Errorf("sandbox roots: %w", err)
 	}
 	return nil
 }
@@ -144,25 +140,21 @@ func (a *App) setToolEnabled(name string, enabled bool) error {
 	}
 	candidate := *a.cfg
 	candidate.Tools.Disabled = disabled
-	published, persistErr := saveConfig(&candidate)
-	if persistErr != nil && !published {
-		return fmt.Errorf("persist tool toggle: %w", persistErr)
-	}
+	published, err := a.persistLocked(&candidate, saveConfig)
 	if published {
-		*a.cfg = candidate
 		a.toolReg.SetToolEnabled(name, enabled)
 		logsink.Info("ring.decision", "tool %q -> %v (operator toggle)", name, enabled)
 	}
-	if persistErr != nil {
-		return fmt.Errorf("tool toggle was published and applied live, but directory durability is unconfirmed: %w", persistErr)
+	if err != nil {
+		return fmt.Errorf("tool toggle: %w", err)
 	}
 	return nil
 }
 
 func (a *App) emitToolEvent(kind, name, args string) {
-	a.toolEmitMu.Lock()
-	emit := a.toolEmit
-	a.toolEmitMu.Unlock()
+	a.turn.mu.Lock()
+	emit := a.turn.toolEmit
+	a.turn.mu.Unlock()
 	if emit != nil {
 		emit(kind, name, args)
 		return
@@ -318,7 +310,7 @@ func (a *App) continuityState() (*dashboard.ContinuityState, error) {
 		c.LifeTicks = ticks
 	}
 
-	if fac := a.reviewFacility.Load(); fac != nil {
+	if fac := a.cognition.reviewFacility.Load(); fac != nil {
 		if snap := fac.LastReview(); !snap.At.IsZero() {
 			c.ReviewAt = snap.At.Format("15:04 Mon Jan 2")
 			if snap.Clear {
@@ -439,7 +431,19 @@ func (a *App) recallForDashboard(query string) (string, error) {
 	if a.engine == nil {
 		return "", fmt.Errorf("no identity engine is running")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 15*time.Second)
 	defer cancel()
 	return a.engine.ExecuteAction(ctx, "verb", "recall", map[string]interface{}{"query": query})
+}
+
+func (a *App) wireIdentityViewHooks(h *dashboard.WSHandler) {
+
+	h.GetIdentity = a.identityState
+
+	h.Recall = a.recallForDashboard
+}
+
+func (a *App) wireWorkHooks(h *dashboard.WSHandler) {
+	h.GetWork = a.workQueueState
+	h.GradeResult = a.gradeResult
 }

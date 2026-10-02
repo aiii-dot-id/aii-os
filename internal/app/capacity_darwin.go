@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || ios
 
 package app
 
@@ -14,17 +14,21 @@ import (
 type hostCapacity struct{}
 
 func (hostCapacity) Measure() pluginfacility.Availability {
-	total, err := capacitySysctl("hw.memsize")
+	return measureDarwinCapacity(capacitySysctl)
+}
+
+func measureDarwinCapacity(read func(string) (uint64, error)) pluginfacility.Availability {
+	total, err := read("hw.memsize")
 	if err != nil || total == 0 || total > math.MaxInt64 {
 		return pluginfacility.Availability{}
 	}
-	page, err := capacitySysctl("hw.pagesize")
+	page, err := read("hw.pagesize")
 	if err != nil || page == 0 {
 		return pluginfacility.Availability{HostTotal: int64(total)}
 	}
 	var pages uint64
-	for _, name := range []string{"vm.page_free_count", "vm.page_speculative_count", "vm.page_purgeable_count"} {
-		n, err := capacitySysctl(name)
+	for _, name := range []string{"vm.page_free_count", "vm.page_pageable_external_count"} {
+		n, err := read(name)
 		if err != nil || n > math.MaxInt64-pages {
 			return pluginfacility.Availability{HostTotal: int64(total)}
 		}

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"time"
 )
@@ -49,10 +50,14 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		return
 	}
 
-	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(context.Background(), turnSourceHarvest), harvestTurnBudget)
+	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceHarvest), harvestTurnBudget)
 	defer cancelTurn()
-	spoken, recorded, err := a.wakeRecorded(turnCtx, "system", notice+" — your sub-agent finished. "+harvestFusionInstruction)
-	if err != nil {
+	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), notice+" — your sub-agent finished. "+harvestFusionInstruction)
+	switch {
+	case err != nil && spoken != "":
+
+		logsink.Warn("harvest.error", "%s: woke and spoke, but %v", sessionID, err)
+	case err != nil:
 
 		logsink.Warn("harvest.error", "%s: wake turn failed (outcome stays unharvested, resurfaces next turn): %v", sessionID, err)
 	}
@@ -60,7 +65,7 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		return
 	}
 	wakeID := fmt.Sprintf("wake_subagent_%s_%d", sessionID, time.Now().UTC().UnixNano())
-	if err := a.store.AddOutboxMessageForInteraction(wakeID, "operator", "", spoken, recorded); err != nil {
+	if err := a.deliverReply(wakeID, spoken, recorded); err != nil {
 		logsink.Warn("harvest.error", "outbox write failed: %v", err)
 	}
 	logsink.Info("harvest.end", "%s: woke and spoke (%d chars)", sessionID, len(spoken))

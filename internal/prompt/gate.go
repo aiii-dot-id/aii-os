@@ -33,32 +33,6 @@ func (g *Gate) SetMaxTokens(maxTokens int) {
 	g.maxTokens.Store(int64(maxTokens))
 }
 
-func (g *Gate) SystemForPrompt(p *Prompt) string {
-	disposed := map[string]bool{}
-	for _, s := range p.Sections {
-		if s.Source != "" {
-			disposed[s.Source] = true
-		}
-	}
-	var parts []string
-	injectUnlessDisposed := func(source, text string) {
-		if strings.TrimSpace(text) != "" && !disposed[source] {
-			parts = append(parts, text)
-		}
-	}
-	injectUnlessDisposed("ring0", g.rings.Ring0())
-	injectUnlessDisposed("ring5", g.rings.Ring5())
-	parts = append(parts, p.Text)
-	injectUnlessDisposed("ring3", g.rings.Ring3())
-	injectUnlessDisposed("ring4", g.rings.Ring4())
-	return strings.Join(parts, "\n\n")
-}
-
-func (g *Gate) SystemWithIdentity(callerContent, ring1, ring2 string) string {
-	text, _ := g.system(callerContent, ring1, ring2)
-	return text
-}
-
 func (g *Gate) SystemWithIdentitySeam(callerContent, ring1, ring2 string) (string, int) {
 	return g.system(callerContent, ring1, ring2)
 }

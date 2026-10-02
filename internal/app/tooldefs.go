@@ -20,24 +20,7 @@ import (
 const PromptToolDefinitionCeiling = 32
 
 func (a *App) buildToolDefinitions() []llm.ToolDefinition {
-	rawDefs := a.toolReg.ToolDefinitions()
-	defs := make([]llm.ToolDefinition, 0, len(rawDefs))
-	for _, raw := range rawDefs {
-		m := raw.(map[string]interface{})
-		fn := m["function"].(map[string]interface{})
-		params, _ := fn["parameters"].(map[string]interface{})
-		if params == nil {
-			params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-		}
-		defs = append(defs, llm.ToolDefinition{
-			Type: "function",
-			Function: llm.ToolFunction{
-				Name:        fn["name"].(string),
-				Description: fn["description"].(string),
-				Parameters:  params,
-			},
-		})
-	}
+	defs := a.toolReg.ToolDefinitions()
 
 	for _, d := range a.toolReg.Shadows() {
 		if d.Conflicted() {
@@ -89,30 +72,28 @@ func (a *App) buildToolDefinitions() []llm.ToolDefinition {
 	return defs
 }
 
-func readOnlyToolCall(name, argsJSON string) bool {
+func readOnlyToolCall(name string, args map[string]interface{}) bool {
 	switch name {
 	case "read", "grep", "ls", "recall":
 		return true
 	case "work":
 
-		var a struct {
-			Action string `json:"action"`
-		}
-		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
-			return false
-		}
-		return a.Action == "status" || a.Action == "measure"
+		action, _ := args["action"].(string)
+		return action == "status" || action == "measure"
 	case "shell":
-		var a struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil || strings.TrimSpace(a.Command) == "" {
-			return false
-		}
-		return readOnlyShellCommand(a.Command)
+		command, _ := args["command"].(string)
+		return strings.TrimSpace(command) != "" && readOnlyShellCommand(command)
 	default:
 		return false
 	}
+}
+
+func decodeArgs(argsJSON string) map[string]interface{} {
+	var args map[string]interface{}
+	if json.Unmarshal([]byte(argsJSON), &args) != nil {
+		return nil
+	}
+	return args
 }
 
 func readOnlyShellCommand(command string) bool {
@@ -149,7 +130,13 @@ func readOnlyShellCommand(command string) bool {
 	}
 }
 
-func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation.Observation {
+func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs conversation.Observation) {
+	seat := a.callSeat(ctx)
+	defer func() {
+		if obs.WorkSession == "" && obs.SessionReason == "" {
+			obs.WorkSession, obs.SessionReason = seat.session, seat.reason
+		}
+	}()
 	var args map[string]interface{}
 	if tc.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
@@ -184,7 +171,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 			if reason != "" {
 				detail += ": " + reason
 			}
-			return conversation.Observation{Text: fmt.Sprintf("Error: %s is not in your active offer (%s) — inspect it with tools action=show name=%s, then tools action=offer name=%s to make it callable from your next turn.", name, detail, name, name), Failed: true, ReasonCode: code}
+			return conversation.Observation{Text: fmt.Sprintf("Error: %s is not in your active offer (%s) — inspect it with tools action=show name=%s, then tools action=offer name=%s to make it callable from your next turn.", name, detail, name, name), Failed: true, Refused: true, ReasonCode: code}
 		}
 	}
 
@@ -195,23 +182,22 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 		if errors.As(err, &refusal) {
 			code = refusal.Code
 		}
-		return conversation.Observation{Text: "Error: " + err.Error(), Failed: true, ReasonCode: code}
+		return conversation.Observation{Text: "Error: " + err.Error(), Failed: true, Refused: true, ReasonCode: code}
 	}
 	tc, name, args = call, call.Function.Name, inner
 
-	subSession, isSub := ctx.Value(identity.SubagentWorkSession{}).(string)
 	countExecuted := func() {
-		if isSub {
+		if seat.actor == actorSubagent {
 
 			if name == "work" {
-				a.noteSubagentWorkCall(subSession, tc.Function.Arguments)
+				a.noteSubagentWorkCall(seat.session, args)
 			}
 			return
 		}
 
-		a.countToolCall(name, tc.Function.Arguments)
+		a.countToolCall(name, args)
 		if name == "work" {
-			a.countSuccessfulWorkCall(tc.Function.Arguments, tc.EmissionOrdinal)
+			a.countSuccessfulWorkCall(args, tc.EmissionOrdinal)
 		}
 	}
 
@@ -224,15 +210,10 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 			return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true}
 		}
 		if name == "work" && a.store != nil {
-			_, steps, independent := parseWorkDeclaration(tc.Function.Arguments)
+			_, steps, independent := workDeclaration(args)
 			if steps > 0 || independent > 0 {
-				session := subSession
-				if session == "" {
-					if ws, e := a.store.ActiveWorkSession(); e != nil {
-						return conversation.Observation{Text: "Work changed, but forecast recording could not read its session: " + e.Error(), Failed: true}
-					} else if ws != nil {
-						session = ws.ID
-					}
+				if seat.lookup != nil {
+					return conversation.Observation{Text: "Work changed, but forecast recording could not read its session: " + seat.lookup.Error(), Failed: true}
 				}
 				var sp, ip *int
 				if steps > 0 {
@@ -241,7 +222,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 				if independent > 0 {
 					ip = &independent
 				}
-				if err := a.store.RecordWorkForecast(session, interaction.TurnID(ctx), sp, ip); err != nil {
+				if err := a.store.RecordWorkForecast(seat.session, interaction.TurnID(ctx), sp, ip); err != nil {
 					return conversation.Observation{Text: "Work changed, but forecast was not recorded: " + err.Error(), Failed: true}
 				}
 			}
@@ -259,7 +240,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 			}
 
 			if act, ok := args["action"].(string); ok && act == "deliver" {
-				if sid, _ := ctx.Value(identity.SubagentWorkSession{}).(string); sid != "" {
+				if seat.actor == actorSubagent {
 					countExecuted()
 					return conversation.Observation{Text: result, EndTurn: true}
 				}
@@ -269,54 +250,74 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) conversation
 		return conversation.Observation{Text: result}
 	}
 
-	sessionReason := ""
-	actor, session := "main", ""
-	if isSub {
-		actor, session = "subagent", subSession
-	} else {
-		if a.currentMode() == ModeSafe {
-			actor = "safe"
-		}
-		if a.store != nil {
-			if ws, werr := a.store.ActiveWorkSession(); werr != nil {
-				sessionReason = "session_lookup_failed"
-			} else if ws != nil {
-				session = ws.ID
-			}
-		}
-	}
-	if session == "" && sessionReason == "" {
-		sessionReason = "no_session"
-	}
-	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: session, Reason: sessionReason})
+	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: seat.session, Reason: seat.reason})
 	started := time.Now()
 	result, err := a.toolReg.ExecuteModel(ctx, name, args)
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 
-		return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true}
+		return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true, Refused: errors.Is(err, tools.ErrUnknownTool)}
 	}
 	if result.ReasonCode == tools.ReasonHostOnly {
-		return conversation.Observation{Text: result.Text(), Failed: true}
+		return conversation.Observation{Text: result.Text(), Failed: true, Refused: true, ReasonCode: result.ReasonCode}
 	}
 	countExecuted()
 
-	a.emitPluginEventAttributed(pluginhost.TopicToolCalled, map[string]interface{}{"tool": name, "failed": result.Error != "", "duration_ms": elapsed, "actor": actor, "session": session}, sessionReason == "session_lookup_failed")
-	return conversation.Observation{Text: result.Text(), Failed: result.Error != "", Truncated: result.Truncated, DurationMS: &elapsed, WorkSession: session, SessionReason: sessionReason, ReasonCode: result.ReasonCode}
+	a.emitPluginEventAttributed(pluginhost.TopicToolCalled, map[string]interface{}{"tool": name, "failed": result.Error != "", "duration_ms": elapsed, "actor": seat.actor, "session": seat.session}, seat.lookup != nil)
+	return conversation.Observation{Text: result.Text(), Failed: result.Error != "", Refused: result.Refused, Truncated: result.Truncated, DurationMS: &elapsed, WorkSession: seat.session, SessionReason: seat.reason, ReasonCode: result.ReasonCode}
+}
+
+const (
+	actorMain     = "main"
+	actorSafe     = "safe"
+	actorSubagent = "subagent"
+)
+
+type callSeat struct {
+	actor   string
+	session string
+	reason  string
+	lookup  error
+}
+
+func (a *App) callSeat(ctx context.Context) callSeat {
+	if child, ok := ctx.Value(identity.SubagentWorkSession{}).(string); ok {
+		seat := callSeat{actor: actorSubagent, session: child}
+		if child == "" {
+			seat.reason = "no_session"
+		}
+		return seat
+	}
+	seat := callSeat{actor: actorMain}
+	if a.currentMode() == ModeSafe {
+		seat.actor = actorSafe
+	}
+	if a.store != nil {
+		ws, err := a.store.ActiveWorkSession()
+		switch {
+		case err != nil:
+			seat.reason, seat.lookup = "session_lookup_failed", err
+		case ws != nil:
+			seat.session = ws.ID
+		}
+	}
+	if seat.session == "" && seat.reason == "" {
+		seat.reason = "no_session"
+	}
+	return seat
 }
 
 func actToolCall(name, argsJSON string) bool {
+	args := decodeArgs(argsJSON)
 	switch name {
 	case "work", "tools":
 		return false
 	case "shell":
-		var a struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil || strings.TrimSpace(a.Command) == "" {
+		command, _ := args["command"].(string)
+		if strings.TrimSpace(command) == "" {
 			return true
 		}
-		return !readOnlyShellChain(a.Command)
+		return !readOnlyShellChain(command)
 	}
 	if strings.HasPrefix(name, "pl_") {
 		if i := strings.LastIndex(name, "_"); i >= 0 {
@@ -326,7 +327,7 @@ func actToolCall(name, argsJSON string) bool {
 			}
 		}
 	}
-	return !readOnlyToolCall(name, argsJSON)
+	return !readOnlyToolCall(name, args)
 }
 
 func readOnlyShellChain(command string) bool {

@@ -1,14 +1,11 @@
 module github.com/aiii-dot-id/aii-os
 
-go 1.27 // forced by stdlib crypto/mldsa (ML-DSA-87); do not lower
+go 1.27
 
-// gomobile bind requires gobind resolvable FROM THIS MODULE — without
-// the tool directive, `gomobile bind` fails on a clean checkout
-// (external review P1, 2026-08-26: Android artifacts were not
-// reproducibly buildable at HEAD).
 tool (
 	golang.org/x/mobile/cmd/gobind
 	golang.org/x/mobile/cmd/gomobile
+	golang.org/x/tools/cmd/deadcode
 	honnef.co/go/tools/cmd/staticcheck
 )
 
@@ -16,13 +13,13 @@ require (
 	filippo.io/age v1.3.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/coder/websocket v1.8.15
+	github.com/ebitengine/purego v0.11.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/trailofbits/go-slh-dsa v0.1.0
 	golang.org/x/crypto v0.55.0
-	golang.org/x/mobile v0.0.0-20260818145002-f020ddb2de58
 	golang.org/x/mod v0.39.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
@@ -39,7 +36,9 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
+	golang.org/x/mobile v0.0.0-20260818145002-f020ddb2de58 // indirect
 	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	honnef.co/go/tools v0.8.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

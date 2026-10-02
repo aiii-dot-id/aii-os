@@ -20,6 +20,8 @@ type Report struct {
 	Frozen         string
 	ManifestSHA256 string
 
+	Target string
+
 	Missing    []string
 	Duplicated []string
 	Unknown    []string

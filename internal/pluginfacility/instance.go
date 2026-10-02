@@ -20,6 +20,8 @@ type Activation struct {
 
 	Material *MaterialStatus
 
+	Selection *Selection
+
 	Admission *Admission
 	Waiting   bool
 
@@ -72,6 +74,7 @@ type Instance struct {
 	Package      string
 	PackageHash  string
 	ManifestHash string
+	Family       string
 	Desired      Desired
 	Verified     bool
 	Since        time.Time

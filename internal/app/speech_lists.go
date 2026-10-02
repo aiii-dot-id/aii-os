@@ -50,10 +50,7 @@ func (a *App) speechLists(name, direction, search, language, typedKey string) (d
 		return out, nil
 	}
 
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := a.lifetime()
 	cfg := a.configSnapshot()
 	timeout := checkTimeout(0, cfg.LLM.ProbeTimeoutSeconds)
 	svc := o.Service

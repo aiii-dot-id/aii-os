@@ -24,7 +24,7 @@ object AppRuntime : mobile.WakeScheduler {
     private val main = Handler(Looper.getMainLooper())
     private var retryFrom: mobile.Runtime? = null
     private var window: ((State) -> Unit)? = null
-    private var foreground = false // main-thread lifecycle truth, reapplied on handoff
+    private var foreground = false
 
     fun observe(callback: (State) -> Unit) {
         window = callback
@@ -126,7 +126,6 @@ object AppRuntime : mobile.WakeScheduler {
     }
 
     fun timeWake() { rt?.timeWake() }
-
 
     override fun schedule(atUnixMs: Long) {
         val ctx = appContext ?: return

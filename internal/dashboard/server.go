@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -31,6 +32,8 @@ import (
 
 //go:embed static/*
 var staticFS embed.FS
+
+const shippedPrefix = "/shipped/"
 
 const AccessTokenMaxBytes = 4096
 
@@ -248,8 +251,7 @@ type ProviderInfo struct {
 	APIType  string `json:"api_type,omitempty"`
 	Endpoint string `json:"endpoint"`
 
-	APIKey string `json:"api_key,omitempty"`
-	HasKey bool   `json:"has_key,omitempty"`
+	HasKey bool `json:"has_key,omitempty"`
 
 	Chat bool `json:"chat"`
 
@@ -293,6 +295,29 @@ type ProviderInfo struct {
 
 	CanSignIn bool        `json:"can_sign_in,omitempty"`
 	SignIn    *SignInView `json:"signin,omitempty"`
+}
+
+type ProviderEdit struct {
+	ProviderInfo
+
+	APIKey string `json:"api_key,omitempty"`
+
+	ClearKey bool `json:"clear_key,omitempty"`
+}
+
+func (e *ProviderEdit) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ProviderInfo
+		APIKey   string `json:"api_key"`
+		HasKey   *bool  `json:"has_key"`
+		ClearKey bool   `json:"clear_key"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*e = ProviderEdit{ProviderInfo: wire.ProviderInfo, APIKey: wire.APIKey,
+		ClearKey: wire.ClearKey || (wire.HasKey != nil && !*wire.HasKey)}
+	return nil
 }
 
 type CredentialInfo struct {
@@ -434,6 +459,19 @@ type PluginActivationView struct {
 	Version string           `json:"version,omitempty"`
 	Since   string           `json:"since,omitempty"`
 	Timings map[string]int64 `json:"timings_ms,omitempty"`
+
+	Selection *PluginSelectionView `json:"selection,omitempty"`
+}
+
+type PluginSelectionView struct {
+	Variant  string                `json:"variant"`
+	Kept     bool                  `json:"kept,omitempty"`
+	Excluded []PluginExclusionView `json:"excluded,omitempty"`
+}
+
+type PluginExclusionView struct {
+	Variant string   `json:"variant"`
+	Reasons []string `json:"reasons"`
 }
 
 type PluginRefusalView struct {
@@ -665,6 +703,8 @@ type PluginPendingView struct {
 
 	Lifecycle *PluginLifecycleView `json:"lifecycle,omitempty"`
 	CleanupAt string               `json:"cleanup_at,omitempty"`
+
+	Selection *PluginSelectionView `json:"selection,omitempty"`
 }
 
 type DashboardState struct {
@@ -856,7 +896,7 @@ type WSHandler struct {
 
 	GetProviders func() ProviderDirectory
 
-	SetProvider    func(ProviderInfo) error
+	SetProvider    func(ProviderEdit) error
 	SetEffort      func(level string) error
 	DeleteProvider func(name string) error
 
@@ -874,6 +914,8 @@ type WSHandler struct {
 	SpeakAhead func(text string) string
 
 	ReplyVoice func() string
+
+	VoiceSpeaker func() string
 
 	SpeakerPolicy func() *SpeakerPolicyState
 
@@ -976,6 +1018,8 @@ type StatsResponse struct {
 	VoiceModeRevision uint64 `json:"voice_mode_revision,omitempty"`
 
 	ReplyVoice string `json:"reply_voice,omitempty"`
+
+	VoiceSpeaker string `json:"voice_speaker,omitempty"`
 
 	Speakers *SpeakerPolicyState `json:"speakers,omitempty"`
 
@@ -1143,7 +1187,7 @@ type ClientMessage struct {
 	Language         string                 `json:"language,omitempty"`
 	Name             string                 `json:"name,omitempty"`
 	Q                string                 `json:"q,omitempty"`
-	Entry            *ProviderInfo          `json:"entry,omitempty"`
+	Entry            *ProviderEdit          `json:"entry,omitempty"`
 	Position         *int                   `json:"position,omitempty"`
 	EntrySHA256      string                 `json:"entry_sha256,omitempty"`
 	Input            string                 `json:"input,omitempty"`
@@ -1329,11 +1373,14 @@ func LoopbackURL(tls bool, port int) string {
 }
 
 func IsLoopback(host string) bool {
-	switch host {
-	case "127.0.0.1", "::1", "localhost", "":
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return false
+	}
+	if strings.EqualFold(h, "localhost") {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil {
+	if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
 		return ip.IsLoopback()
 	}
 	return false
@@ -1357,11 +1404,19 @@ func New(host string, port int, handler *WSHandler) *Server {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+
+		shippedOnly := false
+		if p == shippedPrefix[:len(shippedPrefix)-1] {
+			http.Redirect(w, r, shippedPrefix, http.StatusFound)
+			return
+		}
+		if rest, ok := strings.CutPrefix(p, shippedPrefix); ok {
+			p, shippedOnly = "/"+rest, true
+		}
 		if p == "/" {
 			p = "/index.html"
 		}
 		var ctype string
-		shippedOnly := false
 		switch path.Ext(p) {
 		case ".html":
 			ctype = "text/html; charset=utf-8"
@@ -1410,7 +1465,10 @@ func New(host string, port int, handler *WSHandler) *Server {
 
 		w.Header().Set("Cache-Control", "no-cache")
 
-		w.Write(data)
+		sum := sha256.Sum256(data)
+		w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
+
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 	})
 
 	mux.HandleFunc("GET /sections/{id}/{path...}", s.handleSectionFile)
@@ -1924,31 +1982,24 @@ func (s *Server) runOutboxPump(ctx context.Context) {
 		if h == nil || h.GetOutbox == nil {
 			continue
 		}
+
+		conns := s.conns(nil)
+		if len(conns) == 0 {
+
+			continue
+		}
 		items, err := h.GetOutbox()
 		if err != nil || len(items) == 0 {
 			continue
 		}
 		msg := ServerMessage{Type: "outbox", Outbox: items}
-		s.wsMu.Lock()
-		conns := make([]*websocket.Conn, 0, len(s.wsConns))
-		for c := range s.wsConns {
-			conns = append(conns, c)
-		}
-		s.wsMu.Unlock()
-		if len(conns) == 0 {
-
-			continue
-		}
-		delivered := false
-		for _, c := range conns {
-			if s.sendMsg(ctx, c, msg) == nil {
-				delivered = true
-			}
-		}
+		delivered := s.fanOut(ctx, conns, msg)
 
 		if delivered && h.MarkDelivered != nil {
 			for _, item := range items {
-				h.MarkDelivered(item.ID)
+				if err := h.MarkDelivered(item.ID); err != nil {
+					logsink.Warn("dashboard.error", "outbox item %s reached the page but was not marked delivered: %v", item.ID, err)
+				}
 			}
 		}
 	}
@@ -1960,18 +2011,9 @@ func (s *Server) PushTransient(id, content string) int {
 
 func (s *Server) PushTransientItems(items []OutboxItem) int {
 	msg := ServerMessage{Type: "outbox", Outbox: items}
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c := range s.wsConns {
-		conns = append(conns, c)
-	}
-	s.wsMu.Unlock()
-	for _, c := range conns {
+	conns := s.conns(nil)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		s.sendMsg(ctx, c, msg)
-		cancel()
-	}
+	s.fanOut(context.Background(), conns, msg)
 	return len(conns)
 }
 
@@ -1999,13 +2041,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if turnCancel != nil {
 		turnCancel()
 	}
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c := range s.wsConns {
-		conns = append(conns, c)
-	}
-	s.wsMu.Unlock()
-	for _, c := range conns {
+	for _, c := range s.conns(nil) {
 
 		c.CloseNow()
 	}
@@ -2042,15 +2078,7 @@ func (s *Server) SwapHandler(h *WSHandler) {
 	s.handler = h
 	s.mu.Unlock()
 	if h != nil && h.Interactions != nil {
-		var retired []*websocket.Conn
-		s.wsMu.Lock()
-		for c, cl := range s.wsConns {
-			if cl.interactionVersion != "1" {
-				retired = append(retired, c)
-			}
-		}
-		s.wsMu.Unlock()
-		for _, c := range retired {
+		for _, c := range s.conns(func(_ *websocket.Conn, cl *wsClient) bool { return cl.interactionVersion != "1" }) {
 			c.CloseNow()
 		}
 	}
@@ -2134,6 +2162,18 @@ func (s *Server) forgetConn(conn *websocket.Conn) bool {
 	return present
 }
 
+func (s *Server) conns(keep func(*websocket.Conn, *wsClient) bool) []*websocket.Conn {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	out := make([]*websocket.Conn, 0, len(s.wsConns))
+	for c, cl := range s.wsConns {
+		if keep == nil || keep(c, cl) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (s *Server) wsAuthorized(r *http.Request) bool {
 	return s.wsAuthorizedUnder(s.auth.Load(), r)
 }
@@ -2213,12 +2253,7 @@ func cutsOff(before, after *accessPolicy) bool {
 }
 
 func (s *Server) closeAdmitted() int {
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c := range s.wsConns {
-		conns = append(conns, c)
-	}
-	s.wsMu.Unlock()
+	conns := s.conns(nil)
 	for _, c := range conns {
 		c.CloseNow()
 	}
@@ -2297,7 +2332,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 			if s.sendMsg(ctx, conn, msg) == nil && h.MarkDelivered != nil {
 				for _, item := range items {
-					h.MarkDelivered(item.ID)
+					if err := h.MarkDelivered(item.ID); err != nil {
+						logsink.Warn("dashboard.error", "outbox item %s reached the page but was not marked delivered: %v", item.ID, err)
+					}
 				}
 			}
 		}
@@ -2765,26 +2802,34 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case "public_name_claim", "public_name_retry", "public_name_move", "public_name_state":
 			h := s.currentHandler()
-			var st PublicNameState
-			var err error
+			var act func() (PublicNameState, error)
 			switch {
 			case msg.Type == "public_name_claim" && h.PublicNameClaim != nil:
-				st, err = h.PublicNameClaim()
+				act = h.PublicNameClaim
 			case msg.Type == "public_name_retry" && h.PublicNameRetry != nil:
-				st, err = h.PublicNameRetry()
+				act = h.PublicNameRetry
 			case msg.Type == "public_name_move" && h.PublicNameMove != nil:
-				st, err = h.PublicNameMove()
+				act = h.PublicNameMove
 			case msg.Type == "public_name_state" && h.PublicNameState != nil:
-				st = h.PublicNameState()
+				st := h.PublicNameState()
+				s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "public_name", PublicName: &st})
+				continue
 			default:
 				s.sendErrorFor(ctx, conn, msg.RequestID, "public names are not available")
 				continue
 			}
-			if err != nil {
-				s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
-				continue
+
+			reqID := msg.RequestID
+			if !s.background(h, func() {
+				st, err := act()
+				if err != nil {
+					s.sendErrorFor(ctx, conn, reqID, err.Error())
+					return
+				}
+				s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "public_name", PublicName: &st})
+			}) {
+				s.sendErrorFor(ctx, conn, reqID, "identity is stopping")
 			}
-			s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "public_name", PublicName: &st})
 
 		case "restore_new":
 			s.answerRestoreNew(ctx, msg, cl.secretsOK,
@@ -3147,6 +3192,10 @@ func (s *Server) handleChat(ctx context.Context, conn *websocket.Conn, message s
 	}
 	if err != nil {
 
+		if response != "" {
+			s.broadcast(s.spokenAloud(ServerMessage{Type: "response", Message: response, Role: speaker, Done: true}))
+		}
+
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -3192,6 +3241,9 @@ func (s *Server) statusMessage(h *WSHandler) (ServerMessage, bool) {
 	if h.ReplyVoice != nil && h.SpeakMint != nil {
 		stats.ReplyVoice = h.ReplyVoice()
 	}
+	if h.VoiceSpeaker != nil {
+		stats.VoiceSpeaker = h.VoiceSpeaker()
+	}
 	if (stats.VoiceState == "plugin" && !stats.VoiceEngine) || (stats.VoiceState == "cloud" && h.HearUtterance == nil) {
 		stats.VoiceState, stats.VoiceReason, stats.VoiceSource = "setup", "", ""
 	}
@@ -3234,7 +3286,9 @@ func (s *Server) sendOutbox(ctx context.Context, conn *websocket.Conn, h *WSHand
 
 	if h.MarkDelivered != nil {
 		for _, item := range items {
-			h.MarkDelivered(item.ID)
+			if err := h.MarkDelivered(item.ID); err != nil {
+				logsink.Warn("dashboard.error", "outbox item %s reached the page but was not marked delivered: %v", item.ID, err)
+			}
 		}
 	}
 }
@@ -3302,17 +3356,7 @@ func (s *Server) broadcastProjects(ctx context.Context, h *WSHandler, skip *webs
 		return
 	}
 	msg := ServerMessage{Type: "projects", Projects: ps}
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c := range s.wsConns {
-		if c != skip {
-			conns = append(conns, c)
-		}
-	}
-	s.wsMu.Unlock()
-	for _, c := range conns {
-		s.sendMsg(ctx, c, msg)
-	}
+	s.fanOut(ctx, s.conns(func(c *websocket.Conn, _ *wsClient) bool { return c != skip }), msg)
 }
 
 func (s *Server) BroadcastConfig() {
@@ -3393,19 +3437,7 @@ func (s *Server) PushWorkspace(id string, ws *WorkspaceState) {
 		return
 	}
 	msg := ServerMessage{Type: "workspace", Workspace: ws}
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c, cl := range s.wsConns {
-		if cl != nil && cl.viewing == id {
-			conns = append(conns, c)
-		}
-	}
-	s.wsMu.Unlock()
-	for _, c := range conns {
-		ctx, cancel := context.WithTimeout(context.Background(), writeWait)
-		s.sendMsg(ctx, c, msg)
-		cancel()
-	}
+	s.fanOut(context.Background(), s.conns(func(_ *websocket.Conn, cl *wsClient) bool { return cl.viewing == id }), msg)
 }
 
 func (s *Server) sendError(ctx context.Context, conn *websocket.Conn, msg string) {
@@ -3503,30 +3535,55 @@ func pluginKeyRefusal(msg ClientMessage, secretsOK bool) string {
 }
 
 func (s *Server) sendMsg(ctx context.Context, conn *websocket.Conn, msg ServerMessage) error {
-	s.wsMu.Lock()
-	cl := s.wsConns[conn]
-	s.wsMu.Unlock()
-	if cl == nil {
-		return errors.New("connection already dropped")
+	if !s.fanOut(ctx, []*websocket.Conn{conn}, msg) {
+		return errNotSent
 	}
-	if msg.Config != nil {
+	return nil
+}
 
-		stamped := *msg.Config
-		stamped.SecretsOK = cl.secretsOK
-		msg.Config = &stamped
-	}
-	data, _ := json.Marshal(msg)
-	wctx, cancel := context.WithTimeout(ctx, writeWait)
-	defer cancel()
-	cl.mu.Lock()
-	err := conn.Write(wctx, websocket.MessageText, data)
-	cl.mu.Unlock()
-	if err != nil {
+var errNotSent = errors.New("the frame did not reach the page")
 
-		logsink.Warn("dashboard.error", "write failed (%v) — dropping client", err)
-		s.dropConn(conn)
+func (s *Server) fanOut(ctx context.Context, conns []*websocket.Conn, msg ServerMessage) bool {
+	var frames [2][]byte
+	delivered := false
+	for _, conn := range conns {
+		cl := s.client(conn)
+		if cl == nil {
+			continue
+		}
+		class := 0
+		if msg.Config != nil && cl.secretsOK {
+			class = 1
+		}
+		if frames[class] == nil {
+			m := msg
+			if m.Config != nil {
+				stamped := *m.Config
+				stamped.SecretsOK = cl.secretsOK
+				m.Config = &stamped
+			}
+			data, err := json.Marshal(m)
+			if err != nil {
+
+				logsink.Warn("dashboard.error", "a %q message could not be encoded (%v); nothing was sent", msg.Type, err)
+				return delivered
+			}
+			frames[class] = data
+		}
+		wctx, cancel := context.WithTimeout(ctx, writeWait)
+		cl.mu.Lock()
+		err := conn.Write(wctx, websocket.MessageText, frames[class])
+		cl.mu.Unlock()
+		cancel()
+		if err != nil {
+
+			logsink.Warn("dashboard.error", "write failed (%v) — dropping client", err)
+			s.dropConn(conn)
+			continue
+		}
+		delivered = true
 	}
-	return err
+	return delivered
 }
 
 func (s *Server) dropConn(conn *websocket.Conn) {
@@ -3571,8 +3628,6 @@ func (s *Server) BoundPort() string {
 }
 
 func (s *Server) BoundAddr() string { return s.boundAddr }
-
-func HostAllowedForTest(s *Server, hostPort string) bool { return s.hostAllowed(hostPort) }
 
 func (s *Server) HostAllowedForTest(hostPort string) bool { return s.hostAllowed(hostPort) }
 

@@ -15,17 +15,17 @@ type ReadTool struct{ maxBytes int }
 
 func (t *ReadTool) Name() string { return "read" }
 func (t *ReadTool) Description() string {
-	return "Read file contents. Args: file_path (required), offset (1-based first line, optional), limit (max lines, optional), byte_offset (continue INSIDE a long line, optional). A truncated result names exactly where to continue — the next line offset, or the next byte_offset when one line is longer than the cap."
+	return "Read a file as numbered lines (cat -n). Each line number and a tab are not in the file: leave them out of edit's old_string. A truncated result says where to continue."
 }
 
 func (t *ReadTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"file_path":   map[string]interface{}{"type": "string", "description": "Path to the file to read"},
-			"offset":      map[string]interface{}{"type": "integer", "description": "1-based line to start at (default 1)"},
-			"limit":       map[string]interface{}{"type": "integer", "description": "Maximum number of lines to return (default: to end of file)"},
-			"byte_offset": map[string]interface{}{"type": "integer", "description": "Byte position WITHIN the line at offset, to continue a line longer than the cap (default 0). Use the value a previous truncated result reported; boundaries are UTF-8 safe."},
+			"file_path":   map[string]interface{}{"type": "string"},
+			"offset":      map[string]interface{}{"type": "integer", "description": "First line, 1-based"},
+			"limit":       map[string]interface{}{"type": "integer", "description": "Most lines"},
+			"byte_offset": map[string]interface{}{"type": "integer", "description": "Continue inside a long line, as a truncated result says"},
 		},
 		"required": []string{"file_path"},
 	}
@@ -40,7 +40,7 @@ const (
 func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (Result, error) {
 	path, _ := args["file_path"].(string)
 	if path == "" {
-		return Result{Error: "file_path is required"}, nil
+		return Refusal(ReasonArgumentsRequired, "file_path is required"), nil
 	}
 	offset, err := intArg(args, "offset", 1)
 	if err != nil {
@@ -73,24 +73,11 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 		return Result{Error: fmt.Sprintf("limit %d is beyond the %d-line ceiling — the byte cap would truncate long before", limit, maxReadLimit)}, nil
 	}
 
-	f, st, err := openRegular(path)
+	f, _, err := openRegular(path)
 	if err != nil {
 		return Result{Error: err.Error()}, nil
 	}
 	defer f.Close()
-
-	if offset == 1 && limit == 0 && byteOffset == 0 && st.Size() <= int64(t.maxBytes) {
-		data, err := io.ReadAll(io.LimitReader(f, int64(t.maxBytes)+1))
-		if err != nil {
-			return Result{Error: err.Error()}, nil
-		}
-		if len(data) <= t.maxBytes {
-			return Result{Output: string(data)}, nil
-		}
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return Result{Error: err.Error()}, nil
-		}
-	}
 
 	r := bufio.NewReaderSize(f, 64<<10)
 	skipped, err := skipLines(ctx, r, offset-1)
@@ -135,6 +122,9 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 		}
 		if !ended && len(win) == 0 {
 
+			if kept == 0 && offset == 1 {
+				return Result{Output: "[empty file]"}, nil
+			}
 			if kept == 0 {
 				return Result{Output: "", Error: fmt.Sprintf(
 					"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)}, nil
@@ -149,17 +139,16 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 			cappedOut = true
 			break
 		}
-		sep := 0
-		if kept > 0 {
-			sep = 1
-		}
-		if out.Len()+sep+len(win) > t.maxBytes {
+
+		num := lineNumber(offset + kept)
+		if kept > 0 && out.Len()+1+len(num)+len(win) > t.maxBytes {
 			cappedOut = true
 			break
 		}
 		if kept > 0 {
 			out.WriteByte('\n')
 		}
+		out.WriteString(num)
 		out.Write(win)
 		kept++
 	}
@@ -256,7 +245,7 @@ func (t *ReadTool) pageWindow(r *bufio.Reader, win []byte, ended bool, offset, b
 			byteOffset, offset)}, nil
 	}
 	if ended && len(win) <= t.maxBytes {
-		out := string(win)
+		out := lineNumber(offset) + string(win)
 		if hasAnotherLine(r) {
 			out += fmt.Sprintf("\n[end of line %d — continue at offset %d]", offset, offset+1)
 		}
@@ -271,12 +260,14 @@ func (t *ReadTool) pageWindow(r *bufio.Reader, win []byte, ended bool, offset, b
 	}
 	next := byteOffset + cut
 	return Result{
-		Output: string(win[:cut]) + fmt.Sprintf(
+		Output: lineNumber(offset) + string(win[:cut]) + fmt.Sprintf(
 			"\n[line %d continues: bytes %d–%d shown. Continue with offset %d and byte_offset %d.]",
 			offset, byteOffset, next, offset, next),
 		Truncated: true,
 	}, nil
 }
+
+func lineNumber(n int) string { return fmt.Sprintf("%6d\t", n) }
 
 func skipLines(ctx context.Context, r *bufio.Reader, n int) (int, error) {
 	skipped := 0
@@ -341,6 +332,30 @@ func intArg(args map[string]interface{}, name string, def int) (int, error) {
 		return parsed, nil
 	}
 	return 0, fmt.Errorf("must be a whole number, got %T", v)
+}
+
+func boolArg(args map[string]interface{}, name string) (bool, error) {
+	switch v := args[name].(type) {
+	case nil:
+		return false, nil
+	case bool:
+		return v, nil
+	case string:
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return b, nil
+		}
+	}
+	return false, fmt.Errorf("%s must be true or false, got %v", name, args[name])
+}
+
+func stringArg(args map[string]interface{}, name string) (string, error) {
+	switch v := args[name].(type) {
+	case nil:
+		return "", nil
+	case string:
+		return v, nil
+	}
+	return "", fmt.Errorf("%s must be a string, got %T", name, args[name])
 }
 
 func (t *ReadTool) ReadOnly() bool { return true }

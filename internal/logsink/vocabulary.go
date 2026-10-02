@@ -1,7 +1,6 @@
 package logsink
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -45,6 +44,7 @@ var declared = []Detail{
 	{Subsystem: "workq", Aspect: AspectEnd, What: "a queued alarm finished"},
 	{Subsystem: "logs", Aspect: AspectError, What: "the logging facility could not do as it was told"},
 	{Subsystem: "logs", Aspect: AspectDecision, What: "a tap began or ended recording payloads, and the expiry it was given"},
+	{Subsystem: "logs", Aspect: AspectPass, What: "the quiet digest: what the console did not show, counted"},
 
 	{Subsystem: "turn", Aspect: AspectBudget, What: "a turn met a limit: tokens, calls, or context pressure"},
 	{Subsystem: "turn", Aspect: AspectDecision, What: "the turn decided something about the model's output"},
@@ -189,6 +189,8 @@ var declared = []Detail{
 	{Subsystem: "plugins", Aspect: AspectEnd, What: "a plugin stopped or was released"},
 	{Subsystem: "plugins", Aspect: AspectDecision, What: "what the facility chose about a package"},
 	{Subsystem: "plugins", Aspect: AspectError, What: "a plugin lifecycle step faulted"},
+	{Subsystem: "plugins", Aspect: AspectSession, What: "a plugin's relayed stderr line"},
+	{Subsystem: "broker", Aspect: AspectError, What: "a receipt the host wrote for itself could not be recorded; the act it audits stands"},
 	{Subsystem: "catalog", Aspect: AspectStart, What: "which catalog is in force, and from where"},
 	{Subsystem: "catalog", Aspect: AspectEnd, What: "a catalog refresh, install or uninstall completed"},
 	{Subsystem: "catalog", Aspect: AspectError, What: "a catalog could not be read, kept or refreshed"},
@@ -237,6 +239,7 @@ var declared = []Detail{
 	{Subsystem: "relay", Aspect: AspectError, What: "a relay connection or attach faulted"},
 	{Subsystem: "certs", Aspect: AspectDecision, What: "a stored certificate was kept or set aside"},
 	{Subsystem: "certs", Aspect: AspectRefusal, What: "a stored certificate was not used, and why"},
+	{Subsystem: "certs", Aspect: AspectError, What: "what the certificate manager knows could not be saved; the certificate itself is unaffected"},
 	{Subsystem: "providers", Aspect: AspectStart, What: "the providers file was created or loaded"},
 	{Subsystem: "providers", Aspect: AspectDecision, What: "what a provider was found to offer"},
 	{Subsystem: "providers", Aspect: AspectError, What: "a provider could not be read or reached"},
@@ -321,37 +324,4 @@ func definedGroupsFor(defined map[string][]string, detail string) []string {
 		return names[i] < names[j]
 	})
 	return names
-}
-
-func ValidateDetailName(name string) error {
-	name = strings.ToLower(strings.TrimSpace(name))
-	sub, asp, found := strings.Cut(name, ".")
-	if !found {
-		return fmt.Errorf("%q is not a detail: a detail is subsystem.aspect (try `aii log details`)", name)
-	}
-	if sub == "" || asp == "" {
-		return fmt.Errorf("%q is not a detail: both halves are needed", name)
-	}
-	known := false
-	for _, a := range aspects {
-		if Aspect(asp) == a {
-			known = true
-			break
-		}
-	}
-	if !known {
-		return fmt.Errorf("%q is not an aspect; the aspects are %s", asp, joinAspects())
-	}
-	if !IsDeclared(name) {
-		return fmt.Errorf("%q is not declared: a detail is declared where it is emitted (internal/logsink/vocabulary.go)", name)
-	}
-	return nil
-}
-
-func joinAspects() string {
-	parts := make([]string, 0, len(aspects))
-	for _, a := range aspects {
-		parts = append(parts, string(a))
-	}
-	return strings.Join(parts, ", ")
 }

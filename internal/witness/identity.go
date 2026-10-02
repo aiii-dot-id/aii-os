@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 	"os"
 	"runtime"
 	"strings"
@@ -60,13 +61,27 @@ func AsIdentityKey(kp *crypto.KeyPair) IdentityKey { return keyPairAdapter{kp} }
 
 const envelopeExpiry = 100 * 365 * 24 * time.Hour
 
-func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore) (canonical []byte, env *PublicKeyEnvelope, err error) {
+func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore, ledgerDir string) (canonical []byte, env *PublicKeyEnvelope, err error) {
 	ids, born, firstWitnessed, err := store.WitnessEnrollment()
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the record's witness enrollment: %w", err)
 	}
 	if len(ids) > 1 {
 		return nil, nil, fmt.Errorf("%w: %s", ErrEnrollmentForked, strings.Join(ids, ", "))
+	}
+	evidence := "the record"
+	pending, err := readPendingReceipt(ledgerDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the receipt pending beside the ledger: %w", err)
+	}
+	if pending != nil {
+		switch {
+		case len(ids) == 0:
+			ids, firstWitnessed = []string{pending.IdentityID}, pending.writtenAt
+			evidence = "the receipt pending beside the ledger"
+		case ids[0] != pending.IdentityID:
+			return nil, nil, fmt.Errorf("%w: the record names %s, the receipt pending beside the ledger names %s", ErrEnrollmentForked, ids[0], pending.IdentityID)
+		}
 	}
 	existing, err := store.LoadWitnessEnvelope()
 	if err != nil {
@@ -79,7 +94,7 @@ func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore) (canonical []b
 
 				return nil, nil, fmt.Errorf("stored witness envelope invalid: %w", err)
 			}
-			logsink.Warn("witness.refusal", "the stored witness envelope is invalid (%v) — rebuilding the envelope the record names", err)
+			logsink.Warn("witness.refusal", "the stored witness envelope is invalid (%v) — rebuilding the envelope %s names", err, evidence)
 		} else if len(ids) == 0 {
 			return canonical, env, nil
 		} else if id, err := DeriveIdentityID(canonical, env); err != nil {
@@ -87,7 +102,7 @@ func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore) (canonical []b
 		} else if id == ids[0] {
 			return canonical, env, nil
 		} else {
-			logsink.Warn("witness.refusal", "the stored witness envelope names %s, the record names %s — the row is not this identity's envelope; rebuilding the record's", id, ids[0])
+			logsink.Warn("witness.refusal", "the stored witness envelope names %s, %s names %s — the row is not this identity's envelope; rebuilding that one", id, evidence, ids[0])
 		}
 	}
 	if len(ids) == 0 {
@@ -109,7 +124,7 @@ func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore) (canonical []b
 		return parseIdentityEnvelope(stored)
 	}
 	if born.IsZero() || firstWitnessed.IsZero() {
-		return nil, nil, fmt.Errorf("%w: %s — the record gives no enrollment window", ErrEnvelopeUnrecoverable, ids[0])
+		return nil, nil, fmt.Errorf("%w: %s (named by %s) — the record gives no enrollment window", ErrEnvelopeUnrecoverable, ids[0], evidence)
 	}
 	canonical, env, err = recoverIdentityEnvelope(key, ids[0], born, firstWitnessed)
 	if err != nil {
@@ -123,7 +138,7 @@ func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore) (canonical []b
 	if err != nil {
 		return nil, nil, fmt.Errorf("persist the recovered witness envelope: %w", err)
 	}
-	logsink.Info("witness.decision", "witness envelope rebuilt from the record: %s, enrolled %s", ids[0], env.CreatedAt)
+	logsink.Info("witness.decision", "witness envelope rebuilt from %s: %s, enrolled %s", evidence, ids[0], env.CreatedAt)
 	return canonical, env, nil
 }
 
@@ -142,7 +157,7 @@ func buildIdentityEnvelope(key IdentityKey, created time.Time) ([]byte, *PublicK
 		Keys: []PublicKeyMaterial{{
 			Alg:                  AlgMLDSA87,
 			PublicKeyB64:         key.PublicKeyB64(),
-			PublicKeyFingerprint: sha256Prefixed([]byte(FingerprintMaterial(AlgMLDSA87, keyID, key.PublicKeyB64()))),
+			PublicKeyFingerprint: sigenvelope.PublicKeyFingerprint(AlgMLDSA87, keyID, key.PublicKeyB64()),
 		}},
 	}
 	raw, err := jsonMarshal(env)

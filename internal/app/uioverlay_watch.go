@@ -17,7 +17,7 @@ func (a *App) watchUIOverlay() {
 
 	init := a.overlaySnapshot()
 	last := init
-	a.overlayLast.Store(&init)
+	a.dash.overlayLast.Store(&init)
 	w := fsdir.New(a.bgCtx, a.gate, a.uiOverlayDir(), fsdir.Options{Heartbeat: a.watcherInterval()})
 	for {
 		select {
@@ -30,9 +30,9 @@ func (a *App) watchUIOverlay() {
 			}
 
 			paths := overlayDiff(last, now)
-			token := a.overlayToken.Add(1)
+			token := a.dash.overlayToken.Add(1)
 			last = now
-			a.overlayLast.Store(&now)
+			a.dash.overlayLast.Store(&now)
 			if a.dashboard != nil {
 				a.dashboard.BroadcastOverlayChanged(token, paths)
 			}

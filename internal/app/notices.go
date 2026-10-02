@@ -76,7 +76,7 @@ func (a *App) noticeRouteState() *dashboard.NoticeRoute {
 }
 
 func (a *App) describedRoutes() map[string]channelRoute {
-	if r := a.routes.Load(); r != nil {
+	if r := a.channels.routes.Load(); r != nil {
 		return copyRoutes(*r)
 	}
 	return map[string]channelRoute{}

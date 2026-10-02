@@ -55,8 +55,6 @@ body {
 .p-state.safe b { color:var(--bad); } .p-state.degraded b { color:var(--warn); }
 
 .nav { flex:1; padding:8px 10px; overflow-y:auto; }
-/* The destinations are buttons, reached and pressed from the keyboard,
-   drawn exactly as before. */
 .nav-item { font:inherit; -webkit-appearance:none; appearance:none; border:none; background:none; width:100%; text-align:left;
   display:flex; align-items:center; gap:11px; padding:10px 13px; margin:2px 0;
   border-radius:var(--r-md); color:var(--dim); font-size:13.5px; font-weight:500;
@@ -91,8 +89,6 @@ body {
 .pill.mode-degraded_witness b { color:var(--warn); }
 
 .views { flex:1; position:relative; min-height:0; display:flex; flex-direction:column; }
-/* A page that is not on is not there: after its fade it is hidden, so it
-   leaves the Tab order and what a screen reader announces. */
 .view { position:absolute; inset:0; overflow-y:auto; opacity:0; pointer-events:none; visibility:hidden;
   transform:translateY(6px); transition:opacity .16s ease, transform .16s ease, visibility 0s linear .16s; display:flex; flex-direction:column; }
 .view.on { opacity:1; pointer-events:auto; visibility:visible; transform:none; position:relative; flex:1; min-height:0;
@@ -130,8 +126,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .ws-table td { padding:6px 10px; border-bottom:1px solid var(--line); }
 .dim-note { color:var(--dim); font-size:13px; padding:8px 0; }
 .bad-text { color:var(--bad); }
-/* The package's own words about itself: what it is, and what it does not
-   do yet. Reads as prose, not as a field, because that is what it is. */
 .pkg-desc { font-size:13px; line-height:1.55; padding:2px 0 6px; max-width:56ch; }
 .pkg-id { padding:0 0 2px; font-family:var(--mono, ui-monospace, monospace); }
 .ws-item { padding:10px 0; border-bottom:1px solid var(--line); }
@@ -161,6 +155,10 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .proj-card:hover { transform:translateY(-3px); border-color:var(--line2); box-shadow:var(--shadow); }
 .proj-card.focused { border-color:hsl(var(--hue) 80% 62%); box-shadow:0 0 0 1px hsl(var(--hue) 80% 62% / .7), 0 10px 34px hsl(var(--hue) 80% 55% / .22); }
 .proj-card h4 { font-size:15px; font-weight:650; margin-bottom:5px; display:flex; align-items:center; gap:8px; }
+.proj-card .proj-open { all:unset; cursor:pointer; }
+.proj-card .proj-open::after { content:""; position:absolute; inset:0; border-radius:inherit; }
+.proj-card:has(.proj-open:focus-visible) { outline:2px solid hsl(var(--hue) 80% 62%); outline-offset:2px; }
+.proj-card .proj-open:focus-visible { text-decoration:underline; }
 .dot { width:7px; height:7px; border-radius:50%; background:var(--good); flex:0 0 auto; }
 .dot.closed { background:var(--faint); }
 .proj-card .desc { color:var(--dim); font-size:12.5px; line-height:1.45; min-height:18px; }
@@ -168,8 +166,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   margin-top:12px; letter-spacing:.06em; text-transform:uppercase; }
 
 #view-chat { padding:0; }
-/* The top of Chat: the Expert checkbox, the line about an active
-   notice route, and what Expert reveals. Quiet, one line when closed. */
 .expert-bar { padding:7px 26px 0; font-size:12px; color:var(--faint); }
 .expert-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; max-width:820px; margin:0 auto; }
 .expert-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:var(--dim); user-select:none; }
@@ -241,9 +237,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .steerq-h { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--acc2); margin-bottom:4px; }
 .steerq-item { font-size:12.5px; color:var(--dim); line-height:1.5; padding:2px 0; overflow-wrap:anywhere; }
 .composer-wrap { padding:12px 26px 20px; background:linear-gradient(transparent, rgba(var(--bg0-rgb),.9) 40%); position:relative; z-index:6; }
-/* THE TEXT BOX ALONE, ITS CONTROLS UNDERNEATH: one line to type in and, below
-   it and outside its border, what adds to a message on the left and how it
-   goes out on the right. Box and row share the conversation's column. */
 .composer { max-width:768px; margin:0 auto; display:flex; flex-direction:column;
   background:var(--panel2); border:1px solid var(--line); border-radius:18px; padding:3px 12px;
   box-shadow:var(--shadow); transition:border .15s, box-shadow .15s; }
@@ -253,18 +246,10 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   transition:background .12s, color .12s, box-shadow .12s, transform .12s; }
 .mic:hover:not(:disabled) { border-color:var(--acc); color:var(--acc); }
 .mic:disabled { cursor:not-allowed; opacity:.4; }
-/* Faint: nothing to speak into yet, or its service cannot be reached —
-   a press opens Speech settings. */
 .mic.faint:not(.live) { opacity:.55; }
-/* Drawn, not emoji: the emoji microphone is a slanted handset that reads as
-   a pencil at this size (found live). */
 .mic svg, .converse svg { width:17px; height:17px; display:block; margin:auto; fill:none; stroke:currentColor;
   stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .converse svg.stop { fill:currentColor; stroke:none; }
-/* THE IDENTITY IS SPEAKING, AND THIS STOPS IT. A reply spoken by a
-   service can run for a while, and until now there was no way to end it
-   short of turning the voice off in Settings. Shown only while something
-   is actually being spoken, so the row is otherwise as it was. */
 .hushb { width:32px; height:32px; flex:0 0 auto; border-radius:50%; border:1px solid var(--line);
   background:rgba(var(--ink2-rgb),.5); color:var(--faint); cursor:pointer; display:grid; place-items:center; }
 .hushb:hover { border-color:var(--acc); color:var(--acc); }
@@ -295,12 +280,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .mic-menu button:hover, .mic-menu button:focus-visible { background:rgba(var(--acc-rgb),.14); outline:none; }
 .composer-row button[hidden] { display:none; }
 
-/* THE MODE IS THE CONTROL. The glyph says which mode is in force and the
-   ring says it again in colour: earbuds is the accent — replies are
-   spoken while the microphone rests — voice off is quiet and faint, and a
-   meeting is the amber of a room being recorded. These come BEFORE the
-   live rules on purpose: a hold recording in any mode is red, like every
-   other recording, and says so over the mode's own colour. */
 .mic.earbuds, .converse.earbuds { border-color:var(--acc); color:var(--acc); }
 .mic.voice-off, .converse.voice-off { opacity:.55; }
 .mic.meeting, .converse.meeting { border-color:var(--warn); color:var(--warn); box-shadow:0 0 0 3px rgba(var(--warn-rgb),.2); }
@@ -309,12 +288,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   color:var(--white); border-color:transparent; transform:scale(1.07);
   box-shadow:0 0 0 4px rgba(var(--bad-rgb),.22); }
 @media (prefers-reduced-motion: reduce) { .mic { transition:none; } .mic.live { transform:none; } }
-/* THE ONE MICROPHONE shows its state in its own shape: idle is
-   faint; waiting (the session is opening, the microphone being granted)
-   is an amber ring; live is red, larger, and pulsing — and its glyph is
-   a stop square, because the next tap finishes. A phone has no hover and
-   no tooltip: the state must be the control itself (found live:
-   the control had no styles and "did not really change"). */
 .converse { width:38px; height:38px; flex:0 0 auto; border-radius:50%; border:1px solid var(--line);
   background:rgba(var(--ink2-rgb),.5); color:var(--faint); font-size:17px; line-height:1; cursor:pointer;
   transition:background .12s, color .12s, box-shadow .12s, transform .12s; }
@@ -338,8 +311,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .composer-tools, .composer-actions { display:flex; align-items:center; gap:8px; min-width:0; }
 .composer-tools { min-height:38px; }
 .effort { position:relative; }
-/* The level alone, as quiet text beside the microphone — how both example
-   bars print it. It takes a surface only when hovered or open. */
 .effort-btn { display:inline-flex; align-items:center; gap:4px; height:32px; padding:0 8px 0 10px; border-radius:999px;
   border:1px solid transparent; background:none; color:var(--dim); font:inherit; font-size:13px;
   white-space:nowrap; cursor:pointer; transition:background .12s, color .12s; }
@@ -359,8 +330,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .jump-latest[hidden] { display:none; }
 .jump-latest:hover { color:var(--txt); border-color:var(--acc); }
 .jump-latest svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-/* Copy sits under a message and shows on hover or keyboard focus; a screen
-   with no hover shows it faintly under the identity's replies. */
 .msg-acts { display:flex; flex-wrap:wrap; align-items:flex-start; align-self:stretch; max-width:100%; gap:4px; margin-top:3px; opacity:0; pointer-events:none; transition:opacity .12s; }
 .msg.operator .msg-acts { justify-content:flex-end; }
 .msg:hover .msg-acts, .msg:focus-within .msg-acts, .msg-acts:has(.message-context[open]) { opacity:1; pointer-events:auto; }
@@ -441,10 +410,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .savebar { margin-top:14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 .savenote { font-size:12px; color:var(--good); opacity:0; transition:opacity .2s; }
 .savenote.show { opacity:1; }
-/* THE WORDS BESIDE A BUTTON ARE VISIBLE. .savenote fades in only when
-   something adds .show, which nothing beside a save bar ever did — so
-   "Checking…", every static note and the answer to Play sample were
-   drawn at opacity 0. This is the class those use. */
 .savesay { font-size:12px; color:var(--dim); }
 
 .fb { position:absolute; inset:0; z-index:5; display:none; overflow-y:auto;
@@ -467,9 +432,10 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   padding:12px 17px; font-size:13px; color:var(--txt); box-shadow:var(--shadow);
   opacity:0; transform:translateY(8px); transition:opacity .2s, transform .2s; max-width:380px; }
 .toast.show { opacity:1; transform:none; }
+.update-notice { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:9; max-width:min(560px, calc(100vw - 32px));
+  display:flex; gap:12px; align-items:center; background:var(--panel-solid); border:1px solid var(--line2); border-radius:var(--r-md);
+  padding:10px 14px; font-size:13px; color:var(--txt); box-shadow:var(--shadow); }
 .hidden { display:none !important; }
-/* Present in the accessibility tree, drawn nowhere: the frame's one announcer
-   (announce.js). Never display:none or hidden, which would remove it. */
 .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; border:0; }
 
 @media (max-width: 767px) {
@@ -519,6 +485,7 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   #view-memory, #view-identity, #view-plugins, #view-settings { padding:18px 14px; }
   .fb-card { margin:3vh 12px 30px; padding:22px 20px 20px; }
   .toast { left:14px; right:14px; bottom:calc(70px + env(safe-area-inset-bottom)); max-width:none; }
+  .update-notice { bottom:calc(70px + env(safe-area-inset-bottom)); }
 }
 
 .sys-panel { display:flex; flex-direction:column; gap:10px; padding:2px 4px; }
@@ -575,9 +542,14 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .ws-table.fl-open .fl-file:hover td:first-child { color:var(--acc2); }
 .ws-table.fl-open .fl-dir td { color:var(--faint); }
 
-#file-viewer { position:fixed; inset:0; z-index:70;
+#file-viewer { width:auto; height:auto; max-width:none; max-height:none; margin:0; border:0; color:inherit;
+  position:fixed; inset:0; z-index:70;
   background:rgba(var(--bg0-rgb),.72); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
   display:flex; align-items:center; justify-content:center; padding:32px; }
+#file-viewer:not([open]) { display:none; }
+#file-viewer::backdrop { background:transparent; }
+.ws-table .fl-name { all:unset; cursor:pointer; }
+.ws-table .fl-name:focus-visible { outline:2px solid var(--acc); outline-offset:2px; border-radius:3px; }
 #file-viewer .fv-card { background:var(--panel2); border:1px solid var(--line2);
   border-radius:var(--r-lg); box-shadow:var(--shadow); max-width:860px; width:100%;
   max-height:82vh; display:flex; flex-direction:column; overflow:hidden; }
@@ -670,7 +642,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   .home-inner { grid-template-columns:minmax(0,1fr); }
 }
 
-/* The plugin store: search, categories, sort, a detail per row. */
 .store-bar { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
 .store-bar input[type=text] { flex:1; }
 .store-bar select { width:auto; flex:0 0 auto; }
@@ -710,7 +681,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .grant-row b { font-weight:600; }
 .grant-list { margin:6px 0; }
 
-/* the identity's questions, as cards in the thread (asks) */
 .msg.ask .body { border:1px solid rgba(var(--warn-rgb,255,180,84),.55); border-radius:8px; padding:10px 12px; }
 .msg.ask .ask-text { margin-bottom:6px; }
 .msg.ask .ask-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; }
@@ -721,7 +691,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .sp-asks .sp-kv b { font-weight:500; }
 @media (max-width: 700px) { .msg.ask .ask-bar .btn { flex:1 1 45%; } }
 
-/* connected accounts: the operator's credential routes */
 .profile { border:1px solid var(--line); border-radius:var(--r-md); padding:8px 10px; margin:6px 0; }
 .profile .chip { font-size:11px; padding:1px 6px; border-radius:8px; border:1px solid var(--line); margin-left:4px; }
 .profile .chip-connected { color:var(--good); } .profile .chip-disconnected, .profile .chip-expired { color:var(--dim); }
@@ -731,7 +700,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .profile-form h4 { margin:0 0 6px; font-size:12px; letter-spacing:.06em; }
 .svc-row { display:flex; gap:10px; align-items:center; font-size:12.5px; } .svc-row span { min-width:90px; }
 
-/* the operator's word on a result: three chips and a line (seam 2) */
 .grade-ask, .grade-said { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; }
 .grade-chip { font-size:12px; padding:2px 9px; border-radius:10px; border:1px solid var(--line); background:none; color:var(--dim); cursor:pointer; }
 .grade-chip:hover { color:var(--txt); border-color:var(--acc); }
@@ -777,7 +745,6 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .message-context > summary:hover { color:var(--txt); background:rgba(var(--line-rgb),.14); }
 .missing-start { color:var(--faint); font-size:12px; padding:4px 0; }
 
-/* ── one receipt per stretch of work ── */
 .turn-receipt { max-width:88%; margin:2px 0 6px; }
 .turn-receipt.trouble > .receipt > summary { color:var(--warn); }
 .turn-receipt.trouble > .receipt > summary::before { content:"!"; }
@@ -820,13 +787,8 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
   .composer-actions { gap:4px; flex-wrap:wrap; justify-content:flex-end; }
 }
 
-/* Native project controls keep the established appearance. */
 button.tab, button.dock-item { font:inherit; color:inherit; border:0; background:none; }
 button.dock-item { padding:0; cursor:pointer; }
 button.tab:focus-visible, button.dock-item:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
 #dashboard-auth { flex-shrink:0; }
-/* No :empty { display:none } here. It made this live region absent from the
-   accessibility tree until the sign-in prompt arrived inside it, and a region
-   that arrives with its words announces nothing. Empty, it is a block with no
-   height. */
 #dashboard-auth #dashboard-signin { width:min(768px, calc(100% - 28px)); }

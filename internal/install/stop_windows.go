@@ -107,5 +107,3 @@ func awaitStop(ctx context.Context, present func() (bool, error), ticks <-chan t
 		}
 	}
 }
-
-var ErrNotRunning = fmt.Errorf("not running")

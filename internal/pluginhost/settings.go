@@ -40,7 +40,7 @@ const (
 
 var (
 	settingKeyPattern    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	settingHandlePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+	settingHandlePattern = regexp.MustCompile(fmt.Sprintf(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,%d}$`, MaxSettingHandleBytes-1))
 
 	settingOperationPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 )
@@ -307,13 +307,13 @@ func StoredInvalid(d SettingDecl, values map[string]interface{}) string {
 	return ""
 }
 
-func DeclaresSetting(decls []SettingDecl, key string) bool {
-	for _, d := range decls {
-		if d.Key == key {
-			return true
+func (ap *ActivePlugin) Setting(key string) *SettingDecl {
+	for i := range ap.Settings {
+		if ap.Settings[i].Key == key {
+			return &ap.Settings[i]
 		}
 	}
-	return false
+	return nil
 }
 
 func SettingKeys(decls []SettingDecl) []string {
@@ -324,11 +324,11 @@ func SettingKeys(decls []SettingDecl) []string {
 	return keys
 }
 
-func loadSettings(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest) ([]SettingDecl, error) {
+func loadSettings(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) ([]SettingDecl, error) {
 	if _, present := res.FileDigests[SettingsFile]; !present {
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, SettingsFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, SettingsFile)
 	if err != nil {
 		return nil, err
 	}

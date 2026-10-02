@@ -14,11 +14,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/pluginworker"
 )
 
-const (
-	ExitDescriptorMismatch = 5
-	ExitDescriptorUnasked  = 6
-)
-
 func Run(args []string) int {
 	fs := flag.NewFlagSet("aii-plugin-worker", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -35,15 +30,15 @@ func Run(args []string) int {
 	descriptorProof := fs.String("descriptor-proof", "", "verify the host's JSON-value descriptor digest before readiness, in a deny-all instance")
 	startupTimeout := fs.Duration("startup-timeout", 0, "bound module admission and descriptor proof together; zero uses invoke-timeout")
 	if err := fs.Parse(args); err != nil {
-		return 1
+		return bbb.ExitUsage
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: aii-plugin-worker [-memory-max bytes] [-invoke-timeout dur] [-forward] <module.wasm>")
-		return 1
+		return bbb.ExitUsage
 	}
 	if *invokeTimeout <= 0 || *startupTimeout < 0 {
 		fmt.Fprintln(os.Stderr, "worker deadlines must be positive")
-		return 1
+		return bbb.ExitUsage
 	}
 	if *startupTimeout == 0 {
 		*startupTimeout = *invokeTimeout
@@ -53,14 +48,14 @@ func Run(args []string) int {
 	wasmBytes, err := os.ReadFile(modulePath)
 	if err != nil {
 		fatalf("load", "read module: %v", err)
-		return 2
+		return bbb.ExitAdmission
 	}
 
 	if *moduleSHA != "" {
 		sum := sha256.Sum256(wasmBytes)
 		if got := "sha256:" + hex.EncodeToString(sum[:]); got != *moduleSHA {
 			fatalf("load", "module digest mismatch: loaded %s, host verified %s — the artifact changed between verification and load", got, *moduleSHA)
-			return 2
+			return bbb.ExitAdmission
 		}
 	}
 
@@ -77,9 +72,9 @@ func Run(args []string) int {
 			fatalf("descriptor", "%v", err)
 			var mismatch *pluginworker.DescriptorMismatchError
 			if errors.As(err, &mismatch) {
-				return ExitDescriptorMismatch
+				return bbb.ExitDescriptorMismatch
 			}
-			return ExitDescriptorUnasked
+			return bbb.ExitDescriptorUnasked
 		}
 		if !present {
 			fmt.Fprintf(os.Stderr, "aii-plugin-worker: descriptor unproven — no %s export\n", pluginworker.ExportDescribe)
@@ -91,7 +86,7 @@ func Run(args []string) int {
 	cancel()
 	if err != nil {
 		fatalf("load", "%v", err)
-		return 2
+		return bbb.ExitAdmission
 	}
 	defer m.Close(context.Background())
 
@@ -102,17 +97,17 @@ func Run(args []string) int {
 		dcancel()
 		if derr != nil {
 			fatalf("describe", "%v", derr)
-			return 3
+			return bbb.ExitInvocation
 		}
 		if !ok {
 			fatalf("describe", "the module exports no %s", pluginworker.ExportDescribe)
-			return 2
+			return bbb.ExitAdmission
 		}
 		if _, werr := os.Stdout.Write(out); werr != nil {
 			fatalf("describe", "stdout: %v", werr)
-			return 4
+			return bbb.ExitStream
 		}
-		return 0
+		return bbb.ExitClean
 	}
 
 	fmt.Fprintf(os.Stderr, "aii-plugin-worker: event=ready module=%s artifact_class=%s memory_max=%d invoke_timeout=%s forward=%t bbb_protocol_version=%d descriptor_proof=%s\n",
@@ -123,12 +118,12 @@ func Run(args []string) int {
 		if errors.Is(err, io.EOF) {
 
 			fmt.Fprintln(os.Stderr, "aii-plugin-worker: event=shutdown reason=stdin-eof")
-			return 0
+			return bbb.ExitClean
 		}
 		if err != nil {
 
 			fatalf("stream", "read frame: %v", err)
-			return 4
+			return bbb.ExitStream
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), *invokeTimeout)
@@ -136,16 +131,16 @@ func Run(args []string) int {
 		cancel()
 		if err != nil {
 			fatalf("invoke", "%v", err)
-			return 3
+			return bbb.ExitInvocation
 		}
 		if len(resp) == 0 {
 
 			fatalf("invoke", "guest returned an empty response frame")
-			return 3
+			return bbb.ExitInvocation
 		}
 		if err := bbb.WriteFrame(os.Stdout, resp, bbb.MaxControlFrameBytes); err != nil {
 			fatalf("stream", "write frame: %v", err)
-			return 4
+			return bbb.ExitStream
 		}
 	}
 }

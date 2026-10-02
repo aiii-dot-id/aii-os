@@ -13,7 +13,7 @@ import (
 )
 
 func replayContent(role, content string) string {
-	if role == "system" {
+	if role == string(interaction.System) {
 		return replayView(content)
 	}
 	return content
@@ -49,20 +49,24 @@ func (a *App) observeChat(ctx context.Context, msg string, emit func(kind, name,
 	a.resetAsk()
 	ctx, cancel := a.beginCancellableTurn(ctx)
 	defer cancel()
-	a.toolEmitMu.Lock()
-	a.toolEmit = emit
-	a.toolEmitMu.Unlock()
-	defer func() {
-		a.toolEmitMu.Lock()
-		a.toolEmit = nil
-		a.toolEmitMu.Unlock()
-	}()
+	defer a.withToolEmit(emit)()
 	reply, err := a.handleMessageLocked(ctx, msg)
 	if a.voiceReplyShown.Swap(false) {
 
 		return "", err
 	}
 	return reply, err
+}
+
+func (a *App) withToolEmit(emit func(kind, name, args string)) (detach func()) {
+	a.turn.mu.Lock()
+	a.turn.toolEmit = emit
+	a.turn.mu.Unlock()
+	return func() {
+		a.turn.mu.Lock()
+		a.turn.toolEmit = nil
+		a.turn.mu.Unlock()
+	}
 }
 
 func (a *App) handleMessage(ctx context.Context, msg string) (string, error) {
@@ -77,10 +81,10 @@ func (a *App) handleMessage(ctx context.Context, msg string) (string, error) {
 
 func (a *App) handleMessageLocked(ctx context.Context, msg string) (string, error) {
 	ctx = withTurnSource(ctx, turnSourceOperator)
-	ref, err := a.recordConversationRef(ctx, "operator", msg)
+	ref, err := a.recordConversationRef(ctx, string(interaction.Operator), msg)
 	seq := ref.Sequence
 	if err != nil {
-		return "", fmt.Errorf("record operator turn: %w", err)
+		return "", unrecorded(fmt.Errorf("record operator turn: %w", err))
 	}
 	a.tagSpokenTurn(seq, msg)
 	return a.runTurnLocked(ctx, msg)
@@ -94,64 +98,22 @@ func (a *App) runTurnLocked(ctx context.Context, msg string) (string, error) {
 }
 
 func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error) {
-	current := llm.Message{Role: "user", Content: msg}
-	conv, omitted, err := a.buildHistory()
-	if err != nil {
-		return "", err
-	}
-	workState, err := a.buildWorkState()
-	if err != nil {
-		return "", err
-	}
 
-	facts, err := a.buildTurnFacts(true)
+	result, err := a.think(ctx, llm.Message{Role: "user", Content: msg}, false)
 	if err != nil {
 		return "", err
 	}
-	reserve, err := a.promptReserve(current, omitted+len(conv)-1)
-	if err != nil {
-		return "", err
-	}
-	p, err := a.composer.ComposeTurn(workState, facts, a.safeTurnSection(), reserve)
-	if err != nil {
-		return "", fmt.Errorf("prompt compose: %w", err)
-	}
-
-	a.carriedEvents = a.eventsCarriedBy(p.Turn)
-	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), conv, omitted, p.Turn)
-	if err != nil {
-
-		a.recordInterruptedTurnContext(ctx, result)
-		return "", err
-	}
-	a.recordTurnCost(ctx, result)
-	if result.Usage.Calls > 0 {
-		a.recordTurnEventDelivery(ctx, p.Turn)
-	}
-
-	a.markComposedHarvests()
-	a.noteYield(result.Yielded)
-	a.noteTurnShape(result.ContinuedAtCap || result.ContinuedAtPressure, result.ContinuedAtPressure)
 	finalText := result.FinalText
 
 	if result.Spoken != "" {
-		if _, err := a.recordReply(ctx, result.Spoken, result); err != nil {
-			return "", fmt.Errorf("record resident turn: %w", err)
-		}
-		return result.Spoken, nil
+		return a.answer(ctx, result.Spoken, result)
 	}
-
 	if finalText != "" {
-		if _, err := a.recordReply(ctx, finalText, result); err != nil {
-			return "", fmt.Errorf("record resident turn: %w", err)
-		}
+		return a.answer(ctx, finalText, result)
 	}
 	return finalText, nil
 }
 
-func (a *App) recordInterruptedTurn(result conversation.Result) {
-	a.recordInterruptedTurnContext(context.Background(), result)
-}
 func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversation.Result) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -164,7 +126,7 @@ func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversat
 		logsink.Warn("turn.error", "interrupted turn not recorded: %v", err)
 		return
 	}
-	if _, err := a.engine.RecordRelatedConversationRef(ctx, "system",
+	if _, err := a.engine.RecordRelatedConversationRef(ctx, string(interaction.System),
 		"[the reply above is incomplete — "+result.Interrupted+"]", ref.ID, interaction.Details{ReasonCode: "interrupted"}); err != nil {
 		logsink.Warn("turn.error", "interruption marker not recorded: %v", err)
 	}

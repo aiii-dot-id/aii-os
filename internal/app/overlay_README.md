@@ -60,9 +60,20 @@ file always restores the shipped frame**. Deletion is your undo.
 2. Write the file. Small edits, one surface at a time.
 3. The screen updates within ~2s (CSS) or reloads (JS/HTML) — the
    operator's half-typed draft is persisted across reloads (sessionStorage,
-   one-shot restore).
+   one-shot restore). While the operator has other unsaved work (a Settings
+   or plugin edit, a pasted key, a project draft, a save still waiting for
+   its answer), the reload waits: the page says the dashboard was updated
+   and reloads once that work is saved or cancelled, or when the operator
+   chooses to reload now.
 4. Deleting the file restores the shipped frame — every step here is
    reversible, so a mistake never costs more than a restore.
+5. A file that is served but stops the page from starting (a module that
+   lacks an export the frame imports, does not parse, or throws as it
+   starts) is not a fallback case. The page says so, with a link to the
+   dashboard as shipped: `/shipped/` on the same address, every frame file
+   compiled in and none of yours, while the file is fixed or deleted. An
+   `index.html` of yours that never loads `recovery.js` cannot show that link,
+   so tell your operator the address before you replace the shell.
 
 ## Escalation
 

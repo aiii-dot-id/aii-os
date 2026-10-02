@@ -6,15 +6,6 @@ import (
 	"fmt"
 )
 
-type Alarm struct {
-	AlarmID     string
-	OwnerName   string
-	Clock       string
-	Deadline    int64
-	RepeatEvery *int64
-	Payload     string
-}
-
 func (s *Store) SetAlarm(alarmID, ownerName, clock string, deadline int64, repeatEvery *int64, payload string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

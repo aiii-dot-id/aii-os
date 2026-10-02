@@ -6,18 +6,10 @@ import { send } from '../ws.js';
 import { saveConfigSection, sendConfigChanges, configFeedbackHTML, savebarHTML, captureForm, restoreForm, forgetForm } from './settings.js';
 import { settingHTML, shown, keyDrafts, keyDraftKey, choiceCache, choiceKey, accountDisclosure } from './plugin-setting.js';
 
-// The store's view state — what the operator typed, chose and opened —
-// survives the re-render every status frame causes. It is not
-// configuration and is never sent anywhere.
 const store = { q: '', cat: '', sort: 'name', open: {} };
 
-// A tier is evidence the host established, named for a person: the
-// index's letter says nothing to someone who has not read the design.
 const TIER = { T3: 'platform-signed', T2: 'reviewed', T1: 'signed', T0: 'unsigned' };
 function tierLabel(t) { return TIER[t] || (t ? esc(t) : 'unsigned'); }
-// A row names the tier the host verified for the release it runs. An
-// offering it does not run has only the index's word for its tier, and
-// the row says whose word that is.
 function metaHTML(e) {
   if (e.installed && e.installed_tier) return esc(e.installed_version || e.version) + ' · ' + tierLabel(e.installed_tier);
   return esc(e.version) + ' · the catalog says ' + tierLabel(e.tier);
@@ -165,9 +157,6 @@ function settingsHTML(c) {
     '</div>';
 }
 
-// The runtime-class ceilings: what a native engine's
-// installed runtime tree may measure, and how many retired trees stay
-// for rollback. The operator's numbers; applied at the next activation.
 function runtimeLimitsHTML(r) {
   if (!r) return '';
   const mib = n => Math.round((n || 0) / 1048576);
@@ -181,12 +170,6 @@ function runtimeLimitsHTML(r) {
     savebarHTML('plugin_runtime', 'saved — applies at the next activation');
 }
 
-// PREPARING. A verified package whose models or runtime are still
-// arriving is named here with how far the download is, what stopped
-// the last attempt and when the next one comes. Install used to return
-// and show nothing while the host fetched gigabytes, and the operator
-// clicked again or gave up; the host now downloads in the background
-// and activates on its own, and this block is where that is visible.
 function pendingHTML(pending) {
   if (!pending || !pending.length) return '';
   return pending.map(p => {
@@ -208,17 +191,9 @@ function pendingHTML(pending) {
         '<div class="dim-note">' + (p.refusal && p.refusal.class === 'transient' && p.retry_at ? 'It is tried again on its own at ' + esc(p.retry_at) + '.' : 'Nothing is downloading and nothing retries on its own. Fix what the reason names and try again, or remove it.') + '</div>' +
         '<div class="savebar"><button class="btn sm" data-plugin="retry:' + id + '">Try again</button> <button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button></div>'
       : held
-      // HELD. Wanted, verified, and not started because the identity is
-      // holding still; the sentence is the host's own and says why. There
-      // is nothing to press: it starts when the hold ends.
       ? '<div class="dim-note">' + esc(p.summary) + '</div>' +
         '<div class="dim-note">Nothing to click: it is activated on its own when the hold ends.</div>'
       : retiring
-      // STOPPING, AND NOT YET STOPPED. Nothing serves and nothing is on
-      // its way up; what the last activation held has not all come
-      // back. The row says which generation, what it still holds and
-      // when the cleanup is asked again — and offers nothing to click,
-      // because starting another engine does not make this one let go.
       ? '<div class="dim-note">' + esc(p.summary) + '</div>' + lifecycleHTML(p) +
         '<div class="dim-note">Nothing to click: the host asks the cleanup again on its own' +
         (p.cleanup_at ? ', next at ' + esc(String(p.cleanup_at).slice(11, 19)) + ' UTC' : '') +
@@ -234,15 +209,6 @@ function pendingHTML(pending) {
 function installedHTML(installed) {
   if (!installed || !installed.length) return '';
   return installed.map(p => {
-    // THE PACKAGE'S OWN WORDS COME FIRST. A card that led with an id and
-    // a version made the operator read the version as a statement of
-    // what the thing is — and a version is the author's own checkpoint
-    // ladder, which need not match what anyone calls it. The manifest of
-    // the voice engine says exactly what it is and what it cannot do yet
-    // while its version reads 0.1.0-native-cp1; the operator read the
-    // version, called the card stale, and the sentence he wanted was in
-    // the package the whole time. Title heads the card, the
-    // id and version stay beside it as the identifiers they are.
     const named = p.title ? esc(p.title) : esc(p.id);
     const head = '<h3>' + named + ' <span class="soon">' + esc(p.version) + ' · ' + esc(p.tier) + '</span></h3>' +
       (p.title ? '<div class="dim-note pkg-id">' + esc(p.id) + '</div>' : '') +
@@ -250,12 +216,6 @@ function installedHTML(installed) {
       '<div class="dim-note">' + esc(p.mode) + ', variant ' + esc(p.variant) +
       (p.tools && p.tools.length ? ' · ' + p.tools.length + ' operation' + (p.tools.length === 1 ? '' : 's') + ', reached through the tools organ, never listed in the prompt' : '') + '</div>' +
       readinessHTML(p) + startupHTML(p) + lifecycleHTML(p) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
-    // A SETTING IS SHOWN WHERE IT BELONGS, ONCE. What the package
-    // scoped to hearing or speaking is tuned beside that half of
-    // Settings → Speech, next to the engine choice it qualifies; this
-    // card keeps what is about the plugin rather than about the speech
-    // it does, and says where the rest went. Showing both here made
-    // this page a superset of a page that did not mention it.
     const all = p.settings || [];
     const elsewhere = all.filter(s => s.scope === 'hearing' || s.scope === 'speaking');
     const own = all.filter(s => !(s.scope === 'hearing' || s.scope === 'speaking'));
@@ -271,12 +231,6 @@ function installedHTML(installed) {
       savebarHTML('plugin:' + p.id, appliesNote(p)) + '</div>';
   }).join('');
 }
-// THE FACILITY'S OWN WORD ON THE CARD. The installed card is the
-// instance: its derived state and since when, every activation that
-// exists — serving, candidate, retiring — with what each stage took,
-// the admission it was granted, what a pending cleanup still holds, and
-// when a refusal is tried again. Read from one committed snapshot,
-// never from a state the page kept for itself.
 function lifecycleHTML(p) {
   const l = p.lifecycle;
   if (!l) return '';
@@ -292,14 +246,9 @@ function lifecycleHTML(p) {
   if (l.residue && l.residue.length) bits.push('still held: ' + esc(l.residue.join('; ')));
   if (l.retry_at) bits.push('tried again at ' + esc(l.retry_at));
   if (l.held) bits.push('held: ' + esc(l.held));
-  // A REPLACEMENT THAT FAILED LEAVES ITS PREDECESSOR SERVING, and the
-  // card of what still serves is the only place its reason can be read.
   const refusal = l.refusal ? '<div class="prep-err">last attempt refused: ' + esc(l.refusal.cause || '') + '</div>' + refusalDetailHTML({ refusal: l.refusal }) : '';
   return '<div class="dim-note lifecycle">' + bits.join('<br>') + '</div>' + refusal;
 }
-// A REFUSAL AN OPERATOR CAN ACT ON: where it stopped, whether waiting
-// helps, what to do, and the evidence — beside what a pending cleanup
-// still holds.
 function refusalDetailHTML(p) {
   const r = p.refusal;
   let out = '';
@@ -310,18 +259,9 @@ function refusalDetailHTML(p) {
   if (p.residue && p.residue.length) out += '<div class="dim-note">still held: ' + esc(p.residue.join('; ')) + '</div>';
   return out;
 }
-// THE ALLOWANCE THAT DECIDED WHETHER IT STARTED. An activation runs under
-// a readiness deadline resolved from three places — what the operator
-// set, what the package asked for, the ceiling that caps both — and the
-// host recorded all of it while the page showed none, so the one number
-// that decides whether an engine starts was anonymous on the card. This
-// is the recorded allowance of THIS activation, never today's config
-// re-read; a plugin without one shows nothing.
 function startupHTML(p) {
   const s = p.startup;
   if (!s) return '';
-  // AS IT WAS SET. Rounded to a tenth of a second, an accepted 25 ms
-  // read "you set 0 s; capped at the 0 s ceiling".
   const sec = ms => ms % 1000 === 0 ? (ms / 1000) + ' s' : ms + ' ms';
   const asked = s.source === 'operator' ? 'you set ' + sec(s.requested_ms)
     : s.source === 'package' ? 'the package asked for ' + sec(s.requested_ms)
@@ -329,15 +269,6 @@ function startupHTML(p) {
   return '<div class="dim-note startup-note">Allowed ' + sec(s.effective_ms) + ' to report ready — ' + esc(asked) +
     (s.capped ? '; capped at the ' + sec(s.ceiling_ms) + ' ceiling' : '; ceiling ' + sec(s.ceiling_ms)) + '.</div>';
 }
-// WHAT THE ENGINE CAME UP WITH. A native engine reports its own
-// readiness when its child is warm: how many models it loaded, what it
-// is computing on, and how long its warm probe took. The host recorded
-// it and nothing showed it, so the one fact that changes what an
-// operator should expect — running on the processor rather than the
-// graphics unit, where synthesis is several times slower — was legible
-// only in the log (the common-native checkpoint on this
-// Mac: 0.64 times real time on the processor against 0.08 with Vulkan).
-// Shown as the engine's own word, never as a promise about speed.
 function readinessHTML(p) {
   const r = p.readiness;
   if (!r) return '';
@@ -348,12 +279,6 @@ function readinessHTML(p) {
   if (!bits.length) return '';
   return '<div class="dim-note engine-ready">the engine reported itself ready: ' + bits.join(' · ') + '</div>';
 }
-// AWAITING YOUR CONFIRMATION (seam 1): an operation the plugin's
-// identity proposed that runs only when the operator confirms exactly
-// these arguments — shown for a person: the summary, each argument, and
-// the recorded text of every transcript final the arguments name, so
-// what is confirmed is what was heard. Confirm runs it once; Deny drops
-// it; an act expires on its own.
 function actsHTML(p) {
   const acts = p.acts || [];
   if (!acts.length) return '';
@@ -369,15 +294,6 @@ function actsHTML(p) {
       '<button class="btn ghost" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="deny">Deny</button></div></div>';
   }).join('') + '</div>';
 }
-// The six grants the page sets, each keyed by the capability the
-// release must be signed for: a yes for a capability the release was
-// not signed for answers nothing, so it is not offered. The lists
-// (outbound hosts, credential handles) are never typed here: a key pasted
-// on the card or an account chosen on it grants a handle and the one host
-// the package signs for, and the config file holds the rest;
-// the page shows what the file says. Files is the identity's own sandbox:
-// which folders it holds is Settings → Sandbox, one list for the identity
-// and every plugin it grants.
 const GRANTS = [
   ['interaction.read', 'interactions', 'interaction history', "Read this identity's operator-visible interaction history, including record content"],
   ['ring4.kv', 'kv', 'key-value store', 'a scoped namespace in the identity\'s store (ring4.kv)'],
@@ -395,14 +311,11 @@ function grantsHTML(p) {
   const rows = GRANTS.filter(x => caps.includes(x[0])).map(x =>
     '<label class="grant-row"><input type="checkbox" data-grant-plugin="' + esc(p.id) + '" data-grant-field="' + x[1] + '"' + (g[x[1]] ? ' checked' : '') + '>' +
     '<span><b>' + x[2] + '</b> <span class="store-hint">' + esc(x[3]) + '</span></span></label>');
-  // The connect scope, offered for every installed plugin: read only
-  // refuses, before any dispatch, an operation that writes or executes.
   rows.push('<label class="grant-row"><input type="checkbox" data-grant-plugin="' + esc(p.id) + '" data-grant-field="read_only"' + (g.read_only ? ' checked' : '') + '>' +
     '<span><b>read only</b> <span class="store-hint">operations that write or execute are refused; the plugin may look, not act</span></span></label>');
   const lists = [];
   const standing = g.auto_confirm || [];
   if (standing.length) lists.push('always confirmed, without asking: ' + standing.map(op => esc(op) + ' <button class="btn ghost" data-revoke-auto="' + esc(p.id) + '" data-op="' + esc(op) + '">revoke</button>').join(', '));
-  // A signed outbound capability names its host (net.outbound:host:port).
   if (caps.some(c => c === 'net.outbound' || c.startsWith('net.outbound:'))) lists.push('outbound hosts: ' + listed(g.hosts, 'none') + ' — granted with a key pasted or an account chosen on this card (the one host the package signs for), or set as ' + key('hosts') + ' in the config file');
   if (caps.includes('net.local')) lists.push('local network: ' + listed(g.local, 'none') + ' — a list, set as ' + key('local') + ' (an address, a range like 192.168.1.0/24, or a name on your own network, each with :port or :* for any); ' + (g.plaintext_credentials ? 'credentials may be sent in the clear to these devices' : 'a credential over plain http needs ' + key('plaintext_credentials') + ': true — anyone on your network could read it'));
   if ((p.settings || []).some(s => s.type === 'secret') || (g.handles && g.handles.length)) lists.push('credential handles: ' + listed(g.handles, 'none') + ' — granted with a key pasted or an account chosen on this card, or set as ' + key('credential_handles') + ' in the config file');
@@ -412,9 +325,6 @@ function grantsHTML(p) {
     (rows.length ? savebarHTML('grants:' + p.id, 'saved — applies to the plugin\'s next call', { label: 'Save grants' }) : '') +
     '</div>';
 }
-// detailHTML is what the verified manifest says about an installed
-// plugin: who published it, what it is, what it implements, what it was
-// signed to touch, where it runs, and the hash that names its bytes.
 function detailHTML(p) {
   const row = (k, v) => v ? '<div class="sp-kv"><span>' + k + '</span><b>' + v + '</b></div>' : '';
   const publisher = p.publisher ? esc(p.publisher) + (p.publisher_id ? ' <span class="store-hint">(certified ' + esc(p.publisher_id) + ')</span>' : '') : '';
@@ -428,20 +338,11 @@ function detailHTML(p) {
     row('package', p.package_hash && '<span title="' + esc(p.package_hash) + '">' + esc(p.package_hash.slice(0, 23)) + '…</span>') +
     '</div>';
 }
-// When a save reaches the plugin — the host's word (PluginView.applies):
-// a resident engine reads its settings as a session opens, so a
-// running spoken session keeps what it opened with; every other plugin
-// reads them at its next call.
 function appliesNote(p) {
   return p.applies === 'next_session'
     ? 'saved — the next spoken session opens with these; a session already running keeps the values it opened with'
     : 'saved — the plugin reads it on its next call';
 }
-// What a live spoken session reports it is running with — the engine's
-// own word at open (session_ready.models.operator_settings) — beside the
-// saved values, so the operator sees what is IN EFFECT and what the
-// next session will open with; a resident engine's card says so even
-// when no session is open.
 function sessionSettingsHTML(p) {
   if (p.applies !== 'next_session') return '';
   const decl = key => (p.settings || []).find(s => s.key === key);
@@ -453,16 +354,6 @@ function sessionSettingsHTML(p) {
     return '<div class="store-hint session-applied">in effect in spoken session ' + esc(id) + ' — ' + (parts.length ? parts.join(' · ') : 'the engine reported no values') + '</div>';
   }).join('');
 }
-// A choice list longer than this gets a filter box: it narrows what is
-// shown, never what is offered — the chosen value always stays listed,
-// and an empty filter lists everything.
-// The choice filter narrows the options a long list SHOWS; a match is
-// on the value or its label, case-insensitively; the selected option is
-// always listed, and an empty filter lists every choice again. The list
-// is REBUILT from the declaration's full set on each keystroke rather
-// than hidden option by option: WebKit shows a native popup's options
-// whatever their hidden attribute says, and a choice the page cannot
-// hide reliably it should not pretend to.
 function wireChoiceFilters(st) {
   st.querySelectorAll('[data-choice-filter-for]').forEach(inp => {
     const sel = inp.nextElementSibling;
@@ -478,12 +369,6 @@ function wireChoiceFilters(st) {
     };
   });
 }
-// WHAT IS ON DISK AND NOT RUNNING, AND WHY. Two different things: a
-// verified package the auto-load level keeps off, and a package that
-// was REFUSED before it had an identity to show — an archive that does
-// not verify, a directory holding more than one, an id another
-// directory already provides. A refusal is named by where it was found,
-// never by what an unverified archive says it is called.
 function skipsHTML(skips) {
   if (!skips || !skips.length) return '';
   const kept = skips.filter(s => !s.kind || s.kind === 'policy');
@@ -494,9 +379,6 @@ function skipsHTML(skips) {
     refused.map(s => '<div class="store-skip"><b>' + esc(s.package || s.dir) + '</b>' + (s.id ? ' (' + esc(s.id) + ')' : '') + ' — ' + esc(s.reason) + '</div>').join('') + '</div>' : '');
 }
 
-// The list re-renders on its own when the operator searches, sorts or
-// picks a category, so the search field keeps its focus and caret; a
-// status frame re-renders the whole page and the store state carries.
 function wireStore(st) {
   const pl = S.config && S.config.plugins;
   const list = st.querySelector('#store-list');
@@ -537,17 +419,10 @@ function wireList(st) {
   if (rf) rf.onclick = () => { rf.disabled = true; rf.textContent = 'Refreshing…'; send({ type: 'catalog_refresh' }); };
 }
 
-// connectPrefill turns a connect answer (the connector's word and the
-// chosen scope) into an open New-profile form: the template whose name
-// or service the word carries, that service read or modify, the rest
-// for the operator.
 export function connectPrefill(req, providers, installed) {
   if (!req) return null;
   const word = String(req.connector || '').toLowerCase();
   const mode = req.scope === 'modify' ? 'modify' : 'read';
-  // An installed plugin's own hint outranks the word: its secret
-  // setting names the authority and the services it speaks to.
-  // A card's own Connect names its setting.
   const plugin = (installed || []).find(p => p.id === req.connector);
   const hinted = plugin && (plugin.settings || []).find(s => s.type === 'secret' && s.oauth && (!req.setting || s.key === req.setting));
   if (hinted) {
@@ -577,7 +452,6 @@ export function renderPlugins() {
     profileDraft = connectPrefill(S.connectRequest, c.plugins.providers, c.plugins.installed);
     S.connectRequest = null;
   }
-  // A key being pasted keeps its focus and caret across the re-render.
   const active = document.activeElement;
   const typing = active && active.dataset && active.hasAttribute('data-pkey-input') ? { k: keyDraftKey(active.dataset.pkeyPlugin, active.dataset.pkeyKey), at: active.selectionStart } : null;
   st.innerHTML = configFeedbackHTML() + storeHTML(c && c.plugins) + pendingHTML(c && c.plugins.pending) + installedHTML(c && c.plugins.installed) + profilesHTML(c && c.plugins) + settingsHTML(c);
@@ -589,8 +463,6 @@ export function renderPlugins() {
   wireChoices(st);
   wireProfiles(st);
   st.querySelectorAll('[data-save]').forEach(btn => { btn.onclick = () => { saveConfigSection(btn.dataset.save); renderPlugins(); }; });
-  // The pointer at where a scoped setting is tuned opens that page on
-  // the control itself, not merely the section.
   st.querySelectorAll('[data-open-section]').forEach(a => {
     a.onclick = e => { e.preventDefault(); if (S.openSettings) S.openSettings(a.dataset.openSection, 'sp-provider-stt'); };
   });
@@ -600,8 +472,6 @@ export function renderPlugins() {
     btn.textContent = btn.dataset.actDecision === 'deny' ? 'Dropping…' : 'Running…';
     send({ type: 'plugin', plugin: { action: btn.dataset.actDecision, id: btn.dataset.actPlugin, act: btn.dataset.actId } });
   }; });
-  // Revoking a standing confirmation sends the list without it; the
-  // reply is the configuration, which re-renders the card.
   st.querySelectorAll('[data-revoke-auto]').forEach(btn => { btn.onclick = () => {
     const id = btn.dataset.revokeAuto, op = btn.dataset.op;
     const p = ((S.config && S.config.plugins && S.config.plugins.installed) || []).find(x => x.id === id);
@@ -614,16 +484,7 @@ export function renderPlugins() {
   wireStore(st);
 }
 
-// ── CONNECTED ACCOUNTS: the operator's credential routes ──
-//
-// A profile is a name the operator gives a credential and the plugins may
-// cite; the page shows what it is for and whether it is connected, never
-// a value. An oauth2 profile connects by the operator's own consent in
-// their browser (a tab, or the pasted redirect when the tab could not
-// reach this machine), or by a code entered on the authority's page
-// where the authority allows it. The form hands a client secret to the
-// host exactly once; it is written to a private file and never shown.
-let profileDraft = null; // the New-profile form's state while open
+let profileDraft = null;
 function profilesHTML(pl) {
   const profiles = (pl && pl.auth_profiles) || [];
   const providers = (pl && pl.providers) || [];
@@ -662,8 +523,6 @@ function newProfileHTML(providers) {
     ['', 'read', 'modify'].map(v => '<label><input type="radio" name="svc-' + esc(sv.name) + '" value="' + v + '"' + ((d.services[sv.name] || '') === v ? ' checked' : '') + '> ' + (v || 'no') + '</label>').join('') + '</div>').join('');
   const custom = d.provider === 'custom' ? '<label class="f">AUTHORIZE URL</label><input id="pf-auth" value="' + esc(d.authorize_url || '') + '"><label class="f">TOKEN URL</label><input id="pf-token" value="' + esc(d.token_url || '') + '"><label class="f">DEVICE URL (OPTIONAL)</label><input id="pf-device" value="' + esc(d.device_url || '') + '"><label class="f">REVOKE URL (OPTIONAL)</label><input id="pf-revoke" value="' + esc(d.revoke_url || '') + '">' : '';
   const hosts = d.hosts != null ? d.hosts : (prov ? prov.hosts.join(', ') : '');
-  // Where the finished account is chosen: on the plugin's card,
-  // whose save grants it — never a config-file chore.
   const choose = d.handle ? 'choose it for <b>' + esc(d.title || d.handle) + '</b> on ' + esc(d.plugin) + '\'s card — saving there grants the plugin its handle and the one host its package signs for' : '';
   const why = d.fromCard ? '<div class="dim-note">An account for ' + esc(d.plugin) + ': finish the profile below and Connect it, then ' + choose + '.</div>'
     : d.connector ? '<div class="dim-note">Your identity asked to connect <b>' + esc(d.connector) + '</b> (' + esc(d.scope === 'modify' ? 'read and modify' : 'read only') + '). Finish the profile below, then Connect it' + (choose ? ', then ' + choose : '; the plugin that needs it cites this profile by name as its handle') + '.</div>' : '';
@@ -690,7 +549,6 @@ function readDraft() {
   d.authorize_url = val('pf-auth').trim(); d.token_url = val('pf-token').trim(); d.device_url = val('pf-device').trim(); d.revoke_url = val('pf-revoke').trim();
   return d;
 }
-// A looked-up setting asks its plugin once when first drawn, and on Refresh.
 function wireChoices(st) {
   const ask = (plugin, key) => {
     choiceCache.set(choiceKey(plugin, key), { pending: true });
@@ -709,7 +567,7 @@ function wireKeys(st, typing) {
     const k = keyDraftKey(inp.dataset.pkeyPlugin, inp.dataset.pkeyKey);
     if (keyDrafts.has(k)) inp.value = keyDrafts.get(k);
     inp.oninput = () => { if (inp.value) keyDrafts.set(k, inp.value); else keyDrafts.delete(k); };
-    if (typing && typing.k === k) { inp.focus(); try { inp.setSelectionRange(typing.at, typing.at); } catch (e) { /* not a text field */ } }
+    if (typing && typing.k === k) { inp.focus(); try { inp.setSelectionRange(typing.at, typing.at); } catch (e) { } }
   });
   st.querySelectorAll('[data-pkey-remove]').forEach(b => { b.onclick = () => {
     const account = b.dataset.pkeyAccount;
@@ -722,9 +580,6 @@ function wireKeys(st, typing) {
     send({ type: 'plugin_key_clear', plugin_key: { plugin: b.dataset.pkeyPlugin, key: b.dataset.pkeyKey } });
   }; });
 }
-// An account's disclosure follows the choice before Save; Connect a
-// … account opens the New profile form prefilled from the hint — the same
-// route a connect card from the thread takes, never a second sign-in.
 function wireAccounts(st) {
   st.querySelectorAll('select[data-pset-type="secret"]').forEach(sel => {
     const said = sel.closest('.store-setting')?.querySelector('[data-pacct-grants]');

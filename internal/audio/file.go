@@ -1,8 +1,8 @@
 package audio
 
 import (
+	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -25,18 +25,26 @@ func NewFileSource(r io.Reader, f Format, chunkSamples int) (*FileSource, error)
 		chunkSamples = 320
 	}
 	br := &peekReader{r: r}
+	src := io.Reader(br)
 	head, err := br.peek(12)
 	if err == nil && string(head[0:4]) == "RIFF" && string(head[8:12]) == "WAVE" {
-		wf, err := readWAVHeader(br)
+		file, err := io.ReadAll(br)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("audio: wav: %w", err)
 		}
-		f = wf
+		w, err := ReadWAV(file)
+		if err != nil {
+			return nil, fmt.Errorf("audio: %w", err)
+		}
+		if w.Tag != 1 || w.Bits != 16 {
+			return nil, errors.New("audio: only 16-bit PCM WAV is read")
+		}
+		f, src = w.Format, bytes.NewReader(w.PCM)
 	}
 	if f.Rate <= 0 || f.Channels <= 0 {
 		return nil, errors.New("audio: a file source needs a rate and channels")
 	}
-	return &FileSource{f: f, r: br, chunk: chunkSamples, stream: 1}, nil
+	return &FileSource{f: f, r: src, chunk: chunkSamples, stream: 1}, nil
 }
 
 func (s *FileSource) Format() Format { return s.f }
@@ -67,26 +75,12 @@ func (s *FileSource) Read(ctx context.Context) (Frame, error) {
 		s.ended = true
 		return fr, nil
 	}
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return Frame{}, err
 	}
 	s.ended, s.endSent = true, true
 	s.seq++
 	return Frame{Kind: KindEnd, Stream: s.stream, Seq: s.seq, Start: s.next}, nil
-}
-
-func readWAVHeader(r io.Reader) (Format, error) {
-	var h [44]byte
-	if _, err := io.ReadFull(r, h[:]); err != nil {
-		return Format{}, fmt.Errorf("audio: wav header: %w", err)
-	}
-	if string(h[12:16]) != "fmt " || binary.LittleEndian.Uint16(h[20:22]) != 1 || binary.LittleEndian.Uint16(h[34:36]) != 16 {
-		return Format{}, errors.New("audio: only canonical 16-bit PCM WAV is read")
-	}
-	if string(h[36:40]) != "data" {
-		return Format{}, errors.New("audio: only a canonical 44-byte WAV header is read")
-	}
-	return Format{Rate: int(binary.LittleEndian.Uint32(h[24:28])), Channels: int(binary.LittleEndian.Uint16(h[22:24]))}, nil
 }
 
 type peekReader struct {
@@ -198,9 +192,3 @@ func (c *CaptureSink) End() int64 {
 	}
 	return -1
 }
-
-type NullSink struct{ F Format }
-
-func (n NullSink) Format() Format                     { return n.F }
-func (n NullSink) Write(context.Context, Frame) error { return nil }
-func (n NullSink) Close() error                       { return nil }

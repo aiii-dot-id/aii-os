@@ -144,3 +144,19 @@ func (t *shellTree) close() {
 func normalizeShellOutput(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
+
+func invocationExempt(token string) bool {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		return false
+	}
+	clean := filepath.Clean(token)
+	if !filepath.IsAbs(clean) {
+		return false
+	}
+	sys := filepath.Clean(filepath.Join(root, "System32"))
+	if strings.EqualFold(clean, sys) {
+		return true
+	}
+	return len(clean) > len(sys) && strings.EqualFold(clean[:len(sys)], sys) && os.IsPathSeparator(clean[len(sys)])
+}

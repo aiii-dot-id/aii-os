@@ -7,7 +7,3 @@ const (
 	ConfigFileName    = install.ConfigFileName
 	ProvidersFileName = install.ProvidersFileName
 )
-
-func DefaultConfigPath() string { return install.ConfigPathIn("") }
-
-func ConfigPathIn(dir string) string { return install.ConfigPathIn(dir) }

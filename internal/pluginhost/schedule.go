@@ -66,11 +66,11 @@ func ParseSchedule(raw []byte, methods []string) ([]ScheduleDecl, error) {
 	return decls, nil
 }
 
-func loadSchedule(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest) ([]ScheduleDecl, error) {
+func loadSchedule(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) ([]ScheduleDecl, error) {
 	if _, present := res.FileDigests[ScheduleFile]; !present {
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, ScheduleFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, ScheduleFile)
 	if err != nil {
 		return nil, err
 	}

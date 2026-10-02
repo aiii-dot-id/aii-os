@@ -24,3 +24,11 @@ func WithModelID(ctx context.Context, modelID string) context.Context {
 }
 
 func ModelIDFromContext(ctx context.Context) string { return wire.ModelIDFromContext(ctx) }
+
+func FormatToolResult(toolCallID, content string) Message {
+	return Message{
+		Role:       "tool",
+		Content:    content,
+		ToolCallID: toolCallID,
+	}
+}

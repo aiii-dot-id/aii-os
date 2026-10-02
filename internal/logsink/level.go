@@ -117,21 +117,6 @@ func ParseLevel(name string) (slog.Level, error) {
 	return 0, fmt.Errorf("logsink: %q is not a level (trace, debug, info, warn, error)", name)
 }
 
-func LevelName(l slog.Level) string {
-	switch {
-	case l <= LevelTrace:
-		return "trace"
-	case l <= slog.LevelDebug:
-		return "debug"
-	case l <= slog.LevelInfo:
-		return "info"
-	case l <= slog.LevelWarn:
-		return "warn"
-	default:
-		return "error"
-	}
-}
-
 func ParseDirective(s string) (slog.Level, map[string]slog.Level, error) {
 	def := slog.LevelInfo
 	cat := map[string]slog.Level{}

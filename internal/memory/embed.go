@@ -58,7 +58,7 @@ func (f *Facility) embedQuery(ctx context.Context, text string) (*queryVector, M
 	return &queryVector{basis: basis, q: q, scale: scale}, MeaningStatus{Status: StatusFoundNothing, Basis: basis}
 }
 
-func layerMeaning(ctx context.Context, db *sql.DB, d Store, q Query, qv *queryVector, pool int) ([]Hit, error) {
+func layerMeaning(ctx context.Context, db store.Reader, d Store, q Query, qv *queryVector, pool int) ([]Hit, error) {
 	where, args := predicates(d, q, true)
 	from := " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ?"
 	if where != "" {
@@ -157,7 +157,7 @@ func (f *Facility) VectorCoverage(ctx context.Context) (basis string, cov []Cove
 	if err != nil {
 		return "", nil, err.Error(), nil
 	}
-	err = f.st.ReadWith(func(db *sql.DB) error {
+	err = f.st.ReadWith(ctx, func(db store.Reader) error {
 		for _, d := range stores {
 			c := Coverage{Store: d.Name}
 			q := "SELECT COUNT(*) FROM " + d.Name + " b"
@@ -262,7 +262,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 		bs := BackfillStore{Store: d.Name}
 		if budget > 0 {
 			var candidates []Hit
-			if err := f.st.ReadWith(func(db *sql.DB) error {
+			if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 				var err error
 				candidates, err = missingVectors(ctx, db, d, basis, budget)
 				return err
@@ -311,7 +311,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 				budget -= len(rows)
 			}
 		}
-		if err := f.st.ReadWith(func(db *sql.DB) error {
+		if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 			return db.QueryRowContext(ctx, missingCountSQL(d), d.Name, basis).Scan(&bs.Remaining)
 		}); err != nil {
 			return rep, fmt.Errorf("%s: remaining: %w", d.Name, err)
@@ -321,7 +321,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 	return rep, nil
 }
 
-func missingVectors(ctx context.Context, db *sql.DB, d Store, basis string, limit int) ([]Hit, error) {
+func missingVectors(ctx context.Context, db store.Reader, d Store, basis string, limit int) ([]Hit, error) {
 	q := "SELECT " + selectList(d) + missingFrom(d) + " ORDER BY b.rowid DESC LIMIT ?"
 	rows, err := db.QueryContext(ctx, q, d.Name, basis, limit)
 	if err != nil {

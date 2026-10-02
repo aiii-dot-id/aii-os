@@ -10,11 +10,11 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type OutcomeSource interface {
-	NextOutcomes(window int) (store.OutcomeBatch, error)
+	NextOutcomes(window int) (rows.OutcomeBatch, error)
 	PublishOutcomeCursor(from, through uint64) error
 	OwnFingerprint() (string, error)
 }
@@ -24,7 +24,7 @@ const defaultOutcomeWindow = 512
 const outcomeClaimQualifier = "self-reported, unverified"
 
 type outcomeReader interface {
-	NextOutcomes(window int) (store.OutcomeBatch, error)
+	NextOutcomes(window int) (rows.OutcomeBatch, error)
 	OwnFingerprint() (string, error)
 }
 
@@ -54,7 +54,7 @@ func (c *ConsolidateFacility) OutcomesPending() bool {
 	return false
 }
 
-func (c *ConsolidateFacility) passOver(batch store.OutcomeBatch) {
+func (c *ConsolidateFacility) passOver(batch rows.OutcomeBatch) {
 	if _, err := c.intake.PassOver(c.outcomeCursor(batch)); err != nil {
 		logsink.Warn("consolidate.error", "outcome cursor not published: %v — the same records are considered again", err)
 	}
@@ -118,7 +118,7 @@ func (c *ConsolidateFacility) ObserveOutcomes(ctx context.Context) error {
 	}
 
 	pass.Product = map[string]interface{}{
-		"id":         store.OutcomeObservationPrefix + outputHash(fmt.Sprintf("%d\n%s", batch.Through, note)),
+		"id":         rows.OutcomeObservationPrefix + outputHash(fmt.Sprintf("%d\n%s", batch.Through, note)),
 		"content":    note,
 		"category":   "observation",
 		"provenance": "self",
@@ -138,7 +138,7 @@ func (c *ConsolidateFacility) ObserveOutcomes(ctx context.Context) error {
 	return nil
 }
 
-func renderOutcome(o store.Outcome) string {
+func renderOutcome(o rows.Outcome) string {
 	was := excerpt(o.Was)
 	if was == "" {
 		was = "(the record holds no text for " + o.ID + ")"

@@ -28,11 +28,14 @@ mkdir -p "$stage/usr/bin" \
 chmod 0755 "$stage"
 
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
-  "$GO" build -trimpath -ldflags "-s -w -X github.com/aiii-dot-id/aii-os/internal/app.Version=$VERSION" \
+  "$GO" build -trimpath -ldflags "-s -w -d -X github.com/aiii-dot-id/aii-os/internal/app.Version=$VERSION" \
   -o "$stage/usr/bin/aii" ./cmd/aii
 
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
-  "$GO" build -trimpath -ldflags "-s -w" -o "$stage/usr/bin/aii-app" ./cmd/aii-app
+  "$GO" build -trimpath -ldflags "-s -w -d" -o "$stage/usr/bin/aii-app" ./cmd/aii-app
+
+CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
+  "$GO" build -trimpath -ldflags "-s -w" -o "$stage/usr/bin/aii-vulkan-probe" ./cmd/aii-vulkan-probe
 
 install -m 0644 packaging/deb/aii-os.desktop "$stage/usr/share/applications/aii-os.desktop"
 for png in packaging/deb/icons/hicolor/*/apps/aii-os.png; do
@@ -43,14 +46,14 @@ done
 
 cp packaging/deb/aii-os@.service "$stage/usr/lib/systemd/user/"
 cp packaging/deb/copyright "$stage/usr/share/doc/aii-os/copyright"
-cp LICENSE "$stage/usr/share/doc/aii-os/LICENSE" # §4(a): recipients get a copy of the License
+cp LICENSE "$stage/usr/share/doc/aii-os/LICENSE"
 install -m 0644 packaging/deb/aii-units.sh "$stage/usr/share/aii-os/aii-units.sh"
 gzip -9nc packaging/deb/aii.1 > "$stage/usr/share/man/man1/aii.1.gz"
 
 {
   printf 'aii-os (%s) unstable; urgency=medium\n\n' "$VERSION"
   printf '  * Release %s.\n\n' "$VERSION"
-  printf ' -- AII <noreply@aiii.id>  %s\n' "$(date -R)"
+  printf ' -- AI Identity Incorporated <james@aiii.id>  %s\n' "$(date -R)"
 } | gzip -9nc > "$stage/usr/share/doc/aii-os/changelog.gz"
 cp packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm "$stage/DEBIAN/"
 chmod 0755 "$stage/DEBIAN/postinst" "$stage/DEBIAN/prerm" "$stage/DEBIAN/postrm"
@@ -63,8 +66,8 @@ Version: $VERSION
 Section: misc
 Priority: optional
 Architecture: $ARCH
-Maintainer: AII <noreply@aiii.id>
-Depends: init-system-helpers (>= 1.66~)
+Maintainer: AI Identity Incorporated <james@aiii.id>
+Depends: libc6, init-system-helpers (>= 1.66~)
 Recommends: systemd
 Installed-Size: $installed
 Description: AII OS identity runtime

@@ -183,7 +183,9 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 	byKey := map[fuse.Key]*Hit{}
 	exactKeys := map[fuse.Key]bool{}
 	counted := map[fuse.Key]bool{}
-	readErr := f.st.ReadWith(func(db *sql.DB) error {
+	began := false
+	readErr := f.st.ReadWith(ctx, func(db store.Reader) error {
+		began = true
 		for _, d := range stores {
 			src := Source{Store: d.Name}
 			if match == "" {
@@ -262,6 +264,13 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 		}
 		return nil
 	})
+	if readErr != nil && !began {
+
+		for _, d := range stores {
+			res.Sources = append(res.Sources, Source{Store: d.Name, Status: classify(readErr), Detail: readErr.Error()})
+		}
+		return res, nil
+	}
 	if readErr != nil {
 		return res, readErr
 	}
@@ -269,7 +278,7 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 	fused := fuse.RRF(fuse.K, pools...)
 
 	boosts := map[fuse.Key]float64{}
-	if err := f.st.ReadWith(func(db *sql.DB) error {
+	if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 		var err error
 		boosts, err = graphBoost(ctx, db, fused)
 		return err
@@ -332,7 +341,7 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 	}
 	res.Hits = hits
 
-	if err := f.st.ReadWith(func(db *sql.DB) error {
+	if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 		for i := range res.Hits {
 			h := &res.Hits[i]
 			if h.Store != "experiences" {
@@ -390,7 +399,7 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 	return res, nil
 }
 
-func laterContradictions(ctx context.Context, db *sql.DB, id string, seq uint64) ([]string, bool, error) {
+func laterContradictions(ctx context.Context, db store.Reader, id string, seq uint64) ([]string, bool, error) {
 	rows, err := db.QueryContext(ctx, `SELECT from_id FROM edges
 		WHERE to_id=? AND edge_type='CONTRADICTS' AND archived=0 AND created_seq>?
 		ORDER BY created_seq DESC, id ASC LIMIT ?`, id, seq, GraphEdgesPerNode+1)
@@ -447,7 +456,7 @@ func (f *Facility) Enumerate(ctx context.Context, storeName, text string, exact 
 	}
 	var hits []Hit
 	var total int
-	err := f.st.ReadWith(func(db *sql.DB) error {
+	err := f.st.ReadWith(ctx, func(db store.Reader) error {
 		where, args := predicates(d, Query{}, false)
 		countSQL := "SELECT COUNT(*) FROM " + d.Name + " b"
 		if where != "" {
@@ -595,7 +604,7 @@ func scanHits(rows *sql.Rows, d Store) ([]Hit, error) {
 	return out, rows.Err()
 }
 
-func layerExact(ctx context.Context, db *sql.DB, d Store, q Query, match string, pool int, ranked bool) ([]Hit, int, error) {
+func layerExact(ctx context.Context, db store.Reader, d Store, q Query, match string, pool int, ranked bool) ([]Hit, int, error) {
 	where, args := predicates(d, q, ranked)
 	from := " FROM " + d.FTS + " f JOIN " + d.Name + " b ON b.rowid = f.rowid WHERE " + d.FTS + " MATCH ?"
 	if where != "" {
@@ -621,7 +630,7 @@ func layerExact(ctx context.Context, db *sql.DB, d Store, q Query, match string,
 	return hits, matched, nil
 }
 
-func layerFuzzy(ctx context.Context, db *sql.DB, d Store, q Query, text string, words []string, pool int, ranked bool) ([]Hit, error) {
+func layerFuzzy(ctx context.Context, db store.Reader, d Store, q Query, text string, words []string, pool int, ranked bool) ([]Hit, error) {
 	match := trigramQuery(words)
 	if match == "" {
 		return nil, nil

@@ -140,11 +140,11 @@ func ParseWebhooks(raw []byte, methods []string, settings []SettingDecl) ([]Webh
 	return decls, nil
 }
 
-func loadWebhooks(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest, settings []SettingDecl) ([]WebhookDecl, error) {
+func loadWebhooks(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest, settings []SettingDecl) ([]WebhookDecl, error) {
 	if _, present := res.FileDigests[WebhooksFile]; !present {
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, WebhooksFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, WebhooksFile)
 	if err != nil {
 		return nil, err
 	}

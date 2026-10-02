@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
 const heardHistoryCapacity = 256
@@ -42,7 +41,7 @@ type heardHistoryRow struct {
 	Attribution        string `json:"attribution"`
 	SpeakerUUID        string `json:"speaker_uuid,omitempty"`
 	ObservedAt         string `json:"observed_at"`
-	filterID           string
+	filterIDs          []string
 	segment            speakerSegment
 	revision           uint64
 	registryRevision   string
@@ -67,7 +66,7 @@ func (b *heardHistory) expire(now time.Time) {
 	}
 }
 
-func (a *App) retainHeard(session string, seq int64, text string, v dashboard.VoiceEvent, delivery, reason string, observation *pluginhost.Event) {
+func (a *App) retainHeard(session string, seq int64, text string, v dashboard.VoiceEvent, delivery, reason string, observation *voiceFrame) {
 	a.mode.mu.RLock()
 	defer a.mode.mu.RUnlock()
 	if a.mode.mode == ModeSafe || seq <= 0 || strings.TrimSpace(text) == "" {
@@ -95,14 +94,11 @@ func (a *App) retainHeard(session string, seq int64, text string, v dashboard.Vo
 		r.Text = heardPrefix(r.Text, heardHistoryTextBytes)
 		r.Truncated = true
 	}
-	if observation != nil {
-		var o speakerObservation
-		if json.Unmarshal(observation.Raw, &o) == nil {
-			r.apply(o)
-			r.InitialAttribution = r.Attribution
-		}
+	if observation != nil && observation.err == nil {
+		r.apply(observation.observation())
+		r.InitialAttribution = r.Attribution
 	}
-	if policy.mode == speakerModeIgnore && policy.uids[r.filterID] {
+	if policy.ignores(r.filterIDs) {
 		return
 	}
 	if len(b.rows) == heardHistoryCapacity {
@@ -119,25 +115,27 @@ func (r *heardHistoryRow) apply(o speakerObservation) {
 		r.registryRevision = o.RegistryRevision
 	}
 	r.SpeakerUUID = ""
-	r.filterID = ""
-	if id := o.filterID(); id != "" && len(id) <= 128 && reSpeakerID.MatchString(id) {
-		r.filterID = strings.Clone(id)
+	r.filterIDs = nil
+	for _, id := range o.filterIDs() {
+		if len(id) <= 128 && reSpeakerID.MatchString(id) {
+			r.filterIDs = append(r.filterIDs, strings.Clone(id))
+		}
 	}
 	if o.validUUID() && o.Continuity != "provisional" {
 		r.SpeakerUUID = o.SpeakerUUID
 	}
 }
 
-func (a *App) amendHeard(ev pluginhost.Event) {
+func (a *App) amendHeard(ev voiceFrame) {
 	a.mode.mu.RLock()
 	defer a.mode.mu.RUnlock()
 	if a.mode.mode == ModeSafe {
 		return
 	}
-	var o speakerObservation
-	if json.Unmarshal(ev.Raw, &o) != nil {
+	if ev.err != nil {
 		return
 	}
+	o := ev.observation()
 	policy := a.speakerPolicyNow()
 	b := &a.heardHistory
 	b.mu.Lock()
@@ -150,7 +148,7 @@ func (a *App) amendHeard(ev pluginhost.Event) {
 				return
 			}
 
-			if id := o.filterID(); policy.mode == speakerModeIgnore && id != "" && policy.uids[id] {
+			if policy.ignores(o.filterIDs()) {
 				copy(b.rows[i:], b.rows[i+1:])
 				clear(b.rows[len(b.rows)-1:])
 				b.rows = b.rows[:len(b.rows)-1]
@@ -199,7 +197,7 @@ func (a *App) recallHeard(query string, after uint64, limit int) (string, error)
 	more := false
 	for i := len(b.rows) - 1; i >= 0; i-- {
 		r := b.rows[i]
-		if policy.mode == speakerModeIgnore && policy.uids[r.filterID] {
+		if policy.ignores(r.filterIDs) {
 			continue
 		}
 		if after > 0 && r.Seq >= after {

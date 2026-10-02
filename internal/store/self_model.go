@@ -343,12 +343,6 @@ func decodeRecordedRefs(raw string) ([]ledger.SelfModelSourceRef, error) {
 	return refs, nil
 }
 
-func (s *Store) Ring2Material() ([]Ring2Belief, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.ring2MaterialLocked()
-}
-
 func (s *Store) ring2MaterialLocked() ([]Ring2Belief, error) {
 	rows, err := s.db.Query(`
 		SELECT id, statement FROM beliefs
@@ -438,29 +432,4 @@ func (s *Store) PromptIdentity() (PromptIdentity, error) {
 		Charter: charter, OperatorName: operatorName, HasOperatorRelationship: hasOperatorRelationship,
 		Ring2: ring2, SelfModel: selfModel, Priorities: priorities,
 	}, nil
-}
-
-func (s *Store) SearchSelfModelSyntheses(n int, beforeSeq uint64, match string) ([]SelfModelSynthesis, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	q := `SELECT id, synthesis_text, continuity_thread, source_entity_refs,
-	             changes_since_last, created_seq, created_at
-	      FROM self_model_synthesis WHERE 1=1`
-	args := []interface{}{}
-	if beforeSeq > 0 {
-		q += ` AND created_seq < ?`
-		args = append(args, beforeSeq)
-	}
-	if match != "" {
-		q += ` AND LOWER(synthesis_text) LIKE '%' || LOWER(?) || '%'`
-		args = append(args, match)
-	}
-	q += ` ORDER BY created_seq DESC LIMIT ?`
-	args = append(args, n)
-	rows, err := s.db.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanSelfModelSyntheses(rows)
 }

@@ -523,28 +523,7 @@ func writeManifest(dir string, mf *Manifest) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, manifestName+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("sync %s: %w", filepath.Base(tmp), err)
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o644); err != nil {
-		return err
-	}
-
-	published, err := atomicfile.Replace(tmp, filepath.Join(dir, manifestName))
+	published, err := atomicfile.WriteReplace(filepath.Join(dir, manifestName), b, 0o644)
 	if err != nil {
 		if published {
 			return fmt.Errorf("manifest published but not durable in %s: %w", dir, err)

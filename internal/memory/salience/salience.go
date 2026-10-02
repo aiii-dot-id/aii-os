@@ -48,10 +48,12 @@ type SalienceWeights struct {
 	Version string `json:"version"`
 }
 
-var DefaultSalience = SalienceWeights{
-	Impact: 0.25, Novelty: 0.15, Recurrence: 0.20, TensionDelta: 0.05, ProvenanceTrust: 0.15,
-	PersistenceHint: 0.05, EmotionalSalience: 0.05, CostToStore: -0.05, CostToQuery: -0.05, DownstreamUse: 0.10,
-	BeliefAt: 0.30, ValueAt: 0.85, Version: "salience-1",
+func DefaultSalience() SalienceWeights {
+	return SalienceWeights{
+		Impact: 0.25, Novelty: 0.15, Recurrence: 0.20, TensionDelta: 0.05, ProvenanceTrust: 0.15,
+		PersistenceHint: 0.05, EmotionalSalience: 0.05, CostToStore: -0.05, CostToQuery: -0.05, DownstreamUse: 0.10,
+		BeliefAt: 0.30, ValueAt: 0.85, Version: "salience-1",
+	}
 }
 
 type SalienceDecision struct {

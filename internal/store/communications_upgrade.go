@@ -438,7 +438,7 @@ func (s *Store) reconcileCommunications(target string, report *ReconcileReport) 
 		}
 		want := columnNameSet(ref.Shapes[name])
 		if name == "outbox" {
-			lost, err := s.populatedDroppedColumns(name, live, want)
+			lost, err := s.populatedDroppedColumns(name, live, want, nil)
 			if err != nil {
 				return err
 			}

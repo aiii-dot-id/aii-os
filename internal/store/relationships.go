@@ -9,18 +9,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
 
-type Relationship struct {
-	ID               string
-	CounterpartName  string
-	CounterpartRole  string
-	TrustLevel       string
-	AutonomyLevel    string
-	RelationshipType string
-	CharterText      string
-	CreatedSeq       uint64
-	UpdatedSeq       uint64
-}
-
 func (s *Store) CurrentOperatorRelationship() (*Relationship, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -119,13 +107,6 @@ func (s *Store) CharterApproval(rel *Relationship) (CharterApproval, error) {
 		a.State, a.SaidAt = ApprovalSaid, at
 	}
 	return a, nil
-}
-
-func (s *Store) CharterNarrative() (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	text, _, _, err := s.operatorCharterLocked()
-	return text, err
 }
 
 func (s *Store) operatorCharterLocked() (charter, name string, has bool, err error) {

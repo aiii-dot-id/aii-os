@@ -16,12 +16,7 @@ func (a *App) PluginSettingChoices(id, key string) ([]dashboard.SettingChoice, e
 	if ap == nil {
 		return nil, fmt.Errorf("no active plugin %q", id)
 	}
-	var decl *pluginhost.SettingDecl
-	for i := range ap.Settings {
-		if ap.Settings[i].Key == key {
-			decl = &ap.Settings[i]
-		}
-	}
+	decl := ap.Setting(key)
 	if decl == nil || decl.ChoicesFrom == "" {
 		return nil, fmt.Errorf("plugin %s's setting %q looks up no choices", id, key)
 	}
@@ -33,7 +28,7 @@ func (a *App) PluginSettingChoices(id, key string) ([]dashboard.SettingChoice, e
 	if rs, ok := tool.(interface{ ReplaySafe() bool }); !ok || !rs.ReplaySafe() {
 		return nil, fmt.Errorf("plugin %s's %q is not a read, so the page does not call it", id, decl.ChoicesFrom)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), choicesTimeout)
+	ctx, cancel := context.WithTimeout(a.lifetime(), choicesTimeout)
 	defer cancel()
 	res, err := a.toolReg.Execute(ctx, name, map[string]interface{}{})
 	if err != nil {

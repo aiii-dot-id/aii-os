@@ -11,10 +11,6 @@ import { displayInteractions, foldTurns, locationKey } from '../interaction-disp
 
 let thinkingEl = null;
 
-// Decide whether to follow BEFORE an item changes scrollHeight. A tall
-// reply could put the new bottom more than 140px away and make the old
-// after-append check mistake a reader at the bottom for a reader above.
-// Live items also precede the activity marker, which always stays last.
 function appendThread(el) {
   const t = $('thread'), inner = $('thread-inner');
   const follow = t && following;
@@ -38,9 +34,6 @@ export function renderSteering(pending) {
 
 }
 
-// ── copy ──
-//
-// A message body is plain text, so copy takes exactly what is shown.
 const COPY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.5v-.3A1.7 1.7 0 0 0 8.8 1.5H4.2a1.7 1.7 0 0 0-1.7 1.7v4.6a1.7 1.7 0 0 0 1.7 1.7h.3"/></svg>';
 const COPIED_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>';
 function copyButton(text) {
@@ -86,8 +79,6 @@ function renderNotices() {
     if (!text) { el?.remove(); continue; }
     if (!el) {
       el = document.createElement('div'); el.id = id; el.className = 'chat-notice' + (important ? ' error' : '');
-      // An error is an alert, said as it is inserted. A notice is a line that
-      // comes and goes with its element, so it is said through #announce.
       const body = document.createElement('span'); if (important) body.setAttribute('role', 'alert');
       const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Dismiss';
       close.onclick = () => { if (important) liveError = ''; else liveNotice = ''; renderNotices(); };
@@ -123,13 +114,9 @@ export function toggleThinkingDots(on) {
     const marker = thinkingMarker();
     if ($('thread-inner').lastElementChild !== marker) appendThread(marker);
   } else if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
-  // The newest receipt says "Working" only while a turn runs: its line
-  // follows the state here, with no render and no layout.
   if (liveReceipt && liveReceipt.el.isConnected) markReceipt(liveReceipt.el, liveReceipt.item, !!on);
 }
 
-// Following is the reader's intent, not proximity to the bottom. Even a
-// small upward gesture holds position until the reader returns deliberately.
 let following = true;
 function atBottom(t) { return t.scrollHeight - t.scrollTop - t.clientHeight <= 2; }
 function positionThread(t, top) {
@@ -147,8 +134,6 @@ function renderJump() {
   const t = $('thread'), j = $('jump-latest');
   if (t && j) j.hidden = following && !historyEarlier;
 }
-// Native scrolling is the navigation. Work happens only after user movement,
-// never an observer that eagerly walks the entire history on an idle phone.
 {
   const t = $('thread'), j = $('jump-latest');
   let lastTop = t?.scrollTop || 0, directionFromInput = 0, dragging = false, touchY = null;
@@ -226,9 +211,6 @@ S.interactionVisible = source => {
   const rows = page.rows.filter(r => ids.has(r.id));
   return rows.length ? { anchor_id: rows[0].id, end_id: rows.at(-1).id } : null;
 };
-// sendChat answers whether the words LEFT. A caller clears the box only
-// on true: a message typed during a reconnect is the operator's, and a
-// toast is no place to keep it.
 export function sendChat(text) {
   text = (text || '').trim();
   if (!text) return false;
@@ -242,15 +224,8 @@ export function sendChat(text) {
   setThinking(true);
   return true;
 }
-// The operator's words begin a turn: whatever receipt ends the loaded
-// record belongs to work that is over, and must not say "Working" for
-// the turn that has not been recorded yet.
 export function operatorTurnBegins() { liveReceipt = null; }
-// Other modules reach it through the shared state, as views reach go():
-// a stubbed chat module in a test page must not have to export it.
 S.operatorTurnBegins = operatorTurnBegins;
-// composing is an IME confirming a candidate with Enter — Japanese,
-// Chinese, Korean — which is not the operator sending.
 export function composing(e) { return !!(e.isComposing || e.keyCode === 229); }
 const input = $('msg-input');
 input.addEventListener('keydown', e => {
@@ -264,20 +239,11 @@ $('send-btn').onclick = () => {
   if (sendChat(input.value)) { input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); }
 };
 
-// ── the composer follows the active model ──
-//
-// renderComposer runs on every config and status push. The placeholder
-// names the identity. The effort control is drawn only when the config
-// carries declared_effort — the active model's OWN levels, decided by the
-// server (dashboard.DeclaredEffort) — and its label is the level in force,
-// what the wire sends, never merely what was asked for.
 export function renderComposer() {
   const name = S.identityExists && S.stats ? S.stats.name : '';
   input.placeholder = name && name !== 'Unnamed' ? 'Message ' + name : 'Message your identity';
   renderComposerEffort();
 }
-// Levels read the way people say them: "Extra High", not "xhigh". The
-// value sent is still the vendor's own token.
 const EFFORT_NAMES = { '': 'Default', none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max' };
 function effortName(level) {
   if (Object.prototype.hasOwnProperty.call(EFFORT_NAMES, level)) return EFFORT_NAMES[level];
@@ -291,16 +257,12 @@ function renderComposerEffort() {
   if (wrap.hidden) { closeEffortMenu(); return; }
   const cur = d.in_force || '';
   val.textContent = effortName(cur);
-  // Rebuilt only when what it offers changed. renderComposer runs on every
-  // status push, and replacing the buttons of an open menu would take the
-  // item from under the operator's keyboard focus mid-choice.
   const checked = d.checked || [];
   const key = d.levels.join('\n') + '\n=' + cur + '\n?' + checked.join(',');
   if (menu.dataset.key === key) return;
   menu.dataset.key = key;
   menu.innerHTML = [''].concat(d.levels).map(l =>
     '<button type="button" role="menuitemradio" aria-checked="' + (l === cur) + '" data-level="' + esc(l) + '"' +
-    // A level the model does not name for itself is proven first.
     (checked.includes(l) ? ' data-checked title="Checked with the provider before it applies"' : '') + '>' +
     '<span>' + esc(effortName(l)) + '</span><span class="check" aria-hidden="true">\u2713</span></button>').join('');
 }
@@ -353,7 +315,6 @@ function resolvedSubstrate() {
 }
 
 function substrateCandidates() {
-  // An entry that names no chat model serves speech only: never a substrate.
   return (S.providers || []).filter(p => p.chat !== false);
 }
 
@@ -434,14 +395,6 @@ export function rejectSubstrateConfig(message, requestID) {
   return true;
 }
 
-// ── the identity asks; the operator answers ──
-//
-// A card in the thread, host-authored from the typed ask. The answer is
-// sent as {type:'ask'} and becomes one operator turn marked [ask <id>];
-// a plugin's confirm card answers through the plugins route, exactly as
-// the Plugins page does. No card ever carries a credential field: connect
-// points at the Plugins page, where granting and credentials stay the
-// operator's own acts.
 const askCards = new Map();
 export function renderAsks(asks) {
   const inner = $('thread-inner');
@@ -457,9 +410,6 @@ export function renderAsks(asks) {
     wireAskCard(d, a);
     appendThread(d);
     askCards.set(a.id, d);
-    // Said once, as the card is made: who asks and what, in the card's own
-    // words and never its arguments. The same ask pushed again is the card
-    // already made, and a card that closes says nothing new.
     announceWords(d.querySelector('.who').textContent, d.querySelector('.ask-text').textContent);
   });
   askCards.forEach((d, id) => {
@@ -495,7 +445,7 @@ function askCardHTML(a) {
       body = '<div class="ask-text">' + esc(a.text) + '</div><div class="store-hint">You set it up on the Plugins page: installing, granting and any credential stay yours. Read only lets it look; read and modify lets it act.</div>';
       bar = '<button class="btn" data-ask-connect="read">Connect, read only</button><button class="btn" data-ask-connect="modify">Connect, read and modify</button><button class="btn ghost" data-ask-answer="not_now">Not now</button>';
       break;
-    default: // clarify
+    default:
       head = who + ' asks';
       body = '<div class="ask-text">' + esc(a.text) + '</div>';
       bar = '<div class="ask-reply"><input type="text" class="ask-input" placeholder="Your answer" maxlength="2000"><button class="btn" data-ask-say="1">Send</button></div><button class="btn ghost" data-ask-answer="not_now">Not now</button><button class="btn ghost" data-ask-answer="no">No</button>';
@@ -517,9 +467,6 @@ function wireAskCard(d, a) {
   d.querySelectorAll('[data-ask-connect]').forEach(b => { b.onclick = () => {
     settle('Set it up on the Plugins page');
     answer({ answer: 'connect', scope: b.dataset.askConnect });
-    // The card lands on the Plugins page with the connector and the
-    // chosen scope: the New profile form opens prefilled from them,
-    // and the operator finishes there.
     S.connectRequest = { connector: a.connector || '', scope: b.dataset.askConnect };
     if (S.go) S.go('plugins');
   }; });
@@ -540,8 +487,6 @@ function wireAskCard(d, a) {
   if (inp) inp.addEventListener('keydown', e => { if (composing(e)) return; if (e.key === 'Enter') { e.preventDefault(); const b = d.querySelector('[data-ask-say]'); if (b) b.onclick(); } });
 }
 
-// The composer survives every history/disclosure update. These surfaces contain
-// local notices only; the recorded/transient reader remains the history owner.
 function chatSurface(id) {
   let el = $(id);
   if (!el) {
@@ -574,8 +519,6 @@ function showPendingMessage(id, text) {
   pendingMessages.set(id, { el, identity: currentPages.get('recorded')?.identity || currentPages.get('transient')?.identity || '', ack: '', receipt: null, lost: false });
   chatSurface('chat-pending').appendChild(el);
 }
-// What became of a sent message: the summary is a disclosure, not a region, so
-// the words are said through #announce when they change.
 function pendingText(p, text) {
   const title = p.el.querySelector('summary');
   if (title.textContent !== text) announce(text);
@@ -631,8 +574,6 @@ S.chatReceipt = (id, r) => {
     return;
   }
   pendingMessages.delete(id); p.el.remove();
-  // Successful recording needs no operator action. The shared reader reveals
-  // the message; a reader in earlier history already has the down arrow.
   if (r.ref.source === 'transient') {
     sysLine('Not saved — your words are in this session’s transient view.', false, r.ref);
   }
@@ -683,8 +624,6 @@ function occurrence(el, entry) {
   return el;
 }
 const detailLimit = 16 * 1024 * 1024;
-// Both explicit tool detail and visible conversation text use the same bounded
-// reader. Decode once, after joining byte ranges, so UTF-8 can cross a chunk.
 async function retainedText(ref, check, signal) {
   if (!Number.isSafeInteger(ref.bytes) || ref.bytes < 1) throw Error('Invalid retained-text reference.');
   if (ref.bytes > detailLimit) throw Error('Message is too large to display here.');
@@ -751,7 +690,6 @@ function presentationRow(el, item) {
     const qualification = document.createElement('div'); qualification.className = 'record-qualification'; el.appendChild(qualification);
   }
   setData(el, 'turnId', r.id);
-  // Kept for inspection/fixture readback; this is never a key or a history cache.
   setData(el, 'payload', JSON.stringify(r));
   setData(el, 'records', JSON.stringify(item.records.map(e => e.row)));
   const voice = r.annotations?.voice;
@@ -785,10 +723,6 @@ function presentationRow(el, item) {
   syncChildren(records, nodes);
   return el;
 }
-// Retained words belong in the existing message body. The DOM owns the loaded
-// text; only mounted-message references and read status live here, not another
-// transcript. At most one automatic read runs, with the existing detail ceiling
-// also bounding the total retained-record bytes expanded in this window.
 const messageTextState = new WeakMap(), unreadMessages = new Set();
 let activeMessageRead = null, pendingTextReading = null;
 const messageObserver = typeof IntersectionObserver === 'function'
@@ -878,16 +812,6 @@ async function pumpMessageText() {
   }
 }
 
-// ── the receipt: a stretch of work, one line beside its words ──
-//
-// The line is computed from the records it folds, nothing else: how long
-// the work took (its first record to the reply that answers it — a
-// stretch no reply follows has no span to claim), how many executions,
-// and whatever went wrong. Depth is reached one click at a time, by the
-// motif everyone knows — a disclosure: the line opens to the steps
-// grouped by name; "Every record" opens to each one, which is the same
-// disclosure a lone record gets. Nothing is open by default, for anyone:
-// the fire hose is available stepwise, never poured.
 function duration(ms) {
   if (!(ms >= 0)) return '';
   const s = Math.round(ms / 1000); if (s < 60) return s + ' s';
@@ -904,24 +828,18 @@ function receiptLabel(it, live) {
   if (it.failed) parts.push(it.failed + ' failed');
   if (it.unknown) parts.push(it.unknown + ' unknown');
   if (it.cancelled) parts.push(it.cancelled + ' cancelled');
-  // A result may sit beyond the loaded window; a step is called unfinished
-  // only when the window holds the whole stretch.
   if (it.unfinished && !live && !it.endOutside) parts.push(it.unfinished + ' unfinished');
   if (it.conflict) parts.push('conflicting records');
   if (it.unsaved) parts.push(it.unsaved === it.items.length ? 'not saved' : it.unsaved + ' not saved');
   if (it.unsavedCompletions) parts.push(it.unsavedCompletions + (it.unsavedCompletions === 1 ? ' completion' : ' completions') + ' not saved');
   return parts.join(' · ');
 }
-// The line and its marks: "!" for a failure or a conflict, "•" while
-// working, "–" when something did not finish or was not saved, else "✓".
 function markReceipt(el, it, live) {
   setText(el.querySelector('.receipt-label'), receiptLabel(it, live));
   const trouble = !!(it.failed || it.conflict);
   const partial = !trouble && !live && !!(it.unknown || it.cancelled || (it.unfinished && !it.endOutside) || it.unsaved || it.unsavedCompletions);
   for (const [name, on] of [['trouble', trouble], ['live', live], ['partial', partial]]) if (el.classList.contains(name) !== on) el.classList.toggle(name, on);
 }
-// The steps, grouped by the name each was recorded under: a plugin's tool is
-// shown as the host named it, never split into a guessed package and method.
 function receiptGroups(it) {
   const groups = new Map();
   for (const item of it.items) {
@@ -933,10 +851,6 @@ function receiptGroups(it) {
   }
   return [...groups.values()];
 }
-// A receipt's key names its first loaded record, which moves when the
-// window moves; the element carries over regardless: any record it holds
-// finds it, it is claimed once per render, and re-keyed. An open receipt
-// stays open, and the reader's anchor stays connected.
 function receiptRow(it, old, claimed, live) {
   let el = old.get(it.key);
   if (!el || claimed.has(el)) {
@@ -1009,11 +923,6 @@ export function renderInteractionPages(pages, navigate, busy, position = '', rea
   const focused = document.activeElement;
   const old = new Map(Array.from(inner.querySelectorAll('.interaction-item[data-interaction-key]')).map(el => [el.dataset.interactionKey, el]));
   const projected = displayInteractions(pages), batch = [], claimed = new Set();
-  // The running turn writes to the transient source while the record is
-  // frozen (SAFE), else to the record — a transient row kept after one
-  // failed write in normal mode says nothing about where the turn runs.
-  // The newest receipt of that source is the only one that can say
-  // "Working".
   const runningSource = S.cont?.mode === 'safe' ? 'transient' : 'recorded';
   liveReceipt = null;
   const firsts = new Map();
@@ -1039,8 +948,6 @@ export function renderInteractionPages(pages, navigate, busy, position = '', rea
   if (S.thinking) batch.push(thinkingMarker()); else thinkingEl = null;
   syncChildren(inner, batch);
   if (focused && inner.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
-  // A changed reference can temporarily shrink a message under the reader.
-  // Keep that same reference-only position until its replacement text arrives.
   const changedText = anchor?.isConnected && messageTextState.get(anchor.querySelector('.record-message'));
   if (!reading && !pendingTextReading && !following && anchorText?.loaded && changedText && changedText !== anchorText && !changedText.loaded) {
     pendingTextReading = { key: anchor.dataset.interactionKey, offset: offset - boundary, following: false, open: S.interactionBookmark()?.open || [] };
@@ -1057,13 +964,6 @@ export function renderInteractionPages(pages, navigate, busy, position = '', rea
   refreshMessageText();
 }
 
-// AN OLDER PAGE THAT ONLY DEEPENS THE TOP RECEIPT DREW NOTHING NEW. The
-// reader pages by records, and a stretch of work folds any number of them
-// into one collapsed line: an older page of tool records can land wholly
-// inside the receipt already at the top, add no scroll room, and leave the
-// reader waiting on a gesture with nothing left to act on. When an older
-// page leaves the same element first, the next older page is asked for at
-// once, until something new is drawn above it or the record begins.
 const shownFirst = new Map();
 function continueOlder(pages, firsts, position) {
   for (const source of ['recorded', 'transient']) {
@@ -1071,15 +971,11 @@ function continueOlder(pages, firsts, position) {
     const before = shownFirst.get(source);
     shownFirst.set(source, first && row ? { el: first, sequence: row.sequence } : null);
     if (position !== 'hold' || !before || !first || !row || first !== before.el) continue;
-    // An expanded receipt already provides real scroll space. Continuing
-    // through it would evict the step being read under the 200-record cap.
     if (!page.has_older || page.stale || page.error || !first.classList.contains('turn-receipt') || first.querySelector('.receipt').open) continue;
     let deeper = false;
     try { deeper = BigInt(row.sequence) < BigInt(before.sequence); } catch (err) { deeper = false; }
     if (deeper) queueMicrotask(() => {
       const thread = $('thread');
-      // A reply can race a jump, a downward gesture, expansion or leaving
-      // Chat. Continue only while the collapsed boundary is still in view.
       if (currentPages.get(source) !== page || !first.isConnected || first.querySelector('.receipt').open ||
           document.visibilityState === 'hidden' || (S.view && S.view !== 'chat') ||
           first.getBoundingClientRect().bottom <= thread.getBoundingClientRect().top) return;
@@ -1088,8 +984,6 @@ function continueOlder(pages, firsts, position) {
   }
 }
 
-// A reload bookmark contains references and disclosure choices, never a copy
-// of conversation content. The reader re-fetches its bounded range first.
 function readingAnchor(inner, boundary) {
   let anchor = Array.from(inner.children).find(el => el.dataset.interactionKey && el.getBoundingClientRect().bottom > boundary);
   if (anchor?.classList.contains('turn-receipt') && anchor.querySelector('.receipt').open) {

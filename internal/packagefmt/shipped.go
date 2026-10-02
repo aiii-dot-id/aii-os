@@ -43,7 +43,8 @@ func shippedRoot(keyType string) *sigenvelope.PublicKeyEnvelope {
 	if err := json.Unmarshal(raw, &env); err != nil {
 		panic(fmt.Sprintf("packagefmt: embedded %s root unparseable — broken build: %v", keyType, err))
 	}
-	if err := sigenvelope.ValidatePublicKeyEnvelope(&env, crypto.ProfileRoot); err != nil {
+
+	if err := sigenvelope.ValidatePublicKeyEnvelopeShape(&env, crypto.ProfileRoot); err != nil {
 		panic(fmt.Sprintf("packagefmt: embedded %s root invalid — broken build: %v", keyType, err))
 	}
 	if env.KeyType != keyType {

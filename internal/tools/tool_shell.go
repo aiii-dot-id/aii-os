@@ -34,7 +34,7 @@ func (t *ShellTool) Parameters() map[string]interface{} {
 func (t *ShellTool) Execute(ctx context.Context, args map[string]interface{}) (Result, error) {
 	command, _ := args["command"].(string)
 	if command == "" {
-		return Result{Error: "command is required"}, nil
+		return Refusal(ReasonArgumentsRequired, "command is required"), nil
 	}
 	if t.sandbox == "" {
 		return Result{Error: "shell unavailable: no sandbox configured"}, nil

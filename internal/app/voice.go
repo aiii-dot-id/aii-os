@@ -90,12 +90,16 @@ func (a *App) observeVoice(ctx context.Context, o heardUtterance) error {
 
 		defer a.releaseTurn()
 		reply, werr := voiceWake(a, withTurnSource(ctx, turnSourceVoice), "participant", framed)
-		if werr != nil {
+		if werr != nil && strings.TrimSpace(reply) == "" {
 			logsink.Warn("voice.error", "could not answer what was heard: %v", werr)
-			return werr
+			return answerFailure(werr, reply)
 		}
 
-		a.synthesizeReply(ctx, o.SessionID, o.Gen, reply)
+		voiceSynthesize(a, ctx, o.SessionID, o.Gen, reply)
+		if werr != nil {
+			logsink.Warn("voice.error", "answered what was heard, but %v", werr)
+			return answerFailure(werr, reply)
+		}
 		return nil
 	}
 
@@ -116,13 +120,12 @@ func (a *App) recordRoomWords(text string, binding *voiceBinding) error {
 	}
 	ref, err := a.engine.RecordConversationRef(context.Background(), roleOperator, voiceMarker+voiceRoomNote+text, interaction.Details{Channel: "voice", Reason: "room speech"})
 	if err != nil {
+		a.retirePendingObservation(binding)
 		return fmt.Errorf("record what the operator said: %w", err)
 	}
 	a.annotateVoiceTurn(ref.Sequence, binding)
 	return nil
 }
-
-var voiceWake = (*App).wake
 
 func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtterance) error {
 	if !o.Answer {
@@ -131,12 +134,14 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 
 	marked := voiceMarker + text
 	binding := a.voiceBindingFor(o)
-	steered, err := a.admitWith(roleOperator, marked, binding)
+	steered, err := a.admit(roleOperator, marked, binding, nil)
 	if err != nil && errors.Is(err, dashboard.ErrBusyInternal) {
 
 		logsink.Info("voice.refusal", "an internal pass holds the identity's turn; the operator's words wait for it")
 		if a.awaitTurnGate(ctx, binding) {
 			err = nil
+		} else if a.lifetime().Err() != nil {
+			err = fmt.Errorf("%w: %w", errWordsStopping, err)
 		} else {
 			err = fmt.Errorf("the internal pass holding the turn did not end in time: %w", err)
 		}
@@ -145,6 +150,7 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 		if binding != nil {
 			binding.release("not admitted: " + err.Error())
 		}
+		a.retirePendingObservation(binding)
 		return err
 	}
 	if steered {
@@ -175,14 +181,27 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 	reply, err := voiceWake(a, ctx, roleOperator, marked)
 
 	a.settleVoice(ctx, reply)
-	if err != nil {
-		logsink.Warn("voice.error", "could not answer the operator: %v", err)
-		return err
-	}
 	if !a.voiceReplyShown.Swap(false) && a.dashboard != nil && strings.TrimSpace(reply) != "" {
 		a.dashboard.BroadcastResponse("identity", reply)
 	}
+	if err != nil {
+		if reply != "" {
+			logsink.Warn("voice.error", "answered the operator, but %v", err)
+		} else {
+			logsink.Warn("voice.error", "could not answer the operator: %v", err)
+		}
+		return answerFailure(err, reply)
+	}
 	return nil
+}
+
+func answerFailure(err error, reply string) error {
+	replied := strings.TrimSpace(reply) != ""
+	var turn *turnError
+	if errors.As(err, &turn) && !replied {
+		return err
+	}
+	return &turnError{recorded: true, replied: replied, err: err}
 }
 
 const voiceMarker = "[voice] "
@@ -194,33 +213,35 @@ func (a *App) voiceBindingFor(o heardUtterance) *voiceBinding {
 		return nil
 	}
 	b := &voiceBinding{session: o.SessionID, gen: o.Gen, seq: o.Sequence, text: o.Text}
-	val, ok := a.voiceSessions.Load(o.SessionID)
-	if !ok {
+	h := a.voiceHandle(o.SessionID)
+	if h == nil {
 		return b
 	}
-	h := val.(*voiceHandle)
 	h.work.Add(1)
 	b.done = h.work.Done
 	return b
 }
 
-var voicePassWait = 5 * time.Minute
-
 func (a *App) awaitTurnGate(ctx context.Context, binding *voiceBinding) bool {
-	if a.turnGate == nil {
+	if a.turnGate == nil || ctx.Err() != nil || a.lifetime().Err() != nil {
 		return false
 	}
 	var ended <-chan struct{}
 	if binding != nil {
-		if val, ok := a.voiceSessions.Load(binding.session); ok {
-			ended = val.(*voiceHandle).done
+		if h := a.voiceHandle(binding.session); h != nil {
+			ended = h.done
 		}
 	}
 	timer := time.NewTimer(voicePassWait)
 	defer timer.Stop()
 	select {
 	case <-a.turnGate:
-		a.holdTurnForeground()
+
+		a.turnTaken()
+		if ctx.Err() != nil || a.lifetime().Err() != nil {
+			a.releaseTurn()
+			return false
+		}
 		return true
 	case <-ctx.Done():
 		return false

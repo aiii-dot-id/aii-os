@@ -61,7 +61,7 @@ class MainActivity : Activity() {
             view.setPadding(space, top + (actionBar?.height ?: 0) + space, space, bottom + space)
             insets
         }
-        box.addView(TextView(this).apply { text = message }) // text, never HTML from an error
+        box.addView(TextView(this).apply { text = message })
         if (retry) box.addView(Button(this).apply {
             text = "Retry"
             setOnClickListener { AppRuntime.retry(this@MainActivity) }

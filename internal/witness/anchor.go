@@ -7,6 +7,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
@@ -21,7 +22,7 @@ type EventMinter interface {
 
 type LedgerSource interface {
 	LastSeq() uint64
-	LastHash() string
+	Last() ledger.Boundary
 	Path() string
 }
 
@@ -34,6 +35,7 @@ type Anchorer struct {
 	minter             EventMinter
 	platformPubkeyPath string
 	sealer             Sealer
+	pause              AppendPause
 	intervalEvents     int
 	floorLogged        bool
 
@@ -48,6 +50,16 @@ type Anchorer struct {
 
 type Sealer interface {
 	Seal(head uint64) error
+}
+
+type AppendPause interface {
+	PauseAppends() (release func())
+}
+
+func (a *Anchorer) SetAppendPause(p AppendPause) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pause = p
 }
 
 func (a *Anchorer) SetSealer(s Sealer) {
@@ -139,6 +151,15 @@ func (a *Anchorer) CheckAndAnchor() error {
 		return fmt.Errorf("anchoring latched off: %w", latched)
 	}
 
+	if err := a.SettlePending(); err != nil {
+		if errors.Is(err, ErrPendingReceiptRefused) {
+			logsink.Error("witness.refusal", "anchoring refused: %v", err)
+		} else {
+			logsink.Error("witness.error", "anchoring refused until the receipt pending beside the ledger is settled: %v", err)
+		}
+		return err
+	}
+
 	current := a.ledger.LastSeq()
 	needed := int64(a.intervalEvents)
 	if st, err := a.client.Status(); err == nil && st.MinPeriodicCadence > needed {
@@ -185,7 +206,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 		logsink.Warn("witness.refusal", "NO platform key source — witness key is SELF-vouched (no manifest verification possible)")
 	}
 
-	canonicalEnvelope, env, err := EnsureIdentityEnvelope(a.key, a.envelopes)
+	canonicalEnvelope, env, err := EnsureIdentityEnvelope(a.key, a.envelopes, filepath.Dir(a.ledger.Path()))
 	if err != nil {
 		return fmt.Errorf("identity envelope: %w", err)
 	}
@@ -198,6 +219,14 @@ func (a *Anchorer) CheckAndAnchor() error {
 		logsink.Error("witness.refusal", "anchoring refused: the record's last receipt names %s, the envelope names %s", a.lastReceipt.IdentityID, identityID)
 		return fmt.Errorf("%w: the record's last receipt names %s, the envelope names %s", ErrNotTheRecordedIdentity, a.lastReceipt.IdentityID, identityID)
 	}
+
+	release := func() {}
+	a.mu.Lock()
+	if a.pause != nil {
+		release = a.pause.PauseAppends()
+	}
+	a.mu.Unlock()
+	defer release()
 
 	req, err := a.buildRequest(identityID, canonicalEnvelope, env)
 	if err != nil {
@@ -239,52 +268,67 @@ func (a *Anchorer) CheckAndAnchor() error {
 	}
 
 	if a.minter != nil {
+
+		dir := filepath.Dir(a.ledger.Path())
+		kept := "kept beside the ledger; the next pass settles it first"
+		if err := writePendingReceipt(dir, result.Receipt, time.Now()); err != nil {
+			kept = "NOT kept beside the ledger"
+			logsink.Error("witness.error", "the receipt for record %d could not be kept beside the ledger before its mint — minting it anyway: %v", result.Receipt.LedgerOrdinal, err)
+		}
 		head, err := a.minter.MintWitnessed(result.Receipt, witnessKey.KeyID)
+		release()
 		if err != nil {
-			logsink.Error("witness.error", "system.witnessed mint failed — receipt verified but NOT in the chain, anchor point not advanced: %v", err)
+			logsink.Error("witness.error", "system.witnessed mint failed — receipt verified but NOT in the chain (%s), anchor point not advanced: %v", kept, err)
 			return fmt.Errorf("mint system.witnessed: %w", err)
+		}
+		if err := retirePendingReceipt(dir); err != nil {
+			logsink.Warn("witness.error", "the receipt for record %d is in the record and its copy beside the ledger could not be retired — the next pass retires it: %v", result.Receipt.LedgerOrdinal, err)
 		}
 
 		if a.sealer != nil && manifestVerified && head != nil {
-			if err := a.sealer.Seal(head.Seq); err != nil {
+			if !onTime(head, result.Receipt) {
+				logsink.Info("witness.decision", "head %d attests record %d: records landed while the witness answered, so it is late — in the record, and the next head on time seals over it", head.Seq, result.Receipt.LedgerOrdinal)
+			} else if err := a.sealer.Seal(head.Seq); err != nil {
 				logsink.Warn("witness.error", "sealing through record %d failed — ledger containers retained: %v", head.Seq, err)
 			}
 		}
 	}
-	a.mu.Lock()
-	a.lastAnchoredSeq = uint64(req.LedgerOrdinal)
-	a.lastReceipt = &result.Receipt
-	a.mu.Unlock()
-
-	fp := ""
-	if wm, ok := witnessKey.FindPublicKey(AlgMLDSA87); ok {
-		fp = wm.PublicKeyFingerprint
-	}
-	if err := writeLocalTail(filepath.Dir(a.ledger.Path()), LocalTail{
-		LedgerOrdinal: result.Receipt.LedgerOrdinal,
-
-		LedgerHash:            result.Receipt.LedgerHash,
-		WitnessedAt:           result.Receipt.WitnessedAt,
-		WitnessKeyFingerprint: fp,
-	}); err != nil {
-		logsink.Warn("witness.error", "witness-tail.json write failed (boot truncation check will lag one anchor): %v", err)
-	}
-
+	a.anchored(result.Receipt)
 	logsink.Info("witness.end", "anchored at seq %d (first=%v, witnessed %s) — receipt in ledger",
 		result.Receipt.LedgerOrdinal, result.First, result.Receipt.WitnessedAt)
 	return nil
 }
 
+func onTime(head *ledger.Event, r WitnessReceipt) bool {
+	return r.LedgerOrdinal >= 0 && head.Seq == uint64(r.LedgerOrdinal)+1 && head.Prev == r.LedgerHash
+}
+
+func (a *Anchorer) anchored(r WitnessReceipt) {
+	a.mu.Lock()
+	a.lastAnchoredSeq = uint64(r.LedgerOrdinal)
+	a.lastReceipt = &r
+	a.mu.Unlock()
+	if err := writeLocalTail(filepath.Dir(a.ledger.Path()), LocalTail{
+		LedgerOrdinal: r.LedgerOrdinal,
+
+		LedgerHash:            r.LedgerHash,
+		WitnessedAt:           r.WitnessedAt,
+		WitnessKeyFingerprint: r.WitnessSignature.PublicKeyFingerprint,
+	}); err != nil {
+		logsink.Warn("witness.error", "witness-tail.json write failed (boot truncation check will lag one anchor): %v", err)
+	}
+}
+
 func (a *Anchorer) buildRequest(identityID string, canonicalEnvelope []byte, env *PublicKeyEnvelope) (WitnessRequest, error) {
-	lastSeq := a.ledger.LastSeq()
-	if lastSeq == 0 {
+	last := a.ledger.Last()
+	if last.Seq == 0 {
 		return WitnessRequest{}, fmt.Errorf("ledger is empty — nothing to anchor")
 	}
 	req := WitnessRequest{
 		IdentityID:        identityID,
 		IdentityPublicKey: canonicalEnvelope,
-		LedgerOrdinal:     int64(lastSeq),
-		LedgerHash:        a.ledger.LastHash(),
+		LedgerOrdinal:     int64(last.Seq),
+		LedgerHash:        last.Hash,
 	}
 	sig, err := SignRequest(a.key, env, req, canonicalEnvelope)
 	if err != nil {

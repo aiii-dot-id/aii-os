@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 type ReconcileReport struct {
@@ -56,80 +54,6 @@ func (r ReconcileReport) Lines() []string {
 
 func (s *Store) applyDeclaredReplacements(schemaText string) ([]string, error) {
 	var notes []string
-	declared := declaredTableSQL(schemaText)
-	for _, table := range sortedKeys(declaredReplacements(schemaText)) {
-		marker := declaredReplacements(schemaText)[table]
-		has, err := s.tableHasColumn(table, marker)
-		if err != nil {
-			return nil, err
-		}
-		if !has {
-			continue
-		}
-		if table != "tool_events" {
-			return nil, fmt.Errorf("no conversion owner for legacy table %s", table)
-		}
-		var before int64
-		if err := s.h().QueryRow("SELECT COUNT(*) FROM " + quoteIdentifier(table)).Scan(&before); err != nil {
-			return nil, err
-		}
-		rows, err := s.h().Query(`SELECT st.ts_ms, st.call_id, st.tool, st.args FROM tool_events st
-   WHERE st.phase='started' AND NOT EXISTS (
-    SELECT 1 FROM tool_events d WHERE d.call_id=st.call_id AND d.phase!='started' AND d.rowid>st.rowid)
-   ORDER BY st.rowid`)
-		if err != nil {
-			return nil, err
-		}
-		var starts []LegacyStart
-		for rows.Next() {
-			var item LegacyStart
-			if err := rows.Scan(&item.TsMs, &item.CallID, &item.Tool, &item.Args); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			starts = append(starts, item)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := s.h().Exec("DROP TABLE " + quoteIdentifier(table)); err != nil {
-			return nil, err
-		}
-		if _, err := s.h().Exec(declared[table]); err != nil {
-			return nil, err
-		}
-		for i, item := range starts {
-			id := "tex_" + uuid.New().String()
-			if _, err := s.h().Exec(`INSERT INTO tool_events
-    (execution_id,turn_id,ordinal,actor,model,provider_call_id,tool,args_record,state,started_ms)
-    VALUES (?,'legacy_v1',?,'legacy','',?,?,?,'started',?)`,
-				id, i+1, item.CallID, item.Tool, metaRecord(item.Args), item.TsMs); err != nil {
-				return nil, err
-			}
-			var call, tool, args, state string
-			var at int64
-			if err := s.h().QueryRow("SELECT provider_call_id,tool,args_record,state,started_ms FROM tool_events WHERE execution_id=?", id).Scan(&call, &tool, &args, &state, &at); err != nil {
-				return nil, err
-			}
-			if call != item.CallID || tool != item.Tool || args != metaRecord(item.Args) || state != "started" || at != item.TsMs {
-				return nil, fmt.Errorf("legacy tool conversion failed its preservation check")
-			}
-		}
-		var after int64
-		if err := s.h().QueryRow("SELECT COUNT(*) FROM tool_events").Scan(&after); err != nil {
-			return nil, err
-		}
-		if after != int64(len(starts)) {
-			return nil, fmt.Errorf("legacy tool conversion count differs")
-		}
-		if s.schemaConversions == nil {
-			s.schemaConversions = map[string]RuntimeConversion{}
-		}
-		s.schemaConversions[table] = RuntimeConversion{Before: before, After: after, Reason: "legacy phase records to unfinished executions"}
-		notes = append(notes, fmt.Sprintf("RECONCILE: %s converted its declared legacy shape; %d unfinished call(s) carried for the boot warning", table, len(starts)))
-	}
 	for target, previous := range declaredDerivedPredecessors(schemaText) {
 		if lenientProvenance(schemaText)[target] != Derived || target == previous {
 			return nil, fmt.Errorf("invalid derived predecessor %s -> %s", previous, target)
@@ -401,14 +325,14 @@ func describeRebuild(table string, live, want map[string]bool, carried int64) st
 	return fmt.Sprintf("%s (%s, %d row(s) carried)", table, strings.Join(parts, " "), carried)
 }
 
-func (s *Store) populatedDroppedColumns(table string, live, want map[string]bool) ([]string, error) {
+func (s *Store) populatedDroppedColumns(table string, live, want, retired map[string]bool) ([]string, error) {
 	shape, err := s.liveShape(table)
 	if err != nil {
 		return nil, err
 	}
 	var candidates []string
 	for c := range live {
-		if !want[c] && shape[c].Hidden != 2 && shape[c].Hidden != 3 {
+		if !want[c] && !retired[c] && shape[c].Hidden != 2 && shape[c].Hidden != 3 {
 			candidates = append(candidates, c)
 		}
 	}
@@ -474,6 +398,7 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 	triggers := declaredTriggerSQL(schemaText)
 	prov := lenientProvenance(schemaText)
 	sidecars := sidecarsIn(schemaText)
+	retired := declaredRetiredColumns(schemaText)
 
 	wantShape, err := referenceShape(schemaText)
 	if err != nil {
@@ -518,13 +443,22 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 		if len(diffs) > 0 {
 			why = "shape: " + strings.Join(diffs, "; ")
 		}
+		var retiring []string
+		for _, c := range sortedKeys(retired[table]) {
+			if live[c] {
+				retiring = append(retiring, c)
+			}
+		}
+		if len(retiring) > 0 {
+			why += "; column(s) " + strings.Join(retiring, ", ") + " retired with their values, as declared"
+		}
 		derived := prov[table] == Derived
 
 		if table == "ledger" && !live["seq"] {
 			return &MirrorReadError{Cause: fmt.Errorf("refusing blind ledger mirror rebuild: no readable seq column")}
 		}
 
-		lost, err := s.populatedDroppedColumns(table, live, want)
+		lost, err := s.populatedDroppedColumns(table, live, want, retired[table])
 		if err != nil {
 			return err
 		}
@@ -539,7 +473,7 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 				return &SchemaError{Phase: "expired plugin state", Cause: err}
 			}
 
-			lost, err = s.populatedDroppedColumns(table, live, want)
+			lost, err = s.populatedDroppedColumns(table, live, want, retired[table])
 			if err != nil {
 				return err
 			}
@@ -551,7 +485,7 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 			return &ShapeError{Problems: []string{fmt.Sprintf(
 				"refusing to rebuild %s: column(s) %s hold data and are not declared — "+
 					"if they were renamed, say so in schema.sql (-- renamed-from: <old>); "+
-					"if they are meant to go, drop them deliberately",
+					"if they are meant to go, retire them there (-- retired-column: <name>) or drop them deliberately",
 				table, strings.Join(lost, ", ")) + "; " + why}}
 		}
 		if len(lost) > 0 {

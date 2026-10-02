@@ -24,7 +24,7 @@ object DashboardAuth {
             var token = ""
             if (isTokenRequest(isMainFrame, message)) {
                 try { token = current()?.dashboardAccessTokenForOrigin(sourceOrigin.toString()) ?: "" }
-                catch (_: Exception) { /* No credential or exception details cross a refused origin. */ }
+                catch (_: Exception) { }
             }
             reply.postMessage(token)
         }

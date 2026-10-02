@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/fsdir"
+	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
@@ -51,10 +52,10 @@ func (a *App) watcherInterval() time.Duration {
 
 func (a *App) reloadConfig() {
 	current := a.configSnapshot()
-	if current.SourcePath == "" || !a.live {
+	if current.SourcePath == "" || !a.live.Load() {
 		return
 	}
-	fresh, err := LoadConfig(current.SourcePath)
+	fresh, err := ReadConfig(current.SourcePath)
 	if err != nil {
 		logsink.Warn("config.error", "unreadable, keeping current: %v", err)
 		return
@@ -70,7 +71,7 @@ func (a *App) reloadConfig() {
 	var providers *providerRegistry
 	var providerPath string
 
-	var proved substrateCapability
+	var measured substrateCapability
 	probed := false
 	if a.llmSwap != nil {
 		providerPath = a.providersPath()
@@ -88,8 +89,7 @@ func (a *App) reloadConfig() {
 				candidateBudget, _ := promptBudgetFor(entry, current.Prompt.MaxTokens)
 				client = a.newLLMClient(cc, candidateBudget)
 				if substrateChanged {
-					proved = a.substrateCapabilityRecord()
-					err = a.probeSubstrate(client, cc, entry, providers, fresh.LLM.ProbeTimeoutSeconds)
+					measured, err = a.probeSubstrate(client, cc, entry, providers, fresh.LLM.ProbeTimeoutSeconds)
 					probed = err == nil
 				}
 			}
@@ -113,7 +113,7 @@ func (a *App) reloadConfig() {
 		}
 	}
 	a.cfgMu.Lock()
-	latest, fileErr := LoadConfig(current.SourcePath)
+	latest, fileErr := ReadConfig(current.SourcePath)
 	providersUnchanged := true
 	if providers != nil {
 		reg, err := loadProvidersFile(providerPath)
@@ -123,9 +123,6 @@ func (a *App) reloadConfig() {
 		a.cfgMu.Unlock()
 		if holdTurn {
 			a.releaseTurn()
-		}
-		if probed {
-			a.setSubstrateCapability(proved)
 		}
 		if fileErr != nil {
 			logsink.Warn("config.error", "recheck failed, keeping current: %v", fileErr)
@@ -137,6 +134,9 @@ func (a *App) reloadConfig() {
 
 	if llmChanged && holdTurn {
 		a.activateLLMRuntime(client, entry, current.Prompt.MaxTokens)
+		if probed {
+			a.setSubstrateCapability(measured)
+		}
 	}
 	rootsChanged := !reflect.DeepEqual(fresh.Tools.ExtraRoots, current.Tools.ExtraRoots)
 	if rootsChanged {
@@ -165,6 +165,17 @@ func (a *App) reloadConfig() {
 		return !reflect.DeepEqual(a, b)
 	}()
 	autoloadChanged := fresh.Plugins.Autoload != current.Plugins.Autoload
+	catalogChanged := fresh.Plugins.CatalogURL != current.Plugins.CatalogURL
+	maintenanceChanged := !reflect.DeepEqual(fresh.Maintenance, current.Maintenance) ||
+		fresh.Identity.DBOptimizeLevels != current.Identity.DBOptimizeLevels ||
+		fresh.Identity.DBLearnDictionary != current.Identity.DBLearnDictionary
+	routeChanged := fresh.Certificate.RouteMode != current.Certificate.RouteMode ||
+		fresh.Certificate.RelayEndpoint != current.Certificate.RelayEndpoint
+	contactsChanged := !reflect.DeepEqual(fresh.Contacts, current.Contacts)
+	readAtUseChanged := !reflect.DeepEqual(fresh.Plugins.Settings, current.Plugins.Settings) ||
+		fresh.Updates.Automatic != current.Updates.Automatic ||
+		fresh.Dashboard.Expert != current.Dashboard.Expert ||
+		fresh.Dashboard.NoticesOffDashboard != current.Dashboard.NoticesOffDashboard
 	togglesChanged := !reflect.DeepEqual(fresh.Tools.Disabled, current.Tools.Disabled)
 	if togglesChanged {
 		if a.toolReg != nil {
@@ -189,15 +200,18 @@ func (a *App) reloadConfig() {
 	applyLogTaps(*fresh, LogControlPathIn(identityHomeFromConfig(fresh.SourcePath)))
 	*a.cfg = *fresh
 	a.publishVoiceMode(fresh.Speech.Mode)
+
+	a.applyAgency(fresh.Agency)
+	rhythmChanged := fresh.Agency.RhythmSeconds != current.Agency.RhythmSeconds && a.timeFac != nil
+	if rhythmChanged {
+		if err := a.armRhythm(fresh.Agency.RhythmSeconds); err != nil {
+			logsink.Warn("config.refusal", "metabolism rhythm not re-armed, it keeps its cadence until the next boot: %v", err)
+			rhythmChanged = false
+		}
+	}
 	a.cfgMu.Unlock()
 	if !reflect.DeepEqual(current.Speech.Mode, fresh.Speech.Mode) {
 		a.voiceModeCommitted(current.Speech.Mode, fresh.Speech.Mode)
-	}
-
-	if a.engine != nil {
-		a.engine.SetAgencyLimits(fresh.Agency.MaxSubagentDepth, fresh.Agency.MaxParallelSubagents,
-			fresh.Agency.SubagentMaxMints, fresh.Agency.SubagentWallSeconds)
-		a.engine.SetLocalSpawnWall(fresh.Agency.SubagentWallSecondsLocal)
 	}
 
 	a.replacePolicy(*fresh)
@@ -215,13 +229,38 @@ func (a *App) reloadConfig() {
 		logsink.Info("config.decision", "plugins.autoload -> %s", fresh.Plugins.Autoload)
 		a.pokePluginSweep()
 	}
+	if catalogChanged {
+		logsink.Info("config.decision", "plugins.catalog_url applied live -> %q (the catalog refreshes now)", fresh.Plugins.CatalogURL)
+		a.catalog.Poke()
+	}
+	if maintenanceChanged {
+		logsink.Info("config.decision", "maintenance and database housekeeping applied live (the daily pass reads them when it runs)")
+	}
+	if routeChanged {
+		logsink.Info("config.decision", "public name route applied live -> %q (the route owner looks again now)", fresh.Certificate.RouteMode)
+		a.signalRoute()
+	}
+	if contactsChanged {
+		logsink.Info("config.decision", "contacts applied live -> %d line(s)", len(fresh.Contacts))
+		a.pokeOutbox()
+	}
+	if readAtUseChanged {
+		logsink.Info("config.decision", "plugin settings, automatic updates and the page's switches applied live (each is read where it is used)")
+	}
 	if togglesChanged {
 		logsink.Info("config.decision", "tool toggles applied live -> disabled %v", fresh.Tools.Disabled)
 	}
 	if agencyChanged {
-		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d, mints %d, wall %ds, local wall %ds",
-			fresh.Agency.MaxSubagentDepth, fresh.Agency.MaxParallelSubagents,
-			fresh.Agency.SubagentMaxMints, fresh.Agency.SubagentWallSeconds, fresh.Agency.SubagentWallSecondsLocal)
+		ag, queue := fresh.Agency, "on"
+		if !agencyOn(ag.SpawnQueue) {
+			queue = "off"
+		}
+		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d (queue %s), mints %d, wall %ds, local wall %ds; a child %d rounds, %d calls, %d legs; a turn %d rounds, %d tokens",
+			ag.MaxSubagentDepth, ag.MaxParallelSubagents, queue, ag.SubagentMaxMints, ag.SubagentWallSeconds,
+			ag.SubagentWallSecondsLocal, ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs, ag.MaxToolRounds, ag.TurnTokenBudget)
+	}
+	if rhythmChanged {
+		logsink.Info("config.decision", "metabolism rhythm re-armed live -> every %ds from now", fresh.Agency.RhythmSeconds)
 	}
 	if policyChanged {
 		logsink.Info("config.decision", "plugin grants/auth profiles applied live -> %d grant(s), %d profile(s)",
@@ -229,6 +268,29 @@ func (a *App) reloadConfig() {
 	}
 	if savedForNextBoot {
 		logsink.Info("config.decision", "other settings changed and are SAVED FOR NEXT BOOT — this process keeps the values it started with")
+	}
+	if a.dashboard != nil && !reflect.DeepEqual(current, *fresh) {
+		a.dashboard.BroadcastConfig()
+	}
+}
+
+func (a *App) applyAgency(ag AgencyConfig) {
+	queue := agencyOn(ag.SpawnQueue)
+	if a.engine != nil {
+		a.engine.SetAgencyLimits(ag.MaxSubagentDepth, ag.MaxParallelSubagents, ag.SubagentMaxMints, ag.SubagentWallSeconds)
+		a.engine.SetLocalSpawnWall(ag.SubagentWallSecondsLocal)
+		a.engine.SetSpawnQueue(queue)
+		a.engine.SetSpawnBudget(ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs)
+	}
+	if a.store != nil {
+		slots := 0
+		if queue {
+			slots = ag.MaxParallelSubagents
+		}
+		a.store.SetClaimLimit(identity.SubagentWorkKind, slots)
+	}
+	if a.conv != nil {
+		a.conv.SetTurnBounds(ag.MaxToolRounds, ag.TurnTokenBudget)
 	}
 }
 
@@ -241,9 +303,31 @@ func blankLiveAppliable(c *Config) {
 	c.Tools.ExtraRoots = nil
 	c.Tools.Disabled = nil
 	c.Plugins.Autoload = ""
+	c.Plugins.CatalogURL = ""
 	c.Plugins.Grants = nil
 	c.Plugins.AuthProfiles = nil
-	c.Agency = AgencyConfig{}
+	c.Maintenance = MaintenanceConfig{}
+	c.Identity.DBOptimizeLevels = false
+	c.Identity.DBLearnDictionary = false
+	c.Plugins.Settings = nil
+	c.Updates.Automatic = false
+	c.Dashboard.Expert = false
+	c.Dashboard.NoticesOffDashboard = false
+	c.Contacts = nil
+	c.Certificate.RouteMode = ""
+	c.Certificate.RelayEndpoint = ""
+
+	c.Agency = AgencyConfig{
+
+		HeuristicNudges: c.Agency.HeuristicNudges,
+		BreadthNudge:    c.Agency.BreadthNudge,
+		PlanNudge:       c.Agency.PlanNudge,
+		PlanningBrief:   c.Agency.PlanningBrief,
+
+		QueueWorkers: c.Agency.QueueWorkers,
+
+		OutcomeWindow: c.Agency.OutcomeWindow,
+	}
 	c.Dashboard.AccessToken = ""
 	c.Dashboard.RequireToken = false
 }

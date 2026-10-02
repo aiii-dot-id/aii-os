@@ -1,9 +1,10 @@
-
+import { anyPending } from './pending.js';
 
 let swapped = {};
 
 export function onOverlayChanged(token, paths) {
   if (typeof token !== 'number' || !Array.isArray(paths)) return;
+  if (location.pathname.startsWith('/shipped/')) return;
   if (token <= lastToken) return;
   lastToken = token;
   let needsReload = false;
@@ -14,7 +15,45 @@ export function onOverlayChanged(token, paths) {
     if (p.endsWith('.css')) swapCSS(p, String(token));
     else needsReload = true;
   }
-  if (needsReload) draftSafeReload();
+  if (needsReload) reloadWhenFree();
+}
+
+const holders = new Set();
+export function holdReloadWhile(unsaved) { holders.add(unsaved); }
+function workHeld() {
+  if (anyPending()) return true;
+  for (const unsaved of holders) {
+    try { if (unsaved()) return true; } catch (err) { return true; }
+  }
+  return false;
+}
+
+let waiting = null;
+function reloadWhenFree() {
+  if (!workHeld()) { draftSafeReload(); return; }
+  showUpdate();
+  if (waiting) return;
+  waiting = setInterval(() => {
+    if (workHeld()) return;
+    clearInterval(waiting); waiting = null;
+    draftSafeReload();
+  }, 1000);
+}
+function showUpdate() {
+  if (document.getElementById('overlay-update')) return;
+  const box = document.createElement('div');
+  box.id = 'overlay-update';
+  box.className = 'update-notice';
+  box.setAttribute('role', 'status');
+  const text = document.createElement('span');
+  text.textContent = 'The dashboard was updated. It reloads once your unsaved changes are saved or cancelled.';
+  const now = document.createElement('button');
+  now.type = 'button';
+  now.className = 'btn ghost sm';
+  now.textContent = 'Reload now, discarding them';
+  now.onclick = draftSafeReload;
+  box.append(text, now);
+  document.body.appendChild(box);
 }
 
 let lastToken = 0;
@@ -37,8 +76,6 @@ function stripVersion(href) {
   return i <  0 ? href : href.slice(0, i);
 }
 
-// Ordinary reload and overlay refresh preserve the same unsent words in
-// this tab only. Empty drafts remove the old value; nothing is sent.
 function saveDraft() {
   const ta = document.getElementById('msg-input'); if (!ta) return;
   try {

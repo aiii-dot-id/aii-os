@@ -4,9 +4,11 @@ import { $, esc, hueOf } from '../util.js';
 import { send, query } from '../ws.js';
 import { go } from '../app.js';
 import { pendingSlot } from '../pending.js';
+import { holdReloadWhile } from '../overlay.js';
 
 export const createPending = pendingSlot();
 let newProjectDraft = { name: '', description: '' };
+holdReloadWhile(() => !!(S.contractDraft || S.focusDraft || newProjectDraft.name || newProjectDraft.description));
 export const focusPending = pendingSlot();
 export const contractPending = pendingSlot();
 
@@ -197,7 +199,6 @@ export function renderProjects() {
     const rbtn = $('proj-reopen');
     if (rbtn) rbtn.onclick = () => projectAct(p.state === 'archived' ? 'unarchive' : 'reopen', { id: p.id });
     if (tab === 'overview') {
-      // Capture at the edit, not only if a push arrives while focused.
       $('focus-edit').oninput = () => { S.focusDraft = { id: p.id, val: $('focus-edit').value }; };
       for (const id of ['ct-outcome', 'ct-accept', 'ct-constr', 'ct-parent']) {
         $(id).oninput = $(id).onchange = () => { S.contractDraft = captureContractDraft(p.id); };
@@ -267,7 +268,6 @@ export function renderDock() {
   const viewed = viewedOf();
 
   const viewedID = viewed ? viewed.id : '';
-  // Archived projects are kept out of the way, behind one toggle.
   const archivedN = S.projects.filter(p => p.state === 'archived').length;
   const list = S.projects.filter(p => (S.showArchived || p.state !== 'archived') && dockFilterOf(p));
   const empty = '<div class="dock-empty">' + (S.projects.length
@@ -351,7 +351,7 @@ export function renderProjTab(p, ws, tab) {
     return '<div class="card"><h3>FILES — click a file to open it</h3>' +
       '<div class="savebar"><button class="btn ghost" id="fl-refresh">Refresh</button></div>' +
       '<table class="ws-table fl-open"><thead><tr><th>Name</th><th>Size</th></tr></thead><tbody>' +
-      files.map(f => '<tr class="' + (f.dir ? 'fl-dir' : 'fl-file') + '"' + (f.dir ? '' : ' data-name="' + esc(f.name) + '"') + '><td>' + (f.dir ? '&#128193; ' : '&#128196; ') + esc(f.name) + '</td><td>' +
+      files.map(f => '<tr class="' + (f.dir ? 'fl-dir' : 'fl-file') + '"' + (f.dir ? '' : ' data-name="' + esc(f.name) + '"') + '><td>' + (f.dir ? '&#128193; ' + esc(f.name) : '&#128196; <button type="button" class="fl-name">' + esc(f.name) + '</button>') + '</td><td>' +
         (f.dir ? '—' : fmtSize(f.size)) + '</td></tr>').join('') +
       '</tbody></table></div>';
   }
@@ -377,19 +377,25 @@ function fmtSize(n) {
   return (n / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+let viewerOpener = null;
 export function aiiOpenFile(projectId, relPath) {
   const seg = String(relPath || '').split('/').map(encodeURIComponent).join('/');
   const url = '/p/' + encodeURIComponent(projectId) + '/' + seg;
-  closeFileViewer();
-  const ov = document.createElement('div');
+  const opener = $('file-viewer') ? viewerOpener : { el: document.activeElement, name: String(relPath || '') };
+  closeFileViewer(false);
+  viewerOpener = opener;
+  const ov = document.createElement('dialog');
   ov.id = 'file-viewer';
-  ov.innerHTML = '<div class="fv-card" role="dialog" aria-modal="true">' +
+  ov.setAttribute('aria-labelledby', 'fv-title');
+  ov.innerHTML = '<div class="fv-card">' +
     '<div class="fv-head"><span id="fv-title">' + esc(relPath) + '</span>' +
-    '<button class="btn ghost sm" id="file-viewer-close">Close</button></div>' +
+    '<button type="button" class="btn ghost sm" id="file-viewer-close">Close</button></div>' +
     '<div class="fv-body" id="fv-body"><div class="dim-note">Loading…</div></div></div>';
   document.body.appendChild(ov);
-  $('file-viewer-close').onclick = closeFileViewer;
+  $('file-viewer-close').onclick = () => closeFileViewer();
   ov.onclick = (ev) => { if (ev.target === ov) closeFileViewer(); };
+  ov.addEventListener('cancel', (ev) => { ev.preventDefault(); closeFileViewer(); });
+  if (typeof ov.showModal === 'function') ov.showModal(); else ov.setAttribute('open', '');
 
   const body = ov.querySelector('#fv-body');
   const mine = () => document.getElementById('file-viewer') === ov;
@@ -408,9 +414,18 @@ export function aiiOpenFile(projectId, relPath) {
   });
 }
 
-export function closeFileViewer() {
+export function closeFileViewer(restore = true) {
   const ov = document.getElementById('file-viewer');
-  if (ov) ov.remove();
+  if (!ov) return;
+  if (ov.open && typeof ov.close === 'function') ov.close();
+  ov.remove();
+  const opener = viewerOpener;
+  viewerOpener = null;
+  if (!restore || !opener) return;
+  const row = [...document.querySelectorAll('#proj-space .fl-file')].find(r => r.dataset.name === opener.name);
+  const back = (opener.el && opener.el.isConnected && opener.el !== document.body) ? opener.el
+    : (row && row.querySelector('.fl-name')) || $('fl-refresh');
+  if (back) back.focus();
 }
 if (typeof document !== 'undefined' && !window.__aiiFvKey) {
   window.__aiiFvKey = true;

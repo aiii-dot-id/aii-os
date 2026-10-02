@@ -15,16 +15,16 @@ type EditTool struct{}
 
 func (t *EditTool) Name() string { return "edit" }
 func (t *EditTool) Description() string {
-	return "Surgical text replacement in a file. Args: file_path (required), old_string (required), new_string (required)"
+	return "Replace exact text in a file."
 }
 
 func (t *EditTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"file_path":  map[string]interface{}{"type": "string", "description": "Path to the file"},
-			"old_string": map[string]interface{}{"type": "string", "description": "Text to find"},
-			"new_string": map[string]interface{}{"type": "string", "description": "Replacement text"},
+			"file_path":  map[string]interface{}{"type": "string"},
+			"old_string": map[string]interface{}{"type": "string", "description": "Exact text, without read's line numbers"},
+			"new_string": map[string]interface{}{"type": "string"},
 		},
 		"required": []string{"file_path", "old_string", "new_string"},
 	}
@@ -51,6 +51,10 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 
 	content := string(data)
 	if !strings.Contains(content, oldStr) {
+		if numberedLines(oldStr) {
+			return Result{Error: "old_string not found in file: every line of it begins with a line number and a tab, " +
+				"the prefix read shows and the file does not hold; reissue the edit with the text after each tab"}, nil
+		}
 		return Result{Error: "old_string not found in file"}, nil
 	}
 
@@ -74,4 +78,15 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]interface{}) (Re
 	}
 
 	return Result{Output: fmt.Sprintf("Edited %s", path)}, nil
+}
+
+func numberedLines(s string) bool {
+	for _, line := range strings.Split(strings.TrimSuffix(s, "\n"), "\n") {
+		rest := strings.TrimLeft(line, " ")
+		digits := len(rest) - len(strings.TrimLeft(rest, "0123456789"))
+		if digits == 0 || !strings.HasPrefix(rest[digits:], "\t") {
+			return false
+		}
+	}
+	return true
 }

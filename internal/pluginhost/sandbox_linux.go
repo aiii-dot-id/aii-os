@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || android
 
 package pluginhost
 
@@ -36,10 +36,8 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 		"--die-with-parent",
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
-	}
-	if profile != nil && (profile.Backend == "cuda" || profile.Backend == "cuda+vulkan" || profile.Backend == "vulkan+cuda") {
 
-		wrapped = append(wrapped, "--proc", "/proc")
+		"--proc", "/proc",
 	}
 	for _, device := range devices {
 		wrapped = append(wrapped, "--dev-bind", device, device)
@@ -65,15 +63,12 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 	wrapped = append(wrapped, credentialMasks()...)
 	wrapped = append(wrapped, "--")
 
-	description := "contained (bubblewrap: no network, read-only filesystem, ssh and shadow files masked; other user-readable credentials are NOT)"
+	description := "contained (bubblewrap: no network, read-only filesystem, private PID-namespace procfs, ssh and shadow files masked; other user-readable credentials are NOT)"
 	if len(files.places) != 0 {
 		description += "; existing AII OS private directories masked (selected plugin material retained); standalone files outside masked directories are NOT protected" + nativePathLimit
 	}
 	if len(devices) != 0 {
 		description += "; " + profile.Backend + " compute devices: " + strings.Join(devices, ", ")
-	}
-	if profile != nil && strings.Contains(profile.Backend, "cuda") {
-		description += "; private PID-namespace procfs"
 	}
 	return append(wrapped, argv...), supervisor.Containment{Description: description, NetworkDenied: true, FilesystemRestricted: true}, nil
 }

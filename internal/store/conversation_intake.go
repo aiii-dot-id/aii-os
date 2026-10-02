@@ -11,8 +11,6 @@ import (
 
 const ConversationCursorKey = "dream.conversation_read_through"
 
-const MaxTurnsPerPass = 256
-
 type (
 	TurnCursor        = cursor.TurnCursor
 	TurnPart          = cursor.TurnPart

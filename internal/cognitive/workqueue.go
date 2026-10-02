@@ -2,7 +2,6 @@ package cognitive
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"strings"
@@ -11,19 +10,19 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/foreground"
 	"github.com/aiii-dot-id/aii-os/internal/quiesce"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 type WorkHandler interface {
 	WorkKinds() []string
-	RunWork(ctx context.Context, w *store.WorkItem) error
+	RunWork(ctx context.Context, w *rows.WorkItem) error
 }
 
 type QueueWork interface {
-	EnqueueWork(item *store.WorkItem) (string, error)
-	ClaimWork(kinds []string, nowMs int64) (*store.WorkItem, error)
+	EnqueueWork(item *rows.WorkItem) (string, error)
+	ClaimWork(kinds []string, nowMs int64) (*rows.WorkItem, error)
 	CompleteWork(id string) error
 	FailWork(id string, errMsg string) error
 	SweepExpiredLeases(nowMs int64, running ...string) (int, error)
@@ -173,7 +172,7 @@ func (e *Executor) pass(ctx context.Context) {
 
 const alarmKindPrefix = "alarm."
 
-func (e *Executor) runOne(ctx context.Context, w *store.WorkItem) {
+func (e *Executor) runOne(ctx context.Context, w *rows.WorkItem) {
 	h := e.handlerFor(w.Kind)
 	if h == nil {
 
@@ -217,7 +216,7 @@ func (e *Executor) handlerFor(kind string) WorkHandler {
 	return nil
 }
 
-func (e *Executor) invokeHandler(ctx context.Context, h WorkHandler, w *store.WorkItem) (err error) {
+func (e *Executor) invokeHandler(ctx context.Context, h WorkHandler, w *rows.WorkItem) (err error) {
 	rel := e.holds.Acquire("work: " + w.Kind)
 	defer rel()
 	defer func() {
@@ -230,7 +229,7 @@ func (e *Executor) invokeHandler(ctx context.Context, h WorkHandler, w *store.Wo
 }
 
 func (e *Executor) Enqueue(kind, payload, dedupKey, source string, priority int, scheduledMs, leaseMs int64) (string, error) {
-	id, err := e.q.EnqueueWork(&store.WorkItem{
+	id, err := e.q.EnqueueWork(&rows.WorkItem{
 		Kind: kind, Payload: payload, DedupKey: dedupKey, Source: source,
 		Priority: priority, Scheduled: scheduledMs, LeaseMs: leaseMs,
 	})
@@ -240,12 +239,4 @@ func (e *Executor) Enqueue(kind, payload, dedupKey, source string, priority int,
 
 	e.Wake()
 	return id, nil
-}
-
-func EncodePayload(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-	return string(b)
 }

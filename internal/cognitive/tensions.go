@@ -5,12 +5,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type TensionsSource interface {
-	TensionsView() ([]store.TensionPair, error)
-	TensionEnds(ids []string) (map[string]store.TensionEnd, error)
+	TensionsView() ([]rows.TensionPair, error)
+	TensionEnds(ids []string) (map[string]rows.TensionEnd, error)
 }
 
 const defaultTensionsMaxChars = 4000
@@ -69,7 +69,7 @@ func renderTensions(src TensionsSource, listed map[string]bool, maxChars int) (s
 	return strings.Join(out, "\n"), nil
 }
 
-func describeTensionEnd(end store.TensionEnd, id string, listed map[string]bool) string {
+func describeTensionEnd(end rows.TensionEnd, id string, listed map[string]bool) string {
 	switch {
 	case end.Kind == "belief" && listed[id]:
 		return fmt.Sprintf("[%s]", id)

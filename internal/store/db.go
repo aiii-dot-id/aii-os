@@ -145,6 +145,11 @@ func prepareSchemaStore(ctx context.Context, db *sql.DB, head *MirrorHead, sourc
 		if e != nil {
 			return e
 		}
+
+		held, e := s.heldToolStarts()
+		if e != nil {
+			return &SchemaError{Phase: "tool record", Cause: e}
+		}
 		rep, e := s.reconcileSchema(string(raw))
 		if e != nil {
 			return e
@@ -154,6 +159,11 @@ func prepareSchemaStore(ctx context.Context, db *sql.DB, head *MirrorHead, sourc
 		notes = append(notes, s.ensureSidecars(rep.RebuildSidecars...)...)
 		if e := s.upgradeInteractionHistory(); e != nil {
 			return &SchemaError{Phase: "interaction history", Cause: e}
+		}
+		if note, e := s.carryToolStarts(held); e != nil {
+			return &SchemaError{Phase: "tool record", Cause: e}
+		} else if note != "" {
+			notes = append(notes, note)
 		}
 		if e := s.upgradeStandingOffer(); e != nil {
 			return &SchemaError{Phase: "standing offer", Cause: e}

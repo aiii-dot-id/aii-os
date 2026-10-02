@@ -79,11 +79,19 @@ func NewClient(genesisURL, firewallURL, bootstrapURL string) *GenesisClient {
 	}
 }
 
-func (c *GenesisClient) trustRoot() *publicKeyEnvelope {
+func (c *GenesisClient) trustRoot() (*publicKeyEnvelope, error) {
 	if c.rootOverride != nil {
-		return c.rootOverride
+		return c.rootOverride, nil
 	}
-	return pinnedRoot()
+	return validPinnedRoot()
+}
+
+func validPinnedRoot() (*publicKeyEnvelope, error) {
+	root := pinnedRoot()
+	if err := sigenvelope.ValidWindow(root, time.Now()); err != nil {
+		return nil, fmt.Errorf("the shipped AIII root does not admit this device's clock (check the clock): %w", err)
+	}
+	return root, nil
 }
 
 type FetchResult struct {
@@ -97,12 +105,16 @@ func (c *GenesisClient) FetchRing0() (*FetchResult, error) {
 		return nil, fmt.Errorf("no genesis server configured")
 	}
 
+	root, err := c.trustRoot()
+	if err != nil {
+		return nil, err
+	}
 	bundleBytes, token, err := c.fetchBundle(c.genesisURL, "ring0")
 	if err != nil {
 		return nil, fmt.Errorf("genesis server error: %w", err)
 	}
 
-	content, err := verifyBundle(bundleBytes, c.trustRoot(), "ring0.bundle")
+	content, err := verifyBundle(bundleBytes, root, "ring0.bundle")
 	if err != nil {
 		return nil, fmt.Errorf("RING0 bundle verification failed (bundle not signed by the shipped AIII root — server inauthentic, or this binary is outdated): %w", err)
 	}
@@ -119,30 +131,25 @@ func (c *GenesisClient) FetchRing5() (*FetchResult, error) {
 		return nil, fmt.Errorf("no firewall server configured")
 	}
 
-	pubkey, err := c.resolveDomainKey(c.firewallURL, "ring5.pubkey", c.trustRoot())
+	root, err := c.trustRoot()
 	if err != nil {
 		return nil, err
 	}
-
+	chainBytes, _, err := c.fetchBundle(c.firewallURL, "ring5.pubkey")
+	if err != nil {
+		return nil, fmt.Errorf("ring5.pubkey domain-key chain unavailable: %w", err)
+	}
 	bundleBytes, token, err := c.fetchBundle(c.firewallURL, "ring5")
 	if err != nil {
 		return nil, fmt.Errorf("firewall server error: %w", err)
-	}
-
-	content, err := verifyBundle(bundleBytes, pubkey, "ring5.bundle")
-	if err != nil {
-		return nil, fmt.Errorf("Ring 5 bundle verification failed: %w", err)
 	}
 	manifestBytes, _, err := c.fetchBundle(c.firewallURL, "ring5.manifest")
 	if err != nil {
 		return nil, fmt.Errorf("Ring 5 manifest fetch failed: %w", err)
 	}
-	manifestPayload, err := verifyBundlePayload(manifestBytes, pubkey, "ring5.manifest")
+	content, err := VerifyRing5(chainBytes, bundleBytes, manifestBytes, root, time.Now().UTC())
 	if err != nil {
-		return nil, fmt.Errorf("Ring 5 manifest verification failed: %w", err)
-	}
-	if err := validateRing5Manifest(manifestPayload, bundleBytes, pubkey, time.Now().UTC()); err != nil {
-		return nil, fmt.Errorf("Ring 5 manifest invalid: %w", err)
+		return nil, err
 	}
 
 	return &FetchResult{
@@ -152,12 +159,35 @@ func (c *GenesisClient) FetchRing5() (*FetchResult, error) {
 	}, nil
 }
 
+func VerifyRing5(chainBytes, bundleBytes, manifestBytes []byte, root *publicKeyEnvelope, now time.Time) (string, error) {
+	pubkey, err := domainKeyFrom(chainBytes, "ring5.pubkey", root)
+	if err != nil {
+		return "", err
+	}
+	content, err := verifyBundle(bundleBytes, pubkey, "ring5.bundle")
+	if err != nil {
+		return "", fmt.Errorf("Ring 5 bundle verification failed: %w", err)
+	}
+	manifestPayload, err := verifyBundlePayload(manifestBytes, pubkey, "ring5.manifest")
+	if err != nil {
+		return "", fmt.Errorf("Ring 5 manifest verification failed: %w", err)
+	}
+	if err := validateRing5Manifest(manifestPayload, bundleBytes, pubkey, now); err != nil {
+		return "", fmt.Errorf("Ring 5 manifest invalid: %w", err)
+	}
+	return content, nil
+}
+
 func (c *GenesisClient) FetchBootstrap() (*FetchResult, error) {
 	if c.bootstrapURL == "" {
 		return nil, fmt.Errorf("no bootstrap server configured")
 	}
 
-	pubkey, err := c.resolveDomainKey(c.bootstrapURL, "bootstrap.pubkey", c.trustRoot())
+	root, err := c.trustRoot()
+	if err != nil {
+		return nil, err
+	}
+	pubkey, err := c.resolveDomainKey(c.bootstrapURL, "bootstrap.pubkey", root)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +213,10 @@ func (c *GenesisClient) resolveDomainKey(baseURL, kind string, root *publicKeyEn
 	if err != nil {
 		return nil, fmt.Errorf("%s domain-key chain unavailable: %w", kind, err)
 	}
+	return domainKeyFrom(chainBytes, kind, root)
+}
+
+func domainKeyFrom(chainBytes []byte, kind string, root *publicKeyEnvelope) (*publicKeyEnvelope, error) {
 	content, err := verifyBundlePayload(chainBytes, root, kind)
 	if err != nil {
 		return nil, fmt.Errorf("%s domain-key chain verification failed (root did not sign this key): %w", kind, err)
@@ -200,7 +234,12 @@ func (c *GenesisClient) resolveDomainKey(baseURL, kind string, root *publicKeyEn
 
 func (c *GenesisClient) SetToken(t string) { c.token = t }
 
-func (c *GenesisClient) Root() *publicKeyEnvelope { return c.trustRoot() }
+func (c *GenesisClient) Root() *publicKeyEnvelope {
+	if c.rootOverride != nil {
+		return c.rootOverride
+	}
+	return pinnedRoot()
+}
 
 func (c *GenesisClient) SetTrustRootForTest(root *publicKeyEnvelope) { c.rootOverride = root }
 
@@ -413,7 +452,11 @@ func VerifyArtifact(bundleBytes []byte, key *publicKeyEnvelope, expectedKind str
 }
 
 func DomainKeyFromBundle(bundleBytes []byte, expectedKind string) (*publicKeyEnvelope, error) {
-	content, err := verifyBundlePayload(bundleBytes, pinnedRoot(), expectedKind)
+	root, err := validPinnedRoot()
+	if err != nil {
+		return nil, err
+	}
+	content, err := verifyBundlePayload(bundleBytes, root, expectedKind)
 	if err != nil {
 		return nil, err
 	}

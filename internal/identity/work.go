@@ -48,12 +48,12 @@ type workStore interface {
 	EnqueueWorkWithSessionBelowLimit(item *store.WorkItem, limit int, sessionID, description string) (int, bool, error)
 	LiveSubagentSessions() ([]store.WorkSession, error)
 	UnharvestedDeliveries(limit int) ([]store.WorkSession, error)
-	StartWorkSessionContext(ctx context.Context, id, description string) error
+	StartWorkSession(ctx context.Context, id, description string) error
 	SetStandingState(text string) error
-	UpdateWorkStateContext(ctx context.Context, sessionID, state string) error
-	UpdateWorkPlanContext(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error
+	UpdateWorkState(ctx context.Context, sessionID, state string) error
+	UpdateWorkPlan(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error
 	ListCommitments(activeOnly bool) ([]store.Commitment, error)
-	DeliverWorkSessionContext(ctx context.Context, id, result, evidence, readback string) error
+	DeliverWorkSession(ctx context.Context, id, result, evidence, readback string) error
 	ActiveWorkSession() (*store.WorkSession, error)
 }
 
@@ -153,11 +153,8 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 
 		answer, _ := args["answer"].(string)
 		answer = strings.TrimSpace(answer)
-		e.agencyMu.RLock()
-		gate := e.yieldGate
-		e.agencyMu.RUnlock()
-		if gate != nil && answer == "" {
-			if need, why := gate(); need {
+		if e.yieldGate != nil && answer == "" {
+			if need, why := e.yieldGate(); need {
 				return "", fmt.Errorf("yield refused: %s. State the best current answer for the operator — answer= (what is established, what is missing, what would change it) — then yield", why)
 			}
 		}
@@ -196,7 +193,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 		}
 		wsID := "ws_" + uuid.New().String()
 
-		if err := e.store.StartWorkSessionContext(ctx, wsID, desc); err != nil {
+		if err := e.store.StartWorkSession(ctx, wsID, desc); err != nil {
 			return "", err
 		}
 
@@ -258,12 +255,12 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 			return "", err
 		}
 		if state != nil {
-			if err := e.store.UpdateWorkStateContext(ctx, wsID, *state); err != nil {
+			if err := e.store.UpdateWorkState(ctx, wsID, *state); err != nil {
 				return "", err
 			}
 		}
 		if focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil {
-			if err := e.store.UpdateWorkPlanContext(ctx, wsID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded); err != nil {
+			if err := e.store.UpdateWorkPlan(ctx, wsID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded); err != nil {
 				return "", err
 			}
 		}
@@ -305,6 +302,10 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 		if !outcomeForm.MatchString(result) {
 			return "", fmt.Errorf("rejected_before_effect (deliver.outcome_line): no effect — begin the result with served:, partial: or unserved:, then one line of what happened (e.g. \"partial: tests written, integration blocked\"); nothing was delivered, so correct the outcome line and deliver again")
 		}
+
+		if store.IsPreStartFailure(result) {
+			return "", fmt.Errorf("rejected_before_effect (deliver.reserved_marker): no effect — a result that begins \"unserved: failed before start:\" is the runtime's record of a run that never started; state the verdict in your own words (e.g. \"unserved: could not read the input\") and deliver again")
+		}
 		subID, _ := ctx.Value(SubagentWorkSession{}).(string)
 		evidence, err := resolveDeliveryEvidence(evidenceArg, readbackArg, result, subID != "")
 		if err != nil {
@@ -326,7 +327,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 			if !found {
 				return "", fmt.Errorf("rejected_before_effect (deliver.commitment_id): no effect — commitment %s not found among active commitments; nothing was delivered", commitmentID)
 			}
-			if err := e.store.DeliverWorkSessionContext(ctx, wsID, result, evidence, readbackArg); err != nil {
+			if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
 				return "", fmt.Errorf("deliver work session: %w", err)
 			}
 			msg := fmt.Sprintf("Delivered (Ring 4), naming commitment %s. If this delivery fulfills it, the completion is yours to write: commit commitment.state_change — a promise kept is identity truth only when YOU complete it.", commitmentID)
@@ -336,7 +337,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]interface{}) (str
 			return msg, nil
 		}
 
-		if err := e.store.DeliverWorkSessionContext(ctx, wsID, result, evidence, readbackArg); err != nil {
+		if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
 			return "", fmt.Errorf("deliver work session: %w", err)
 		}
 		msg := "Delivered (Ring 4). If it mattered, note it — work output becomes identity truth only through your own note, or your own completion of a promise it fulfills."

@@ -10,7 +10,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/attention"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type MorningBriefConfig struct {
@@ -35,10 +35,10 @@ func (m *MorningBriefFacility) SetAttention(fn func(ctx context.Context) ([]atte
 }
 
 type BriefStore interface {
-	ListIntentions() ([]store.Intention, error)
-	ListSelfModelSyntheses(n int, beforeSeq uint64) ([]store.SelfModelSynthesis, error)
+	ListIntentions() ([]rows.Intention, error)
+	ListSelfModelSyntheses(n int, beforeSeq uint64) ([]rows.SelfModelSynthesis, error)
 
-	ListExperiencesSince(after time.Time, n int) ([]store.Experience, error)
+	ListExperiencesSince(after time.Time, n int) ([]rows.Experience, error)
 }
 
 const (

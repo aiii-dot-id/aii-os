@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 )
 
@@ -79,23 +81,28 @@ type Event struct {
 
 func terminal(typ, synthesisID string) bool {
 	switch typ {
-	case "session_end", "failure":
+	case EventSessionEnd, EventFailure:
 		return true
-	case "cancellation":
+	case EventCancellation:
 		return synthesisID == ""
 	}
 	return false
 }
 
-var inputEventTypes = map[string]bool{"transcript_partial": true, "transcript_final": true, "speaker_observation": true, "input_finished": true}
+var inputEventTypes = map[string]bool{EventTranscriptPartial: true, EventTranscriptFinal: true, EventSpeakerObservation: true, EventInputFinished: true}
 
-var telemetryTypes = map[string]bool{"vad_probability": true, "transcript_partial": true}
+var telemetryTypes = map[string]bool{EventVADProbability: true, EventTranscriptPartial: true}
 
 var ErrSessionDead = errors.New("voicesession: the transport has ended; this session is dead — rebind for a new one")
 
 var ErrStaleReply = errors.New("voicesession: the reply belongs to an earlier session instance and was discarded")
 
 func IsAdmissionUnknown(err error) bool { return errors.Is(err, supervisor.ErrAdmissionUnknown) }
+
+func IsSessionRefused(err error) bool {
+	var refused *supervisor.SessionRefusedError
+	return errors.As(err, &refused)
+}
 
 const (
 	observerBuffer  = 1024
@@ -137,6 +144,7 @@ type VoiceSession struct {
 	lastSeq      int64
 	gaps         uint64
 	foreign      uint64
+	malformed    uint64
 
 	terminalCh chan struct{}
 
@@ -244,25 +252,20 @@ func (v *VoiceSession) consume() {
 		if !ok {
 			break
 		}
-		var ev struct {
-			Type        string `json:"type"`
-			SessionID   string `json:"session_id"`
-			SynthesisID string `json:"synthesis_id"`
-			Sequence    int64  `json:"sequence"`
-			Reason      string `json:"reason"`
+
+		ev, err := DecodeVoiceFrame(raw)
+		if err != nil {
+			v.withhold(err)
+			continue
 		}
-		_ = json.Unmarshal(raw, &ev)
+		if len(ev.Unread) != 0 {
+			v.noteUnread(ev)
+		}
 		isTerminal := terminal(ev.Type, ev.SynthesisID)
 
 		named, namedSynthesis, names := uint32(0), "", false
-		if ev.Type == "synthesis_start" {
-			var body struct {
-				SynthesisID  string `json:"synthesis_id"`
-				OutputStream *int64 `json:"output_stream"`
-			}
-			if json.Unmarshal(raw, &body) == nil && body.SynthesisID != "" && body.OutputStream != nil && *body.OutputStream >= 0 && *body.OutputStream <= math.MaxUint32 {
-				named, namedSynthesis, names = uint32(*body.OutputStream), body.SynthesisID, true
-			}
+		if ev.Type == EventSynthesisStart && ev.SynthesisID != "" && ev.OutputStream != nil && *ev.OutputStream >= 0 && *ev.OutputStream <= math.MaxUint32 {
+			named, namedSynthesis, names = uint32(*ev.OutputStream), ev.SynthesisID, true
 		}
 		v.mu.Lock()
 		if ev.SessionID != "" && v.sessionID != "" && ev.SessionID != v.sessionID {
@@ -293,8 +296,8 @@ func (v *VoiceSession) consume() {
 			v.mu.Unlock()
 			continue
 		}
-		if ev.Type == "input_finished" {
-			v.applyInputFinishedLocked(raw)
+		if ev.Type == EventInputFinished {
+			v.applyInputFinishedLocked(ev)
 		}
 		if names && ev.SessionID == "" {
 
@@ -314,7 +317,7 @@ func (v *VoiceSession) consume() {
 			}
 		}
 		if isTerminal {
-			if ev.Type == "failure" {
+			if ev.Type == EventFailure {
 				v.failed, v.failReason = true, "engine reported failure"
 
 				if ev.Reason != "" {
@@ -325,7 +328,7 @@ func (v *VoiceSession) consume() {
 			}
 			v.markTerminalLocked()
 		}
-		if ev.Type == "input_finished" {
+		if ev.Type == EventInputFinished {
 
 			if (reconciled && v.wireCompletion) || (!reconciled && v.reconciledCompletion) {
 				v.mu.Unlock()
@@ -359,6 +362,84 @@ func (v *VoiceSession) consume() {
 
 	close(v.telemetry)
 	close(v.observer)
+}
+
+func (v *VoiceSession) withhold(err error) {
+	var m *MalformedFrame
+	if !errors.As(err, &m) {
+		m = &MalformedFrame{Reason: err.Error()}
+	}
+	v.mu.Lock()
+	session := m.SessionID
+	if session == "" {
+		session = v.sessionID
+	}
+	reconcile, inst := false, v.inst
+	if m.SessionID != "" && v.sessionID != "" && m.SessionID != v.sessionID {
+		v.foreign++
+	} else {
+		v.malformed++
+
+		reconcile = m.Type == EventInputFinished
+		if m.Type == EventTranscriptFinal && (v.binding == nil || v.binding.HasInput()) {
+			notice := Event{Type: m.Type, SessionID: session}
+			if m.Sequenced {
+				notice.Sequence = m.Sequence
+			}
+			select {
+			case v.observer <- notice:
+			default:
+				v.markFaultLocked("observer overflow: the application did not consume critical events")
+			}
+		}
+	}
+	v.mu.Unlock()
+	var named []string
+	if m.Type != "" {
+		named = append(named, fmt.Sprintf("type %q", m.Type))
+	}
+	if m.Sequenced {
+		named = append(named, fmt.Sprintf("sequence %d", m.Sequence))
+	}
+	what := ""
+	if len(named) != 0 {
+		what = " (" + strings.Join(named, ", ") + ")"
+	}
+	logsink.Warn("voice.refusal", "session %s: an engine frame%s does not decode and is withheld (%s): no words and no speaker reach the observer, the page, a record or a turn; the session stays trusted", session, what, m.Reason)
+	if reconcile {
+		go v.reconcileWithheldCompletion(inst)
+	}
+}
+
+func (v *VoiceSession) reconcileWithheldCompletion(inst uint64) {
+	ctx, cancel := context.WithTimeout(context.Background(), statusReconcileBound)
+	defer cancel()
+	_, _ = v.Status(ctx)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.inst != inst || v.inputFinished || v.closed || v.failed {
+		return
+	}
+	v.markFaultLocked("input_finished without an exact cutoff")
+}
+
+func (v *VoiceSession) noteUnread(ev VoiceFrame) {
+	session := ev.SessionID
+	if session == "" {
+		v.mu.Lock()
+		session = v.sessionID
+		v.mu.Unlock()
+	}
+	logsink.Warn("voice.refusal", "session %s: the engine's %s (sequence %d) applies with fields that do not decode read as empty (%s): it carries no words and no speaker evidence", session, ev.Type, ev.Sequence, strings.Join(ev.Unread, "; "))
+}
+
+func (v *VoiceSession) MalformedFor(sessionID string) uint64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if sessionID == "" || sessionID != v.sessionID {
+		return 0
+	}
+	return v.malformed
 }
 
 func (v *VoiceSession) transportEnded() {
@@ -432,7 +513,7 @@ func (v *VoiceSession) open(ctx context.Context, sessionID string, args map[stri
 		v.owner = v.pair.attach(actx)
 	}
 	v.sessionID, v.admission = sessionID, "pending"
-	v.lastSeq, v.gaps, v.foreign = 0, 0, 0
+	v.lastSeq, v.gaps, v.foreign, v.malformed = 0, 0, 0, 0
 	v.finishedIn, v.closing, v.closed, v.closeWhy = false, false, false, ""
 	v.finishCutoff, v.finishStream, v.inputFinished, v.inputEnd = -1, "", false, 0
 	v.streams, v.reported = map[uint32]string{}, map[uint32]int64{}
@@ -456,13 +537,12 @@ func (v *VoiceSession) open(ctx context.Context, sessionID string, args map[stri
 		return fmt.Errorf("voicesession: the open of %s was superseded", sessionID)
 	}
 	v.openResult = result
-	var refused *supervisor.SessionRefusedError
 	switch {
 	case err == nil:
 		v.admission = "admitted"
-	case errors.Is(err, supervisor.ErrAdmissionUnknown):
+	case IsAdmissionUnknown(err):
 		v.admission = "unknown"
-	case errors.As(err, &refused):
+	case IsSessionRefused(err):
 		v.admission = "refused"
 		v.closed, v.closeWhy = true, "the engine refused the open"
 		v.markTerminalLocked()
@@ -490,13 +570,12 @@ func (v *VoiceSession) sessionResources(sessionID string) (inst uint64, p *audio
 	return v.inst, v.pump, v.finishedIn || v.inputFinished, nil
 }
 
-func (v *VoiceSession) applyInputFinishedLocked(raw json.RawMessage) {
-	var c InputCompletion
-	if json.Unmarshal(raw, &c) != nil {
-		v.markFaultLocked("input_finished without an exact cutoff")
-		return
+func (v *VoiceSession) applyInputFinishedLocked(f VoiceFrame) {
+	c := InputCompletion{StreamID: f.StreamID, ProcessedEndSample: f.ProcessedEndSample, Sequence: f.Sequence, Reason: f.Reason}
+	if f.EndSample != nil {
+		c.EndSample, c.hasEnd = *f.EndSample, true
 	}
-	v.admitInputCompletionLocked(c, "input_finished")
+	v.admitInputCompletionLocked(c, EventInputFinished)
 }
 
 func (v *VoiceSession) admitInputCompletionLocked(c InputCompletion, source string) bool {
@@ -530,7 +609,7 @@ func (v *VoiceSession) queueReconciledCompletionLocked(c InputCompletion) {
 		Type      string `json:"type"`
 		SessionID string `json:"session_id"`
 		InputCompletion
-	}{"input_finished", v.sessionID, c})
+	}{EventInputFinished, v.sessionID, c})
 	if err != nil {
 		v.markFaultLocked("the reconciled input completion could not be encoded: " + err.Error())
 		return
@@ -587,8 +666,10 @@ func (v *VoiceSession) InputFinished() (bool, int64) {
 	return v.inputFinished, v.inputEnd
 }
 
+const statusReconcileBound = 2 * time.Second
+
 func (v *VoiceSession) reconcileFinish(inst uint64, engineEnd int64) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), statusReconcileBound)
 	defer cancel()
 	snap, err := v.Status(ctx)
 	if err != nil || v.instance() != inst {
@@ -847,8 +928,7 @@ func (v *VoiceSession) Status(ctx context.Context) (Snapshot, error) {
 	inst := v.instance()
 	raw, err := v.control(ctx, "speech.session.status", map[string]any{"session_id": v.id()})
 	if err != nil {
-		var refused *supervisor.SessionRefusedError
-		if errors.As(err, &refused) {
+		if IsSessionRefused(err) {
 
 			v.apply(inst, func() {
 				if v.admission == "unknown" && !v.closed && !v.failed {

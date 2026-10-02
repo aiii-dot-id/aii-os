@@ -33,8 +33,6 @@ func declaredIndexSQL(sqlText string) map[string][]string {
 	return out
 }
 
-var replacesLegacyRe = regexp.MustCompile(`(?i)^--\s*replaces-legacy-when-column:\s*([a-z_][a-z_0-9]*)`)
-
 var derivedPredecessorRe = regexp.MustCompile(`(?i)^--\s*replaces-derived-table:\s*([a-z_][a-z_0-9]*)`)
 
 func declaredDerivedPredecessors(text string) map[string]string {
@@ -71,7 +69,8 @@ func validateSchemaAnnotations(text string, ref *schemaDescription) error {
 			}
 		}
 	}
-	for table, renames := range declaredRenames(text) {
+	allRenames := declaredRenames(text)
+	for table, renames := range allRenames {
 		sources := map[string]string{}
 		for target, source := range renames {
 			if _, still := ref.Shapes[table][source]; still && source != target {
@@ -83,19 +82,19 @@ func validateSchemaAnnotations(text string, ref *schemaDescription) error {
 			sources[source] = target
 		}
 	}
-	return nil
-}
-
-func declaredReplacements(sqlText string) map[string]string {
-	out := map[string]string{}
-	for table, body := range rawTableBodies(sqlText) {
-		for _, annotation := range schemaComments(body) {
-			if m := replacesLegacyRe.FindStringSubmatch(annotation.text); m != nil {
-				out[table] = strings.ToLower(m[1])
+	for table, columns := range declaredRetiredColumns(text) {
+		for _, column := range sortedKeys(columns) {
+			if _, still := ref.Shapes[table][column]; still {
+				return fmt.Errorf("table %s both declares and retires column %s", table, column)
+			}
+			for target, source := range allRenames[table] {
+				if source == column {
+					return fmt.Errorf("column %s.%s is both retired and renamed to %s", table, column, target)
+				}
 			}
 		}
 	}
-	return out
+	return nil
 }
 
 var renamedFromRe = regexp.MustCompile(`(?i)^--\s*renamed-from:\s*([a-z_][a-z_0-9]*)`)
@@ -489,6 +488,25 @@ func declaredRetiredTables(sqlText string) []string {
 		out = append(out, name)
 	}
 	sort.Strings(out)
+	return out
+}
+
+var retiredColumnRe = regexp.MustCompile(`(?i)^--\s*retired-column:\s*([a-z_][a-z_0-9]*)\b`)
+
+func declaredRetiredColumns(sqlText string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for table, body := range rawTableBodies(sqlText) {
+		for _, annotation := range schemaComments(body) {
+			m := retiredColumnRe.FindStringSubmatch(annotation.text)
+			if m == nil {
+				continue
+			}
+			if out[table] == nil {
+				out[table] = map[string]bool{}
+			}
+			out[table][sqliteName(m[1])] = true
+		}
+	}
 	return out
 }
 

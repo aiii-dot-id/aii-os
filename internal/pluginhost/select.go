@@ -2,9 +2,17 @@ package pluginhost
 
 import (
 	"fmt"
+	"slices"
 
-	"github.com/aiii-dot-id/aii-os/internal/facility"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+)
+
+const (
+	FacilityTransportLocal = "sev_transport.local"
+
+	FacilityOperatorPresenceFresh = "sev_operator_presence.fresh"
+
+	FacilityForegroundLifecycle = "sev_foreground.lifecycle"
 )
 
 type hostContext struct {
@@ -12,7 +20,7 @@ type hostContext struct {
 	arch     string
 	topology string
 
-	facilities *facility.Set
+	facilities []string
 
 	supervised bool
 	resources  *selectionResources
@@ -102,10 +110,10 @@ func selectVariant(res *packagefmt.Result, host hostContext) (*packagefmt.Varian
 			}
 			switch class {
 			case packagefmt.PredicateClassFacility:
-				if name == facility.TransportLocal {
+				if name == FacilityTransportLocal {
 					continue
 				}
-				if !host.facilities.Has(name) {
+				if !slices.Contains(host.facilities, name) {
 					missing = append(missing, predicate)
 				}
 			case packagefmt.PredicateClassRuntime:
@@ -126,7 +134,7 @@ func selectVariant(res *packagefmt.Result, host hostContext) (*packagefmt.Varian
 		}
 
 		if len(missing) == 0 && host.resources != nil && v.ExecutionRuntime == "native_t3_component" {
-			missing = resourceRefusals(host.resources.profiles[v.VariantID], host.resources.available, host.resources.policy)
+			missing = host.resources.refusals(v.VariantID)
 		}
 		if len(missing) == 0 {
 			selectable = append(selectable, v)
@@ -140,6 +148,14 @@ func selectVariant(res *packagefmt.Result, host hostContext) (*packagefmt.Varian
 		return nil, refusal
 	case 1:
 		return selectable[0], nil
+	}
+
+	if host.resources != nil && host.resources.keep != "" {
+		for _, v := range selectable {
+			if v.VariantID == host.resources.keep {
+				return v, nil
+			}
+		}
 	}
 	if m.VariantPreference != nil {
 		for _, id := range m.VariantPreference {

@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"log"
 	"os"
 	_ "time/tzdata"
 
 	"github.com/aiii-dot-id/aii-os/internal/app"
+	"github.com/aiii-dot-id/aii-os/internal/vulkancap"
 	"github.com/aiii-dot-id/aii-os/internal/workercmd"
 )
 
@@ -20,6 +22,8 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case vulkancap.Subcommand:
+			os.Exit(runVulkanProbe())
 		case "init":
 			os.Exit(runInit(os.Args[2:]))
 		case "slots":
@@ -79,7 +83,7 @@ func main() {
 	}
 
 	if *configPath == "" {
-		*configPath = app.DefaultConfigPath()
+		*configPath = install.ConfigPathIn("")
 	}
 
 	cfg, err := app.LoadConfig(*configPath)

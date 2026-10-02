@@ -13,6 +13,8 @@ type skillStore interface {
 	ListSkillProposals(limit int) ([]store.SkillProposal, error)
 }
 
+const SkillProposalFate = "Nothing promotes a proposal into your doctrine, and no operator view lists proposals."
+
 func (e *Engine) verbSkill(_ context.Context, args map[string]interface{}) (string, error) {
 	action, _ := args["action"].(string)
 	switch action {
@@ -24,7 +26,7 @@ func (e *Engine) verbSkill(_ context.Context, args map[string]interface{}) (stri
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Skill proposal %s recorded (status: proposed). Your operator decides promotion; a replay harness will verify candidates once one exists — until then verified=none is the honest label.", id), nil
+		return fmt.Sprintf("Skill proposal %s recorded in your own store, not your signed ledger. %s recall source=skills reads them back.", id, SkillProposalFate), nil
 
 	case "list":
 		props, err := e.store.ListSkillProposals(10)
@@ -38,10 +40,10 @@ func (e *Engine) verbSkill(_ context.Context, args map[string]interface{}) (stri
 		words := strings.Fields(strings.ToLower(stringArg(args, "query")))
 		var lines []string
 		for _, p := range props {
-			if !carriesWords(p.ID+" "+p.Status+" "+p.Verified+" "+p.Title+" "+p.Delta, words) {
+			if !carriesWords(p.ID+" "+p.Title+" "+p.Delta, words) {
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("- %s [%s, verified=%s] %s", p.ID, p.Status, p.Verified, p.Title))
+			lines = append(lines, fmt.Sprintf("- %s %s", p.ID, p.Title))
 		}
 		if len(lines) == 0 {
 			return fmt.Sprintf("No skill proposal mentions %q (%d recorded).", stringArg(args, "query"), len(props)), nil

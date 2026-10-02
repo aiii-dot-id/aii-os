@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/vulkancap"
 )
 
 func readExactly(r io.Reader, name string) ([]byte, error) {
@@ -25,10 +27,46 @@ func readBounded(r io.Reader, limit int64, what string) ([]byte, error) {
 	return b, nil
 }
 
-func extractFromTarGz(archiveBytes []byte) ([]byte, error) {
+const (
+	tarBinary = "aii"
+	zipBinary = "aii.exe"
+)
+
+type entry struct {
+	name    string
+	regular bool
+	kind    string
+	size    int64
+}
+
+func executable(name, want string) bool {
+	name = strings.TrimRight(name, `/\`)
+	return name[strings.LastIndexAny(name, `/\`)+1:] == want
+}
+
+func admit(e entry, want string, seen bool) error {
+	var why string
+	switch {
+	case seen:
+		why = "appears twice"
+	case !e.regular:
+		why = fmt.Sprintf("is not a regular file (%s)", e.kind)
+	case e.name != want:
+		why = "is not at the archive root"
+	case e.size <= 0:
+		why = "is empty"
+	case e.size > maxDownloadSize:
+		why = fmt.Sprintf("exceeds the %d byte limit", maxDownloadSize)
+	default:
+		return nil
+	}
+	return fmt.Errorf("archive entry %q: %s %s — refusing the release", e.name, want, why)
+}
+
+func extractFromTarGz(archiveBytes []byte) (binary, helper []byte, err error) {
 	gzr, err := gzip.NewReader(bytes.NewReader(archiveBytes))
 	if err != nil {
-		return nil, fmt.Errorf("gzip reader: %w", err)
+		return nil, nil, fmt.Errorf("gzip reader: %w", err)
 	}
 	defer gzr.Close()
 
@@ -39,18 +77,28 @@ func extractFromTarGz(archiveBytes []byte) ([]byte, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("tar read: %w", err)
+			return nil, nil, fmt.Errorf("tar read: %w", err)
 		}
-
-		base := hdr.Name
-		if idx := strings.LastIndexByte(hdr.Name, '/'); idx >= 0 {
-			base = hdr.Name[idx+1:]
+		want, into := tarBinary, &binary
+		switch {
+		case executable(hdr.Name, tarBinary):
+		case executable(hdr.Name, vulkancap.Helper):
+			want, into = vulkancap.Helper, &helper
+		default:
+			continue
 		}
-		if base == "aii" || base == "aii-os" {
-			return readExactly(tr, hdr.Name)
+		e := entry{hdr.Name, hdr.Typeflag == tar.TypeReg, fmt.Sprintf("tar type %q", hdr.Typeflag), hdr.Size}
+		if err := admit(e, want, *into != nil); err != nil {
+			return nil, nil, err
+		}
+		if *into, err = readExactly(tr, hdr.Name); err != nil {
+			return nil, nil, err
 		}
 	}
-	return nil, fmt.Errorf("binary 'aii' not found in archive")
+	if binary == nil {
+		return nil, nil, fmt.Errorf("binary %q not found in archive", tarBinary)
+	}
+	return binary, helper, nil
 }
 
 func extractFromZip(archiveBytes []byte) ([]byte, error) {
@@ -58,19 +106,25 @@ func extractFromZip(archiveBytes []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zip reader: %w", err)
 	}
+	var binary *zip.File
 	for _, f := range zr.File {
-		base := f.Name
-		if idx := strings.LastIndexByte(f.Name, '/'); idx >= 0 {
-			base = f.Name[idx+1:]
+		if !executable(f.Name, zipBinary) {
+			continue
 		}
-		if base == "aii.exe" || base == "aii-os.exe" {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, fmt.Errorf("open zip entry %s: %w", f.Name, err)
-			}
-			defer rc.Close()
-			return readExactly(rc, f.Name)
+		size := int64(min(f.UncompressedSize64, maxDownloadSize+1))
+		e := entry{f.Name, f.Mode().IsRegular(), fmt.Sprintf("mode %v", f.Mode()), size}
+		if err := admit(e, zipBinary, binary != nil); err != nil {
+			return nil, err
 		}
+		binary = f
 	}
-	return nil, fmt.Errorf("binary 'aii.exe' not found in archive")
+	if binary == nil {
+		return nil, fmt.Errorf("binary %q not found in archive", zipBinary)
+	}
+	rc, err := binary.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open zip entry %s: %w", binary.Name, err)
+	}
+	defer rc.Close()
+	return readExactly(rc, binary.Name)
 }

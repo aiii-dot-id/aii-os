@@ -105,9 +105,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	limit := p.ParentBudget
 	if limit <= 0 {
 
-		if _, entry, err := h.a.resolveLLM(); err == nil {
-			limit = entry.ThinkingBudget
-		}
+		limit = h.a.currentProvider().ThinkingBudget
 	}
 	cfg := h.a.configSnapshot()
 	leg := p.Leg
@@ -159,11 +157,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	h.a.emitPluginEvent(pluginhost.TopicSubagentSpawned, map[string]interface{}{"session": p.SessionID, "role": p.Role, "model": target.modelID, "depth": p.Depth, "leg": leg})
 	reserve, err := h.a.promptReserve(goalMsg, 0)
 	if err != nil {
-		startErr := fmt.Errorf("subagent request estimate: %w", err)
-		if deliveryErr := h.a.store.DeliverWorkSession(p.SessionID, "unserved: failed before start: "+err.Error(), store.EvidenceNotRun, ""); deliveryErr != nil {
-			startErr = errors.Join(startErr, fmt.Errorf("record subagent start failure: %w", deliveryErr))
-		}
-		return startErr
+		return h.failBeforeStart(ctx, p.SessionID, "request estimate", err)
 	}
 	composeFn := h.a.composer.ComposeFoldedWithin
 	if p.Context == "full" {
@@ -171,11 +165,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	}
 	prompt, err := composeFn(target.budget, "", reserve)
 	if err != nil {
-		startErr := fmt.Errorf("subagent compose: %w", err)
-		if deliveryErr := h.a.store.DeliverWorkSession(p.SessionID, "unserved: failed before start: "+err.Error(), store.EvidenceNotRun, ""); deliveryErr != nil {
-			startErr = errors.Join(startErr, fmt.Errorf("record subagent start failure: %w", deliveryErr))
-		}
-		return startErr
+		return h.failBeforeStart(ctx, p.SessionID, "compose", err)
 	}
 
 	var predictedNow func() int
@@ -289,7 +279,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		tokens = ">=" + tokens
 	}
 
-	header := subagentOutcomeHeader(p.Role, modelID, target.fallback, target.cause,
+	header := subagentOutcomeHeader(p.Role, modelID, target.cause,
 		result.RoundsUsed, cfg.Agency.SubagentMaxToolRounds,
 		result.ToolCallsUsed, cfg.Agency.SubagentMaxToolCalls,
 		result.Usage.Calls, tokens, result.ExhaustedBudget || result.ExhaustedCallBudget)
@@ -309,7 +299,8 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if err != nil || result.ExhaustedBudget || result.ExhaustedCallBudget {
 		h.a.markFleetSpent()
 	}
-	if deliveryErr := h.a.store.DeliverWorkSession(p.SessionID, outcome, store.EvidenceWorkerReportOnly, ""); deliveryErr != nil {
+
+	if deliveryErr := h.a.store.DeliverWorkSession(context.WithoutCancel(ctx), p.SessionID, outcome, store.EvidenceWorkerReportOnly, ""); deliveryErr != nil {
 
 		logsink.ErrorCtx(ctx, "subagent.error", "%s: outcome could not be delivered (run err: %v): %v — item completed to prevent trajectory replay", p.SessionID, err, deliveryErr)
 		return nil
@@ -319,6 +310,14 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	}
 	h.closeChild(p, leg, accCalls, accTokens, accWall, modelID, err, outcome, compactText(outcome, 120))
 	return nil
+}
+
+func (h *subagentHandler) failBeforeStart(ctx context.Context, sessionID, phase string, cause error) error {
+	err := fmt.Errorf("subagent %s: %w", phase, cause)
+	if deliveryErr := h.a.store.DeliverWorkSession(context.WithoutCancel(ctx), sessionID, store.PreStartFailure(cause.Error()), store.EvidenceNotRun, ""); deliveryErr != nil {
+		err = errors.Join(err, fmt.Errorf("record subagent start failure: %w", deliveryErr))
+	}
+	return err
 }
 
 func subagentNotice(goal, outcome string) string {
@@ -336,7 +335,7 @@ func subagentNotice(goal, outcome string) string {
 		status += " (rounds)"
 	case strings.Contains(first, "tool-call budget"):
 		status += " (calls)"
-	case strings.Contains(first, "FAILED") || strings.Contains(first, "failed before start"):
+	case strings.Contains(first, "FAILED") || store.IsPreStartFailure(first):
 		status += " (failed)"
 	}
 	return "[sub-agent done] " + compactText(strings.TrimSpace(goal), 120) + " — " + status
@@ -417,17 +416,18 @@ type runTarget struct {
 	modelID string
 
 	budgetGuess bool
-	fallback    bool
 
 	cause string
 }
 
-func (a *App) activeRunTarget(fallback bool, cause string) runTarget {
+func (t runTarget) fellBack() bool { return t.cause != "" }
+
+func (a *App) activeRunTarget(cause string) runTarget {
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
 	client := a.llmSwap.Current()
 	_, src := a.currentPromptBudget()
-	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), budgetGuess: src == budgetFallback, fallback: fallback, cause: cause}
+	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), budgetGuess: src == budgetFallback, cause: cause}
 }
 
 func (a *App) routeIsLocal(role string) bool {
@@ -458,7 +458,7 @@ func (a *App) routeIsLocal(role string) bool {
 
 func (a *App) resolveRunTarget(role string) runTarget {
 	if role == "" {
-		return a.activeRunTarget(false, "")
+		return a.activeRunTarget("")
 	}
 	cfg := a.configSnapshot()
 	reg, regErr := a.loadProviders()
@@ -466,12 +466,12 @@ func (a *App) resolveRunTarget(role string) runTarget {
 	if route, ok := cfg.Agency.Roles[role]; ok {
 		if regErr != nil {
 			logsink.Warn("subagent.decision", "role %q: providers unavailable (%v) — using the active model", role, regErr)
-			return a.activeRunTarget(true, "providers-unavailable")
+			return a.activeRunTarget("providers-unavailable")
 		}
 		cc, entry, err := a.resolveLLMConfig(LLMConfig{Provider: route.Provider, Model: route.Model, APIKeyEnv: cfg.LLM.APIKeyEnv}, reg)
 		if err != nil {
 			logsink.Warn("subagent.decision", "role %q: route %s/%s did not resolve (%v) — using the active model", role, route.Provider, route.Model, err)
-			return a.activeRunTarget(true, "route-down")
+			return a.activeRunTarget("route-down")
 		}
 		budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
 		logsink.Info("subagent.decision", "role %q routed: provider %q model %q (prompt budget %d)", role, entry.Name, cc.Model, budget)
@@ -491,7 +491,7 @@ func (a *App) resolveRunTarget(role string) runTarget {
 	}
 
 	logsink.Info("subagent.decision", "role %q: no route — using the active model", role)
-	return a.activeRunTarget(true, "no-route")
+	return a.activeRunTarget("no-route")
 }
 
 func localEntries(reg *providerRegistry) []providerEntry {
@@ -518,10 +518,10 @@ func (a *App) firstHealthyLocal(reg *providerRegistry) (providerEntry, bool) {
 	return providerEntry{}, false
 }
 
-func subagentOutcomeHeader(role, modelID string, fallback bool, cause string,
+func subagentOutcomeHeader(role, modelID, cause string,
 	rounds, roundLimit, toolCalls, callLimit, llmCalls int, tokens string, exhausted bool) string {
 	return fmt.Sprintf("[sub-agent role=%q model=%q fallback=%t cause=%q rounds=%d/%d tool_calls=%d/%d llm_calls=%d tokens=%s exhausted=%t]",
-		role, modelID, fallback, cause, rounds, roundLimit, toolCalls, callLimit, llmCalls, tokens, exhausted)
+		role, modelID, runTarget{cause: cause}.fellBack(), cause, rounds, roundLimit, toolCalls, callLimit, llmCalls, tokens, exhausted)
 }
 
 func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tokens int, wallMs int64, modelID string, runErr error, outcome, event string) {
@@ -560,7 +560,7 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 
 func (h *subagentHandler) deliveredResult(id string) (string, bool) {
 	ws, err := h.a.store.WorkSessionByID(id)
-	if err != nil || ws == nil || ws.Status != "delivered" || strings.HasPrefix(ws.Result, "unserved: failed before start:") {
+	if err != nil || ws == nil || ws.Status != "delivered" || store.IsPreStartFailure(ws.Result) {
 		return "", false
 	}
 	return ws.Result, true

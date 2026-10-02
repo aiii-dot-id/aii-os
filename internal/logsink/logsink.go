@@ -111,7 +111,7 @@ func (s *Sink) installStream() {
 	if def, cat, err := ParseDirective(os.Getenv(EnvDirective)); err == nil {
 		SetLevels(def, cat)
 	} else {
-		defer func() { Warn("logs", "%v — the level is unchanged", err) }()
+		defer func() { Warn("logs.error", "%v — the level is unchanged", err) }()
 	}
 	var file io.Writer
 	if s.file != nil {

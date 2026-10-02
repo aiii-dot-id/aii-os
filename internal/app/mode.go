@@ -125,21 +125,6 @@ func (a *App) witnessAttempt(ok bool) {
 	}
 }
 
-func (a *App) resetModeForTest() {
-	a.mode.mu.Lock()
-	a.mode.mode = ModeNormal
-	a.mode.reason, a.mode.trigger, a.mode.detail = "", 0, ""
-	a.mode.since = time.Time{}
-	a.mode.witnessFails = 0
-	a.mode.mu.Unlock()
-	if a.store != nil {
-
-		a.store.SetFrozen(false, "")
-		a.store.SetWorkQueueFrozen(false)
-	}
-	a.stopSafeBeacon()
-}
-
 func (a *App) stopSafeBeacon() {
 	a.mode.mu.Lock()
 	defer a.mode.mu.Unlock()

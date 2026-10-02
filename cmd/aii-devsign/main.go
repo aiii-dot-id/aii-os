@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt/packagetest"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
@@ -64,7 +66,12 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *staging == "" {
-		fmt.Fprintln(stderr, "usage: aii-devsign -staging <dir> [-o pkg.aiiospkg -root-out root.pub.json] | [-payload-out pair.json] | [-attach-sig sig.json -root root.pub.json -o pkg.aiiospkg]")
+		fmt.Fprintln(stderr, "usage: aii-devsign -staging <dir> [-o pkg.aiiospkg -root-out root.pub.json] | [-payload-out pair.json] | [-attach-sig sig.json -root root.pub.json -status status.json -o pkg.aiiospkg]")
+		return 2
+	}
+
+	if refusal := modeRefusal(*payloadOut, *attachSig, *out, *rootOut, *statusOut, *rootIn, *statusIn); refusal != "" {
+		fmt.Fprintf(stderr, "devsign: %s\n", refusal)
 		return 2
 	}
 
@@ -128,7 +135,7 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var sigBytes, statusBytes []byte
+	var sigBytes, statusBytes, rootBytes []byte
 	var verifyRoot *sigenvelope.PublicKeyEnvelope
 	if *attachSig != "" {
 
@@ -158,7 +165,7 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		}
 	} else {
 
-		role, rerr := packagetest.NewRole(fmt.Sprintf("aiii_dev_platform_%d", time.Now().UTC().Unix()), packagetest.KeyTypePlatformRelease)
+		role, status, rerr := packagetest.NewPlatformRelease(fmt.Sprintf("aiii_dev_platform_%d", time.Now().UTC().Unix()))
 		if rerr != nil {
 			fmt.Fprintf(stderr, "devsign: dev root: %v\n", rerr)
 			return 1
@@ -168,36 +175,19 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "devsign: sign: %v\n", err)
 			return 1
 		}
-		statusBytes, err = role.SignRevocationStatus(1, nil)
-		if err != nil {
-			fmt.Fprintf(stderr, "devsign: status snapshot: %v\n", err)
-			return 1
-		}
-		verifyRoot = role.Env
-		if *rootOut != "" {
-			envRaw, _ := json.MarshalIndent(role.Env, "", "  ")
-			if err := os.WriteFile(*rootOut, envRaw, 0o644); err != nil {
-				fmt.Fprintf(stderr, "devsign: write root: %v\n", err)
-				return 1
-			}
-			if *statusOut == "" {
-				*statusOut = filepath.Join(filepath.Dir(*rootOut), platformStatusFileName())
-			}
-		}
-		if *statusOut != "" {
-			if err := os.WriteFile(*statusOut, statusBytes, 0o644); err != nil {
-				fmt.Fprintf(stderr, "devsign: write status: %v\n", err)
-				return 1
-			}
+		statusBytes, verifyRoot = status, role.Env
+		rootBytes, _ = json.MarshalIndent(role.Env, "", "  ")
+		if *statusOut == "" {
+			*statusOut = filepath.Join(filepath.Dir(*rootOut), platformStatusFileName())
 		}
 	}
 
-	pkg := packagetest.Build(packagetest.PackageSpec{
+	pkg, err := build(packagetest.PackageSpec{
 		Root: spec.ID + "-" + spec.Version, Manifest: manifest, InstallFiles: files,
 		Signatures: map[string][]byte{packagetest.SigFilePlatformSig: sigBytes},
 	})
-	if err := os.WriteFile(*out, pkg, 0o644); err != nil {
-		fmt.Fprintf(stderr, "devsign: write package: %v\n", err)
+	if err != nil {
+		fmt.Fprintf(stderr, "devsign: %v\n", err)
 		return 1
 	}
 
@@ -207,7 +197,7 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "devsign: status snapshot staging: %v\n", err)
 		return 1
 	}
-	res, err := packagefmt.VerifyFile(*out, roots)
+	res, err := packagefmt.Verify(bytes.NewReader(pkg), roots)
 	if err != nil {
 		fmt.Fprintf(stderr, "devsign: built package does NOT verify: %v\n", err)
 		return 1
@@ -216,14 +206,49 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "devsign: built package verified %s, want T3\n", res.Tier)
 		return 1
 	}
-	fmt.Fprintf(stdout, "SIGNED T3 %s %s\npackage %s\npackage_hash %s\nmanifest_hash %s\n", spec.ID, spec.Version, *out, res.PackageHash, res.ManifestHash)
-	if *rootOut != "" && *attachSig == "" {
-		fmt.Fprintf(stdout, "pin as plugins.platform_root: %s (DEV root — throwaway, not platform trust)\n", *rootOut)
+	type output struct {
+		path, what string
+		data       []byte
 	}
-	if *statusOut != "" && *attachSig == "" {
+	writes := []output{{*out, "package", pkg}}
+	if rootBytes != nil {
+		writes = append(writes, output{*rootOut, "root", rootBytes}, output{*statusOut, "status", statusBytes})
+	}
+	for _, w := range writes {
+		if err := os.WriteFile(w.path, w.data, 0o644); err != nil {
+			fmt.Fprintf(stderr, "devsign: write %s: %v\n", w.what, err)
+			return 1
+		}
+	}
+	fmt.Fprintf(stdout, "SIGNED T3 %s %s\npackage %s\npackage_hash %s\nmanifest_hash %s\n", spec.ID, spec.Version, *out, res.PackageHash, res.ManifestHash)
+	if rootBytes != nil {
+		fmt.Fprintf(stdout, "pin as plugins.platform_root: %s (DEV root — throwaway, not platform trust; expires %s, after which a host that pins it runs every plugin quarantined)\n", *rootOut, verifyRoot.ExpiresAt)
 		fmt.Fprintf(stdout, "install as <data>/trust/%s: %s (empty revocation snapshot — without it no T3 verifies)\n", platformStatusFileName(), *statusOut)
 	}
 	return 0
+}
+
+func modeRefusal(payloadOut, attachSig, out, rootOut, statusOut, rootIn, statusIn string) string {
+	switch {
+	case payloadOut != "" && (attachSig != "" || out != "" || rootOut != "" || statusOut != "" || rootIn != "" || statusIn != ""):
+		return "-payload-out is ceremony phase 1 and takes only -staging; phase 2 is a second run with -attach-sig"
+	case attachSig == "" && (rootIn != "" || statusIn != ""):
+		return "-root and -status belong to ceremony phase 2 (-attach-sig); without it the package is signed by a throwaway dev root"
+	case attachSig != "" && (rootOut != "" || statusOut != ""):
+		return "-root-out and -status-out belong to ephemeral mode; phase 2 verifies against the ceremony's -root and -status"
+	case payloadOut == "" && attachSig == "" && rootOut == "":
+		return "ephemeral mode needs -root-out: without the dev root it signed with, no host can verify the package"
+	}
+	return ""
+}
+
+func build(spec packagetest.PackageSpec) (pkg []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("the staging dir cannot be packaged: %v", r)
+		}
+	}()
+	return packagetest.Build(spec), nil
 }
 
 func platformStatusFileName() string {
@@ -253,7 +278,7 @@ func loadStaging(dir string) (*devsignSpec, map[string][]byte, error) {
 		return nil, nil, fmt.Errorf("read devsign.json: %w", err)
 	}
 	var spec devsignSpec
-	if err := json.Unmarshal(raw, &spec); err != nil {
+	if err := canonicaljson.DecodeStrict(raw, &spec); err != nil {
 		return nil, nil, fmt.Errorf("parse devsign.json: %w", err)
 	}
 	if spec.ID == "" || spec.Version == "" || len(spec.Variants) == 0 {
@@ -271,6 +296,9 @@ func loadStaging(dir string) (*devsignSpec, map[string][]byte, error) {
 		rel, rerr := filepath.Rel(rootDir, p)
 		if rerr != nil {
 			return rerr
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file (a link or device would sign bytes from outside the staging dir)", filepath.ToSlash(rel))
 		}
 		b, rerr := os.ReadFile(p)
 		if rerr != nil {

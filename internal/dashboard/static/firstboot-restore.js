@@ -2,22 +2,16 @@ import { S } from './state.js';
 import { $, esc } from './util.js';
 import { renderInto } from './announce.js';
 import { send } from './ws.js';
+import { holdReloadWhile } from './overlay.js';
 
-// First boot's second door: restore an identity on a machine that holds
-// none. Three things from the person — the model it will run on (the birth
-// form's own fields), the escrow file with its passphrase, and the snapshot
-// that left the old machine — and then the identity's own page.
-//
-// The passphrase is read from its field when the keys are asked for and is
-// not kept: the snapshot is opened by the keys once they are in place.
-
-let step = 'closed';   // closed | keys | snapshot | restoring | done
+let step = 'closed';
 let busy = false;
-let said = null;       // { kind, text }
-let keys = null;       // { identity, holds_snapshot_key }
-let snapshot = '';     // the snapshot's name, once it has arrived
+let said = null;
+let keys = null;
+let snapshot = '';
 let progress = '';
 let secretsOK = true;
+holdReloadWhile(() => busy || step === 'snapshot' || step === 'restoring' || !!(document.getElementById('fbr-pass') || {}).value);
 
 const body = () => $('fb-restore-body');
 function say(kind, text) { said = { kind, text }; render(); }
@@ -43,7 +37,6 @@ function render() {
     html += '<div class="err" data-nosecrets data-announce>This connection is not private: a passphrase, or an identity in the clear, would cross the network. Open this page on the machine itself, or serve the dashboard with TLS, and come back.</div>';
     renderInto(el, html); return;
   }
-  // 1 — the keys
   html += '<div data-step="keys"><label class="f">1 · THE ESCROW FILE</label>';
   if (keys) {
     html += '<div class="ok" data-keys-ok data-announce>The keys of identity <span style="font-family:var(--mono)">' + esc(keys.identity.slice(0, 16)) + '…</span> are in place on this machine; the key signs and verifies.</div>';
@@ -53,7 +46,6 @@ function render() {
       '<div style="margin-top:10px"><button class="btn" id="fbr-keys"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Opening…' : 'Open it') + '</button></div>';
   }
   html += '</div>';
-  // 2 — the snapshot
   if (keys) {
     html += '<div data-step="snapshot" style="margin-top:16px"><label class="f">2 · THE SNAPSHOT</label>';
     if (snapshot) {
@@ -67,7 +59,6 @@ function render() {
     }
     html += '</div>';
   }
-  // 3 — restore
   if (keys && snapshot) {
     html += '<div data-step="restore" style="margin-top:16px"><label class="f">3 · RESTORE</label>' +
       '<div class="fb-hint" data-restore-says>The snapshot is proved before anything is put in place, and held to the keys above: another identity\'s snapshot is refused. The identity will be as it was when that snapshot was made — what it lived afterwards on the old machine is not in it. If the witness attested records this snapshot does not hold, the next anchor is refused as a rollback and the identity enters SAFE until you deal with it — see Backups &amp; Keys after the restore.</div>' +
@@ -138,7 +129,6 @@ function wire() {
   if (c) c.onclick = () => { step = 'closed'; said = null; render(); };
 }
 
-// applyRestoreNew takes the server's answers.
 export function applyRestoreNew(reply) {
   if (!reply) return;
   secretsOK = reply.secrets_ok !== false;
@@ -153,5 +143,4 @@ export function applyRestoreNew(reply) {
   }
 }
 
-// For the tests.
 export function restoreDoorState() { return { step, busy, keys, snapshot, secretsOK }; }

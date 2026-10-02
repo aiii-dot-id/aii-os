@@ -3,8 +3,9 @@ package acceptance
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,14 +145,10 @@ func loadLines[T any](path string, validate func(T) error) ([]T, error) {
 			continue
 		}
 		var v T
-		dec := json.NewDecoder(bytes.NewReader(line))
-		dec.DisallowUnknownFields()
-		dec.UseNumber()
-		if err := dec.Decode(&v); err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", name, n, err)
-		}
-		if dec.More() {
+		if err := canonicaljson.DecodeStrictNumbers(line, &v); errors.Is(err, canonicaljson.ErrTrailingContent) {
 			return nil, fmt.Errorf("%s:%d: content after the object", name, n)
+		} else if err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", name, n, err)
 		}
 		if err := validate(v); err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", name, n, err)

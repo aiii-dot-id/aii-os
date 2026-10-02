@@ -60,7 +60,7 @@ func (s *Server) sendInteractionQuery(ctx context.Context, c *websocket.Conn, h 
 					}
 					q := *request.InteractionQuery
 					q.Window = request.InteractionWindow
-					page, err := current.Interactions.QueryInteractions(q)
+					page, err := current.Interactions.QueryInteractions(ctx, q)
 					if current != s.currentHandler() {
 						err = &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "history owner replaced"}
 					}
@@ -134,7 +134,7 @@ func (s *Server) serveInteractionDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	req := interaction.ReadRequest{Version: interaction.Version, Source: q.Get("source"), ID: q.Get("id"), Incarnation: q.Get("incarnation"), SHA256: q.Get("sha256"), Offset: offset, Length: interaction.MaxReadBytes}
-	result, err := h.Interactions.ReadInteraction(req)
+	result, err := h.Interactions.ReadInteraction(r.Context(), req)
 	if h != s.currentHandler() {
 		err = &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "history owner replaced"}
 	}

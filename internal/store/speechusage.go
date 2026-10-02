@@ -26,6 +26,8 @@ func (s *Store) AddSpeechUse(u SpeechUse) error {
 }
 
 func (s *Store) SpeechUsed(period string) ([]SpeechUse, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	rows, err := s.db.Query(`SELECT provider, direction, period, requests, characters, ms
 		FROM speech_usage WHERE period = ? ORDER BY characters + ms DESC, provider`, period)
 	if err != nil {

@@ -1,9 +1,10 @@
-//go:build darwin
+//go:build darwin || ios
 
 package updates
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,8 +14,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"golang.org/x/sys/unix"
 )
-
-const previousBundleName = ".aii-os-previous.app"
 
 func extractBundleArchive(archivePath, destDir string) (string, error) {
 	cmd := exec.Command("/usr/bin/ditto", "-x", "-k", archivePath, destDir)
@@ -101,18 +100,18 @@ func swapBundles(a, b string) error {
 	return nil
 }
 
-func applyBundleUpdate(bundlePath string, archiveBytes []byte) (retErr error) {
+func applyBundleUpdate(tgt target, archiveBytes []byte, owner string) (already bool, retErr error) {
 
 	if cap := hostcap.Can(hostcap.Subprocess); !cap.Available {
-		return fmt.Errorf("cannot install an application bundle here: %s "+
+		return false, fmt.Errorf("cannot install an application bundle here: %s "+
 			"(verifying one requires ditto, codesign and spctl)", cap.Reason)
 	}
 
-	parent := filepath.Dir(bundlePath)
+	parent := filepath.Dir(tgt.path)
 
 	stageDir, err := os.MkdirTemp(parent, ".aii-update-")
 	if err != nil {
-		return fmt.Errorf("stage beside %s: %w", bundlePath, err)
+		return false, fmt.Errorf("stage beside %s: %w", tgt.path, err)
 	}
 
 	keepStage := false
@@ -125,24 +124,44 @@ func applyBundleUpdate(bundlePath string, archiveBytes []byte) (retErr error) {
 
 	archivePath := filepath.Join(stageDir, "payload.zip")
 	if err := os.WriteFile(archivePath, archiveBytes, 0o600); err != nil {
-		return fmt.Errorf("write payload: %w", err)
+		return false, fmt.Errorf("write payload: %w", err)
 	}
 	staged, err := extractBundleArchive(archivePath, stageDir)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := verifyStagedBundle(staged, bundlePath); err != nil {
-		return err
+	if err := verifyStagedBundle(staged, tgt.path); err != nil {
+		return false, err
 	}
+	already, keepStage, err = installBundle(tgt, staged, owner)
+	return already, err
+}
 
-	prev := filepath.Join(parent, previousBundleName)
-	if err := os.RemoveAll(prev); err != nil {
-		return fmt.Errorf("clear previous bundle backup: %w", err)
+func installBundle(tgt target, staged, owner string) (already, keepStage bool, err error) {
+	want, err := imageHash(staged)
+	if err != nil {
+		return false, false, fmt.Errorf("read the staged bundle to compare: %w", err)
 	}
+	already, err = tgt.replace(want, func(have string) error {
 
-	keep, err := installSwapped(bundlePath, staged, prev)
-	keepStage = keep
-	return err
+		if err := writeRecord(tgt.record, updatePending{BackupSHA256: have, NewSHA256: want, Owner: owner}); err != nil {
+			return errors.Join(fmt.Errorf("write update record: %w", err), withdraw(tgt.record))
+		}
+		replaceStep("recorded")
+
+		if err := os.RemoveAll(tgt.backup); err != nil {
+			return errors.Join(fmt.Errorf("clear previous bundle backup: %w", err), withdraw(tgt.record))
+		}
+		keep, err := installSwapped(tgt.path, staged, tgt.backup)
+		keepStage = keep
+		if err != nil && !keep {
+
+			return errors.Join(err, withdraw(tgt.record))
+		}
+
+		return err
+	})
+	return already, keepStage, err
 }
 
 var renameOutgoing = os.Rename
@@ -164,10 +183,10 @@ func installSwapped(bundlePath, staged, prev string) (bool, error) {
 	return false, nil
 }
 
-func applyIfBundle(exePath string, archiveBytes []byte) (bool, error) {
-	bundlePath, ok := bundleRoot(exePath)
-	if !ok {
-		return false, nil
+func applyIfBundle(tgt target, archiveBytes []byte, owner string) (handled, already bool, err error) {
+	if !tgt.bundle {
+		return false, false, nil
 	}
-	return true, applyBundleUpdate(bundlePath, archiveBytes)
+	already, err = applyBundleUpdate(tgt, archiveBytes, owner)
+	return true, already, err
 }

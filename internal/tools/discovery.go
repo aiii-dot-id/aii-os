@@ -352,38 +352,41 @@ func (r *Registry) Offer(ref string) (string, error) {
 	case StateOffered:
 		return name, nil
 	}
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	if _, still := r.tools[name]; !still {
-		return name, fmt.Errorf("%s was deactivated", name)
-	}
-	if len(r.offerOrder) >= MaxOffered {
-		return name, fmt.Errorf("the offer is full (%d of %d): release one of %s first", len(r.offerOrder), MaxOffered, strings.Join(r.offerOrder, ", "))
-	}
-	if r.offered == nil {
-		r.offered = map[string]bool{}
-	}
-	r.offered[name] = true
-	r.offerOrder = append(r.offerOrder, name)
-	seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
-	if i, standing := r.seatIndexLocked(name); standing {
+	return name, r.changeStanding(func() error {
+		if _, still := r.tools[name]; !still {
+			return fmt.Errorf("%s was deactivated", name)
+		}
 
-		r.standing[i] = seat
-	} else {
+		if r.offered[name] {
+			return nil
+		}
+		if len(r.offerOrder) >= MaxOffered {
+			return fmt.Errorf("the offer is full (%d of %d): release one of %s first", len(r.offerOrder), MaxOffered, strings.Join(r.offerOrder, ", "))
+		}
+		if r.offered == nil {
+			r.offered = map[string]bool{}
+		}
+		r.offered[name] = true
+		r.offerOrder = append(r.offerOrder, name)
+		seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
+		if i, standing := r.seatIndexLocked(name); standing {
 
-		if len(r.standing) >= MaxOffered {
-			for i, s := range r.standing {
-				if !r.offered[s.Name] {
-					r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
-					break
+			r.standing[i] = seat
+		} else {
+
+			if len(r.standing) >= MaxOffered {
+				for i, s := range r.standing {
+					if !r.offered[s.Name] {
+						r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
+						break
+					}
 				}
 			}
+			r.standing = append(r.standing, seat)
 		}
-		r.standing = append(r.standing, seat)
-	}
-	delete(r.told, name)
-	r.recordStandingLocked()
-	return name, nil
+		delete(r.told, name)
+		return nil
+	})
 }
 
 func (r *Registry) Release(ref string) (string, error) {
@@ -391,19 +394,18 @@ func (r *Registry) Release(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	i, standing := r.seatIndexLocked(name)
-	if !r.offered[name] && !standing {
-		return name, fmt.Errorf("%s is not in the offer", name)
-	}
-	r.unofferLocked(name)
-	if standing {
-		r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
-	}
-	delete(r.told, name)
-	r.recordStandingLocked()
-	return name, nil
+	return name, r.changeStanding(func() error {
+		i, standing := r.seatIndexLocked(name)
+		if !r.offered[name] && !standing {
+			return fmt.Errorf("%s is not in the offer", name)
+		}
+		r.unofferLocked(name)
+		if standing {
+			r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
+		}
+		delete(r.told, name)
+		return nil
+	})
 }
 
 type OfferNotice struct {
@@ -447,10 +449,24 @@ func (r *Registry) MarkOfferNoticesTold(names []string) {
 	}
 }
 
-func (r *Registry) recordStandingLocked() {
-	if r.persistOffer != nil {
-		r.persistOffer(append([]StandingSeat(nil), r.standing...))
+func (r *Registry) changeStanding(change func() error) error {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	var persist func([]StandingSeat)
+	var seats []StandingSeat
+	err := func() error {
+		r.regMu.Lock()
+		defer r.regMu.Unlock()
+		if err := change(); err != nil {
+			return err
+		}
+		persist, seats = r.persistOffer, append([]StandingSeat(nil), r.standing...)
+		return nil
+	}()
+	if persist != nil {
+		persist(seats)
 	}
+	return err
 }
 
 func (r *Registry) unofferLocked(name string) {

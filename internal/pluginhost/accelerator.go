@@ -112,8 +112,8 @@ func ParseAccelerators(raw []byte, variantIDs []string) (map[string]AcceleratorP
 	return profiles, nil
 }
 
-func loadAccelerator(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest, variantID string) (*AcceleratorProfile, error) {
-	profiles, err := loadAccelerators(pkgPath, res, m)
+func loadAccelerator(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest, variantID string) (*AcceleratorProfile, error) {
+	profiles, err := loadAccelerators(pkgPath, res, held, m)
 	if err != nil {
 		return nil, err
 	}
@@ -124,11 +124,11 @@ func loadAccelerator(pkgPath string, res *packagefmt.Result, m *packagefmt.Manif
 	return &p, nil
 }
 
-func loadAccelerators(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest) (map[string]AcceleratorProfile, error) {
+func loadAccelerators(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) (map[string]AcceleratorProfile, error) {
 	if _, present := res.FileDigests[AcceleratorFile]; !present {
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, AcceleratorFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, AcceleratorFile)
 	if err != nil {
 		return nil, err
 	}

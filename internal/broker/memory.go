@@ -108,7 +108,7 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 	project := st.ActiveProjectID()
 
 	if args.Supersedes != "" {
-		old, found, err := st.PluginMemoryGetScoped(b.storageScope(), args.Supersedes)
+		old, found, err := st.PluginMemoryGet(b.storageScope(), args.Supersedes)
 		if err != nil {
 			return nil, fmt.Errorf("broker: memory.remember: %w", err)
 		}
@@ -132,8 +132,9 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 		return nil, fmt.Errorf("broker: memory.remember: %w", err)
 	}
 	bestID, best := "", 0.0
+	like := trigram.Against(text)
 	for _, h := range res.Hits {
-		if sim := trigram.Similarity(h.Text, text); sim > best {
+		if sim := like(h.Text); sim > best {
 			best, bestID = sim, h.ID
 		}
 	}
@@ -160,7 +161,7 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 
 func (b *Binding) addMemory(p invokeParams, st *store.Store, text, project string, temp bool, now time.Time, supersedes string) (string, []byte, error) {
 	id := "pm_" + randomHex(16)
-	err := st.PluginMemoryAddScoped(b.storageScope(), store.PluginMemory{
+	err := st.PluginMemoryAdd(b.storageScope(), store.PluginMemory{
 		ID: id, PluginID: b.pluginID, Text: text, Project: project,
 		Attribution: "plugin", Temp: temp, CreatedAt: now,
 	}, b.host.cfg.maxMemories(), supersedes)
@@ -212,7 +213,7 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	now := time.Now()
 
 	if args.ID != "" {
-		m, found, err := st.PluginMemoryGetScoped(b.storageScope(), args.ID)
+		m, found, err := st.PluginMemoryGet(b.storageScope(), args.ID)
 		if err != nil {
 			return nil, fmt.Errorf("broker: memory.recall: %w", err)
 		}

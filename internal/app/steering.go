@@ -19,38 +19,32 @@ const maxSteerChars = 8_000
 
 var errSteerQueueFull = fmt.Errorf("the identity is holding %d unread messages already; wait for the next tool call", maxPendingSteers)
 
-func (a *App) AdmitOperator(text string) (steered bool, err error) {
-	return a.admit(roleOperator, text)
-}
-
 func (a *App) admitOperatorChat(ctx context.Context, text string) (bool, error) {
-	return a.admitObserved(roleOperator, text, nil, ctx)
+	return a.admit(roleOperator, text, nil, ctx)
 }
 
 func (a *App) AdmitParticipant(text string) (steered bool, err error) {
-	return a.admit(roleParticipant, text)
+	return a.admit(roleParticipant, text, nil, nil)
 }
+
+var errWordsStopping = fmt.Errorf("%w; the words were not delivered", errStopping)
 
 const admitAttempts = 8
 
-func (a *App) admit(role, text string) (steered bool, err error) {
-	return a.admitWith(role, text, nil)
-}
-
-func (a *App) admitWith(role, text string, voice *voiceBinding) (steered bool, err error) {
-	return a.admitObserved(role, text, voice, nil)
-}
-
-func (a *App) admitObserved(role, text string, voice *voiceBinding, recordCtx context.Context) (steered bool, err error) {
+func (a *App) admit(role, text string, voice *voiceBinding, recordCtx context.Context) (steered bool, err error) {
 	if a.turnGate == nil {
 		return false, errors.New("application turn gate is not initialized")
+	}
+
+	if a.lifetime().Err() != nil {
+		return false, errWordsStopping
 	}
 	for i := 0; i < admitAttempts; i++ {
 		if a.TryBeginTurn() {
 
 			return false, nil
 		}
-		steered, err = a.steerObserved(role, text, voice, recordCtx)
+		steered, err = a.steer(role, text, voice, recordCtx)
 		if err != nil || steered {
 			return steered, err
 		}
@@ -60,12 +54,12 @@ func (a *App) admitObserved(role, text string, voice *voiceBinding, recordCtx co
 }
 
 func (a *App) TryBeginTurn() bool {
-	if a.turnGate == nil {
+	if a.turnGate == nil || a.lifetime().Err() != nil {
 		return false
 	}
 	select {
 	case <-a.turnGate:
-		a.holdTurnForeground()
+		a.turnTaken()
 		return true
 	default:
 		return false
@@ -75,7 +69,7 @@ func (a *App) TryBeginTurn() bool {
 func (a *App) EndTurn() { a.releaseTurn() }
 
 func (a *App) Steer(text string) (bool, error) {
-	return a.steer(roleOperator, text)
+	return a.steer(roleOperator, text, nil, nil)
 }
 
 type steerEntry struct {
@@ -97,6 +91,13 @@ type voiceBinding struct {
 	text string
 }
 
+func (b *voiceBinding) ref() string {
+	if b == nil || b.seq == 0 {
+		return ""
+	}
+	return voiceRefKey(b.session, b.seq)
+}
+
 func (b *voiceBinding) release(why string) {
 	b.once.Do(func() {
 		if b.done != nil {
@@ -111,15 +112,7 @@ const (
 	roleParticipant = "participant"
 )
 
-func (a *App) steer(role, text string) (bool, error) {
-	return a.steerWith(role, text, nil)
-}
-
-func (a *App) steerWith(role, text string, voice *voiceBinding) (bool, error) {
-	return a.steerObserved(role, text, voice, nil)
-}
-
-func (a *App) steerObserved(role, text string, voice *voiceBinding, recordCtx context.Context) (bool, error) {
+func (a *App) steer(role, text string, voice *voiceBinding, recordCtx context.Context) (bool, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false, errors.New("nothing was said")
@@ -310,13 +303,13 @@ func releaseVoice(entries []steerEntry, why string) {
 	}
 }
 
-var voiceSynthesize = (*App).synthesizeReply
-
 func (a *App) settleVoice(ctx context.Context, reply string) {
 	a.turnMu.Lock()
 	held := a.turnVoice
 	a.turnVoice = nil
 	a.turnMu.Unlock()
+
+	speak := a.speakHeard
 	if len(held) == 0 {
 
 		if strings.TrimSpace(reply) == "" {
@@ -324,6 +317,9 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 		}
 		if b := a.typedReplyVoice(); b != nil {
 			held = []*voiceBinding{b}
+			speak = func(ctx context.Context, b *voiceBinding, reply string) replyVerdict {
+				return voiceSynthesize(a, ctx, b.session, b.gen, reply)
+			}
 		} else {
 			return
 		}
@@ -337,7 +333,7 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 	var refused *voiceBinding
 	for _, b := range held {
 		if latest[b.session] == b && strings.TrimSpace(reply) != "" {
-			switch voiceSynthesize(a, ctx, b.session, b.gen, reply) {
+			switch speak(ctx, b, reply) {
 			case replyAdmitted:
 				b.spoken = true
 				shown = true
@@ -350,6 +346,8 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 			a.noteReplyOutcome(b.session, "the turn answered with silence")
 		}
 		b.release("settled")
+
+		a.retirePendingObservation(b)
 	}
 	if !shown && refused != nil && a.speakFallback(ctx, refused, reply) {
 

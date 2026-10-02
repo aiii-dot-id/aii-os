@@ -23,11 +23,7 @@ type PluginMemory struct {
 	UpdatedAt    time.Time
 }
 
-func (s *Store) PluginMemoryAdd(m PluginMemory, maxMemories int) error {
-	return s.PluginMemoryAddScoped(PluginScope{PluginID: m.PluginID}, m, maxMemories, "")
-}
-
-func (s *Store) PluginMemoryAddScoped(scope PluginScope, m PluginMemory, maxMemories int, supersedes string) error {
+func (s *Store) PluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories int, supersedes string) error {
 	if m.ID == "" || scope.PluginID == "" || m.Text == "" || (m.PluginID != "" && m.PluginID != scope.PluginID) {
 		return errors.New("plugin memory: id, plugin id and text are required")
 	}
@@ -106,11 +102,7 @@ func (s *Store) PluginMemoryAddScoped(scope PluginScope, m PluginMemory, maxMemo
 	return tx.Commit()
 }
 
-func (s *Store) PluginMemoryGet(pluginID, id string) (PluginMemory, bool, error) {
-	return s.PluginMemoryGetScoped(PluginScope{PluginID: pluginID}, id)
-}
-
-func (s *Store) PluginMemoryGetScoped(scope PluginScope, id string) (PluginMemory, bool, error) {
+func (s *Store) PluginMemoryGet(scope PluginScope, id string) (PluginMemory, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var m PluginMemory
@@ -135,41 +127,7 @@ func (s *Store) PluginMemoryGetScoped(scope PluginScope, id string) (PluginMemor
 	return m, true, nil
 }
 
-func (s *Store) PluginMemorySupersede(pluginID, oldID, newID string) error {
-	if oldID == "" || newID == "" || oldID == newID {
-		return fmt.Errorf("%w: a memory cannot supersede itself", ErrPluginMemoryNotFound)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.w().Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM plugin_memories WHERE plugin_id = ? AND id = ?`, pluginID, newID).Scan(&n); err != nil {
-		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %s is not a memory of this plugin", ErrPluginMemoryNotFound, newID)
-	}
-	res, err := tx.Exec(`UPDATE plugin_memories SET superseded_by = ?, updated_at = ?
-		WHERE plugin_id = ? AND id = ? AND superseded_by IS NULL`,
-		newID, time.Now().UTC().Format(time.RFC3339Nano), pluginID, oldID)
-	if err != nil {
-		return err
-	}
-	if k, _ := res.RowsAffected(); k == 0 {
-		return fmt.Errorf("%w: %s is not a current memory of this plugin", ErrPluginMemoryNotFound, oldID)
-	}
-	return tx.Commit()
-}
-
-func (s *Store) PluginMemoryCount(pluginID string) (int, error) {
-	return s.PluginMemoryCountScoped(PluginScope{PluginID: pluginID})
-}
-
-func (s *Store) PluginMemoryCountScoped(scope PluginScope) (int, error) {
+func (s *Store) PluginMemoryCount(scope PluginScope) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var n int
@@ -178,26 +136,12 @@ func (s *Store) PluginMemoryCountScoped(scope PluginScope) (int, error) {
 	return n, err
 }
 
-func (s *Store) PluginMemoryClearTemp(pluginID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.w().Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := clearPluginMemoryTemp(tx, &pluginID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func clearPluginMemoryTemp(h dbi, pluginID *string) error {
 	where, args := pluginTempWhere(pluginID)
 	return clearPluginMemoryWhere(h, where, args)
 }
 
-func (s *Store) PluginMemoryClearTempScoped(scope PluginScope) error {
+func (s *Store) PluginMemoryClearTemp(scope PluginScope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.w().Begin()

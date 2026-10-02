@@ -100,31 +100,15 @@ func icns(render func(size int) []byte) []byte {
 	return b.Bytes()
 }
 
-func parseICNS(data []byte) (map[string][]byte, error) {
-	if len(data) < 8 || string(data[:4]) != "icns" || int(binary.BigEndian.Uint32(data[4:])) != len(data) {
-		return nil, fmt.Errorf("not an icns file")
-	}
-	out := map[string][]byte{}
-	for p := 8; p < len(data); {
-		if p+8 > len(data) {
-			return nil, fmt.Errorf("truncated entry at %d", p)
-		}
-		n := int(binary.BigEndian.Uint32(data[p+4:]))
-		if n < 8 || p+n > len(data) {
-			return nil, fmt.Errorf("bad entry length %d at %d", n, p)
-		}
-		out[string(data[p:p+4])] = data[p+8 : p+n]
-		p += n
-	}
-	return out, nil
-}
-
 func parseICO(data []byte) ([]sizedImage, error) {
 	le := binary.LittleEndian
 	if len(data) < 6 || le.Uint16(data[0:]) != 0 || le.Uint16(data[2:]) != 1 {
 		return nil, fmt.Errorf("not an ico file")
 	}
 	n := int(le.Uint16(data[4:]))
+	if len(data) < 6+16*n {
+		return nil, fmt.Errorf("ico directory truncated: %d entries in %d bytes", n, len(data))
+	}
 	var out []sizedImage
 	for i := 0; i < n; i++ {
 		e := data[6+16*i:]
@@ -139,37 +123,4 @@ func parseICO(data []byte) ([]sizedImage, error) {
 		out = append(out, sizedImage{size, data[off : off+ln]})
 	}
 	return out, nil
-}
-
-func decodeIconImage(data []byte) (*image.NRGBA, error) {
-	if bytes.HasPrefix(data, []byte("\x89PNG")) {
-		img, err := png.Decode(bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		n, ok := img.(*image.NRGBA)
-		if !ok {
-			return nil, fmt.Errorf("PNG is %T, want NRGBA", img)
-		}
-		return n, nil
-	}
-	le := binary.LittleEndian
-	if len(data) < 40 || le.Uint32(data) != 40 || le.Uint16(data[14:]) != 32 {
-		return nil, fmt.Errorf("not a 32-bit DIB")
-	}
-	w, h := int(int32(le.Uint32(data[4:]))), int(int32(le.Uint32(data[8:])))/2
-	if len(data) < 40+w*h*4 {
-		return nil, fmt.Errorf("DIB truncated")
-	}
-	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	px := data[40:]
-	for y := 0; y < h; y++ {
-		row := px[(h-1-y)*w*4:]
-		for x := 0; x < w; x++ {
-			q := row[x*4:]
-			i := img.PixOffset(x, y)
-			img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = q[2], q[1], q[0], q[3]
-		}
-	}
-	return img, nil
 }

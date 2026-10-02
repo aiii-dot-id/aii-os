@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || ios
 
 package oauth
 
@@ -30,13 +30,23 @@ const keychainFresh = time.Minute
 
 var (
 	keychainMu   sync.Mutex
-	keychainKept = map[string]keychainEntry{}
+	keychainKept = map[string]*keychainEntry{}
 )
 
 type keychainEntry struct {
 	bytes  []byte
 	at     time.Time
 	missed bool
+	done   chan struct{}
+}
+
+func (e *keychainEntry) answered() bool {
+	select {
+	case <-e.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func forgetAdopted(service string) {
@@ -45,35 +55,46 @@ func forgetAdopted(service string) {
 	keychainMu.Unlock()
 }
 
-func adoptedBytes(service, path string) ([]byte, error) {
+func adoptedBytes(ctx context.Context, service, path string) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err == nil || !os.IsNotExist(err) || service == "" {
 		return raw, err
 	}
 	keychainMu.Lock()
-	if kept, ok := keychainKept[service]; ok && time.Since(kept.at) < keychainFresh {
+	e := keychainKept[service]
+	if e != nil && (!e.answered() || time.Since(e.at) < keychainFresh) {
 		keychainMu.Unlock()
-		if kept.missed {
-			return nil, err
+		select {
+		case <-e.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		return kept.bytes, nil
-	}
-	keychainMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), keychainReadTimeout)
-	defer cancel()
-	out, kerr := keychainLookup(ctx, service)
-	if kerr != nil {
-
-		keychainMu.Lock()
-		keychainKept[service] = keychainEntry{missed: true, at: time.Now()}
+	} else {
+		e = &keychainEntry{done: make(chan struct{})}
+		keychainKept[service] = e
 		keychainMu.Unlock()
+		lookupKeychain(ctx, service, e)
+	}
+	if e.missed {
 		return nil, err
 	}
-	got := bytes.TrimSpace(out)
+	return e.bytes, nil
+}
+
+func lookupKeychain(ctx context.Context, service string, e *keychainEntry) {
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), keychainReadTimeout)
+	defer cancel()
+	out, kerr := keychainLookup(lctx, service)
 	keychainMu.Lock()
-	keychainKept[service] = keychainEntry{bytes: got, at: time.Now()}
-	keychainMu.Unlock()
-	return got, nil
+	defer keychainMu.Unlock()
+	e.at = time.Now()
+	if kerr != nil {
+
+		e.missed = true
+	} else {
+		e.bytes = bytes.TrimSpace(out)
+	}
+	close(e.done)
 }
 
 func keychainNote(service string) string {

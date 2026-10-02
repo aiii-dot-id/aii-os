@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -58,7 +59,8 @@ func (a *App) gradeResult(req dashboard.GradeRequest) (uint64, error) {
 	if comment != "" {
 		text += " — " + comment
 	}
-	ref, err := a.engine.RecordConversationRef(context.Background(), roleOperator, text, interaction.Details{Grade: &interaction.Grade{Session: session, Grade: grade, Item: req.Item}})
+
+	ref, err := a.engine.RecordConversationRef(context.Background(), string(interaction.Operator), text, interaction.Details{Grade: &interaction.Grade{Session: session, Grade: grade, Item: req.Item}})
 	seq := ref.Sequence
 	if err != nil {
 		return 0, fmt.Errorf("the grade could not be recorded: %w", err)
@@ -96,10 +98,10 @@ func (a *App) gradesOf(sessions []string) map[string]dashboard.GradeView {
 	out := map[string]dashboard.GradeView{}
 
 	for _, t := range turns {
-		if t.Role != roleOperator || !strings.HasPrefix(t.Content, "[grade ") {
+		if t.Role != string(interaction.Operator) {
 			continue
 		}
-		session, grade, comment, ok := parseGradeTurn(t.Content)
+		session, grade, comment, ok := gradeOfTurn(t)
 		if !ok || !want[session] {
 			continue
 		}
@@ -112,6 +114,19 @@ func (a *App) gradesOf(sessions []string) map[string]dashboard.GradeView {
 }
 
 const gradeScanTurns = 200
+
+func gradeOfTurn(t store.ConversationTurn) (session, grade, comment string, ok bool) {
+	g := t.Details.Grade
+	if g == nil {
+		return parseGradeTurn(t.Content)
+	}
+	tail := t.Content
+	if _, after, found := strings.Cut(tail, "] "); found {
+		tail = after
+	}
+	_, comment, _ = strings.Cut(tail, " — ")
+	return g.Session, g.Grade, strings.TrimSpace(comment), g.Session != "" && gradeWords(g.Grade)
+}
 
 func parseGradeTurn(content string) (session, grade, comment string, ok bool) {
 	rest, found := strings.CutPrefix(content, "[grade ")

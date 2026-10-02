@@ -26,8 +26,6 @@ import (
 
 const WorkerSubcommand = "plugin-worker"
 
-var harnessLane func() (string, []string, error)
-
 func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door *ledgerAdapter) (*pluginhost.Options, error) {
 	cfg := a.configSnapshot()
 	opts := &pluginhost.Options{WebhookURL: a.webhookURL}
@@ -51,7 +49,7 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	}
 	opts.NativePlaces = func() []*firewall.Rule {
 		current := a.configSnapshot()
-		return substrateObjects(current, current.Tools.CWD)
+		return substrateObjects(a.activeConfig(current), current.Tools.CWD)
 	}
 	var err error
 
@@ -79,9 +77,7 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	}
 	a.catalog.Open(cfg.Plugins.CatalogDir, filepath.Join(filepath.Dir(cfg.Identity.LedgerPath), "plugins-catalog"), opts.Roots.PlatformRelease, a.effectiveCatalogURL)
 
-	if opts.Facilities, err = a.hostFacilities(); err != nil {
-		return nil, fmt.Errorf("host facilities: %w", err)
-	}
+	opts.Facilities = hostFacilities()
 	if opts.WorkerBinary, opts.WorkerArgs, err = a.resolveWorkerBinary(); err != nil {
 		return nil, err
 	}
@@ -154,7 +150,7 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 
 			InSAFE: func() bool { return a.currentMode() == ModeSafe },
 
-			Sandbox: newPluginSandbox(toolReg, a.ensureRing5Policy(), cfg.Identity.LedgerPath),
+			Sandbox: newPluginSandbox(toolReg, cfg.Identity.LedgerPath),
 
 			OwnListener: a.ownListener,
 			Guard:       a.brokerGuard,
@@ -173,13 +169,15 @@ func (a *App) pokePluginSweep() {
 	default:
 	}
 
-	if a.facility != nil {
-		a.facility.Poke("app")
+	a.pluginMu.Lock()
+	f := a.facility
+	a.pluginMu.Unlock()
+	if f != nil {
+		f.Poke("app")
 	}
 }
 
 func (a *App) startPluginSweep(ctx context.Context) {
-	a.sweepPoke = make(chan struct{}, 1)
 
 	a.pluginFacility().Attach(ctx)
 	a.watchFacility(ctx)
@@ -321,10 +319,6 @@ func (a *App) pluginSkipViews() []dashboard.PluginSkipView {
 	return out
 }
 
-func activationIsCurrent(pkg, hash string, meta activePkgMeta) bool {
-	return pkg == meta.pkg && hash != "" && hash == meta.hash
-}
-
 func (a *App) replacePolicy(cfg Config) {
 
 	if a.toolReg != nil && a.applySubstrate(cfg) {
@@ -358,7 +352,7 @@ func trustFingerprint(dir string) string {
 }
 
 func fetchModel(ctx context.Context, url string, offset int64, w io.Writer) (int64, error) {
-	if err := tools.FetchGuard(ctx, url); err != nil {
+	if err := firewall.FetchGuard(ctx, url); err != nil {
 		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -369,7 +363,7 @@ func fetchModel(ctx context.Context, url string, offset int64, w io.Writer) (int
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	client := tools.GuardedClient(30*time.Minute, nil, nil)
+	client := firewall.GuardedClient(30*time.Minute, nil, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
@@ -379,7 +373,7 @@ func fetchModel(ctx context.Context, url string, offset int64, w io.Writer) (int
 	case resp.StatusCode == http.StatusPartialContent:
 	case resp.StatusCode == http.StatusOK && offset > 0:
 
-		return 0, fmt.Errorf("the server does not resume; the partial download will be discarded and refetched")
+		return 0, fmt.Errorf("%w; the partial download will be discarded and refetched", pluginhost.ErrNoResume)
 	case resp.StatusCode == http.StatusOK:
 	default:
 		return 0, fmt.Errorf("the model server answered %d", resp.StatusCode)
@@ -424,6 +418,16 @@ func activationPosture(capabilities []string, granted bool) string {
 		return signed + ", brokered (operator grant active)"
 	}
 	return signed + ", quarantine, no operator grant"
+}
+
+func (a *App) pluginGranted(id string) bool {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	if a.cfg == nil {
+		return false
+	}
+	_, ok := a.cfg.Plugins.Grants[id]
+	return ok
 }
 
 func (a *App) acquirer() *pluginhost.Acquirer {
@@ -487,6 +491,10 @@ func (a *App) RetryPlugin(id string) error {
 	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
 		return fmt.Errorf("plugins: refusing to retry %q — not a plain plugin id", id)
 	}
+
+	if acq := a.acquirer(); acq != nil {
+		acq.Reselect(id)
+	}
 	if !a.pluginFacility().Retry(id) {
 		return fmt.Errorf("plugins: %q is not a plugin this host has — nothing to try again", id)
 	}
@@ -509,6 +517,13 @@ type pendingMark struct{ phase, text string }
 
 func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
 	byID := map[string]dashboard.PluginPendingView{}
+
+	chosen := map[string]*dashboard.PluginSelectionView{}
+	for _, v := range a.pluginFacility().Snapshot().Instances {
+		if s := latestSelection(v); s != nil {
+			chosen[v.ID] = s
+		}
+	}
 	if acq := a.acquirer(); acq != nil {
 		for _, st := range acq.Snapshot() {
 			v := dashboard.PluginPendingView{ID: st.PluginID, Version: st.Version, Phase: st.Phase, Summary: st.Summary(),
@@ -547,7 +562,8 @@ func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
 		return nil
 	}
 	out := make([]dashboard.PluginPendingView, 0, len(byID))
-	for _, v := range byID {
+	for id, v := range byID {
+		v.Selection = chosen[id]
 		out = append(out, v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

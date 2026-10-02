@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,7 +17,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/bbb"
 	"github.com/aiii-dot-id/aii-os/internal/consolewin"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
-	"github.com/aiii-dot-id/aii-os/internal/workercmd"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 type State string
@@ -134,15 +133,6 @@ type Spec struct {
 	VerifyArtifact func() error
 
 	ExitMeaning func(code int) string
-
-	Log *log.Logger
-}
-
-func (s Spec) logger() *log.Logger {
-	if s.Log != nil {
-		return s.Log
-	}
-	return log.Default()
 }
 
 func (s Spec) readyProvenance() string {
@@ -161,19 +151,19 @@ func (s Spec) readyTimeout() time.Duration {
 
 func WorkerExitMeaning(code int) string {
 	switch code {
-	case 0:
+	case bbb.ExitClean:
 		return "clean shutdown (stdin EOF)"
-	case 1:
+	case bbb.ExitUsage:
 		return "usage error"
-	case 2:
+	case bbb.ExitAdmission:
 		return "module load/admission failure"
-	case 3:
+	case bbb.ExitInvocation:
 		return "fatal invocation failure (trap, timeout, resource kill, ABI or frame-budget violation)"
-	case 4:
+	case bbb.ExitStream:
 		return "stream failure (framing violation or broken pipe)"
-	case workercmd.ExitDescriptorMismatch:
+	case bbb.ExitDescriptorMismatch:
 		return "descriptor disagrees with the packaged contract"
-	case workercmd.ExitDescriptorUnasked:
+	case bbb.ExitDescriptorUnasked:
 		return "descriptor proof failed before comparison"
 	case -1:
 		return "killed by signal (no exit code)"
@@ -497,7 +487,7 @@ func (s *Supervisor) spawnAndAwaitReady(ctx context.Context) (spawnErr error) {
 		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: cerr}
 	}
 	if cmsg != "" {
-		s.spec.logger().Printf("plugin %s: native child %s", s.spec.PluginID, cmsg)
+		logsink.Info("plugins.start", "plugin %s: native child %s", s.spec.PluginID, cmsg)
 	}
 	c.contained = contained
 	if s.spec.RLimitASBytes > 0 {
@@ -512,7 +502,7 @@ func (s *Supervisor) spawnAndAwaitReady(ctx context.Context) (spawnErr error) {
 			return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
 		}
 		if msg != "" {
-			s.spec.logger().Printf("plugin %s: resource envelope: %s", s.spec.PluginID, msg)
+			logsink.Info("plugins.start", "plugin %s: resource envelope: %s", s.spec.PluginID, msg)
 		}
 	}
 
@@ -644,7 +634,6 @@ func (s *Supervisor) pumpFrames(c *child, stdout io.Reader) {
 }
 
 func (s *Supervisor) pumpStderr(c *child, stderr io.Reader) {
-	lg := s.spec.logger()
 	br := bufio.NewReader(stderr)
 	buf := make([]byte, 0, 256)
 	flush := func() {
@@ -654,7 +643,7 @@ func (s *Supervisor) pumpStderr(c *child, stderr io.Reader) {
 		line := string(buf)
 		buf = buf[:0]
 		c.noteLine(line)
-		lg.Printf("plugin %s: %s", s.spec.PluginID, line)
+		logsink.Debug("plugins.session", "plugin %s: %s", s.spec.PluginID, line)
 		if s.spec.ReadyMark != "" && strings.Contains(line, s.spec.ReadyMark) {
 			c.tailMu.Lock()
 			if c.readyLine == "" {
@@ -724,12 +713,13 @@ func (s *Supervisor) reap(c *child, gen int) {
 		s.mu.Unlock()
 		return
 	}
+
 	if c.cleanupErr != nil {
 		s.state = StateStopped
 		s.stopReason = c.cleanupErr
 		s.publishStateLocked()
-		s.spec.logger().Printf("plugin %s: %v", s.spec.PluginID, s.stopReason)
 		s.mu.Unlock()
+		logsink.Warn("plugins.error", "plugin %s: %v", s.spec.PluginID, c.cleanupErr)
 		return
 	}
 	if s.state == StateStopped {
@@ -738,12 +728,21 @@ func (s *Supervisor) reap(c *child, gen int) {
 		return
 	}
 	code := exitCode(err)
-	s.spec.logger().Printf("plugin %s: child exited code=%d meaning=%q restarts=%d",
-		s.spec.PluginID, code, s.exitMeaning(code), s.restarts)
+	meaning, restarts := s.exitMeaning(code), s.restarts
+
+	var lastWords string
+	if tail := c.tailLines(); code != 0 && len(tail) > 0 {
+		lastWords = "; stderr tail: " + strings.Join(tail, " | ")
+	}
+	exited := func() {
+		logsink.Info("plugins.end", "plugin %s: child exited code=%d meaning=%q restarts=%d%s",
+			s.spec.PluginID, code, meaning, restarts, lastWords)
+	}
 
 	if s.state == StateStarting {
 
 		s.mu.Unlock()
+		exited()
 		return
 	}
 	if c.cancelled.Load() {
@@ -752,26 +751,30 @@ func (s *Supervisor) reap(c *child, gen int) {
 		s.state = StateRestarting
 		s.child = nil
 		s.mu.Unlock()
-		s.spec.logger().Printf("plugin %s: child exited on the host's cancel of a call; reviving now, not counted (restarts=%d)",
+		exited()
+		logsink.Info("plugins.end", "plugin %s: child exited on the host's cancel of a call; reviving now, not counted (restarts=%d)",
 			s.spec.PluginID, n)
 		go s.restart(n)
 		return
 	}
 
 	last := &ChildExitError{PluginID: s.spec.PluginID, Code: code,
-		Meaning: s.exitMeaning(code), Phase: "run", StderrTail: c.tailLines()}
+		Meaning: meaning, Phase: "run", StderrTail: c.tailLines()}
 	if !s.countRestartLocked(time.Now(), last) {
-		s.spec.logger().Printf("plugin %s: DEACTIVATED: %v", s.spec.PluginID, s.stopReason)
+		reason := s.stopReason
 		s.mu.Unlock()
+		exited()
+		logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, reason)
 		return
 	}
 	n := s.restarts
 	s.state = StateRestarting
 	s.child = nil
 	s.mu.Unlock()
+	exited()
 
 	delay := s.spec.Backoff.delay(n)
-	s.spec.logger().Printf("plugin %s: restart %d/%d in %s",
+	logsink.Info("plugins.end", "plugin %s: restart %d/%d in %s",
 		s.spec.PluginID, n, s.spec.Backoff.maxRestarts(), delay)
 	time.AfterFunc(delay, func() { s.restart(n) })
 }
@@ -807,20 +810,21 @@ func (s *Supervisor) restart(n int) {
 			s.state = StateStopped
 			s.stopReason = err
 			s.publishStateLocked()
-			s.spec.logger().Printf("plugin %s: DEACTIVATED: %v", s.spec.PluginID, err)
 			s.mu.Unlock()
+			logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, err)
 			return
 		}
 		if !s.countRestartLocked(time.Now(), err) {
-			s.spec.logger().Printf("plugin %s: DEACTIVATED: %v", s.spec.PluginID, s.stopReason)
+			reason := s.stopReason
 			s.mu.Unlock()
+			logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, reason)
 			return
 		}
 		next := s.restarts
 		s.state = StateRestarting
 		s.mu.Unlock()
 		delay := s.spec.Backoff.delay(next)
-		s.spec.logger().Printf("plugin %s: restart %d/%d in %s (previous respawn failed: %v)",
+		logsink.Info("plugins.end", "plugin %s: restart %d/%d in %s (previous respawn failed: %v)",
 			s.spec.PluginID, next, s.spec.Backoff.maxRestarts(), delay, err)
 		time.AfterFunc(delay, func() { s.restart(next) })
 	}
@@ -1019,7 +1023,7 @@ func (s *Supervisor) answerUpstream(ctx context.Context, c *child, members map[s
 		reply, derr = s.dispatcher.Dispatch(ctx, importName, params)
 		if derr != nil {
 
-			s.spec.logger().Printf("plugin %s: upstream %s dispatch failed: %v", s.spec.PluginID, method, derr)
+			logsink.Warn("plugins.error", "plugin %s: upstream %s dispatch failed: %v", s.spec.PluginID, method, derr)
 			reply = mustJSON(rpcErrorObject{Code: -32603, Message: "host dispatch failed"})
 		}
 	}
@@ -1121,7 +1125,7 @@ func (s *Supervisor) awaitReaped(c *child) bool {
 		if c.cmd != nil && c.cmd.Process != nil {
 			pid = c.cmd.Process.Pid
 		}
-		s.spec.logger().Printf("plugin %s: SIGKILL did not reap pid %d within %s — abandoning the wait; the process is unkillable (uninterruptible I/O) and is now ORPHANED",
+		logsink.Warn("plugins.error", "plugin %s: SIGKILL did not reap pid %d within %s — abandoning the wait; the process is unkillable (uninterruptible I/O) and is now ORPHANED",
 			s.spec.PluginID, pid, closeGraceKill)
 		return false
 	}

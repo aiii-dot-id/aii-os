@@ -17,7 +17,7 @@ mkdir -p "$OUT"
 app="$OUT/AII OS.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp LICENSE "$app/Contents/Resources/LICENSE" # inside the bundle, under the seal (§4(a))
+cp LICENSE "$app/Contents/Resources/LICENSE"
 
 echo "==> binaries"
 if [ -n "$BIN_DIR" ]; then
@@ -50,8 +50,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
-	<!-- The dashboard is the interface; the bundle only starts it and
-	     opens a browser, so it has no window of its own. -->
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 </dict>

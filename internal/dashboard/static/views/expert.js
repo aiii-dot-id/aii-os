@@ -4,26 +4,11 @@ import { renderInto } from '../announce.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
-// The top of Chat, the page the dashboard opens on: the Expert
-// checkbox, what it reveals, and one plain line about the operator's
-// notice route whenever that route is on.
-//
-// Expert is the host's setting (dashboard.expert). It is read from the
-// status every page receives and saved through the configuration door,
-// never kept in this browser, so every page and every browser agrees. It
-// only shows and hides: the control under it saves its own setting, and
-// the line about an active route is said whether Expert is on or off.
-
 const KEYS = { expert: 'dashboard.expert', route: 'dashboard.notices_off_dashboard' };
 const slots = { expert: pendingSlot(), route: pendingSlot() };
-// What the host said to this page's last save of each: a refusal in its
-// own words, or a lost connection. Cleared by the next save.
 const said = { expert: '', route: '' };
-// A save the host acknowledged, shown until the status that follows it.
 const confirmed = { expert: null, route: null };
 
-// inForce is the setting as the host last said it, or as this page asked
-// for it while the host has yet to answer.
 function inForce(which) {
   const held = slots[which].waiting();
   if (held) return held.value;
@@ -34,8 +19,6 @@ function inForce(which) {
 
 const thenList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ', then ' + xs[xs.length - 1];
 
-// routeLine is the one plain line about an active route: where the
-// notices go, or — when nothing can carry them now — that they wait here.
 export function routeLine(n) {
   if (!n || !n.on) return '';
   const carried = (n.lines || []).filter(l => l.carried);
@@ -80,9 +63,6 @@ export function renderExpert() {
   line.textContent = words;
   line.hidden = !words;
   const panel = bar.querySelector('[data-expert-panel]');
-  // The panel is rebuilt at every status, so its refusal is said through
-  // the announcer as the rebuild first shows it; opening the panel shows
-  // what was already said.
   renderInto(panel, expert ? panelHTML() : '', panel.hidden);
   panel.hidden = !expert;
   const route = panel.querySelector('[data-notice-route]');
@@ -97,8 +77,6 @@ function save(which, value) {
   renderExpert();
 }
 
-// acceptExpertConfig takes the configuration door's answer to one of this
-// page's saves; the status that follows it carries the setting to every page.
 export function acceptExpertConfig(requestID) {
   for (const which of Object.keys(slots)) {
     const held = slots[which].claim(requestID);
@@ -107,8 +85,6 @@ export function acceptExpertConfig(requestID) {
   return false;
 }
 
-// rejectExpertConfig shows the door's refusal beside the control, in its
-// own words; the setting stays as the host has it.
 export function rejectExpertConfig(requestID, text) {
   for (const which of Object.keys(slots)) {
     if (slots[which].claim(requestID)) { said[which] = text; renderExpert(); return true; }
@@ -116,8 +92,6 @@ export function rejectExpertConfig(requestID, text) {
   return false;
 }
 
-// expertStatus is a status's arrival: the host's word replaces what was
-// acknowledged before it.
 export function expertStatus() {
   confirmed.expert = confirmed.route = null;
   renderExpert();

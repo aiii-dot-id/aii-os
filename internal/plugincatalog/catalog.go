@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"io"
 	"net/http"
 	"os"
@@ -13,9 +14,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const (
@@ -37,7 +36,7 @@ type Catalog struct {
 	keep sync.Mutex
 
 	mu      sync.RWMutex
-	held    *pluginhost.Catalog
+	held    *Index
 	at      string
 	refusal string
 	unkept  string
@@ -58,7 +57,7 @@ func (c *Catalog) Open(dir, cache string, root *sigenvelope.PublicKeyEnvelope, u
 	c.dir, c.cache, c.root, c.url = dir, cache, root, url
 	c.poke = make(chan struct{}, 1)
 	if c.dir != "" {
-		cat, err := pluginhost.LoadCatalog(c.dir, root)
+		cat, err := LoadCatalog(c.dir, root)
 		if err != nil {
 			c.refused(fmt.Errorf("catalog at %s unavailable: %w", c.dir, err))
 			return
@@ -71,7 +70,7 @@ func (c *Catalog) Open(dir, cache string, root *sigenvelope.PublicKeyEnvelope, u
 	if c.cache == "" {
 		return
 	}
-	cat, err := pluginhost.LoadCatalog(c.cache, root)
+	cat, err := LoadCatalog(c.cache, root)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) || !cacheAbsent(c.cache) {
 
@@ -88,7 +87,7 @@ func cacheAbsent(dir string) bool {
 	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
 		return false
 	}
-	for _, name := range []string{pluginhost.CatalogFile, pluginhost.CatalogSigFile} {
+	for _, name := range []string{CatalogFile, CatalogSigFile} {
 		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
 			return false
 		}
@@ -96,7 +95,7 @@ func cacheAbsent(dir string) bool {
 	return true
 }
 
-func (c *Catalog) adopt(cat *pluginhost.Catalog, fetchedAt string) {
+func (c *Catalog) adopt(cat *Index, fetchedAt string) {
 	c.mu.Lock()
 	c.held = cat
 	if fetchedAt != "" {
@@ -123,7 +122,7 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 	if err != nil {
 		return c.refused(fmt.Errorf("fetching the index signature: %w", err))
 	}
-	cat, err := pluginhost.ParseCatalog(md, sig, c.root)
+	cat, err := ParseCatalog(md, sig, c.root)
 	if err != nil {
 		return c.refused(err)
 	}
@@ -178,7 +177,7 @@ func writeCache(dir string, md, sig []byte) error {
 	for _, f := range []struct {
 		name string
 		data []byte
-	}{{pluginhost.CatalogFile, md}, {pluginhost.CatalogSigFile, sig}} {
+	}{{CatalogFile, md}, {CatalogSigFile, sig}} {
 		if err := keepFile(dir, f.name, f.data); err != nil {
 			return fmt.Errorf("keep %s: %w", f.name, err)
 		}
@@ -187,39 +186,16 @@ func writeCache(dir string, md, sig []byte) error {
 }
 
 func keepFile(dir, name string, data []byte) error {
-	tmp, err := os.CreateTemp(dir, "."+name+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	published, err := atomicfile.Replace(tmpPath, filepath.Join(dir, name))
-	if err != nil && !published {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err != nil {
+	published, err := atomicfile.WriteReplace(filepath.Join(dir, name), data, 0o600)
+	if err != nil && published {
 
 		return fmt.Errorf("published but not synced: %w", err)
 	}
-	return nil
+	return err
 }
 
 func fetchSmall(ctx context.Context, url string, max int64) ([]byte, error) {
-	if err := tools.FetchGuard(ctx, url); err != nil {
+	if err := firewall.FetchGuard(ctx, url); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -227,7 +203,7 @@ func fetchSmall(ctx context.Context, url string, max int64) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "AII-OS/1.0 (plugin catalog)")
-	client := tools.GuardedClient(2*time.Minute, nil, nil)
+	client := firewall.GuardedClient(2*time.Minute, nil, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -293,7 +269,7 @@ func (c *Catalog) State() (fetchedAt, problem string) {
 	}
 }
 
-func (c *Catalog) Current() *pluginhost.Catalog {
+func (c *Catalog) Current() *Index {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.held

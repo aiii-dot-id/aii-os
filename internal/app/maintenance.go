@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
@@ -67,13 +69,19 @@ func maintenanceKeep(cfg Config) int {
 }
 
 func (a *App) backupsDir(cfg Config) string {
-	return filepath.Join(filepath.Dir(cfg.Identity.DBPath), backupsDirName)
+	return filepath.Join(filepath.Dir(a.activeIdentity(cfg.Identity).DBPath), backupsDirName)
+}
+
+type maintenanceState struct {
+	mu sync.Mutex
+
+	lastVerify time.Time
 }
 
 func (a *App) runMaintenance(ctx context.Context) {
 
-	a.maintMu.Lock()
-	defer a.maintMu.Unlock()
+	a.maint.mu.Lock()
+	defer a.maint.mu.Unlock()
 	cfg := a.configSnapshot()
 	if !maintenanceEnabled(cfg) {
 		logsink.Info("maintenance.refusal", "disabled by config; nothing verified, nothing copied")
@@ -159,11 +167,6 @@ func (a *App) recordPass(st store.ContinuityStatus) {
 
 const restoreAdvice = "stop the identity, move the database aside — never delete it, it holds every conversation and the lived clock — and restore aii.db with its ledger from the newest snapshot under data/backups (the Restore procedure in the maintenance contract)"
 
-func (a *App) maintenanceBackup(ctx context.Context, cfg Config, dir string) (string, uint64, error) {
-	p, err := a.takeSnapshot(ctx, cfg, dir, false)
-	return p.Name, p.Record, err
-}
-
 type publishedSnapshot struct {
 	Name        string
 	Record      uint64
@@ -189,7 +192,7 @@ func (a *App) takeSnapshot(ctx context.Context, cfg Config, dir string, onDemand
 		}
 	}()
 
-	srcDir := filepath.Dir(cfg.Identity.LedgerPath)
+	srcDir := filepath.Dir(a.activeIdentity(cfg.Identity).LedgerPath)
 	tailRaw, tailErr := os.ReadFile(witness.TailPath(srcDir))
 	if tailErr != nil && !errors.Is(tailErr, os.ErrNotExist) {
 		return none(fmt.Errorf("copy the witness tail: %w", tailErr))
@@ -383,8 +386,6 @@ func (a *App) proveSnapshotIn(ctx context.Context, cfg Config, dir string, want 
 	return nil
 }
 
-var snapshotStep = func(step string) {}
-
 const snapshotDB = "aii.db"
 
 const snapshotReceiptName = "RECEIPT.json"
@@ -406,8 +407,6 @@ func writeReceipt(dir string, r snapshotReceipt) error {
 	return writeFileDurably(filepath.Join(dir, snapshotReceiptName), append(raw, '\n'))
 }
 
-var syncDir = atomicfile.SyncDir
-
 func syncTree(root string) error {
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -422,41 +421,20 @@ func syncTree(root string) error {
 
 func writeFileDurably(path string, data []byte) error {
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
+	published, err := atomicfile.WriteReplace(path, data, 0o600)
+	if err != nil && published {
+		return fmt.Errorf("%s published but not durable: %w", filepath.Base(path), err)
 	}
-	published := false
-	defer func() {
-		if !published {
-			os.Remove(tmp.Name())
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	published, err = atomicfile.Replace(tmp.Name(), path)
 	return err
 }
 
 func (a *App) verifyLiveLedger(cfg Config) (int, error) {
-	beside, err := a.besideFor(cfg, filepath.Dir(cfg.Identity.LedgerPath))
+	ledgerPath := a.activeIdentity(cfg.Identity).LedgerPath
+	beside, err := a.besideFor(cfg, filepath.Dir(ledgerPath))
 	if err != nil {
 		return 0, err
 	}
-	n, _, err := genesis.VerifyHeld(cfg.Identity.LedgerPath, beside, nil)
+	n, _, err := genesis.VerifyHeld(ledgerPath, beside, nil)
 	if err != nil {
 		return n, fmt.Errorf("%w; witness: %s", err, beside.Summary())
 	}
@@ -469,19 +447,37 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if st, err := in.Stat(); err != nil {
+		return err
+	} else if st.IsDir() {
+		return &os.PathError{Op: "read", Path: src, Err: syscall.EISDIR}
+	}
+	return copyInto(in, dst)
+}
+
+func copyInto(r io.Reader, dst string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".copy-*")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+	defer os.Remove(tmp.Name())
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
 		return err
 	}
-	if err := out.Sync(); err != nil {
-		out.Close()
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
 		return err
 	}
-	return out.Close()
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	published, err := atomicfile.PublishNew(tmp.Name(), dst)
+	if err != nil && published {
+
+		return fmt.Errorf("the copy is in place, whole, and its directory could not be made durable: %w", err)
+	}
+	return err
 }
 
 const snapshotSums = escrow.SumsName

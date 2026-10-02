@@ -119,6 +119,8 @@ func (s *Store) InsertSubagentMetric(m SubagentMetric) error {
 }
 
 func (s *Store) SubagentStats(window time.Duration) (runs, calls, tokens, failed int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	cutoff := time.Now().UTC().Add(-window).UnixMilli()
 	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(calls),0), COALESCE(SUM(tokens),0), COALESCE(SUM(failed),0)
 		FROM subagent_metrics WHERE ts_ms >= ?`, cutoff)
@@ -134,6 +136,8 @@ func (s *Store) SubagentStats(window time.Duration) (runs, calls, tokens, failed
 const timelyDeclarationMax = 20
 
 func (s *Store) BetaUnplannedDeepCount(sinceMs int64) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM turn_metrics
 		WHERE ts_ms >= ? AND calls > 100
@@ -144,6 +148,8 @@ func (s *Store) BetaUnplannedDeepCount(sinceMs int64) (int, error) {
 }
 
 func (s *Store) PlanCalibration(window time.Duration) (plans int, predicted int, actual int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	cutoff := time.Now().UTC().Add(-window).UnixMilli()
 
 	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(predicted),0), COALESCE(SUM(calls),0)
@@ -159,6 +165,8 @@ func (s *Store) PlanCalibration(window time.Duration) (plans int, predicted int,
 }
 
 func (s *Store) RhythmStats(window time.Duration) (turns int, calls int, readOnlyPct int, spawns int, harvests int, rounds int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	cutoff := time.Now().UTC().Add(-window).UnixMilli()
 
 	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(calls),0), COALESCE(SUM(read_only),0), COALESCE(SUM(spawned),0), COALESCE(SUM(harvested),0),
@@ -189,6 +197,8 @@ type WakeUsage struct {
 }
 
 func (s *Store) TimerWakeUsage(window time.Duration) (WakeUsage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var u WakeUsage
 	if s.historicalTurnMetrics {
 		return u, nil

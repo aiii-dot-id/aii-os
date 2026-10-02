@@ -136,10 +136,21 @@ func (a *App) buildWorkState() (string, error) {
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func (a *App) buildTurnFacts(events bool, current ...string) (string, error) {
+func (a *App) nowLine(now time.Time) string {
+	line := "### Now\n" + now.UTC().Format("2006-01-02 15:04:05 UTC, Monday") + " (" + now.Local().Format("2006-01-02 15:04 MST") + " here)"
+	switch lived, err := a.store.Lived(); {
+	case err != nil:
+		line += "; your lived clock could not be read this turn"
+	case !lived.BirthAt.IsZero():
+		line += fmt.Sprintf("; you have lived %d pulses since your birth on %s, %s ago", lived.Ticks, lived.BirthAt.UTC().Format("2006-01-02"), roundAge(now.Sub(lived.BirthAt)))
+	}
+	return line + "."
+}
+
+func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string) (string, error) {
 	a.composedEvents, a.composedEventText = nil, ""
 	a.carriedEvents = false
-	var parts []string
+	parts := []string{a.nowLine(time.Now())}
 
 	if note := strings.TrimSpace(store.InterruptedNote(a.bootInterrupted) + "\n" + store.SweptSessionNote(a.bootSwept)); note != "" {
 		parts = append(parts, "### Interrupted at last shutdown\n"+note)
@@ -174,9 +185,9 @@ func (a *App) buildTurnFacts(events bool, current ...string) (string, error) {
 				line += fmt.Sprintf("\nOf those, %d turn(s) stated a plan of %d calls in advance and took %d.", plans, predicted, actual)
 			}
 
-			if done, failedN, truncN, terr := a.store.ToolEventStats(48 * time.Hour); terr != nil {
+			if done, failedN, truncN, terr := a.store.ToolResultStats(48 * time.Hour); terr != nil {
 
-				logsink.Warn("prompt.error", "tool event stats unreadable this turn: %v", terr)
+				logsink.Warn("prompt.error", "tool result stats unreadable this turn: %v", terr)
 			} else if done > 0 && (failedN > 0 || truncN > 0) {
 				line += fmt.Sprintf("\nOf the last %d tool calls, %d failed and %d were truncated.", done, failedN, truncN)
 			}
@@ -262,14 +273,14 @@ func (a *App) buildTurnFacts(events bool, current ...string) (string, error) {
 	}
 
 	if !attentionUrgent(ws, subs) && a.store != nil {
-		if items, err := memory.New(a.store).Attention(context.Background(), time.Now()); err != nil {
+		if medium, err := memory.New(a.store).Attention(ctx, time.Now(), attention.CostMedium); err != nil {
 			logsink.Warn("prompt.error", "attention: unreadable this turn, the prompt goes without it: %v", err)
-		} else if medium := attention.OfCost(items, attention.CostMedium); len(medium) > 0 {
+		} else if len(medium) > 0 {
 			parts = append(parts, "### Attention — one thing the record is holding\n"+medium[0].Text+"\nIt closes nothing by itself; resolve it or hold it knowingly.")
 		}
 	}
 	if events {
-		if err := a.appendPendingEvents(&parts, current); err != nil {
+		if err := a.appendPendingEvents(ctx, &parts, current); err != nil {
 			if err := a.diagnosticPromptRead(&parts, "recent events", err); err != nil {
 				return "", err
 			}
@@ -373,9 +384,9 @@ func (a *App) markComposedHarvests() {
 		swept++
 	}
 
-	a.turnMeterMu.Lock()
-	a.turnHarvested += swept
-	a.turnMeterMu.Unlock()
+	a.turn.mu.Lock()
+	a.turn.turnHarvested += swept
+	a.turn.mu.Unlock()
 	logsink.Info("harvest.end", "swept=%d of=%d", swept, len(a.composedUnharvested))
 	a.composedUnharvested = nil
 }
@@ -404,13 +415,9 @@ func (a *App) modelNotice() string {
 }
 
 func (a *App) gatedSystem(p *prompt.Prompt) llm.Message {
-	sysText := a.promptGate.SystemForPrompt(p)
-	msg := llm.Message{Role: "system", Content: sysText}
+	msg := llm.Message{Role: "system", Content: p.Text}
 	if p.StableLen > 0 && p.StableLen <= len(p.Text) {
-		stable := p.Text[:p.StableLen]
-		if i := strings.Index(sysText, stable); i >= 0 {
-			msg.StableLen = i + len(stable)
-		}
+		msg.StableLen = p.StableLen
 	}
 	return msg
 }
@@ -426,7 +433,7 @@ func (a *App) promptReserve(current llm.Message, omitted int) (int, error) {
 	return llm.EstimateInputTokens([]llm.Message{system, sent}, a.buildToolDefinitions())
 }
 
-func (a *App) buildHistory() ([]llm.Message, int, error) {
+func (a *App) buildHistory(ctx context.Context) ([]llm.Message, int, error) {
 	recentTurns := a.configSnapshot().Prompt.RecentTurns
 	if recentTurns <= 0 {
 		recentTurns = 20
@@ -443,11 +450,11 @@ func (a *App) buildHistory() ([]llm.Message, int, error) {
 		floor = turns[0].TurnSeq
 	}
 	for _, t := range turns {
-		if t.Role == "operator" && t.Details.Channel == "plugin" && t.Details.Actor == "operator" && t.TurnID != "" {
+		if t.Role == string(interaction.Operator) && t.Details.Channel == "plugin" && t.Details.Actor == "operator" && t.TurnID != "" {
 			actTurns = append(actTurns, t.TurnID)
 		}
 	}
-	results, moreResults, resultErr := a.store.OperatorActResults(floor, actTurns)
+	results, moreResults, resultErr := a.store.OperatorActResults(ctx, floor, actTurns)
 	appendResult := func(r interaction.Record) {
 		conv = append(conv, llm.Message{Role: "user", Content: fmt.Sprintf("[Result of an operator-authorized tool; outcome=%s; interaction=%s]\n%s", r.Outcome, r.ID, untrusted.Wrap("tool result: "+r.Details.Tool, r.Content))})
 	}
@@ -459,15 +466,15 @@ func (a *App) buildHistory() ([]llm.Message, int, error) {
 			appendResult(results[resultIndex])
 			resultIndex++
 		}
-		if t.Role == "system" {
+		if t.Role == string(interaction.System) {
 			continue
 		}
 		role := "user"
-		if t.Role == "resident" {
+		if t.Role == string(interaction.Resident) {
 			role = "assistant"
 		}
 		content := t.Content
-		if t.Role == "operator" && t.Details.Channel == "plugin" && t.Details.Actor == "operator" {
+		if t.Role == string(interaction.Operator) && t.Details.Channel == "plugin" && t.Details.Actor == "operator" {
 
 			content = fmt.Sprintf("[Host-recorded operator decision: %s; tool=%s]\n%s", t.Details.Reason, t.Details.Tool, untrusted.Wrap("operator-act report (may include historical plugin output)", content))
 		}
@@ -488,11 +495,11 @@ func (a *App) buildHistory() ([]llm.Message, int, error) {
 
 	if a.engine != nil {
 		for _, t := range a.engine.SafeTranscript() {
-			if t.Role == "system" {
+			if t.Role == string(interaction.System) {
 				continue
 			}
 			role := "user"
-			if t.Role == "resident" {
+			if t.Role == string(interaction.Resident) {
 				role = "assistant"
 			}
 			conv = append(conv, llm.Message{Role: role, Content: t.Content})

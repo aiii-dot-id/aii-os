@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
 
@@ -23,31 +24,11 @@ func writeLocalTail(dir string, tail LocalTail) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, TailFileName+".tmp-")
-	if err != nil {
-		return err
+	published, err := atomicfile.WriteReplace(TailPath(dir), raw, 0o600)
+	if err != nil && published {
+		return fmt.Errorf("%s published but not durable: %w", TailFileName, err)
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, TailPath(dir)); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
+	return err
 }
 
 func TailPath(ledgerDir string) string { return filepath.Join(ledgerDir, TailFileName) }
@@ -156,7 +137,9 @@ func LoadBeside(ledgerDir string, platform *PublicKeyEnvelope) (*Beside, error) 
 	return &Beside{Heads: heads, Tail: NewTailCheck(tail)}, nil
 }
 
-func (b *Beside) VerifyHead(evt *ledger.Event) error { return b.Heads.VerifyHead(evt) }
+func (b *Beside) VerifyHead(evt *ledger.Event, hashAt func(seq uint64) (string, bool)) (uint64, error) {
+	return b.Heads.VerifyHead(evt, hashAt)
+}
 
 func (b *Beside) Visit(evt *ledger.Event) error { return b.Tail.Visit(evt) }
 func (b *Beside) Held() error                   { return b.Tail.Held() }

@@ -31,7 +31,11 @@ type Observation struct {
 	WorkSession, SessionReason, ReasonCode string
 	Text                                   string
 	Failed                                 bool
-	Truncated                              bool
+
+	Cancelled bool
+
+	Refused   bool
+	Truncated bool
 
 	EndTurn bool
 
@@ -53,7 +57,7 @@ type ToolDefiner interface {
 type Transcript interface {
 	RecordToolStart(turnID string, ordinal int, callID, tool, args, model string) error
 
-	RecordToolDone(turnID string, ordinal int, tool, args, result string, failed, truncated bool) error
+	RecordToolDone(turnID string, ordinal int, tool, args string, obs Observation) error
 	TranscriptResultExcerptLimit() int
 }
 
@@ -234,6 +238,13 @@ func (l *Loop) SetModelLimits(contextBudgetTokens, thinkingBudget int) {
 	l.cfg.ThinkingBudget = thinkingBudget
 }
 
+func (l *Loop) SetTurnBounds(maxIterations, turnTokenBudget int) {
+	l.cfgMu.Lock()
+	defer l.cfgMu.Unlock()
+	l.cfg.MaxIterations, l.cfg.TurnTokenBudget = maxIterations, turnTokenBudget
+	l.cfg = l.cfg.withDefaults()
+}
+
 func (l *Loop) SetContextBudgetFallback(fallback bool) {
 	l.cfgMu.Lock()
 	defer l.cfgMu.Unlock()
@@ -356,6 +367,10 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 	degenNudged := false
 	truncated := false
 	for i := 0; i < cfg.MaxIterations; i++ {
+
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 		roundsUsed = i + 1
 
 		if i > 0 && turnUsage.TotalTokens+silentSpent >= cfg.TurnTokenBudget {
@@ -573,7 +588,11 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 					go func() {
 						defer wg.Done()
 						defer func() { <-sem }()
-						o := l.tools.Execute(llm.WithModelID(ctx, resp.ModelID), tc)
+
+						o := notRun()
+						if ctx.Err() == nil {
+							o = l.tools.Execute(llm.WithModelID(ctx, resp.ModelID), tc)
+						}
 						mu.Lock()
 						preObs[idx] = o
 						if o.EndTurn {
@@ -609,7 +628,12 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				}
 			}
 			if !pre {
-				obs = l.tools.Execute(llm.WithModelID(ctx, resp.ModelID), tc)
+				if ctx.Err() != nil {
+
+					obs = notRun()
+				} else {
+					obs = l.tools.Execute(llm.WithModelID(ctx, resp.ModelID), tc)
+				}
 			}
 			if obs.EndTurn {
 				yielded = true
@@ -620,7 +644,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			result := obs.Text
 
 			if l.transcript != nil {
-				if err := recordObservedTool(l.transcript, turnID, respOrdinals[tcIdx], tc.Function.Name, tc.Function.Arguments, obs); err != nil {
+				if err := l.transcript.RecordToolDone(turnID, respOrdinals[tcIdx], tc.Function.Name, tc.Function.Arguments, obs); err != nil {
 					return fail(fmt.Errorf("record tool result: %w", err))
 				}
 			}
@@ -646,7 +670,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			}
 			messages = append(messages, llm.FormatToolResult(tc.ID, modelResult))
 
-			if len([]rune(modelResult)) >= repeatResultMinRunes {
+			if runes := utf8.RuneCountInString(modelResult); runes >= repeatResultMinRunes {
 				h := resultHash(modelResult)
 				repeats := 1
 				for _, prev := range recentResults {
@@ -662,7 +686,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 					repeatNudged = true
 					messages[len(messages)-1].Content += repeatResultNote(repeats, truncated)
 					logsink.InfoCtx(ctx, "nudge.decision", "Repeat-result nudge sent: identical %d-rune result received %d times in the last %d calls (truncated=%v)",
-						len([]rune(modelResult)), repeats, repeatResultWindow, truncated)
+						runes, repeats, repeatResultWindow, truncated)
 				}
 			}
 		}
@@ -788,6 +812,10 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				return fail(fitErr)
 			}
 
+			if err := ctx.Err(); err != nil {
+				return fail(err)
+			}
+
 			resp, err := l.llm.Chat(ctx, messages, llm.ChatOptions{Tools: finalTools, DisableTools: true, ThinkingBudget: cfg.ThinkingBudget, PreviousResponseID: previousResponseID})
 			if err != nil {
 				turnUsage.failed(err)
@@ -880,12 +908,17 @@ func fitRequest(messages *[]llm.Message, st *fitState, systemBase string,
 	if st.replayOff {
 		llm.DropReasoning(*messages)
 	}
+
+	toolTokens, err := llm.EstimateToolTokens(tools)
+	if err != nil {
+		return err
+	}
 	for {
-		err := llm.ValidateInput(*messages, tools, budget)
+		used, err := llm.AdmitPriced(*messages, toolTokens, budget)
 		if err == nil {
-			warnIfTight(messages, st, tools, budget)
-			noteIfPressured(messages, st, tools, budget)
-			return llm.ValidateInput(*messages, tools, budget)
+			used = warnIfTight(messages, st, used, budget)
+			noteIfPressured(messages, st, used, budget)
+			return nil
 		}
 		var limitErr *llm.ContextLimitError
 		if !errors.As(err, &limitErr) {
@@ -1008,7 +1041,7 @@ func dropHistory(messages *[]llm.Message, st *fitState, end int) {
 
 const contextLinePrefix = "\n[context: "
 
-func noteIfPressured(messages *[]llm.Message, st *fitState, tools []llm.ToolDefinition, budget int) {
+func noteIfPressured(messages *[]llm.Message, st *fitState, used, budget int) {
 	if budget <= 0 || len(*messages) == 0 {
 		return
 	}
@@ -1016,19 +1049,28 @@ func noteIfPressured(messages *[]llm.Message, st *fitState, tools []llm.ToolDefi
 	if last.Role != "tool" || strings.Contains(last.Content, contextLinePrefix) {
 		return
 	}
-	used, err := llm.EstimateInputTokens(*messages, tools)
-	if err != nil {
-		return
-	}
 	dropped := st.omitted - st.baseOmitted
 	if st.folded == 0 && st.abridged == 0 && dropped <= 0 && !st.replayOff && used*100 < budget*contextTightPercent {
 		return
 	}
 	line := contextLine(used, budget, dropped, st)
+	was := *last
 	last.Content += line
-	if llm.ValidateInput(*messages, tools, budget) != nil {
+	if after, err := reprice(used, was, *last); err != nil || after > budget {
 		last.Content = strings.TrimSuffix(last.Content, line)
 	}
+}
+
+func reprice(used int, was, now llm.Message) (int, error) {
+	before, err := llm.EstimateMessageTokens(was)
+	if err != nil {
+		return 0, err
+	}
+	after, err := llm.EstimateMessageTokens(now)
+	if err != nil {
+		return 0, err
+	}
+	return used - before + after, nil
 }
 
 func contextLine(used, budget, dropped int, st *fitState) string {
@@ -1124,43 +1166,50 @@ const contextTightPercent = 85
 
 const contextTightNote = "\n\nThe context for this turn is nearly full. Further tool calls may not fit, and if the request stops fitting your tools will be withdrawn for one last call of this turn."
 
-func warnIfTight(messages *[]llm.Message, st *fitState, tools []llm.ToolDefinition, budget int) {
+func warnIfTight(messages *[]llm.Message, st *fitState, used, budget int) int {
 	if st.warned || budget <= 0 {
-		return
+		return used
 	}
 
-	used, err := llm.EstimateInputTokens(withoutReplay(*messages), tools)
-	if err != nil || used*100 < budget*contextTightPercent {
-		return
+	bare, err := withoutReplay(*messages, used)
+	if err != nil || bare*100 < budget*contextTightPercent {
+		return used
 	}
 	last := len(*messages) - 1
+	was := (*messages)[last]
 	if last == st.current {
 		st.tight = true
 		renderCurrent(*messages, st)
-		if llm.ValidateInput(*messages, tools, budget) != nil {
-			st.tight = false
-			renderCurrent(*messages, st)
-			return
-		}
 	} else {
 		(*messages)[last].Content += contextTightNote
-		if llm.ValidateInput(*messages, tools, budget) != nil {
+	}
+	after, err := reprice(used, was, (*messages)[last])
+	if err != nil || after > budget {
+		if last == st.current {
+			st.tight = false
+			renderCurrent(*messages, st)
+		} else {
 			(*messages)[last].Content = strings.TrimSuffix((*messages)[last].Content, contextTightNote)
-			return
 		}
+		return used
 	}
 	st.warned = true
+	return after
 }
 
-func withoutReplay(messages []llm.Message) []llm.Message {
+func withoutReplay(messages []llm.Message, used int) (int, error) {
 	for _, m := range messages {
-		if m.Reasoning != "" {
-			c := append([]llm.Message(nil), messages...)
-			llm.DropReasoning(c)
-			return c
+		if m.Reasoning == "" {
+			continue
+		}
+		bare := m
+		bare.Reasoning = ""
+		var err error
+		if used, err = reprice(used, m, bare); err != nil {
+			return 0, err
 		}
 	}
-	return messages
+	return used, nil
 }
 
 func historyAbridgedNote(abridged int) string {
@@ -1292,17 +1341,16 @@ func isHeardRecall(tool, args string) bool {
 	if tool != "recall" {
 		return false
 	}
-	var call struct {
-		Source string `json:"source"`
-	}
-	return json.Unmarshal([]byte(args), &call) == nil && call.Source == "heard"
+	var call map[string]any
+	return json.Unmarshal([]byte(args), &call) == nil && call["source"] == "heard"
 }
 
 func truncateToolResult(result string, maxChars, transcriptChars int) string {
-	runes := []rune(result)
-	if len(runes) <= maxChars {
+
+	if utf8.RuneCountInString(result) <= maxChars {
 		return result
 	}
+	runes := []rune(result)
 	omitted := len(runes) - maxChars
 	retention := "no transcript excerpt is available"
 	if transcriptChars > 0 {
@@ -1762,11 +1810,6 @@ func shortTurn(id string) string {
 	return id
 }
 
-func recordObservedTool(t Transcript, turn string, ordinal int, tool, args string, obs Observation) error {
-	if measured, ok := t.(interface {
-		RecordToolDoneObserved(string, int, string, string, Observation) error
-	}); ok {
-		return measured.RecordToolDoneObserved(turn, ordinal, tool, args, obs)
-	}
-	return t.RecordToolDone(turn, ordinal, tool, args, obs.Text, obs.Failed, obs.Truncated)
+func notRun() Observation {
+	return Observation{Text: "Not run: the turn ended before this call began.", Failed: true, Cancelled: true}
 }

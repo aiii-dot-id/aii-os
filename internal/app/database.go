@@ -50,7 +50,8 @@ func (a *App) databaseState() dashboard.DatabaseState {
 		if view.path != "" {
 			path = view.path
 		}
-		format, err := view.store.DatabaseFormat(context.Background())
+		ctx := a.lifetime()
+		format, err := view.store.DatabaseFormat(ctx)
 		state.Active = format
 		state.Notice = view.notice
 		if err != nil {
@@ -59,7 +60,7 @@ func (a *App) databaseState() dashboard.DatabaseState {
 			_, safe := a.SafeMode()
 			state.CanExport = !safe
 			var dictionaryBytes int
-			dictionaryBytes, err = view.store.CompressionDictionaryBytes(context.Background())
+			dictionaryBytes, err = view.store.CompressionDictionaryBytes(ctx)
 			if err != nil {
 				state.Notice = err.Error()
 				state.CanExport = false
@@ -96,10 +97,10 @@ func (a *App) exportDatabase(ctx context.Context) (io.ReadCloser, int64, error) 
 	if _, safe := a.SafeMode(); safe {
 		return nil, 0, fmt.Errorf("database export makes a file and is unavailable in SAFE")
 	}
-	if !a.maintMu.TryLock() {
+	if !a.maint.mu.TryLock() {
 		return nil, 0, fmt.Errorf("maintenance is already running")
 	}
-	defer a.maintMu.Unlock()
+	defer a.maint.mu.Unlock()
 	view := a.databaseView.Load()
 	if view == nil || view.store == nil || view.path == "" {
 		return nil, 0, fmt.Errorf("no active database to export")

@@ -138,11 +138,11 @@ func (d SubscriptionDecl) Matches(payload map[string]interface{}) bool {
 	return true
 }
 
-func loadSubscriptions(pkgPath string, res *packagefmt.Result, m *packagefmt.Manifest) ([]SubscriptionDecl, error) {
+func loadSubscriptions(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) ([]SubscriptionDecl, error) {
 	if _, present := res.FileDigests[SubscriptionsFile]; !present {
 		return nil, nil
 	}
-	raw, err := loadVerifiedMember(pkgPath, res, SubscriptionsFile)
+	raw, err := loadVerifiedMember(pkgPath, res, held, SubscriptionsFile)
 	if err != nil {
 		return nil, err
 	}

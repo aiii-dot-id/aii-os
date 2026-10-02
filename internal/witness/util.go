@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 )
 
 func jsonMarshal(v interface{}) ([]byte, error) { return json.Marshal(v) }
@@ -26,9 +25,3 @@ func jsonUnmarshalStrict(data []byte, out interface{}) error {
 func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
 func base64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
-
-func liveWitnessURL() string { return liveWitnessURLEnv() }
-
-func liveWitnessURLEnv() string { return osGetenv("AII_TEST_WITNESSD_URL") }
-
-func osGetenv(k string) string { return os.Getenv(k) }

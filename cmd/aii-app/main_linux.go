@@ -7,16 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-
-	"github.com/aiii-dot-id/aii-os/internal/install"
 )
 
 func openURL(url string) error { return exec.Command("xdg-open", url).Run() }
-
-func startService(slot string) bool {
-	started, _, err := install.Register(slot)
-	return err == nil && started
-}
 
 func alert(msg string) {
 	fmt.Fprintln(os.Stderr, msg)

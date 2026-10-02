@@ -15,6 +15,10 @@ type Format struct {
 
 func (f Format) BytesPerSample() int { return 2 * f.Channels }
 
+func (f Format) Valid() bool {
+	return f.Channels >= 1 && f.Channels <= 2 && f.Rate >= 8000 && f.Rate <= 192000
+}
+
 func (f Format) String() string { return fmt.Sprintf("s16le/%d/%d", f.Rate, f.Channels) }
 
 type Kind uint8
@@ -145,82 +149,65 @@ type Binding struct {
 }
 
 func (p *Plane) Bind(sessionID, inputID, outputID string, contained bool) (*Binding, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	in, ok := p.endpoints[inputID]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrEndpointUnknown, inputID)
-	}
-	out, ok := p.endpoints[outputID]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrEndpointUnknown, outputID)
-	}
-	if in.Source == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotASource, inputID)
-	}
-	if out.Sink == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotASink, outputID)
-	}
-	if p.SafeMode != nil {
-		if reason, safe := p.SafeMode(); safe {
-			if !contained {
-				return nil, fmt.Errorf("%w: the engine is not contained (%s)", ErrSafe, reason)
-			}
-			if in.Remote || out.Remote {
-				return nil, fmt.Errorf("%w: a remote endpoint (%s)", ErrSafe, reason)
-			}
-		}
-	}
-	for _, id := range []string{inputID, outputID} {
-		if s, busy := p.bound[id]; busy && s != sessionID {
-			return nil, fmt.Errorf("%w: %s is held by session %s", ErrEndpointBusy, id, s)
-		}
-	}
-	p.bound[inputID] = sessionID
-	p.bound[outputID] = sessionID
-	b := &Binding{
-		SessionID: sessionID, InputID: inputID, OutputID: outputID,
-		InputHandle: "in:" + sessionID + ":" + inputID, OutputHandle: "out:" + sessionID + ":" + outputID,
-		InFormat: in.Source.Format(), OutFormat: out.Sink.Format(), Source: in.Source, Sink: out.Sink,
-		Contained: contained, Remote: in.Remote || out.Remote,
-		plane: p, released: make(chan struct{}),
-	}
-	return b, nil
+	return p.bind(sessionID, true, inputID, outputID, contained)
 }
 
 func (b *Binding) HasInput() bool { return b.Source != nil }
 
 func (p *Plane) BindOutput(sessionID, outputID string, contained bool) (*Binding, error) {
+	return p.bind(sessionID, false, "", outputID, contained)
+}
+
+func (p *Plane) bind(sessionID string, input bool, inputID, outputID string, contained bool) (*Binding, error) {
+	reason, safe := "", false
+	if p.SafeMode != nil {
+		reason, safe = p.SafeMode()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out, ok := p.endpoints[outputID]
-	if !ok {
+	ids := []string{outputID}
+	var in *Endpoint
+	if input {
+		if in = p.endpoints[inputID]; in == nil {
+			return nil, fmt.Errorf("%w: %s", ErrEndpointUnknown, inputID)
+		}
+		ids = []string{inputID, outputID}
+	}
+	out := p.endpoints[outputID]
+	if out == nil {
 		return nil, fmt.Errorf("%w: %s", ErrEndpointUnknown, outputID)
+	}
+	if in != nil && in.Source == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNotASource, inputID)
 	}
 	if out.Sink == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotASink, outputID)
 	}
-	if p.SafeMode != nil {
-		if reason, safe := p.SafeMode(); safe {
-			if !contained {
-				return nil, fmt.Errorf("%w: the engine is not contained (%s)", ErrSafe, reason)
-			}
-			if out.Remote {
-				return nil, fmt.Errorf("%w: a remote endpoint (%s)", ErrSafe, reason)
-			}
+	remote := out.Remote || in != nil && in.Remote
+	if safe && !contained {
+		return nil, fmt.Errorf("%w: the engine is not contained (%s)", ErrSafe, reason)
+	}
+	if safe && remote {
+		return nil, fmt.Errorf("%w: a remote endpoint (%s)", ErrSafe, reason)
+	}
+	for _, id := range ids {
+		if s, busy := p.bound[id]; busy && s != sessionID {
+			return nil, fmt.Errorf("%w: %s is held by session %s", ErrEndpointBusy, id, s)
 		}
 	}
-	if s, busy := p.bound[outputID]; busy && s != sessionID {
-		return nil, fmt.Errorf("%w: %s is held by session %s", ErrEndpointBusy, outputID, s)
-	}
-	p.bound[outputID] = sessionID
-	return &Binding{
-		SessionID: sessionID, OutputID: outputID,
-		OutputHandle: "out:" + sessionID + ":" + outputID,
-		OutFormat:    out.Sink.Format(), Sink: out.Sink,
-		Contained: contained, Remote: out.Remote,
+	b := &Binding{
+		SessionID: sessionID, OutputID: outputID, OutputHandle: "out:" + sessionID + ":" + outputID,
+		OutFormat: out.Sink.Format(), Sink: out.Sink, Contained: contained, Remote: remote,
 		plane: p, released: make(chan struct{}),
-	}, nil
+	}
+	if in != nil {
+		b.InputID, b.InputHandle = inputID, "in:"+sessionID+":"+inputID
+		b.InFormat, b.Source = in.Source.Format(), in.Source
+	}
+	for _, id := range ids {
+		p.bound[id] = sessionID
+	}
+	return b, nil
 }
 
 func (b *Binding) Release() {
@@ -407,7 +394,7 @@ func (p *Pump) runInput(ctx context.Context) {
 		fr, err := p.b.Source.Read(ctx)
 		if err != nil {
 
-			broken := err != io.EOF && ctx.Err() == nil
+			broken := !errors.Is(err, io.EOF) && ctx.Err() == nil
 			p.mu.Lock()
 			if broken {
 				p.inErr = err
@@ -531,12 +518,13 @@ func (p *Pump) runOutput(ctx context.Context) {
 	for {
 		fr, err := p.ch.ReadOutput()
 		if err != nil {
+			broken := !errors.Is(err, io.EOF)
 			p.mu.Lock()
-			if err != io.EOF {
+			if broken {
 				p.outErr = err
 			}
 			p.mu.Unlock()
-			if err != io.EOF {
+			if broken {
 				p.markFailed()
 			}
 			return

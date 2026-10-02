@@ -9,16 +9,12 @@ import (
 
 var ErrPluginKVQuota = errors.New("plugin kv quota exceeded")
 
-func (s *Store) PluginKVPut(pluginID, key, value string, temp bool, maxKeys, maxTotalBytes int) error {
-	return s.PluginKVPutScoped(PluginScope{PluginID: pluginID}, key, value, temp, maxKeys, maxTotalBytes)
-}
-
 const pluginKVView = `k.plugin_id = ? AND (k.activation = ? OR
 	(k.activation = '' AND k.temp = 0 AND NOT EXISTS
 		(SELECT 1 FROM plugin_kv local WHERE local.plugin_id = k.plugin_id
 		 AND local.key = k.key AND local.activation = ?)))`
 
-func (s *Store) PluginKVPutScoped(scope PluginScope, key, value string, temp bool, maxKeys, maxTotalBytes int) error {
+func (s *Store) PluginKVPut(scope PluginScope, key, value string, temp bool, maxKeys, maxTotalBytes int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !temp {
@@ -59,11 +55,7 @@ func (s *Store) PluginKVPutScoped(scope PluginScope, key, value string, temp boo
 	return tx.Commit()
 }
 
-func (s *Store) PluginKVGet(pluginID, key string) (string, bool, error) {
-	return s.PluginKVGetScoped(PluginScope{PluginID: pluginID}, key)
-}
-
-func (s *Store) PluginKVGetScoped(scope PluginScope, key string) (string, bool, error) {
+func (s *Store) PluginKVGet(scope PluginScope, key string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return pluginKVGet(s.db, scope, key)
@@ -82,11 +74,7 @@ func pluginKVGet(h dbi, scope PluginScope, key string) (string, bool, error) {
 	return value, true, nil
 }
 
-func (s *Store) PluginKVDelete(pluginID, key string) (bool, error) {
-	return s.PluginKVDeleteScoped(PluginScope{PluginID: pluginID}, key, false)
-}
-
-func (s *Store) PluginKVDeleteScoped(scope PluginScope, key string, temporary bool) (bool, error) {
+func (s *Store) PluginKVDelete(scope PluginScope, key string, temporary bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !temporary || scope.Activation == "" {
@@ -130,11 +118,7 @@ func (s *Store) PluginKVDeleteScoped(scope PluginScope, key string, temporary bo
 	return true, nil
 }
 
-func (s *Store) PluginKVList(pluginID, prefix string, limit int) ([]string, bool, error) {
-	return s.PluginKVListScoped(PluginScope{PluginID: pluginID}, prefix, limit)
-}
-
-func (s *Store) PluginKVListScoped(scope PluginScope, prefix string, limit int) ([]string, bool, error) {
+func (s *Store) PluginKVList(scope PluginScope, prefix string, limit int) ([]string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if limit <= 0 {
@@ -165,11 +149,7 @@ func (s *Store) PluginKVListScoped(scope PluginScope, prefix string, limit int) 
 	return keys, truncated, nil
 }
 
-func (s *Store) PluginKVClearTemp(pluginID string) error {
-	return s.PluginKVClearTempScoped(PluginScope{PluginID: pluginID})
-}
-
-func (s *Store) PluginKVClearTempScoped(scope PluginScope) error {
+func (s *Store) PluginKVClearTemp(scope PluginScope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.w().Exec(`DELETE FROM plugin_kv WHERE plugin_id = ? AND activation = ? AND temp = 1`, scope.PluginID, scope.Activation)

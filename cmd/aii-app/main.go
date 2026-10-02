@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
@@ -44,7 +43,10 @@ func run() error {
 	if _, err := os.Stat(aii); err != nil {
 		return fmt.Errorf("the aii binary is missing from this bundle: %w", err)
 	}
+	return launch(aii)
+}
 
+func launch(aii string) error {
 	root, err := install.Root()
 	if err != nil {
 		return err
@@ -71,9 +73,14 @@ func run() error {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	if running(dir) {
+	present, err := slotRunning(dir)
+	if err != nil {
 
-		return waitServing(port, url, dir, "", nil)
+		return fmt.Errorf("cannot determine whether this identity is running: %w", err)
+	}
+	if present {
+
+		return waitServing(port, url, dir)
 	}
 	if serving(port) {
 
@@ -83,50 +90,37 @@ func run() error {
 		url = fmt.Sprintf("http://127.0.0.1:%d", port)
 	}
 
-	if startService(install.SlotName(n)) {
-		return waitServing(port, url, dir, "", nil)
+	slot := install.SlotName(n)
+	if err := startService(aii, slot); err != nil {
+		return fmt.Errorf("the service manager did not start %s: %w", slot, err)
 	}
-
-	if err := os.MkdirAll(filepath.Join(dir, "log"), 0o700); err != nil {
-		return fmt.Errorf("prepare the log directory: %w", err)
-	}
-	bootLog := filepath.Join(dir, "log", "boot.log")
-	lf, err := os.OpenFile(bootLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", bootLog, err)
-	}
-	defer lf.Close()
-
-	cmd := exec.Command(aii, "-dir", dir)
-	cmd.Dir = dir
-	cmd.Stdout, cmd.Stderr = lf, lf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start the identity: %w", err)
-	}
-
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
-	return waitServing(port, url, dir, bootLog, exited)
+	return waitServing(port, url, dir)
 }
 
-func waitServing(port int, url, dir, bootLog string, exited <-chan error) error {
+func startService(aii, slot string) error {
+	out, err := exec.Command(aii, "register", slot).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func waitServing(port int, url, dir string) error {
 	deadline := time.After(60 * time.Second)
 	for {
 		select {
-		case <-exited:
-
-			raw, _ := os.ReadFile(bootLog)
-			msg := strings.TrimSpace(lastLines(string(raw), 12))
-			if msg == "" {
-				msg = "it exited without saying why; see " + filepath.Join(dir, "log", "aii.log")
-			}
-			return fmt.Errorf("the identity stopped during startup:\n\n%s", msg)
 		case <-deadline:
 			return fmt.Errorf("the identity did not start serving on port %d within 60s — see %s", port, filepath.Join(dir, "log", "aii.log"))
 		default:
+
 			if serving(port) {
-				return openURL(url)
+				present, err := slotRunning(dir)
+				if err != nil {
+					return fmt.Errorf("cannot determine whether this identity is running: %w", err)
+				}
+				if present {
+					return openURL(url)
+				}
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
@@ -143,11 +137,6 @@ func writePort(aii, dir string) func(port int) error {
 	}
 }
 
-func running(slotDir string) bool {
-	out, err := exec.Command("pgrep", "-f", "aii -dir "+slotDir).Output()
-	return err == nil && len(strings.TrimSpace(string(out))) > 0
-}
-
 func serving(port int) bool {
 	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
 	if err != nil {
@@ -155,12 +144,4 @@ func serving(port int) bool {
 	}
 	c.Close()
 	return true
-}
-
-func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
 }

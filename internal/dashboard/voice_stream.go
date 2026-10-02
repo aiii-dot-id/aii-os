@@ -29,6 +29,8 @@ type VoiceSession interface {
 
 	PlaybackReport(ctx context.Context, r PlaybackReport) error
 	Label() string
+
+	Malformed() uint64
 	Done() <-chan struct{}
 	Released() <-chan struct{}
 
@@ -68,6 +70,8 @@ type VoiceSessionState struct {
 	State     string `json:"state"`
 	Label     string `json:"label,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+
+	Malformed uint64 `json:"malformed,omitempty"`
 }
 
 type VoiceEvent struct {
@@ -241,7 +245,7 @@ func decodeVoiceStream(data []byte) (audio.Format, audio.Frame, error) {
 		return audio.Format{}, audio.Frame{}, fmt.Errorf("voice stream frame sets a reserved header byte this identity does not understand")
 	}
 	f := audio.Format{Rate: int(binary.LittleEndian.Uint32(data[4:8])), Channels: int(data[1])}
-	if f.Channels <= 0 || f.Channels > 2 || f.Rate < 8000 || f.Rate > 192000 {
+	if !f.Valid() {
 		return audio.Format{}, audio.Frame{}, fmt.Errorf("voice stream frame declares a format that is not audio")
 	}
 	fr := audio.Frame{Kind: audio.Kind(data[2]), Stream: uint32(binary.LittleEndian.Uint32(data[20:24])), Seq: binary.LittleEndian.Uint32(data[8:12]), Start: int64(binary.LittleEndian.Uint64(data[12:20]))}
@@ -280,7 +284,7 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 			return
 		}
 		f := audio.Format{Rate: req.Rate, Channels: req.Channels}
-		if f.Channels <= 0 || f.Channels > 2 || f.Rate < 8000 || f.Rate > 192000 {
+		if !f.Valid() {
 			s.sendVoiceState(ctx, conn, VoiceSessionState{State: "refused", Reason: "the page must declare its capture rate and channels"})
 			return
 		}
@@ -331,7 +335,7 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 		cl.vmu.Unlock()
 
 		logsink.Info("voice.session", "session %s opened by the page at %s (%s; mode %s; endpoints %s, %s)", sess.ID(), cl.addr, clip(cl.agent, 60), mode, cv.micID, cv.spkID)
-		s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "open", Label: sess.Label()})
+		s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "open", Label: sess.Label(), Malformed: sess.Malformed()})
 
 		go func() {
 			select {
@@ -346,13 +350,13 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 			}
 			why := sess.InputCompletionReason()
 			logsink.Info("voice.session", "session %s stopped accepting speech (%s)", sess.ID(), clip(why, 120))
-			s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "input_complete", Label: sess.Label(), Reason: why})
+			s.sendVoiceState(ctx, conn, VoiceSessionState{SessionID: sess.ID(), State: "input_complete", Label: sess.Label(), Reason: why, Malformed: sess.Malformed()})
 		}()
 
 		go func() {
 			<-sess.Done()
 			logsink.Info("voice.session", "session %s of the page at %s ended (%s)", sess.ID(), cl.addr, sess.Label())
-			s.sendVoiceState(context.Background(), conn, VoiceSessionState{SessionID: sess.ID(), State: "closed", Label: sess.Label()})
+			s.sendVoiceState(context.Background(), conn, VoiceSessionState{SessionID: sess.ID(), State: "closed", Label: sess.Label(), Malformed: sess.Malformed()})
 			if cv.mic != nil {
 				cv.mic.end()
 			}
@@ -373,8 +377,9 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 		}
 
 		if !s.background(h, func() {
-			cv.reportInterruptError(cv.session.Interrupt(context.Background()), func(message string) {
-				s.sendError(context.Background(), conn, message)
+			jctx := s.serverTurnCtx()
+			cv.reportInterruptError(cv.session.Interrupt(jctx), func(message string) {
+				s.sendError(jctx, conn, message)
 			})
 		}) {
 			s.sendError(ctx, conn, "identity is stopping")
@@ -396,8 +401,9 @@ func (s *Server) handleVoiceSession(ctx context.Context, conn *websocket.Conn, r
 
 		report := *r
 		if !s.background(h, func() {
-			if err := cv.session.PlaybackReport(context.Background(), report); err != nil {
-				s.sendVoiceEvent(context.Background(), conn, VoiceEvent{SessionID: report.SessionID, Type: "receipt_refused", Stream: report.Stream, Reason: err.Error()})
+			jctx := s.serverTurnCtx()
+			if err := cv.session.PlaybackReport(jctx, report); err != nil {
+				s.sendVoiceEvent(jctx, conn, VoiceEvent{SessionID: report.SessionID, Type: "receipt_refused", Stream: report.Stream, Reason: err.Error()})
 			}
 		}) {
 			s.sendError(ctx, conn, "identity is stopping")
@@ -454,8 +460,9 @@ func (s *Server) handleVoiceStream(ctx context.Context, conn *websocket.Conn, da
 
 		h := s.currentHandler()
 		if h == nil || !s.background(h, func() {
-			if err := cv.session.Finish(context.Background(), fr.Start); err != nil {
-				s.sendError(context.Background(), conn, "could not finish the input: "+err.Error())
+			jctx := s.serverTurnCtx()
+			if err := cv.session.Finish(jctx, fr.Start); err != nil {
+				s.sendError(jctx, conn, "could not finish the input: "+err.Error())
 			}
 		}) {
 			s.sendError(ctx, conn, "identity is stopping")
@@ -476,7 +483,7 @@ func (s *Server) dropVoiceSession(cl *wsClient) {
 	if cv.mic != nil {
 		cv.mic.end()
 	}
-	_ = cv.session.Close(context.Background(), "abort")
+	_ = cv.session.Close(s.serverTurnCtx(), "abort")
 }
 
 func (s *Server) client(conn *websocket.Conn) *wsClient {

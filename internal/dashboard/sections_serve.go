@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/sections"
-	"github.com/coder/websocket"
 )
 
 func (s *Server) SetSections(reg *sections.Registry) {
@@ -282,17 +281,7 @@ func (s *Server) BroadcastOverlayChanged(token uint64, paths []string) {
 }
 
 func (s *Server) broadcast(msg ServerMessage) {
-	s.wsMu.Lock()
-	conns := make([]*websocket.Conn, 0, len(s.wsConns))
-	for c := range s.wsConns {
-		conns = append(conns, c)
-	}
-	s.wsMu.Unlock()
-	for _, c := range conns {
-		ctx, cancel := context.WithTimeout(context.Background(), writeWait)
-		s.sendMsg(ctx, c, msg)
-		cancel()
-	}
+	s.fanOut(context.Background(), s.conns(nil), msg)
 }
 
 var sectionServableTypes = map[string]string{

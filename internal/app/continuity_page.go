@@ -9,11 +9,17 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
+	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/escrow"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
+
+func (a *App) wireContinuityHooks(h *dashboard.WSHandler) {
+	h.GetContinuity = a.continuityState
+	h.Continuity = a.continuityHooks()
+}
 
 func (a *App) continuityHooks() *dashboard.ContinuityHooks {
 	return &dashboard.ContinuityHooks{
@@ -163,9 +169,15 @@ func (a *App) escrowCreateHere(pass []byte) (file []byte, name string, err error
 	cfg := a.configSnapshot()
 	var c escrow.Contents
 	defer c.Wipe()
-	if c.IdentityKey, err = os.ReadFile(cfg.Identity.KeyPath); err != nil {
+
+	if c.IdentityKey, err = os.ReadFile(a.activeIdentity(cfg.Identity).KeyPath); err != nil {
 		logsink.Error("escrow.error", "the identity key does not read: %v", err)
 		return nil, "", errors.New("The identity's key could not be read on this machine.")
+	}
+	if held, perr := crypto.ParseKeyPair(c.IdentityKey); perr != nil || a.door == nil || a.door.kp == nil ||
+		held.Fingerprint() != a.door.kp.Fingerprint() {
+		logsink.Error("escrow.error", "the key file read is not the running identity's key (%v); nothing was sealed", perr)
+		return nil, "", errors.New("The key file on this machine is not this running identity's key, so no escrow was made.")
 	}
 	if c.SnapshotKey, err = os.ReadFile(a.snapshotKeyPath(cfg)); errors.Is(err, os.ErrNotExist) {
 		return nil, "", errors.New("This identity has no snapshot key yet. One is made at the next normal start; make the escrow after it.")
@@ -226,7 +238,7 @@ func (a *App) escrowCheckHere(sealed, pass []byte) (dashboard.ContinuityView, er
 			return fail("That escrow file opens, but it holds an OLDER snapshot key than the one on this machine, so it could not open snapshots made here. Make a new escrow file and check that one.")
 		}
 	}
-	if _, published, err := escrow.WriteReceipt(kp, recipient, cfg.Identity.KeyPath, time.Now()); err != nil && !published {
+	if _, published, err := escrow.WriteReceipt(kp, recipient, a.activeIdentity(cfg.Identity).KeyPath, time.Now()); err != nil && !published {
 		logsink.Error("escrow.error", "checked, and the receipt could not be written: %v", err)
 		return fail("The escrow file checked out, but the record of the check could not be written on this machine, so snapshots stay unencrypted.")
 	}

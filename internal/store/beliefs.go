@@ -5,18 +5,6 @@ import (
 	"fmt"
 )
 
-type Belief struct {
-	ID               string
-	Statement        string
-	Ring             int
-	NodeType         string
-	Confidence       float64
-	EvidenceCount    int
-	FirstSeq         uint64
-	LastSeq          uint64
-	ConfirmedAtTicks int64
-}
-
 func (s *Store) ListBeliefs() ([]Belief, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -33,15 +21,6 @@ func (s *Store) ListBeliefs() ([]Belief, error) {
 	defer rows.Close()
 
 	return scanBeliefs(rows)
-}
-
-type RetiredBelief struct {
-	ID        string
-	Statement string
-
-	RetiredAt string
-
-	Replacement TensionEnd
 }
 
 const retiredBeliefsSQL = `
@@ -145,25 +124,11 @@ func scanBeliefs(rows *sql.Rows) ([]Belief, error) {
 	return beliefs, rows.Err()
 }
 
-type Edge struct {
-	ID         string
-	FromID     string
-	ToID       string
-	EdgeType   string
-	CreatedSeq uint64
-}
-
 func (s *Store) ListEdgesForBelief(beliefID string) ([]Edge, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return edgesForBeliefRead(s.db, beliefID)
-}
-
-type StaleBelief struct {
-	ID        string
-	Statement string
-	Gap       uint64
 }
 
 func (s *Store) OldestStaleBelief(minGap uint64) (StaleBelief, bool, error) {

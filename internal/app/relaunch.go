@@ -1,3 +1,5 @@
+//go:build !android && !ios
+
 package app
 
 import (
@@ -19,4 +21,6 @@ func relaunch() {
 		logsink.Error("boot.error", "hand-over failed (%v); leaving with exit %d for the service manager", err, exitRestart)
 		os.Exit(exitRestart)
 	}
+
+	os.Exit(0)
 }

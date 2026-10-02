@@ -139,24 +139,21 @@ func ResolveCachePolicy(config *CachePolicy, extra map[string]any, dialect Diale
 	return p, nil
 }
 
-func (c *Client) applyOpenAICache(body []byte, messages []Message) ([]byte, error) {
+func (c *Client) applyOpenAICache(body *openAIBody, messages []Message) error {
 	p, err := c.cachePolicy()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if c.cache == nil && p == (CachePolicy{}) && !c.explicitCache {
-		return body, nil
+		return nil
 	}
-	var req map[string]json.RawMessage
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, err
-	}
+	req := body.add()
 	if c.cache != nil {
 		delete(req, "prompt_cache_key")
 		delete(req, "prompt_cache_retention")
 		delete(req, "prompt_cache_options")
 	}
-	set := func(k string, v any) { req[k], _ = json.Marshal(v) }
+	set := func(k string, v any) { req[k] = v }
 	if p.Key == "" && c.explicitCache {
 		for _, m := range messages {
 			if m.Role == "system" && m.StableLen > 0 && m.StableLen <= len(m.Content) {
@@ -176,9 +173,13 @@ func (c *Client) applyOpenAICache(body []byte, messages []Message) ([]byte, erro
 		}
 		set("prompt_cache_options", map[string]string{"mode": mode, "ttl": "30m"})
 		if p.Mode != "off" {
+			sent, err := json.Marshal(req["messages"])
+			if err != nil {
+				return err
+			}
 			var wire []map[string]json.RawMessage
-			if err := json.Unmarshal(req["messages"], &wire); err != nil {
-				return nil, err
+			if err := json.Unmarshal(sent, &wire); err != nil {
+				return err
 			}
 
 			left := 3
@@ -194,7 +195,7 @@ func (c *Client) applyOpenAICache(body []byte, messages []Message) ([]byte, erro
 					seam = len(m.Content)
 				}
 				if seam < 0 || seam > len(m.Content) {
-					return nil, &CachePolicyError{"stable_len", "outside message"}
+					return &CachePolicyError{"stable_len", "outside message"}
 				}
 				parts := []map[string]any{{"type": "text", "text": m.Content[:seam], "prompt_cache_breakpoint": map[string]string{"mode": "explicit"}}}
 				if seam < len(m.Content) {
@@ -208,7 +209,7 @@ func (c *Client) applyOpenAICache(body []byte, messages []Message) ([]byte, erro
 	} else if p.TTL != "" {
 		set("prompt_cache_retention", p.TTL)
 	}
-	return json.Marshal(req)
+	return nil
 }
 
 func addBeta(current, flag string) string {

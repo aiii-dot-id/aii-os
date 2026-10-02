@@ -2,7 +2,9 @@ package cognitive
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -17,7 +19,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/memory/salience"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type ConsolidateConfig struct {
@@ -48,16 +50,19 @@ type ConsolidateFacility struct {
 	tensions   TensionsSource
 
 	outcomes      outcomeReader
-	outcomeCursor func(store.OutcomeBatch) landing.Cursor
+	outcomeCursor func(rows.OutcomeBatch) landing.Cursor
 	intake        *landing.Lander
 
 	ring3Mu    sync.Mutex
 	retiredGen atomic.Uint64
+
+	lastRenderIn  [sha256.Size]byte
+	lastRenderOut string
 }
 
 type ConsolidateStore interface {
 	ExperienceStore
-	ListExperiences(n int) ([]store.Experience, error)
+	ListExperiences(n int) ([]rows.Experience, error)
 	BeliefStore
 	EdgeStore
 	LifetimeStore
@@ -70,6 +75,8 @@ type ConsolidateStore interface {
 
 type StandingSource interface {
 	StandingFor(id string) (string, error)
+
+	Fault(err error) bool
 }
 
 type ProvenanceResolver interface {
@@ -81,11 +88,11 @@ type EntityChecker interface {
 }
 
 type IntentionStore interface {
-	ListIntentions() ([]store.Intention, error)
+	ListIntentions() ([]rows.Intention, error)
 }
 
 type EdgeStore interface {
-	ListEdgesForBelief(beliefID string) ([]store.Edge, error)
+	ListEdgesForBelief(beliefID string) ([]rows.Edge, error)
 }
 
 type LifetimeStore interface {
@@ -101,7 +108,7 @@ func NewConsolidate(store ConsolidateStore, llm LLMCaller, lg ConsolidateLedger,
 		cfg.Threshold = 3
 	}
 	if cfg.Salience.Version == "" {
-		cfg.Salience = salience.DefaultSalience
+		cfg.Salience = salience.DefaultSalience()
 	}
 	if cfg.MaxOps == 0 {
 		cfg.MaxOps = 32
@@ -147,9 +154,9 @@ func (c *ConsolidateFacility) Predicate(ctx context.Context) bool {
 	return err == nil && reservedWaiting(experiences)
 }
 
-func reservedWaiting(experiences []store.Experience) bool {
+func reservedWaiting(experiences []rows.Experience) bool {
 	for _, e := range experiences {
-		if strings.HasPrefix(e.ID, store.OutcomeObservationPrefix) {
+		if strings.HasPrefix(e.ID, rows.OutcomeObservationPrefix) {
 			return true
 		}
 	}
@@ -202,7 +209,7 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 
 		outputs, refused, mintErr := c.mintOperations(env.Operations, expIDs, modelID)
 		if mintErr != nil {
-			logsink.Warn("consolidate.refusal", "belief comparison unavailable: %v — nothing consumed", mintErr)
+			logsink.Warn("consolidate.refusal", "%v — nothing consumed; the material retries next pass", mintErr)
 			return nil
 		}
 		if refused > 0 && len(outputs) == 0 {
@@ -214,7 +221,7 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		if c.ledger == nil {
 			logsink.Warn("consolidate.refusal", "no ledger door — %d operation(s) and consumption skipped", len(env.Operations))
 		} else if _, err := c.ledger.Append(ledger.EventConsolidationRun, 3,
-			store.FacilityRunPayload{Inputs: expIDs, Outputs: outputs, Confirmed: c.confirmedCrossings()}, modelID); err != nil {
+			rows.FacilityRunPayload{Inputs: expIDs, Outputs: outputs, Confirmed: c.confirmedCrossings()}, modelID); err != nil {
 			logsink.Warn("consolidate.refusal", "run marker refused: %v — nothing consumed, pass will re-run", err)
 		} else {
 			logsink.Info("consolidate.end", "consumed %d experiences into %d ledger event(s)", len(expIDs), len(outputs))
@@ -315,7 +322,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 	statements := map[string]string{}
 	beliefs, err := c.store.ListBeliefs()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("belief comparison unavailable: %w", err)
 	}
 	for _, b := range beliefs {
 		known[b.ID] = b.Ring
@@ -411,7 +418,10 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				"distinct_from": distinctFrom, "distinction": strings.TrimSpace(op.Distinction),
 			}, modelID)
 			if err != nil {
-				logsink.Debug("consolidate.refusal", "op %d (upsert %q) refused before append: %v — dropped", i, id, err)
+				if !errors.Is(err, rows.ErrRefused) {
+					return outputs, refused, fmt.Errorf("op %d (upsert %q) neither landed nor was refused: %w", i, id, err)
+				}
+				logsink.Debug("consolidate.refusal", "op %d (upsert %q): %v — dropped", i, id, err)
 				refused++
 				continue
 			}
@@ -442,7 +452,9 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				continue
 			}
 
-			if standing, err := c.store.StandingFor(oldID); err != nil {
+			if standing, err := c.store.StandingFor(oldID); c.store.Fault(err) {
+				return outputs, refused, fmt.Errorf("op %d (supersede %q): its standing could not be read: %w", i, oldID, err)
+			} else if err != nil {
 				logsink.Debug("consolidate.refusal", "op %d (supersede %q) dropped — its standing cannot be derived (%v), so it cannot be shown uncontested", i, oldID, err)
 				continue
 			} else if standing == "suspect" {
@@ -453,7 +465,10 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 				"old_id": oldID, "new_id": newID, "reason": strings.TrimSpace(op.Reason),
 			}, modelID)
 			if err != nil {
-				logsink.Debug("consolidate.refusal", "op %d (supersede %q→%q) refused before append: %v — dropped", i, oldID, newID, err)
+				if !errors.Is(err, rows.ErrRefused) {
+					return outputs, refused, fmt.Errorf("op %d (supersede %q→%q) neither landed nor was refused: %w", i, oldID, newID, err)
+				}
+				logsink.Debug("consolidate.refusal", "op %d (supersede %q→%q): %v — dropped", i, oldID, newID, err)
 				continue
 			}
 			outputs = append(outputs, evt.Seq)
@@ -464,7 +479,7 @@ func (c *ConsolidateFacility) mintOperations(ops []beliefOperation, inputs []str
 	return outputs, refused, nil
 }
 
-func (c *ConsolidateFacility) buildEvidenceBlock(experiences []store.Experience) string {
+func (c *ConsolidateFacility) buildEvidenceBlock(experiences []rows.Experience) string {
 	retired, more := c.retiredSince(experiences)
 	expTexts := make([]string, len(experiences))
 	for i, e := range experiences {
@@ -479,7 +494,7 @@ func (c *ConsolidateFacility) buildEvidenceBlock(experiences []store.Experience)
 
 	listed := map[string]bool{}
 	if beliefs, err := c.store.ListBeliefs(); err == nil && len(beliefs) > 0 {
-		var ring3 []store.Belief
+		var ring3 []rows.Belief
 		for _, b := range beliefs {
 			if b.Ring == 3 {
 				ring3 = append(ring3, b)
@@ -498,7 +513,7 @@ func (c *ConsolidateFacility) buildEvidenceBlock(experiences []store.Experience)
 	parts = append(parts, c.tensionsBlock(listed)...)
 
 	if intentions, err := c.store.ListIntentions(); err == nil && len(intentions) > 0 {
-		var active []store.Intention
+		var active []rows.Intention
 		for _, i := range intentions {
 			if i.State == "active" {
 				active = append(active, i)
@@ -556,7 +571,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	var parts []string
 
 	if len(beliefs) > 0 {
-		var ring3 []store.Belief
+		var ring3 []rows.Belief
 		for _, b := range beliefs {
 			if b.Ring == 3 {
 				ring3 = append(ring3, b)
@@ -573,7 +588,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	parts = append(parts, c.tensionsBlock(nil)...)
 
 	if len(experiences) > 0 {
-		var salient []store.Experience
+		var salient []rows.Experience
 		for _, e := range experiences {
 			if e.Raw == 0 {
 				salient = append(salient, e)
@@ -588,7 +603,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	}
 
 	if len(intentions) > 0 {
-		var active []store.Intention
+		var active []rows.Intention
 		for _, i := range intentions {
 			if i.State == "active" {
 				active = append(active, i)
@@ -612,6 +627,12 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 	if err != nil {
 		logsink.Warn("consolidate.error", "authority context unavailable: %v", err)
 		c.writeRing3Deterministic()
+		return
+	}
+
+	in := sha256.Sum256([]byte(systemPrompt + "\x00" + userMsg))
+	if in == c.lastRenderIn && c.lastRenderOut != "" && c.ringWriter.RingSection(ring.Ring3, "working_truth") == c.lastRenderOut {
+		logsink.Info("consolidate.decision", "Ring 3 render skipped: its input is unchanged since the last render, which still stands")
 		return
 	}
 	output, _, err := c.llm.ChatSimple(wire.WithTapSource(callCtx, "consolidate"), systemPrompt, userMsg)
@@ -639,6 +660,7 @@ func (c *ConsolidateFacility) writeRing3(ctx context.Context) {
 			logsink.Info("consolidate.decision", "a belief was retired while Ring 3 was being rendered — the %d-char render is not kept; Ring 3 stands as rendered from the store", len(output))
 			return
 		}
+		c.lastRenderIn, c.lastRenderOut = in, output
 		logsink.Info("consolidate.end", "wrote %d chars to Ring 3 (working_truth, rendered from the store)", len(output))
 	}
 }
@@ -689,7 +711,7 @@ func (c *ConsolidateFacility) renderRing3Deterministic(clearIfEmpty bool) {
 
 	beliefs, err := c.store.ListBeliefs()
 	if err == nil && len(beliefs) > 0 {
-		var ring3 []store.Belief
+		var ring3 []rows.Belief
 		for _, b := range beliefs {
 			if b.Ring == 3 {
 				ring3 = append(ring3, b)
@@ -706,7 +728,7 @@ func (c *ConsolidateFacility) renderRing3Deterministic(clearIfEmpty bool) {
 
 	experiences, err := c.store.ListExperiences(5)
 	if err == nil && len(experiences) > 0 {
-		var salient []store.Experience
+		var salient []rows.Experience
 		for _, e := range experiences {
 			if e.Raw == 0 {
 				salient = append(salient, e)
@@ -789,7 +811,7 @@ func (c *ConsolidateFacility) ReconcileRing3(writtenAt time.Time) {
 	c.BeliefRetired()
 }
 
-func (c *ConsolidateFacility) confirmedCrossings() []store.ConfirmedCrossing {
+func (c *ConsolidateFacility) confirmedCrossings() []rows.ConfirmedCrossing {
 	if c.store == nil {
 		return nil
 	}
@@ -802,7 +824,7 @@ func (c *ConsolidateFacility) confirmedCrossings() []store.ConfirmedCrossing {
 	if ticks <= 0 {
 		return nil
 	}
-	var out []store.ConfirmedCrossing
+	var out []rows.ConfirmedCrossing
 	for _, b := range beliefs {
 		if b.ConfirmedAtTicks != 0 {
 			continue
@@ -813,7 +835,7 @@ func (c *ConsolidateFacility) confirmedCrossings() []store.ConfirmedCrossing {
 			continue
 		}
 		if standing == "confirmed" {
-			out = append(out, store.ConfirmedCrossing{ID: b.ID, Ticks: ticks})
+			out = append(out, rows.ConfirmedCrossing{ID: b.ID, Ticks: ticks})
 		}
 	}
 	return out
@@ -870,7 +892,7 @@ func consolidationTool() wire.ToolDefinition {
 }
 
 type DecisionLog interface {
-	RecordMemoryDecision(store.MemoryDecision) error
+	RecordMemoryDecision(rows.MemoryDecision) error
 }
 
 func (c *ConsolidateFacility) SetDecisionLog(l DecisionLog) { c.decisions = l }
@@ -881,11 +903,12 @@ func (c *ConsolidateFacility) salienceFor(id, stmt string, conf float64, evidenc
 		CostToStore: salience.CostToStore(stmt, 400), CostToQuery: salience.CostToQuery(stmt),
 	}
 	best := 0.0
+	like := trigram.Against(stmt)
 	for otherID, other := range statements {
 		if otherID == id {
 			continue
 		}
-		if sim := trigram.Similarity(stmt, other); sim > best {
+		if sim := like(other); sim > best {
 			best = sim
 		}
 	}
@@ -950,7 +973,7 @@ func (c *ConsolidateFacility) logDecision(d salience.SalienceDecision, stmt stri
 	if c.decisions == nil {
 		return
 	}
-	if err := c.decisions.RecordMemoryDecision(store.MemoryDecision{
+	if err := c.decisions.RecordMemoryDecision(rows.MemoryDecision{
 		Kind: "salience", Facility: "consolidate", Decision: d.Class, Seq: seq, Score: d.Score,
 		Record: map[string]interface{}{
 			"candidate": stmt, "features": d.Features, "explanations": d.Explanations,

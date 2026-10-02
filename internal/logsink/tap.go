@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
 
 const (
@@ -160,16 +162,6 @@ func SetTaps(next map[string]time.Time) {
 	}
 }
 
-func Taps() map[string]time.Time {
-	out := map[string]time.Time{}
-	if cur := taps.Load(); cur != nil {
-		for k, v := range *cur {
-			out[k] = v
-		}
-	}
-	return out
-}
-
 func captureWhere() string {
 	captureMu.Lock()
 	defer captureMu.Unlock()
@@ -239,6 +231,11 @@ func writeCapture(line []byte) error {
 
 		f, err := os.OpenFile(filepath.Join(captureDir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
+			return err
+		}
+
+		if err := fileperm.RestrictToOwner(f); err != nil {
+			f.Close()
 			return err
 		}
 		st, err := f.Stat()

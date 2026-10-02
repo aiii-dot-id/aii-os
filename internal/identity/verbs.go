@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
-	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -103,10 +103,6 @@ type Engine struct {
 	fetchedURLs  map[string]bool
 	fetchedOrder []string
 
-	reachable func(name string) bool
-
-	askProposer func(session, text string, choices []string, connector string) error
-
 	agencyMu             sync.RWMutex
 	maxSubagentDepth     int
 	maxParallelSubagents int
@@ -114,37 +110,70 @@ type Engine struct {
 	subagentWallSeconds  int
 
 	subagentWallSecondsLocal int
-	routeIsLocal             func(role string) bool
-	workWake                 func()
-
-	yieldGate func() (need bool, why string)
 
 	spawnQueueOff bool
 
 	spawnRounds, spawnCalls, spawnLegs int
 
-	store        storePort
-	ledger       EventWriter
-	rings        *ring.Manager
+	store    storePort
+	ledger   EventWriter
+	rings    *ring.Manager
+	toolDisc ToolDiscoverer
+
+	instruments  *memory.Facility
 	projects     ProjectPort
 	voice        VoicePort
 	heardHistory func(string, uint64, int) (string, error)
-
-	continuity ContinuityPort
-	toolDisc   ToolDiscoverer
-
-	instruments *memory.Facility
-	timers      TimerSetter
+	continuity   ContinuityPort
+	timers       TimerSetter
+	reachable    func(name string) bool
+	askProposer  func(session, text string, choices []string, connector string) error
+	workWake     func()
+	yieldGate    func() (need bool, why string)
+	routeIsLocal func(role string) bool
 }
 
-func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscoverer) *Engine {
-	return &Engine{
-		store:       s,
-		ledger:      l,
-		rings:       rm,
-		toolDisc:    td,
-		instruments: memory.New(s),
+type Ports struct {
+	Projects ProjectPort
+	Voice    VoicePort
+
+	HeardHistory func(query string, after uint64, limit int) (string, error)
+	Continuity   ContinuityPort
+	Timers       TimerSetter
+
+	Embedder memory.Embedder
+
+	Reachable func(name string) bool
+
+	AskProposer func(session, text string, choices []string, connector string) error
+
+	WorkWake func()
+
+	YieldGate func() (need bool, why string)
+
+	RouteIsLocal func(role string) bool
+}
+
+func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscoverer, p Ports) *Engine {
+	e := &Engine{
+		store:        s,
+		ledger:       l,
+		rings:        rm,
+		toolDisc:     td,
+		instruments:  memory.New(s),
+		projects:     p.Projects,
+		voice:        p.Voice,
+		heardHistory: p.HeardHistory,
+		continuity:   p.Continuity,
+		timers:       p.Timers,
+		reachable:    p.Reachable,
+		askProposer:  p.AskProposer,
+		workWake:     p.WorkWake,
+		yieldGate:    p.YieldGate,
+		routeIsLocal: p.RouteIsLocal,
 	}
+	e.instruments.SetEmbedder(p.Embedder)
+	return e
 }
 
 func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, args map[string]interface{}) (string, error) {
@@ -157,7 +186,7 @@ func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, arg
 }
 
 func (e *Engine) append(ctx context.Context, eventType ledger.EventType, ring int, payload interface{}) (*ledger.Event, error) {
-	return e.ledger.Append(eventType, ring, payload, llm.ModelIDFromContext(ctx))
+	return e.ledger.Append(eventType, ring, payload, wire.ModelIDFromContext(ctx))
 }
 
 type SubagentDepth struct{}
@@ -165,12 +194,6 @@ type SubagentDepth struct{}
 type SubagentBudget struct{}
 
 type SubagentWorkSession struct{}
-
-func (e *Engine) SetReachable(fn func(name string) bool) { e.reachable = fn }
-
-func (e *Engine) SetAskProposer(fn func(session, text string, choices []string, connector string) error) {
-	e.askProposer = fn
-}
 
 func (e *Engine) SetSpawnQueue(on bool) {
 	e.agencyMu.Lock()
@@ -207,12 +230,6 @@ func (e *Engine) spawnQueueOn() bool {
 	return !e.spawnQueueOff
 }
 
-func (e *Engine) SetYieldGate(fn func() (need bool, why string)) {
-	e.agencyMu.Lock()
-	defer e.agencyMu.Unlock()
-	e.yieldGate = fn
-}
-
 func (e *Engine) SetAgencyLimits(maxDepth, maxParallel, maxMints, wallSeconds int) {
 	e.agencyMu.Lock()
 	defer e.agencyMu.Unlock()
@@ -228,17 +245,11 @@ func (e *Engine) SetLocalSpawnWall(seconds int) {
 	e.subagentWallSecondsLocal = seconds
 }
 
-func (e *Engine) SetRouteIsLocal(fn func(role string) bool) {
-	e.agencyMu.Lock()
-	defer e.agencyMu.Unlock()
-	e.routeIsLocal = fn
-}
-
 func (e *Engine) spawnWall(role string) int {
 	e.agencyMu.RLock()
-	wall, local, oracle := e.subagentWallSeconds, e.subagentWallSecondsLocal, e.routeIsLocal
+	wall, local := e.subagentWallSeconds, e.subagentWallSecondsLocal
 	e.agencyMu.RUnlock()
-	if oracle != nil && local > 0 && oracle(role) {
+	if e.routeIsLocal != nil && local > 0 && e.routeIsLocal(role) {
 		return local
 	}
 	return wall
@@ -249,8 +260,6 @@ func (e *Engine) agencyLimits() (maxDepth, maxParallel, maxMints, wallSeconds in
 	defer e.agencyMu.RUnlock()
 	return e.maxSubagentDepth, e.maxParallelSubagents, e.maxSubagentMints, e.subagentWallSeconds
 }
-
-func (e *Engine) SetWorkWake(wake func()) { e.workWake = wake }
 
 type SubagentMints struct{}
 

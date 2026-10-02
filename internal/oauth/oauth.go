@@ -71,23 +71,19 @@ type OAuthParams struct {
 	TokenParams     map[string]any
 	RefreshParams   map[string]any
 	ResourceHeaders map[string]string
-	ClaimHeaders    map[string][]string
-	ClientID        string
-	AuthorizeURL    string
-	TokenURL        string
-	RedirectURI     string
-	Scope           string
+
+	ClaimHeaders map[string][]string
+	ClientID     string
+	AuthorizeURL string
+	TokenURL     string
+	RedirectURI  string
+	Scope        string
 
 	RequiredScope string
-	Originator    string
 
 	ClientSecret string
 
-	IDTokenAddOrganizations bool
-
 	AuthorizeParams map[string]string
-
-	AccountClaim []string
 }
 
 func (sp spec) refreshable() bool { return sp.oauth.TokenURL != "" && sp.oauth.ClientID != "" }
@@ -143,7 +139,11 @@ func isNotExist(err error) bool            { return os.IsNotExist(err) }
 
 var homeDir = credentialHome
 
+var ErrClaimWithoutHeader = errors.New("oauth_account_claim needs an account_header to ride in")
+
 func applyOverrides(sp spec, ov map[string]string) (spec, error) {
+	authorize := map[string]string{}
+	var claim []string
 	for k, v := range ov {
 		if v == "" {
 			return spec{}, fmt.Errorf("credential option %q is empty", k)
@@ -184,22 +184,16 @@ func applyOverrides(sp spec, ov map[string]string) (spec, error) {
 		case k == "oauth_scope":
 			sp.oauth.Scope = v
 		case k == "oauth_originator":
-			sp.oauth.Originator = v
+			authorize["originator"] = v
 		case k == "oauth_id_token_add_organizations":
-			switch v {
-			case "true":
-				sp.oauth.IDTokenAddOrganizations = true
-			case "false":
-				sp.oauth.IDTokenAddOrganizations = false
-			default:
+			if v != "true" && v != "false" {
 				return spec{}, fmt.Errorf("credential option %q must be \"true\" or \"false\", got %q", k, v)
 			}
+			authorize["id_token_add_organizations"] = v
 		case k == "oauth_account_claim":
-			var path []string
-			if err := json.Unmarshal([]byte(v), &path); err != nil || len(path) == 0 {
+			if err := json.Unmarshal([]byte(v), &claim); err != nil || len(claim) == 0 {
 				return spec{}, fmt.Errorf("credential option %q must be a JSON array of claim names, got %q", k, v)
 			}
-			sp.oauth.AccountClaim = path
 		case k == "oauth_authorize_params":
 			var m map[string]string
 			if err := json.Unmarshal([]byte(v), &m); err != nil {
@@ -228,6 +222,27 @@ func applyOverrides(sp spec, ov map[string]string) (spec, error) {
 			return spec{}, fmt.Errorf("unknown credential option %q", k)
 		}
 	}
+	if len(authorize) > 0 {
+		params := copyMap(sp.oauth.AuthorizeParams)
+		if params == nil {
+			params = map[string]string{}
+		}
+		for k, v := range authorize {
+			params[k] = v
+		}
+		sp.oauth.AuthorizeParams = params
+	}
+	if claim != nil {
+		if sp.accountHeader == "" {
+			return spec{}, fmt.Errorf("credential option %q: %w", "oauth_account_claim", ErrClaimWithoutHeader)
+		}
+		headers := copyPaths(sp.oauth.ClaimHeaders)
+		if headers == nil {
+			headers = map[string][]string{}
+		}
+		headers[sp.accountHeader] = claim
+		sp.oauth.ClaimHeaders = headers
+	}
 	return sp, nil
 }
 
@@ -238,7 +253,7 @@ type Source struct {
 
 	owned bool
 
-	refreshMu sync.Mutex
+	refresh chan struct{}
 
 	mu         sync.Mutex
 	st         *state
@@ -287,8 +302,8 @@ func newBorrowed(kind string, params OAuthParams, overrides ...map[string]string
 		}
 		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	}
-	s := &Source{kind: kind, sp: sp, path: path}
-	if _, err := s.load(); err != nil {
+	s := &Source{kind: kind, sp: sp, path: path, refresh: make(chan struct{}, 1)}
+	if err := s.open(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -314,8 +329,8 @@ func NewOwnedConfigured(kind, path string, params OAuthParams, overrides ...map[
 		return nil, fmt.Errorf("credential %q: an owned source needs a token endpoint and client id", kind)
 	}
 	sp.abs, sp.file, sp.keychain = path, nil, ""
-	s := &Source{kind: kind, sp: sp, path: path, owned: true}
-	if _, err := s.load(); err != nil {
+	s := &Source{kind: kind, sp: sp, path: path, owned: true, refresh: make(chan struct{}, 1)}
+	if err := s.open(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -355,8 +370,26 @@ func (s *Source) DiscoveryQuery() map[string]string {
 	return query
 }
 
-func (s *Source) load() (*state, error) {
-	raw, err := adoptedBytes(s.sp.keychain, s.path)
+func (s *Source) open() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.load(context.Background())
+	return err
+}
+
+func (s *Source) load(ctx context.Context) (*state, error) {
+	for {
+		gen := s.gen
+		s.mu.Unlock()
+		raw, err := adoptedBytes(ctx, s.sp.keychain, s.path)
+		s.mu.Lock()
+		if s.gen == gen {
+			return s.adopt(raw, err)
+		}
+	}
+}
+
+func (s *Source) adopt(raw []byte, err error) (*state, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 
@@ -383,14 +416,7 @@ func (s *Source) load() (*state, error) {
 		}
 		st.headers[s.sp.accountHeader] = st.account
 	}
-	paths := copyPaths(s.sp.oauth.ClaimHeaders)
-	if s.sp.accountHeader != "" && len(s.sp.oauth.AccountClaim) > 0 {
-		if paths == nil {
-			paths = map[string][]string{}
-		}
-		paths[s.sp.accountHeader] = s.sp.oauth.AccountClaim
-	}
-	for header, path := range paths {
+	for header, path := range s.sp.oauth.ClaimHeaders {
 		if st.isAPIKey {
 			continue
 		}
@@ -454,7 +480,7 @@ func (s *Source) Credential(ctx context.Context) (Credential, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, err := s.load()
+	st, err := s.load(ctx)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -477,11 +503,15 @@ func nearExpiry(st *state) bool {
 }
 
 func (s *Source) refreshOwned(ctx context.Context, refreshTok string, seenGen uint64) (Credential, error) {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
+	select {
+	case s.refresh <- struct{}{}:
+	case <-ctx.Done():
+		return Credential{}, ctx.Err()
+	}
+	defer func() { <-s.refresh }()
 	s.mu.Lock()
 	if s.gen != seenGen {
-		if st, err := s.load(); err == nil && !nearExpiry(st) {
+		if st, err := s.load(ctx); err == nil && !nearExpiry(st) {
 			c := s.credLocked(st)
 			s.mu.Unlock()
 			return c, nil
@@ -493,7 +523,7 @@ func (s *Source) refreshOwned(ctx context.Context, refreshTok string, seenGen ui
 		return Credential{}, err
 	}
 	if sha256.Sum256(before) != s.sourceHash {
-		st, err := s.load()
+		st, err := s.load(ctx)
 		if err != nil {
 			s.mu.Unlock()
 			return Credential{}, err
@@ -532,7 +562,7 @@ func (s *Source) refreshOwned(ctx context.Context, refreshTok string, seenGen ui
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, err := s.load()
+	st, err := s.load(ctx)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -541,8 +571,14 @@ func (s *Source) refreshOwned(ctx context.Context, refreshTok string, seenGen ui
 	return c, nil
 }
 
-func ParamsFromOptions(opts map[string]string) (OAuthParams, error) {
-	sp, err := applyOverrides(spec{}, opts)
+func ParamsFromOptions(base OAuthParams, opts map[string]string) (OAuthParams, error) {
+	contract := map[string]string{}
+	for k, v := range opts {
+		if strings.HasPrefix(k, "oauth_") || k == "account_header" {
+			contract[k] = v
+		}
+	}
+	sp, err := applyOverrides(spec{oauth: base}, contract)
 	if err != nil {
 		return OAuthParams{}, err
 	}
@@ -564,7 +600,7 @@ func (s *Source) Stale(ctx context.Context, gen uint64) error {
 	}
 
 	forgetAdopted(s.sp.keychain)
-	if _, err := s.load(); err != nil {
+	if _, err := s.load(ctx); err != nil {
 		return err
 	}
 	if gen != s.gen {
@@ -585,7 +621,7 @@ func (s *Source) ForceRefresh(ctx context.Context, gen uint64) (Credential, erro
 	}
 	s.mu.Lock()
 
-	st, err := s.load()
+	st, err := s.load(ctx)
 	if err != nil {
 		s.mu.Unlock()
 		return Credential{}, err
@@ -736,7 +772,8 @@ func (s *Source) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := Info{Kind: s.kind, Path: s.path}
-	if _, err := s.load(); err != nil {
+
+	if _, err := s.load(context.Background()); err != nil {
 		i.Error = err.Error()
 	}
 	if s.st == nil {
@@ -802,40 +839,6 @@ func Dialect(kind string, overrides ...map[string]string) string {
 		}
 	}
 	return sp.dialect
-}
-
-func OverrideParams(base OAuthParams, opts map[string]string) (OAuthParams, error) {
-	filtered := map[string]string{}
-	for k, v := range opts {
-		if strings.HasPrefix(k, "oauth_") {
-			filtered[k] = v
-		}
-	}
-	sp, err := applyOverrides(spec{oauth: base}, filtered)
-	if err != nil {
-		return OAuthParams{}, err
-	}
-	p := sp.oauth
-	p.AuthorizeParams = copyMap(p.AuthorizeParams)
-	if p.AuthorizeParams == nil {
-		p.AuthorizeParams = map[string]string{}
-	}
-	if p.Originator != "" {
-		p.AuthorizeParams["originator"] = p.Originator
-		p.Originator = ""
-	}
-	if _, set := filtered["oauth_id_token_add_organizations"]; set {
-		p.AuthorizeParams["id_token_add_organizations"] = filtered["oauth_id_token_add_organizations"]
-		p.IDTokenAddOrganizations = false
-	}
-	if len(p.AccountClaim) > 0 && opts["account_header"] != "" {
-		p.ClaimHeaders = copyPaths(p.ClaimHeaders)
-		if p.ClaimHeaders == nil {
-			p.ClaimHeaders = map[string][]string{}
-		}
-		p.ClaimHeaders[opts["account_header"]] = p.AccountClaim
-	}
-	return p, nil
 }
 
 func validHeader(name, value string) bool {

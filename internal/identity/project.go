@@ -46,8 +46,6 @@ type ProjectPort interface {
 	Waive(id, item, reason string) (ProjectInfo, error)
 }
 
-func (e *Engine) SetProjects(p ProjectPort) { e.projects = p }
-
 var ErrProjectSafe = errors.New("project mutation refused in SAFE")
 
 func (e *Engine) verbProject(ctx context.Context, args map[string]interface{}) (string, error) {

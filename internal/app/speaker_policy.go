@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
 const (
@@ -27,8 +25,6 @@ const (
 )
 
 var reSpeakerID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
-var speakerDecisionBound = 16 * time.Second
 
 func validateSpeakerPolicy(c SpeakerPolicyConfig) error {
 	mode := c.Mode
@@ -133,17 +129,30 @@ func policyFrom(c SpeakerPolicyConfig) speakerPolicy {
 func (p speakerPolicy) restricted() bool { return p.mode != speakerModeAll }
 
 func (p speakerPolicy) decide(decision, speakerID string) (bool, string) {
-	if decision != "known" {
-		speakerID = ""
+	if decision != "known" || speakerID == "" {
+		return p.decideIdentity(nil)
 	}
-	return p.decideIdentity(speakerID)
+	return p.decideIdentity([]string{speakerID})
 }
 
-func (p speakerPolicy) decideIdentity(speakerID string) (bool, string) {
-	known := speakerID != ""
+func (p speakerPolicy) lists(ids []string) bool {
+	for _, id := range ids {
+		if p.uids[id] {
+			return true
+		}
+	}
+	return false
+}
+
+func (p speakerPolicy) ignores(ids []string) bool {
+	return p.mode == speakerModeIgnore && p.lists(ids)
+}
+
+func (p speakerPolicy) decideIdentity(ids []string) (bool, string) {
+	known := len(ids) > 0
 	switch p.mode {
 	case speakerModeOnly:
-		if known && p.uids[speakerID] {
+		if p.lists(ids) {
 			return true, ""
 		}
 		if known {
@@ -151,7 +160,7 @@ func (p speakerPolicy) decideIdentity(speakerID string) (bool, string) {
 		}
 		return false, "only the listed speakers are heard; this voice was not identified"
 	case speakerModeIgnore:
-		if known && p.uids[speakerID] {
+		if p.lists(ids) {
 			return false, "this speaker is ignored"
 		}
 		if known {
@@ -189,10 +198,10 @@ type heldFinal struct {
 	resolved    bool
 	deliver     bool
 	decision    string
-	speakerID   string
+	speakerIDs  []string
 	reason      string
 	revision    uint64
-	observation *pluginhost.Event
+	observation *voiceFrame
 }
 
 func (a *App) holdFinal(h *voiceHandle, f *heldFinal) {
@@ -203,11 +212,11 @@ func (a *App) holdFinal(h *voiceHandle, f *heldFinal) {
 		h.held = map[int64]*heldFinal{}
 	}
 	h.held[seq] = f
-	f.timer = time.AfterFunc(speakerDecisionBound, func() { a.decideHeld(h, seq, "", "", true, nil) })
+	f.timer = time.AfterFunc(speakerDecisionBound, func() { a.decideHeld(h, seq, "", nil, true, nil) })
 	h.heldMu.Unlock()
 }
 
-func (a *App) decideHeld(h *voiceHandle, seq int64, decision, speakerID string, timedOut bool, observation *pluginhost.Event) {
+func (a *App) decideHeld(h *voiceHandle, seq int64, decision string, speakerIDs []string, timedOut bool, observation *voiceFrame) {
 	p := a.speakerPolicyNow()
 	h.heldMu.Lock()
 	f := h.held[seq]
@@ -217,11 +226,10 @@ func (a *App) decideHeld(h *voiceHandle, seq int64, decision, speakerID string, 
 	}
 	f.timer.Stop()
 	f.resolved, f.revision, f.observation = true, p.revision, observation
-	f.decision, f.speakerID = decision, speakerID
-	f.deliver, f.reason = p.decideIdentity(speakerID)
+	f.decision, f.speakerIDs = decision, speakerIDs
+	f.deliver, f.reason = p.decideIdentity(speakerIDs)
 	if observation != nil && !f.deliver {
-		var o speakerObservation
-		if json.Unmarshal(observation.Raw, &o) == nil && o.Reason == "speaker_profile_pending" {
+		if observation.err == nil && observation.observation().Reason == "speaker_profile_pending" {
 			f.reason += "; speaker identification pending — awaiting corroborating speech"
 		}
 	}
@@ -257,7 +265,7 @@ func (a *App) drainHeld(h *voiceHandle) {
 
 		if f.deliver {
 			p := a.speakerPolicyNow()
-			if deliver, reason := p.decideIdentity(f.speakerID); !deliver {
+			if deliver, reason := p.decideIdentity(f.speakerIDs); !deliver {
 				f.deliver, f.reason, f.revision = false, reason, p.revision
 			}
 		}
@@ -328,7 +336,7 @@ func (a *App) admitHeldInOrder(h *voiceHandle, f *heldFinal) {
 		if _, safe := a.SafeMode(); safe || h.closing.Load() {
 			return
 		}
-		a.handleHeard(context.Background(), f.heard)
+		a.handleHeard(a.lifetime(), f.heard)
 	}()
 }
 
@@ -362,14 +370,13 @@ func (a *App) withholdHeld(h *voiceHandle, why string) {
 	}
 }
 
-func (a *App) observationForHeld(ev pluginhost.Event) bool {
-	val, ok := a.voiceSessions.Load(ev.SessionID)
-	if !ok {
+func (a *App) observationForHeld(ev voiceFrame) bool {
+	h := a.voiceHandle(ev.SessionID)
+	if h == nil {
 		return false
 	}
-	h := val.(*voiceHandle)
-	var body speakerObservation
-	if json.Unmarshal(ev.Raw, &body) != nil || body.RefersTo == 0 {
+	body := ev.observation()
+	if ev.err != nil || body.RefersTo == 0 {
 		return false
 	}
 	h.heldMu.Lock()
@@ -377,7 +384,7 @@ func (a *App) observationForHeld(ev pluginhost.Event) bool {
 	withheld := h.withheld[body.RefersTo]
 	h.heldMu.Unlock()
 	if held {
-		a.decideHeld(h, body.RefersTo, body.Decision, body.filterID(), false, &ev)
+		a.decideHeld(h, body.RefersTo, body.Decision, body.filterIDs(), false, &ev)
 	}
 	return held || withheld
 }

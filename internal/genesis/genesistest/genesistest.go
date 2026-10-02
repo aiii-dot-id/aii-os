@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
@@ -15,7 +16,7 @@ type Root struct {
 
 	ring0        []byte
 	constitution string
-	token        string
+	ring5        string
 
 	bootstrapKeyBundle []byte
 	bootstrapPacket    []byte
@@ -56,10 +57,28 @@ func fetchLive() (*Root, error) {
 	if err != nil {
 		return nil, fmt.Errorf("live bootstrap packet: %w", err)
 	}
+	ring5, err := genesis.VerifyRing5(live.Ring5PubkeyBundle, live.Ring5Bundle, live.Ring5Manifest, root, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("live Ring 5 does not verify against the shipped pin: %w", err)
+	}
 	return &Root{
-		Env: root, ring0: live.Ring0, constitution: laws, token: live.Token,
+		Env: root, ring0: live.Ring0, constitution: laws, ring5: ring5,
 		bootstrapKeyBundle: live.BootstrapKey, bootstrapPacket: live.BootstrapPacket, bootstrapPrompt: prompt,
 	}, nil
+}
+
+func (r *Root) Ring5(t *testing.T) string {
+	t.Helper()
+	return r.ring5
+}
+
+func LiveRing5() (string, error) {
+	once.Do(func() { shared, fetchErr = fetchLive() })
+	if fetchErr != nil {
+		return "", fmt.Errorf("genesistest: Ring 5 comes from the real servers and nowhere else; "+
+			"this test binary could not reach them: %w", fetchErr)
+	}
+	return shared.ring5, nil
 }
 
 func (r *Root) Ring0Bundle(t *testing.T) []byte {
@@ -72,11 +91,6 @@ func (r *Root) Constitution(t *testing.T) string {
 	return r.constitution
 }
 
-func (r *Root) Token(t *testing.T) string {
-	t.Helper()
-	return r.token
-}
-
 func (r *Root) BootstrapArtifacts(t *testing.T) (keyBundle, packet []byte, prompt string) {
 	t.Helper()
 	return r.bootstrapKeyBundle, r.bootstrapPacket, r.bootstrapPrompt
@@ -85,19 +99,6 @@ func (r *Root) BootstrapArtifacts(t *testing.T) (keyBundle, packet []byte, promp
 func (r *Root) BootstrapPrompt(t *testing.T) string {
 	t.Helper()
 	return r.bootstrapPrompt
-}
-
-func NotTheSigner(t *testing.T) *sigenvelope.PublicKeyEnvelope {
-	t.Helper()
-	live, err := genesislive.Fetch()
-	if err != nil {
-		t.Fatalf("genesistest: %v", err)
-	}
-	env, err := genesis.DomainKeyFromBundle(live.Ring5PubkeyBundle, "ring5.pubkey")
-	if err != nil {
-		t.Fatalf("genesistest: read the Ring 5 domain key: %v", err)
-	}
-	return env
 }
 
 func (r *Root) Birth(t *testing.T, cfg genesis.BirthConfig) *genesis.BirthResult {

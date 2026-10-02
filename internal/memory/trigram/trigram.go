@@ -47,22 +47,26 @@ func Words(s string) []string {
 	return out
 }
 
-func Similarity(a, b string) float64 {
-	sa, sb := trigramSet(a), trigramSet(b)
-	if len(sa) == 0 || len(sb) == 0 {
-		return 0
-	}
-	shared := 0
-	for t := range sa {
-		if _, ok := sb[t]; ok {
-			shared++
+func Similarity(a, b string) float64 { return Against(a)(b) }
+
+func Against(a string) func(b string) float64 {
+	sa := trigramSet(a)
+	return func(b string) float64 {
+		if len(sa) == 0 {
+			return 0
 		}
+		sb := trigramSet(b)
+		if len(sb) == 0 {
+			return 0
+		}
+		shared := 0
+		for t := range sb {
+			if _, ok := sa[t]; ok {
+				shared++
+			}
+		}
+		return float64(shared) / float64(len(sa)+len(sb)-shared)
 	}
-	union := len(sa) + len(sb) - shared
-	if union == 0 {
-		return 0
-	}
-	return float64(shared) / float64(union)
 }
 
 func Windows(word string) []string {

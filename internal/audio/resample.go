@@ -18,7 +18,21 @@ type Resampler struct {
 	histStart int64
 	inPos     int64
 	outPos    int64
+
+	vals  []float64
+	split []byte
+
+	phases []phase
 }
+
+type phase struct {
+	f      float64
+	w      []float64
+	lo, hi int
+	wsum   float64
+}
+
+const maxKernelWeights = 1 << 16
 
 func NewResampler(from, to Format) *Resampler {
 	r := &Resampler{from: from, to: to, same: from.Rate == to.Rate}
@@ -58,35 +72,25 @@ func (r *Resampler) Feed(pcm []byte) {
 	n := len(pcm) / r.from.BytesPerSample()
 	if len(r.channels) != 0 {
 		for c, ch := range r.channels {
-			mono := make([]byte, n*2)
+			r.split = r.split[:0]
 			for i := 0; i < n; i++ {
-				copy(mono[i*2:i*2+2], pcm[(i*len(r.channels)+c)*2:][:2])
+				r.split = append(r.split, pcm[(i*len(r.channels)+c)*2:][:2]...)
 			}
-			ch.Feed(mono)
+			ch.Feed(r.split)
 		}
 		r.inPos += int64(n)
 		return
 	}
-	if r.same {
-		r.inPos += int64(n)
-		r.hist = append(r.hist, r.mono(pcm, n)...)
-		return
-	}
-	r.hist = append(r.hist, r.mono(pcm, n)...)
-	r.inPos += int64(n)
-}
 
-func (r *Resampler) mono(pcm []byte, n int) []float64 {
-	out := make([]float64, n)
 	ch := r.from.Channels
 	for i := 0; i < n; i++ {
 		var acc float64
 		for c := 0; c < ch; c++ {
 			acc += float64(int16(binary.LittleEndian.Uint16(pcm[(i*ch+c)*2:])))
 		}
-		out[i] = acc / float64(ch) / 32768
+		r.hist = append(r.hist, acc/float64(ch)/32768)
 	}
-	return out
+	r.inPos += int64(n)
 }
 
 func (r *Resampler) Take() []byte { return r.produce(false) }
@@ -108,14 +112,14 @@ func (r *Resampler) produce(flush bool) []byte {
 		r.outPos = r.channels[0].Position()
 		return out
 	}
-	var vals []float64
 	if r.same {
-		vals = append(vals, r.hist...)
+		out := r.encode(r.hist)
+		r.outPos += int64(len(r.hist))
 		r.hist = r.hist[:0]
 		r.histStart = r.inPos
-		r.outPos += int64(len(vals))
-		return r.encode(vals)
+		return out
 	}
+	vals := r.vals[:0]
 	limit := r.TargetPos(r.inPos)
 	for r.outPos < limit {
 		t := float64(r.outPos) / r.ratio
@@ -123,25 +127,20 @@ func (r *Resampler) produce(flush bool) []byte {
 		if !flush && center+int64(r.half) >= r.inPos {
 			break
 		}
-		var acc, wsum float64
-		for k := center - int64(r.half); k <= center+int64(r.half)+1; k++ {
-			u := (float64(k) - t) / r.scale
-			if u <= -8 || u >= 8 {
-				continue
-			}
-			w := sinc(u) * blackman(u/8)
-			wsum += w
-			if k < r.histStart || k >= r.inPos {
-				continue
-			}
-			acc += w * r.hist[k-r.histStart]
+
+		first := center - int64(r.half)
+		ph := r.kernel(t, center)
+		var acc float64
+		for j := max(int64(ph.lo), r.histStart-first); j < min(int64(ph.hi), r.inPos-first); j++ {
+			acc += ph.w[j] * r.hist[first+j-r.histStart]
 		}
-		if wsum != 0 {
-			acc /= wsum
+		if ph.wsum != 0 {
+			acc /= ph.wsum
 		}
 		vals = append(vals, acc)
 		r.outPos++
 	}
+	r.vals = vals
 
 	if keep := int64(math.Floor(float64(r.outPos)/r.ratio)) - int64(r.half) - 1; keep > r.histStart {
 		if keep > r.inPos {
@@ -155,6 +154,44 @@ func (r *Resampler) produce(flush bool) []byte {
 		r.histStart = r.inPos
 	}
 	return r.encode(vals)
+}
+
+func (r *Resampler) kernel(t float64, center int64) *phase {
+	if r.phases == nil {
+		g, b := int64(r.from.Rate), int64(r.to.Rate)
+		for b != 0 {
+			g, b = b, g%b
+		}
+		n := int64(r.to.Rate) / g
+		if n*int64(2*r.half+2) > maxKernelWeights {
+			n = 1
+		}
+		r.phases = make([]phase, n)
+	}
+	n := int64(len(r.phases))
+	ph := &r.phases[(r.outPos%n+n)%n]
+	f := t - float64(center)
+	if t < 0 {
+		f = math.NaN()
+	}
+	if ph.w != nil && ph.f == f {
+		return ph
+	}
+	if ph.w == nil {
+		ph.w = make([]float64, 2*r.half+2)
+	}
+	ph.f, ph.lo, ph.hi, ph.wsum = f, len(ph.w), 0, 0
+	for j := range ph.w {
+		u := (float64(center+int64(j-r.half)) - t) / r.scale
+		if u <= -8 || u >= 8 {
+			continue
+		}
+		w := sinc(u) * blackman(u/8)
+		ph.w[j] = w
+		ph.wsum += w
+		ph.lo, ph.hi = min(ph.lo, j), j+1
+	}
+	return ph
 }
 
 func (r *Resampler) encode(vals []float64) []byte {

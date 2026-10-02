@@ -541,8 +541,6 @@ func directRoute(cfg Config) ([]certs.Record, error) {
 	return out, nil
 }
 
-var interfaceAddrs = net.InterfaceAddrs
-
 func addressRecord(ip net.IP) certs.Record {
 	if v4 := ip.To4(); v4 != nil {
 		return certs.Record{Type: certs.RecordA, Value: v4.String()}

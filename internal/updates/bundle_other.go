@@ -2,4 +2,6 @@
 
 package updates
 
-func applyIfBundle(string, []byte) (bool, error) { return false, nil }
+func applyIfBundle(target, []byte, string) (handled, already bool, err error) {
+	return false, false, nil
+}

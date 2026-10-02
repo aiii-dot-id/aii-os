@@ -2,8 +2,10 @@ package pluginhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 )
@@ -32,12 +34,16 @@ type Selection struct {
 
 	ResourceRefusals []VariantRefusal
 
+	Kept bool
+
 	Startup StartupAllowance
 
 	variant       *packagefmt.Variant
 	profile       *AcceleratorProfile
 	models        []ModelDecl
 	artifactBytes []byte
+
+	held map[string][]byte
 }
 
 func (s Selection) Models() []ModelDecl { return append([]ModelDecl(nil), s.models...) }
@@ -53,11 +59,18 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 	m := res.Manifest
 
 	host := currentHost(opts)
+	rels := []string{AcceleratorFile, ModelsFile, RuntimesFile}
+	for _, v := range m.Variants {
+		if v.Platform == host.platform && v.Arch == host.arch && v.Topology == host.topology {
+			rels = append(rels, v.Entrypoint)
+		}
+	}
+	held := walkMembers(pkgPath, res, nil, rels...)
 	if m.VariantPreference != nil {
 		if err := checkHostWindow(m, hostVersionFor(opts)); err != nil {
 			return Selection{}, err
 		}
-		profiles, err := loadAccelerators(pkgPath, res, m)
+		profiles, err := loadAccelerators(pkgPath, res, held, m)
 		if err != nil {
 			return Selection{}, err
 		}
@@ -68,7 +81,20 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 		if err != nil {
 			return Selection{}, err
 		}
-		host.resources = &selectionResources{profiles: profiles, available: available, policy: opts.SelectionPolicy}
+		decls, err := loadRuntimes(pkgPath, res, held, m)
+		if err != nil {
+			return Selection{}, err
+		}
+		runtimes := make(map[string]RuntimeDecl, len(decls))
+		for _, d := range decls {
+			runtimes[d.VariantID] = d
+		}
+		keep := ""
+		if opts.Acquirer != nil {
+			keep = opts.Acquirer.chosenFor(m.ID, res.PackageHash, res.ManifestHash)
+		}
+		host.resources = &selectionResources{profiles: profiles, available: credited(available, opts.Replacing), policy: opts.SelectionPolicy,
+			runtimes: runtimes, limits: opts.RuntimeLimits, keep: keep}
 	}
 	variant, serr := selectVariant(res, host)
 	if serr != nil {
@@ -76,17 +102,30 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 	}
 	sel := Selection{VariantID: variant.VariantID, Runtime: variant.ExecutionRuntime, variant: variant}
 	if host.resources != nil {
+		keep := host.resources.keep
+		sel.Kept = keep != "" && keep == sel.VariantID
 		for _, v := range m.Variants {
 			if v.Platform != host.platform || v.Arch != host.arch || v.Topology != host.topology || v.ExecutionRuntime != "native_t3_component" {
 				continue
 			}
-			if missing := resourceRefusals(host.resources.profiles[v.VariantID], host.resources.available, host.resources.policy); len(missing) > 0 {
+			if missing := host.resources.refusals(v.VariantID); len(missing) > 0 {
 				sel.ResourceRefusals = append(sel.ResourceRefusals, VariantRefusal{VariantID: v.VariantID, Missing: missing})
 			}
 		}
-		if opts.Log != nil {
-			opts.Log.Printf("plugin %s: signed variant preference selected %s; resource exclusions: %v", m.ID, sel.VariantID, sel.ResourceRefusals)
+
+		var b strings.Builder
+		switch {
+		case sel.Kept:
+			fmt.Fprintf(&b, "component set %s kept: chosen earlier for these bytes, its material in flight or on disk", sel.VariantID)
+		case keep != "":
+			fmt.Fprintf(&b, "component set %s selected; %s, chosen earlier for these bytes, is no longer possible here", sel.VariantID, keep)
+		default:
+			fmt.Fprintf(&b, "component set %s selected by the signed preference", sel.VariantID)
 		}
+		for _, r := range sel.ResourceRefusals {
+			fmt.Fprintf(&b, "; passed over %s: %s", r.VariantID, strings.Join(r.Missing, ", "))
+		}
+		logDecision("plugin %s %s: %s", m.ID, m.Version, b.String())
 	}
 	if variant.ExecutionRuntime == "native_t3_component" {
 		var profile *AcceleratorProfile
@@ -95,12 +134,12 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 			p := host.resources.profiles[variant.VariantID]
 			profile = &p
 		} else {
-			profile, perr = loadAccelerator(pkgPath, res, m, variant.VariantID)
+			profile, perr = loadAccelerator(pkgPath, res, held, m, variant.VariantID)
 		}
 		if perr != nil {
 			return Selection{}, perr
 		}
-		models, merr := loadModels(pkgPath, res, m, profile)
+		models, merr := loadModels(pkgPath, res, held, m, profile)
 		if merr != nil {
 			return Selection{}, merr
 		}
@@ -110,11 +149,15 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 		}
 	}
 	sel.Startup = startupAllowance(opts, m.ID, sel.profile)
-	artifactBytes, aerr := loadVerifiedMember(pkgPath, res, variant.Entrypoint)
+	artifactBytes, aerr := loadVerifiedMember(pkgPath, res, held, variant.Entrypoint)
 	if aerr != nil {
 		return Selection{}, aerr
 	}
-	sel.artifactBytes = artifactBytes
+
+	for _, v := range m.Variants {
+		delete(held, v.Entrypoint)
+	}
+	sel.artifactBytes, sel.held = artifactBytes, held
 	return sel, nil
 }
 
@@ -134,7 +177,7 @@ func Prepare(pkgPath string, res *packagefmt.Result, sel Selection, opts *Option
 		material.Models = sel.models
 		material.ModelsDir = pluginStorageDir(opts.PluginModelsDir, m.ID)
 	}
-	decl, rerr := loadRuntime(pkgPath, res, m, sel.variant.VariantID)
+	decl, rerr := loadRuntime(pkgPath, res, sel.held, m, sel.variant.VariantID)
 	if rerr != nil {
 		return Material{}, rerr
 	}
@@ -179,7 +222,7 @@ func Acquire(ctx context.Context, mat Material, opts *Options) (string, error) {
 	if opts.Acquirer != nil {
 		modelFetch, runtimeFetch, matCtx = nil, nil, opts.Acquirer.lifetime()
 	}
-	root, eerr := mat.ensure(matCtx, modelFetch, runtimeFetch, opts.logf)
+	root, eerr := mat.ensure(matCtx, modelFetch, runtimeFetch, logDecision)
 	if eerr != nil {
 		if opts.Acquirer != nil && acquirable(eerr) {
 			opts.Acquirer.Want(mat)
@@ -259,11 +302,23 @@ func StagePreparedContext(ctx context.Context, pkgPath string, res *packagefmt.R
 func (s *Staged) Acquire(ctx context.Context) error {
 	s.acquired, s.runtimeRoot = false, ""
 	root, err := Acquire(ctx, s.material, s.opts)
+	var acquiring *AcquiringError
+	if err == nil || errors.As(err, &acquiring) {
+		s.remember()
+	}
 	if err != nil {
 		return err
 	}
 	s.runtimeRoot, s.acquired = root, true
 	return nil
+}
+
+func (s *Staged) remember() {
+	m := s.res.Manifest
+	if s.opts.Acquirer == nil || m.VariantPreference == nil || s.sel.profile == nil || s.material.PluginID == "" {
+		return
+	}
+	s.opts.Acquirer.choose(m.ID, s.res.PackageHash, s.res.ManifestHash, s.sel.VariantID)
 }
 
 func (s *Staged) Material() Material { return s.material }

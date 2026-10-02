@@ -10,11 +10,10 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
-
-var timerWakeBudget = 15 * time.Minute
 
 const safeWakePosture = " You are in safe mode: your integrity is unverified, nothing you say or do now is recorded, and only your read-only tools work."
 
@@ -82,27 +81,32 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, notice string) error 
 
 		fact += safeWakePosture
 	}
-	spoken, recorded, err := a.wakeRecorded(turnCtx, "system", fact+" Respond to your operator in your own words.")
+	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), fact+" Respond to your operator in your own words.")
+
+	if spoken != "" {
+		wakeID := fmt.Sprintf("wake_%s_%d", alarmID, time.Now().UTC().UnixNano())
+		if derr := a.deliverReply(wakeID, spoken, recorded); derr != nil {
+
+			var frozen *store.FrozenError
+			if !errors.As(derr, &frozen) {
+				return errors.Join(fmt.Errorf("timer %s wake reply delivery failed: %w", alarmID, derr), err)
+			}
+			a.deliverTransient(wakeID, spoken)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() == nil {
 
 			logsink.Warn("wake.error", "timer %s wake cancelled; this attempt will not be retried", alarmID)
 			return nil
 		}
+		if spoken != "" {
+			return fmt.Errorf("timer %s woke and its reply was delivered, but %w", alarmID, err)
+		}
 		return fmt.Errorf("timer %s wake turn failed: %w", alarmID, err)
 	}
 	if spoken == "" {
 		return nil
-	}
-	wakeID := fmt.Sprintf("wake_%s_%d", alarmID, time.Now().UTC().UnixNano())
-	if err := a.store.AddOutboxMessageForInteraction(wakeID, "operator", "", spoken, recorded); err != nil {
-
-		var frozen *store.FrozenError
-		if errors.As(err, &frozen) {
-			a.deliverTransient(wakeID, spoken)
-		} else {
-			return fmt.Errorf("timer %s wake reply delivery failed: %w", alarmID, err)
-		}
 	}
 	logsink.Info("wake.end", "TIMER WAKE: %s woke and spoke (%d chars)", alarmID, len(spoken))
 	return nil
@@ -151,7 +155,7 @@ func (a *App) announceSafeFirings(fs []identity.SafeFiring) {
 }
 
 func (a *App) runSafeWake(batch []identity.SafeFiring) {
-	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(context.Background(), turnSourceTimer), timerWakeBudget)
+	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceTimer), timerWakeBudget)
 	defer cancelTurn()
 	notices := make([]string, len(batch))
 	for i, f := range batch {
@@ -165,10 +169,14 @@ func (a *App) runSafeWake(batch []identity.SafeFiring) {
 	}
 	fact += safeWakePosture + " Respond to your operator in your own words."
 	wakeID := fmt.Sprintf("wake_%s_%d_safe", batch[0].AlarmID, batch[0].Deadline)
-	spoken, err := a.wake(turnCtx, "system", fact)
+	spoken, err := a.wake(turnCtx, string(interaction.System), fact)
 	if err != nil {
 
 		logsink.Warn("wake.error", "turn failed for %d timer(s) (SAFE, notices delivered transiently, no retry): %v", len(batch), err)
+		if spoken != "" {
+			a.deliverTransient(wakeID, spoken)
+			wakeID += "_failure"
+		}
 		a.deliverTransient(wakeID, fmt.Sprintf("[timer %s fired in safe mode, but the wake turn did not finish: %v — it fires again once the operator restores the identity]", firingIDs(batch), err))
 		return
 	}

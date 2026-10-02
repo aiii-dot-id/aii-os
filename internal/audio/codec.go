@@ -71,26 +71,11 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	if n > 0 {
 		fr.PCM = make([]byte, n)
 		if _, err := io.ReadFull(r, fr.PCM); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				err = io.ErrUnexpectedEOF
 			}
 			return Frame{}, err
 		}
 	}
 	return fr, nil
-}
-
-type PipeChannel struct {
-	In  io.WriteCloser
-	Out io.ReadCloser
-}
-
-func (c *PipeChannel) WriteInput(fr Frame) error  { return WriteFrame(c.In, fr) }
-func (c *PipeChannel) ReadOutput() (Frame, error) { return ReadFrame(c.Out) }
-func (c *PipeChannel) Close() error {
-	err := c.In.Close()
-	if oerr := c.Out.Close(); err == nil {
-		err = oerr
-	}
-	return err
 }

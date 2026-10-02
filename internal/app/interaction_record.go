@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -26,18 +27,18 @@ func (a *App) recordConversationForReceipt(ctx, receiptCtx context.Context, role
 		fingerprint = a.keyPair.Fingerprint()
 	}
 	ref, loc, err := a.engine.RecordConversationLocated(ctx, role, text, interaction.Details{})
-	if role == roleParticipant && err == nil && ref.Sequence != 0 && a.store != nil {
+	if role == string(interaction.Participant) && err == nil && ref.Sequence != 0 && a.store != nil {
 		if id := inboundID(receiptCtx); id != "" {
 			if err := a.store.AnnotateTurn(ref.Sequence, "turn_event.arrival", id, `{}`); err != nil {
 				logsink.Warn("channel.error", "arrival input retained but source annotation failed; notice may repeat: %v", err)
 			}
 		}
 	}
-	if role == "operator" {
+	if role == string(interaction.Operator) {
 		loc.Identity = fingerprint
 		dashboard.ChatRecorded(receiptCtx, &loc, err)
 	}
-	if role == "resident" && err == nil {
+	if role == string(interaction.Resident) && err == nil {
 		if sink, ok := ctx.Value(replyRecordKey{}).(*store.InteractionRef); ok {
 			*sink = ref
 		}
@@ -46,7 +47,7 @@ func (a *App) recordConversationForReceipt(ctx, receiptCtx context.Context, role
 }
 
 func (a *App) recordReply(ctx context.Context, text string, result conversation.Result) (store.InteractionRef, error) {
-	ref, err := a.recordConversationRef(ctx, "resident", text)
+	ref, err := a.recordConversationRef(ctx, string(interaction.Resident), text)
 	if err != nil || ref.Sequence == 0 || a.store == nil {
 		return ref, err
 	}
@@ -62,6 +63,20 @@ func replyReasoning(r conversation.Result) []store.ReasoningCall {
 		out = append(out, store.ReasoningCall{Call: c.Call, Model: c.Model, Text: c.Text})
 	}
 	return out
+}
+
+func (a *App) answer(ctx context.Context, text string, result conversation.Result) (string, error) {
+	if _, err := a.recordReply(ctx, text, result); err != nil {
+		return text, fmt.Errorf("the host could not record this reply: %w", err)
+	}
+	return text, nil
+}
+
+func (a *App) deliverReply(id, spoken string, recorded store.InteractionRef) error {
+	if recorded.ID == "" {
+		return a.store.AddOutboxMessage(id, "operator", "", spoken, nil)
+	}
+	return a.store.AddOutboxMessageForInteraction(id, "operator", "", spoken, recorded)
 }
 
 func (a *App) recordConversation(ctx context.Context, role, text string) error {
@@ -87,6 +102,7 @@ func (a *App) wireProjectInteractionRecorder() {
 			prior := copyContract(*before)
 			change.Before = &prior
 		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, err := a.store.RecordInteraction(ctx, interaction.Input{ID: "project_" + uuid.NewString(), Kind: interaction.Notice, Role: interaction.System, ProjectID: id, Content: "Project criteria accepted", Details: interaction.Details{Project: change}})

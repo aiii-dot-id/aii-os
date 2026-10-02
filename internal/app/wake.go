@@ -8,13 +8,14 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
 func (a *App) wake(ctx context.Context, role, fact string) (string, error) {
 	var reply string
 	var err error
-	if role == roleOperator {
+	if role == string(interaction.Operator) {
 
 		reply, err = a.operatorTurn(ctx, fact)
 	} else {
@@ -24,86 +25,44 @@ func (a *App) wake(ctx context.Context, role, fact string) (string, error) {
 	return reply, err
 }
 
+type turnError struct {
+	recorded bool
+	replied  bool
+	err      error
+}
+
+func (e *turnError) Error() string { return e.err.Error() }
+func (e *turnError) Unwrap() error { return e.err }
+
+func unrecorded(err error) error { return &turnError{err: err} }
+
 func (a *App) operatorTurn(ctx context.Context, msg string) (string, error) {
 	if a.conv == nil || a.composer == nil || a.engine == nil {
-		return "", fmt.Errorf("the identity is not live")
+		return "", unrecorded(fmt.Errorf("the identity is not live"))
 	}
 	a.resetAsk()
 	ctx, cancel := a.beginCancellableTurn(ctx)
 	defer cancel()
-	emit := a.pageToolEmit()
-	a.toolEmitMu.Lock()
-	a.toolEmit = emit
-	a.toolEmitMu.Unlock()
-	defer func() {
-		a.toolEmitMu.Lock()
-		a.toolEmit = nil
-		a.toolEmitMu.Unlock()
-	}()
+	defer a.withToolEmit(a.pageToolEmit())()
 	return a.handleMessageLocked(ctx, msg)
 }
 
 func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) {
 
 	if a.conv == nil || a.composer == nil || a.engine == nil {
-		return "", fmt.Errorf("the identity is not live")
+		return "", unrecorded(fmt.Errorf("the identity is not live"))
 	}
 	ctx, cancel := a.beginCancellableTurn(ctx)
 	defer cancel()
 
 	if err := a.recordConversation(ctx, role, fact); err != nil {
-		return "", fmt.Errorf("record the fact: %w", err)
-	}
-	workState, err := a.buildWorkState()
-	if err != nil {
-		return "", fmt.Errorf("working state: %w", err)
+		return "", unrecorded(fmt.Errorf("record the fact: %w", err))
 	}
 
-	firing, _ := ctx.Value(timerRecordKey{}).(string)
-	facts, err := a.buildTurnFacts(true, firing)
+	result, err := a.think(ctx, llm.Message{Role: "user", Content: fact}, true)
 	if err != nil {
-		return "", fmt.Errorf("turn facts: %w", err)
-	}
-	conv, omitted, err := a.buildHistory()
-	if err != nil {
-		return "", fmt.Errorf("history: %w", err)
-	}
-	current := llm.Message{Role: "user", Content: fact}
-
-	history := conv
-	if n := len(conv); n == 0 || conv[n-1].Role != "user" || conv[n-1].Content != fact {
-		history = append(conv, current)
-	}
-	reserve, err := a.promptReserve(current, omitted+len(history)-1)
-	if err != nil {
-		return "", fmt.Errorf("request estimate: %w", err)
-	}
-	p, err := a.composer.ComposeTurn(workState, facts, a.safeTurnSection(), reserve)
-	if err != nil {
-		return "", fmt.Errorf("compose: %w", err)
-	}
-
-	a.carriedEvents = a.eventsCarriedBy(p.Turn)
-	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), history, omitted, p.Turn)
-	if err != nil {
-
-		a.recordInterruptedTurnContext(ctx, result)
 		return "", err
 	}
-	a.recordTurnCost(ctx, result)
-	if result.Usage.Calls > 0 {
-		a.recordTurnEventDelivery(ctx, p.Turn)
-		if firing != "" {
-			if err := a.store.RecordTurnEvents(ctx, []store.TurnEvent{{Timer: &store.OutboxMessage{ID: firing}, Text: fact}}, interaction.TurnID(ctx)); err != nil {
-				logsink.Warn("prompt.error", "timer input acknowledgment failed; its notice remains pending: %v", err)
-			}
-		}
-	}
-
-	a.markComposedHarvests()
-	a.noteYield(result.Yielded)
-	a.noteTurnShape(result.ContinuedAtCap || result.ContinuedAtPressure, result.ContinuedAtPressure)
-
 	spoken := result.Spoken
 	if spoken == "" {
 		spoken = result.FinalText
@@ -112,8 +71,57 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 
 		return "", nil
 	}
-	if _, err := a.recordReply(ctx, spoken, result); err != nil {
-		logsink.Warn("wake.error", "FAILED to record wake speech: %v — the transcript is missing what was said", err)
+
+	return a.answer(ctx, spoken, result)
+}
+
+func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool) (conversation.Result, error) {
+	workState, err := a.buildWorkState()
+	if err != nil {
+		return conversation.Result{}, fmt.Errorf("working state: %w", err)
 	}
-	return spoken, nil
+
+	firing, _ := ctx.Value(timerRecordKey{}).(string)
+	facts, err := a.buildTurnFacts(ctx, true, firing)
+	if err != nil {
+		return conversation.Result{}, fmt.Errorf("turn facts: %w", err)
+	}
+	conv, omitted, err := a.buildHistory(ctx)
+	if err != nil {
+		return conversation.Result{}, fmt.Errorf("history: %w", err)
+	}
+	history := conv
+	if n := len(conv); appendCurrent && (n == 0 || conv[n-1].Role != "user" || conv[n-1].Content != current.Content) {
+		history = append(conv, current)
+	}
+	reserve, err := a.promptReserve(current, omitted+len(history)-1)
+	if err != nil {
+		return conversation.Result{}, fmt.Errorf("request estimate: %w", err)
+	}
+	p, err := a.composer.ComposeTurn(workState, facts, a.safeTurnSection(), reserve)
+	if err != nil {
+		return conversation.Result{}, fmt.Errorf("compose: %w", err)
+	}
+
+	a.carriedEvents = a.eventsCarriedBy(p.Turn)
+	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), history, omitted, p.Turn)
+	if err != nil {
+
+		a.recordInterruptedTurnContext(ctx, result)
+		return result, err
+	}
+	a.recordTurnCost(ctx, result)
+	if result.Usage.Calls > 0 {
+		a.recordTurnEventDelivery(ctx, p.Turn)
+		if firing != "" {
+			if err := a.store.RecordTurnEvents(ctx, []store.TurnEvent{{Timer: &store.OutboxMessage{ID: firing}, Text: current.Content}}, interaction.TurnID(ctx)); err != nil {
+				logsink.Warn("prompt.error", "timer input acknowledgment failed; its notice remains pending: %v", err)
+			}
+		}
+	}
+
+	a.markComposedHarvests()
+	a.noteYield(result.Yielded)
+	a.noteTurnShape(result.ContinuedAtCap || result.ContinuedAtPressure, result.ContinuedAtPressure)
+	return result, nil
 }

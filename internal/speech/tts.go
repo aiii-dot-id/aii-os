@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/aiii-dot-id/aii-os/internal/audio"
 )
 
 type SynthConfig struct {
@@ -155,57 +156,24 @@ func decodeAudio(b []byte, r Response) (Audio, error) {
 const maxAudioBytes = 32 << 20
 
 func parseWAV(b []byte) (Audio, error) {
-	if len(b) < 12 || string(b[0:4]) != "RIFF" || string(b[8:12]) != "WAVE" {
-		return Audio{}, errors.New("speech: the answer is not a WAV file")
+	w, err := audio.ReadWAV(b)
+	if err != nil {
+		return Audio{}, fmt.Errorf("speech: %w", err)
 	}
-	var rate, channels, bits, format int
-	haveFmt := false
-	off := 12
-	for off+8 <= len(b) {
-		id := string(b[off : off+4])
-		size := int64(binary.LittleEndian.Uint32(b[off+4 : off+8]))
-		body := off + 8
-		switch id {
-		case "fmt ":
-			if size < 16 || body+16 > len(b) {
-				return Audio{}, errors.New("speech: the WAV's fmt chunk is short")
-			}
-			format = int(binary.LittleEndian.Uint16(b[body:]))
-			channels = int(binary.LittleEndian.Uint16(b[body+2:]))
-			rate = int(binary.LittleEndian.Uint32(b[body+4:]))
-			bits = int(binary.LittleEndian.Uint16(b[body+14:]))
-			haveFmt = true
-		case "data":
-			if !haveFmt {
-				return Audio{}, errors.New("speech: the WAV has samples before its format")
-			}
-			if (format != 1 && format != 0xFFFE) || bits != 16 {
-				return Audio{}, fmt.Errorf("speech: the answer is %d-bit audio in WAV format %d; ask the service for 16-bit PCM", bits, format)
-			}
-			if rate <= 0 || channels <= 0 {
-				return Audio{}, fmt.Errorf("speech: the WAV says %d Hz and %d channel(s)", rate, channels)
-			}
-
-			end := int64(body) + size
-			if size == 0 || size == 0xFFFFFFFF || end > int64(len(b)) {
-				end = int64(len(b))
-			}
-			pcm := b[body:end]
-			if len(pcm)%2 != 0 {
-				pcm = pcm[:len(pcm)-1]
-			}
-			if len(pcm) == 0 {
-				return Audio{}, errors.New("speech: the WAV holds no samples")
-			}
-			return Audio{PCM: pcm, Rate: rate, Channels: channels}, nil
-		}
-		next := int64(body) + size + size%2
-		if next > int64(len(b)) {
-			break
-		}
-		off = int(next)
+	if (w.Tag != 1 && w.Tag != 0xFFFE) || w.Bits != 16 {
+		return Audio{}, fmt.Errorf("speech: the answer is %d-bit audio in WAV format %d; ask the service for 16-bit PCM", w.Bits, w.Tag)
 	}
-	return Audio{}, errors.New("speech: the WAV has no data chunk")
+	if w.Format.Rate <= 0 || w.Format.Channels <= 0 {
+		return Audio{}, fmt.Errorf("speech: the WAV says %d Hz and %d channel(s)", w.Format.Rate, w.Format.Channels)
+	}
+	pcm := w.PCM
+	if len(pcm)%2 != 0 {
+		pcm = pcm[:len(pcm)-1]
+	}
+	if len(pcm) == 0 {
+		return Audio{}, errors.New("speech: the WAV holds no samples")
+	}
+	return Audio{PCM: pcm, Rate: w.Format.Rate, Channels: w.Format.Channels}, nil
 }
 
 func chunkText(text string, max int) []string {

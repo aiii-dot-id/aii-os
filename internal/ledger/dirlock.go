@@ -1,9 +1,12 @@
 package ledger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/aiii-dot-id/aii-os/internal/filelock"
 )
 
 const LedgerDirLockName = ".ledger.lock"
@@ -23,4 +26,12 @@ func lockLedgerDir(dir string) (*os.File, error) {
 		return nil, fmt.Errorf("cannot lock the ledger directory %q: %w", dir, err)
 	}
 	return f, nil
+}
+
+func lockLedgerFile(file *os.File) error {
+	err := filelock.Lock(file)
+	if errors.Is(err, filelock.ErrHeld) {
+		return fmt.Errorf("%w: %w", ErrLedgerInUse, err)
+	}
+	return err
 }

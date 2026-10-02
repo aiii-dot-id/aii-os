@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,30 +17,35 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
-	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 func LoadConfig(path string) (*Config, error) {
+	cfg, err := ReadConfig(path)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return cfg, err
+	}
+
+	loadedFrom := path
+	if path == "" {
+		loadedFrom = install.ConfigPathIn("")
+	}
+	logsink.Info("config.start", "no config found — creating the default, FIRSTBOOT")
+	cfg = defaultConfig()
+	cfg.SourcePath = loadedFrom
+	if _, err := saveConfig(cfg); err != nil {
+		return nil, fmt.Errorf("cannot write default config: %w", err)
+	}
+	return cfg, nil
+}
+
+func ReadConfig(path string) (*Config, error) {
 
 	loadedFrom := path
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("read config: %w", err)
-		}
-
-		if path == "" {
-			loadedFrom = DefaultConfigPath()
-		}
-		logsink.Info("config.start", "no config found — creating the default, FIRSTBOOT")
-		cfg := defaultConfig()
-		cfg.SourcePath = loadedFrom
-		if _, err := saveConfig(cfg); err != nil {
-			return nil, fmt.Errorf("cannot write default config: %w", err)
-		}
-		return cfg, nil
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 
 	cfg := *defaultConfig()
@@ -257,9 +264,24 @@ func saveConfig(cfg *Config) (bool, error) {
 	}
 	path := cfg.SourcePath
 	if path == "" {
-		path = DefaultConfigPath()
+		path = install.ConfigPathIn("")
 	}
 	return writeFileAtomic(path, data)
+}
+
+func (a *App) persistLocked(candidate *Config, persist func(*Config) (bool, error)) (published bool, err error) {
+	published, err = persist(candidate)
+	if !published {
+		if err != nil {
+			return false, fmt.Errorf("persist config: %w", err)
+		}
+		return false, nil
+	}
+	*a.cfg = *candidate
+	if err != nil {
+		return true, fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", err)
+	}
+	return true, nil
 }
 
 func (cfg *Config) UnmarshalJSON(data []byte) error {
@@ -301,41 +323,11 @@ func (a *App) configSnapshot() Config {
 	return *a.cfg
 }
 
-func writeFileAtomic(path string, data []byte) (published bool, retErr error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+func writeFileAtomic(path string, data []byte) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
 	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return false, fmt.Errorf("create temporary config: %w", err)
-	}
-	tmp := f.Name()
-	closed := false
-	defer func() {
-		if !closed {
-			retErr = errors.Join(retErr, f.Close())
-		}
-		if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove temporary config: %w", err))
-		}
-	}()
-
-	if err := fileperm.RestrictToOwner(f); err != nil {
-		return false, fmt.Errorf("protect temporary config: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		return false, fmt.Errorf("write temporary config: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return false, fmt.Errorf("sync temporary config: %w", err)
-	}
-	err = f.Close()
-	closed = true
-	if err != nil {
-		return false, fmt.Errorf("close temporary config: %w", err)
-	}
-	published, err = atomicfile.Replace(tmp, path)
+	published, err := atomicfile.WriteReplace(path, data, 0o600)
 	if err != nil {
 		return published, fmt.Errorf("replace config: %w", err)
 	}

@@ -181,7 +181,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (string, error) {
 			return
 		}
 		empty := ""
-		if err := a.store.UpdateWorkPlan(ask.Session, nil, nil, nil, nil, nil, &empty); err != nil {
+		if err := a.store.UpdateWorkPlan(a.lifetime(), ask.Session, nil, nil, nil, nil, nil, &empty); err != nil {
 			logsink.Warn("ask.error", "%s answered but the session's decision could not be cleared: %v", ask.ID, err)
 		}
 	}
@@ -231,7 +231,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (string, error) {
 			what = "the connector"
 		}
 
-		if a.pluginInstalled(ask.Connector) {
+		if a.activePlugin(ask.Connector) != nil {
 			if _, gerr := a.applyConfigChange(map[string]interface{}{"plugins.grants." + ask.Connector + ".read_only": req.Scope != "modify"}); gerr != nil {
 				keep()
 				return "", fmt.Errorf("connect %s (%s) was not answered: writing the plugin's read_only grant failed: %w", what, scope, gerr)
@@ -264,14 +264,7 @@ func clip(s string, n int) string {
 	return s[:n] + "…"
 }
 
-func (a *App) pluginInstalled(id string) bool {
-	if id == "" {
-		return false
-	}
-	for _, ap := range a.plugins {
-		if ap != nil && ap.ID == id {
-			return true
-		}
-	}
-	return false
+func (a *App) wireAskHooks(h *dashboard.WSHandler) {
+	h.GetAsks = a.askViews
+	h.AnswerAsk = a.answerAsk
 }

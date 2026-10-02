@@ -9,6 +9,8 @@ import (
 
 const bundleSuffix = ".app"
 
+const previousBundleName = ".aii-os-previous.app"
+
 func bundleRoot(exePath string) (string, bool) {
 	macOSDir := filepath.Dir(exePath)
 	contentsDir := filepath.Dir(macOSDir)

@@ -14,8 +14,6 @@ type ContinuityPort interface {
 	Verify(ctx context.Context, name string) (string, error)
 }
 
-func (e *Engine) SetContinuity(c ContinuityPort) { e.continuity = c }
-
 const (
 	continuityRead   = "read"
 	continuityTake   = "take"

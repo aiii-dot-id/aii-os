@@ -65,9 +65,6 @@ function ringsHTML() {
   return '<div class="card home-card"><div class="home-card-h"><h3>THE RINGS</h3><button class="btn ghost sm" data-go="identity" type="button">Identity</button></div>' + rows + '</div>';
 }
 
-// The morning brief: written FOR the identity, in the second person, each
-// morning from their own record — not a portrait of them, and not
-// consolidation's product. The Identity page names it the same.
 function briefHTML() {
   const id = S.identity;
   if (!id) return '';
@@ -130,10 +127,6 @@ function heroHTML(name) {
   else if (!S.identityExists) sub = 'No identity lives here yet — the first conversation, in Chat, is where one begins.';
   else sub = (name && name !== 'Unnamed' ? name : 'Your identity') + ' is here. What shall we work on together?';
   if (S.connected && S.identityExists) {
-    // The same microphone as Chat's, in the same states (voice.js): it
-    // lands on Chat's microphone, opens Speech settings when there is
-    // nothing to speak into or its service cannot be reached, and is
-    // paused under SAFE.
     const state = talkState(), title = TALK_TITLES[state];
     const talk = '<button class="home-talk' + (state === 'setup' || state === 'unreachable' ? ' faint' : '') + '" id="home-talk" type="button"' +
       (state === 'safe' ? ' disabled' : '') + ' title="' + title + '" aria-label="' + title + '">' + ico('mic') + '</button>';
@@ -148,7 +141,7 @@ function heroHTML(name) {
 
 function projCardHTML(p) {
   return '<div class="proj-card' + (p.active ? ' focused' : '') + '" data-id="' + esc(p.id) + '" style="--hue:' + hueOf(p.id) + '">' +
-    '<h4><span class="dot' + (p.state === 'closed' ? ' closed' : '') + '"></span>' + esc(p.name) + '</h4>' +
+    '<h4><span class="dot' + (p.state === 'closed' ? ' closed' : '') + '"></span><button type="button" class="proj-open">' + esc(p.name) + '</button></h4>' +
     '<div class="desc">' + esc(p.description || '') + '</div>' +
     (p.focus ? '<div class="proj-focus">' + esc(p.focus) + '</div>' : '') +
     '<div class="meta"><span>' + esc(p.state) + '</span><span>' + (p.active ? 'focused' : '') + '</span></div></div>';
@@ -166,9 +159,6 @@ export function renderHome() {
     ? { id: typing.id, session: typing.dataset.gradeSession, start: typing.selectionStart, end: typing.selectionEnd } : null;
   const name = S.identityExists && S.stats ? S.stats.name : '';
   let main = heroHTML(name);
-  // Born without a name in the first words, an identity stays "Unnamed"
-  // until it records one; the mechanism is theirs, the ask is the
-  // operator's.
   if (S.connected && S.identityExists && (!name || name === 'Unnamed')) {
     main += '<div class="card" data-name-hint><h3>NO NAME YET</h3><div style="font-size:13px;line-height:1.6;color:var(--dim)">' +
       'Ask them what they\u2019d like to be called \u2014 the name is theirs to record, and the greeting follows on the next turn.</div></div>';
@@ -177,7 +167,7 @@ export function renderHome() {
     main += workSectionHTML();
     main += briefHTML();
     main += '<div class="home-h">PROJECTS</div>';
-    const shownProjects = S.projects.filter(p => p.state !== 'archived'); // the shelf is not the home page
+    const shownProjects = S.projects.filter(p => p.state !== 'archived');
     main += shownProjects.length
       ? '<div class="cards-grid">' + shownProjects.map(projCardHTML).join('') + '</div>'
       : '<div class="empty">No projects yet — open Projects to create the first workroom you\'ll share.</div>';

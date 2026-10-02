@@ -28,16 +28,8 @@ type ringWriterAdapter struct {
 	briefPersister BriefPersister
 }
 
-func NewRingWriter(m *ring.Manager) RingWriter {
-	return &ringWriterAdapter{manager: m}
-}
-
 func NewPersistingRingWriter(m *ring.Manager, p RingPersister) RingWriter {
 	return &ringWriterAdapter{manager: m, persister: p}
-}
-
-func NewBriefWriter(m *ring.Manager) BriefWriter {
-	return &ringWriterAdapter{manager: m}
 }
 
 func NewPersistingBriefWriter(m *ring.Manager, p BriefPersister) BriefWriter {

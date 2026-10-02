@@ -4,25 +4,43 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"strings"
 	"time"
 )
 
-const (
-	toolEventRetention = 14 * 24 * time.Hour
-)
+const openToolCall = `c.kind='tool_call' AND c.source_kind='tool' AND NOT EXISTS (
+	SELECT 1 FROM conversations r WHERE r.source_kind='tool' AND r.source_id=c.source_id AND r.kind='tool_result')`
+
+const openCallsSinceSQL = `SELECT c.turn_id, json_extract(c.details,'$.emission_ordinal'), json_extract(c.details,'$.tool')
+	FROM conversations c WHERE c.turn_seq >= ? AND c.recorded_at >= ? AND ` + openToolCall + ` ORDER BY c.turn_seq`
+
+const windowFloorSQL = `SELECT MIN(turn_seq) FROM conversations INDEXED BY idx_conversations_recorded_seq WHERE recorded_at >= ?`
+
+const unfinishedWindow = 14 * 24 * time.Hour
+
+func toolExecutionID(turnID string, ordinal int) string {
+	return fmt.Sprintf("tex_%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", turnID, ordinal))))
+}
 
 func metaRecord(s string) string {
 	return fmt.Sprintf("[%d chars, sha256=%x]", len([]rune(s)), sha256.Sum256([]byte(s)))
 }
 
-type LegacyStart struct {
-	TsMs   int64
-	CallID string
-	Tool   string
-	Args   string
+func windowSince(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, cutoff time.Time) (floor int64, stamp string, ok bool, err error) {
+	stamp, err = interaction.NormalizeTime(cutoff)
+	if err != nil {
+		return 0, "", false, err
+	}
+	var min sql.NullInt64
+	if err := q.QueryRow(windowFloorSQL, stamp).Scan(&min); err != nil {
+		return 0, "", false, err
+	}
+	return min.Int64, stamp, min.Valid, nil
 }
 
 func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, providerCallID, tool, args string) error {
@@ -35,17 +53,13 @@ func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, provid
 		return err
 	}
 	defer tx.Rollback()
-	id := fmt.Sprintf("tex_%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", turnID, ordinal))))
-	_, err = tx.Exec(`INSERT INTO tool_events(execution_id,turn_id,ordinal,actor,model,provider_call_id,tool,args_record,state,started_ms) VALUES(?,?,?,?,?,?,?,?,'started',?)`, id, turnID, ordinal, actor, model, providerCallID, tool, metaRecord(args), time.Now().UTC().UnixMilli())
-	if err != nil {
-		return err
-	}
+	id := toolExecutionID(turnID, ordinal)
 	project, work, why := s.activeProject, "", ""
 	switch actor {
 	case "operator":
 		why = "operator_act"
 	case "main", "safe":
-		err = tx.QueryRow(`SELECT id FROM work_sessions WHERE status='active' AND NOT EXISTS(SELECT 1 FROM work_queue w WHERE `+subagentQueueForSession+`) ORDER BY rowid DESC LIMIT 1`, SubagentWorkKind).Scan(&work)
+		err = tx.QueryRow(`SELECT id FROM work_sessions WHERE status='active' AND NOT `+queuedChild("")+` ORDER BY rowid DESC LIMIT 1`, SubagentWorkKind, SubagentWorkKind).Scan(&work)
 		if err == sql.ErrNoRows {
 			why = "no_session"
 		} else if err != nil {
@@ -64,22 +78,21 @@ func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, provid
 	if err != nil {
 		return err
 	}
+	if !added {
+		return fmt.Errorf("tool start for turn %s ordinal %d is already recorded", turnID, ordinal)
+	}
 	err = tx.Commit()
 	changed = added
 	return err
 
 }
 
-func (s *Store) RecordToolDone(turnID string, ordinal int, tool, args, result string, failed, truncated bool) error {
-	return s.RecordToolDoneMeasured(turnID, ordinal, tool, args, result, failed, truncated, ToolMeasurement{})
-}
-
 func (s *Store) ToolCallStarted(turnID string, ordinal int) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE turn_id=? AND ordinal=? AND state='started'`,
-		turnID, ordinal).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM conversations c WHERE c.source_kind='tool' AND c.source_id=? AND `+openToolCall,
+		toolExecutionID(turnID, ordinal)).Scan(&n); err != nil {
 		return false, err
 	}
 	return n > 0, nil
@@ -94,9 +107,13 @@ func (s *Store) AbandonUnfinishedToolCalls() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT tool,turn_id,ordinal FROM tool_events WHERE state='started' ORDER BY started_ms`)
+	defer tx.Rollback()
+	floor, stamp, found, err := windowSince(tx, time.Now().Add(-unfinishedWindow))
+	if err != nil || !found {
+		return nil, err
+	}
+	rows, err := tx.Query(openCallsSinceSQL, floor, stamp)
 	if err != nil {
-		tx.Rollback()
 		return nil, err
 	}
 	var names []string
@@ -107,36 +124,27 @@ func (s *Store) AbandonUnfinishedToolCalls() ([]string, error) {
 	var pendingCalls []pending
 	for rows.Next() {
 		var t, turn string
-		var ordinal int
-		if err := rows.Scan(&t, &turn, &ordinal); err != nil {
+		var ordinal sql.NullInt64
+		if err := rows.Scan(&turn, &ordinal, &t); err != nil {
 			rows.Close()
-			tx.Rollback()
 			return nil, err
 		}
 		names = append(names, t)
-		pendingCalls = append(pendingCalls, pending{t, turn, ordinal})
+		pendingCalls = append(pendingCalls, pending{t, turn, int(ordinal.Int64)})
 	}
 
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		tx.Rollback()
 		return nil, fmt.Errorf("scan unfinished tool calls: %w", err)
 	}
 	rows.Close()
 	if len(names) == 0 {
-		tx.Rollback()
 		return nil, nil
 	}
 	for _, p := range pendingCalls {
 		if _, err := s.appendToolOutcome(tx, p.turn, p.ordinal, p.tool, "", "outcome unknown: runtime ended before a recorded completion", interaction.Unknown, false, ToolMeasurement{}); err != nil {
-			tx.Rollback()
 			return nil, err
 		}
-	}
-	if _, err := tx.Exec(`UPDATE tool_events SET state='abandoned', finished_ms=? WHERE state='started'`,
-		time.Now().UTC().UnixMilli()); err != nil {
-		tx.Rollback()
-		return nil, err
 	}
 	changed = true
 	if err := tx.Commit(); err != nil {
@@ -145,41 +153,101 @@ func (s *Store) AbandonUnfinishedToolCalls() ([]string, error) {
 	return names, nil
 }
 
-func (s *Store) ToolEventStats(window time.Duration) (done, failed, truncated int, err error) {
-	cutoff := time.Now().UTC().Add(-window).UnixMilli()
-	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(failed),0), COALESCE(SUM(truncated),0)
-		FROM tool_events WHERE state='done' AND started_ms >= ?`, cutoff)
-	if e := row.Scan(&done, &failed, &truncated); e != nil {
-		if e == sql.ErrNoRows {
-			return 0, 0, 0, nil
-		}
-		return 0, 0, 0, e
+const toolResultStatsSQL = `SELECT COUNT(*), COALESCE(SUM(outcome='failed'),0), COALESCE(SUM(json_extract(details,'$.truncated')),0)
+	FROM conversations WHERE kind='tool_result' AND turn_seq >= ? AND recorded_at >= ? AND outcome IN ('succeeded','failed')`
+
+func (s *Store) ToolResultStats(window time.Duration) (done, failed, truncated int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return toolResultStatsSince(s.db, time.Now().Add(-window))
+}
+
+func toolResultStatsSince(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, cutoff time.Time) (done, failed, truncated int, err error) {
+	floor, stamp, found, err := windowSince(q, cutoff)
+	if err != nil || !found {
+		return 0, 0, 0, err
 	}
-	return done, failed, truncated, nil
+	err = q.QueryRow(toolResultStatsSQL, floor, stamp).Scan(&done, &failed, &truncated)
+	return done, failed, truncated, err
 }
 
-type execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
+type heldToolStart struct {
+	turn, actor, model, call, tool, args string
+	ordinal                              int
 }
 
-func pruneToolEventsOn(db execer) (int64, error) {
-	res, err := db.Exec(`DELETE FROM tool_events WHERE started_ms < ?`,
-		time.Now().UTC().Add(-toolEventRetention).UnixMilli())
+func (s *Store) heldToolStarts() ([]heldToolStart, error) {
+	if ok, err := s.tableHasColumn("tool_events", "state"); err != nil || !ok {
+		return nil, err
+	}
+	rows, err := s.h().Query(`SELECT turn_id,ordinal,actor,model,provider_call_id,tool,args_record FROM tool_events WHERE state='started' ORDER BY started_ms`)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	defer rows.Close()
+	var held []heldToolStart
+	for rows.Next() {
+		var h heldToolStart
+		if err := rows.Scan(&h.turn, &h.ordinal, &h.actor, &h.model, &h.call, &h.tool, &h.args); err != nil {
+			return nil, err
+		}
+		held = append(held, h)
+	}
+	return held, rows.Err()
 }
 
-func (s *Store) PruneToolEvents() (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return pruneToolEventsOn(s.w())
-}
+func (s *Store) carryToolStarts(held []heldToolStart) (string, error) {
+	if len(held) == 0 {
+		return "", nil
+	}
+	var before int64
+	if err := s.h().QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&before); err != nil {
+		return "", err
+	}
+	carried := 0
+	for _, h := range held {
+		id := toolExecutionID(h.turn, h.ordinal)
+		var n int
+		if err := s.h().QueryRow(`SELECT COUNT(*) FROM conversations WHERE source_kind='tool' AND source_id=? AND kind='tool_call'`, id).Scan(&n); err != nil {
+			return "", err
+		}
+		if n > 0 {
+			continue
+		}
+		details, err := json.Marshal(interaction.Details{Tool: h.tool, Actor: h.actor, Model: h.model, ProviderCallID: h.call, Ordinal: h.ordinal, ArgsRecord: h.args, LegacySource: "tool_events", OrderBasis: "import"})
+		if err != nil {
+			return "", err
+		}
+		stamp, err := interaction.NormalizeTime(time.Now())
+		if err != nil {
+			return "", err
+		}
 
-func (s *Store) hasLegacyToolEvents() (bool, error) {
-	return s.tableHasColumn("tool_events", "phase")
+		if _, err := s.h().Exec(`INSERT INTO conversations(id,session_id,role,content,turn_seq,created_at,kind,turn_id,source_kind,source_id,recorded_at,details) VALUES(?,'default','system',?,COALESCE((SELECT MAX(turn_seq) FROM conversations),0)+1,?,'tool_call',?,'tool',?,?,?)`,
+			"tool_call_"+id, fmt.Sprintf("→ %s(%s)", h.tool, h.args), stamp, h.turn, id, stamp, string(details)); err != nil {
+			return "", err
+		}
+		carried++
+	}
+	if carried == 0 {
+		return "", nil
+	}
+	var after int64
+	if err := s.h().QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&after); err != nil {
+		return "", err
+	}
+	if s.schemaConversions == nil {
+		s.schemaConversions = map[string]RuntimeConversion{}
+	}
+	reason := "unfinished tool executions carried from the retired tool_events"
+	if previous, ok := s.schemaConversions["conversations"]; ok {
+		before = previous.Before
+		reason = previous.Reason + "; " + reason
+	}
+	s.schemaConversions["conversations"] = RuntimeConversion{Before: before, After: after, Reason: reason}
+	return fmt.Sprintf("RECONCILE: %d unfinished tool call(s) carried from tool_events into the conversation log for the boot warning", carried), nil
 }
 
 func InterruptedNote(names []string) string {
@@ -193,6 +261,7 @@ func InterruptedNote(names []string) string {
 func (s *Store) StartedToolInteraction(turn string, ordinal int) (id, parent, model string, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	err = s.db.QueryRow(`SELECT e.execution_id,COALESCE(c.id,''),e.model FROM tool_events e LEFT JOIN conversations c ON c.source_kind='tool' AND c.source_id=e.execution_id AND c.kind='tool_call' WHERE e.turn_id=? AND e.ordinal=? AND e.state='started'`, turn, ordinal).Scan(&id, &parent, &model)
+	err = s.db.QueryRow(`SELECT c.source_id, c.id, COALESCE(json_extract(c.details,'$.model'),'') FROM conversations c WHERE c.source_kind='tool' AND c.source_id=? AND `+openToolCall,
+		toolExecutionID(turn, ordinal)).Scan(&id, &parent, &model)
 	return
 }

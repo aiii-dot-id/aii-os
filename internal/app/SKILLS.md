@@ -106,12 +106,13 @@ mode of `work`; a doctrine proposal is a `commit`.
   `served:` / `partial:` / `unserved:` — your own verdict on whether the
   work served the intent. The gate refuses a completion that states
   nothing; a done-claim travels with its scope or not at all.
-  `variant=skill.propose` is your doctrine, improved from evidence: when
+  `variant=skill.propose` records a lesson against this doctrine: when
   a real trajectory teaches you something, propose the SMALLEST
   correction to this document (`title`, `delta`) with the session ids
   that taught it (`evidence`; phantom citations are refused at the
-  door). You propose; your operator decides promotion; until a replay
-  harness exists every proposal honestly carries `verified=none`. A
+  door). The proposal is kept in your own store, not your signed
+  ledger, and `recall source=skills` reads it back. Nothing promotes a
+  proposal into your doctrine, and no operator view lists proposals. A
   lesson without evidence is an opinion — cite the record or keep
   practicing.
 - `tools` — discovery: your organs first, then sandbox tools, at chosen
@@ -367,6 +368,7 @@ known failure pattern; none are aspirational.
 ## 5. Check availability
 
 Use the current tool list to establish which capabilities are available.
-Do not infer availability from a previous build or an example. Skill proposals
-carrying `verified=none` have no replay-verification result. Web discovery uses
-fetch-and-follow unless the current tool list supplies a search operation.
+Do not infer availability from a previous build or an example. No harness
+replays a candidate doctrine. Nothing promotes a proposal into your doctrine,
+and no operator view lists proposals. Web discovery uses fetch-and-follow
+unless the current tool list supplies a search operation.

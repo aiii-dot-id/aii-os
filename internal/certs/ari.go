@@ -61,15 +61,15 @@ func CertID(leaf *x509.Certificate) (string, error) {
 	return enc.EncodeToString(leaf.AuthorityKeyId) + "." + enc.EncodeToString(value), nil
 }
 
-func (m *Manager) renewalWindow(ctx context.Context) (*Window, error) {
-	if m.leaf == nil {
+func (m *Manager) renewalWindow(ctx context.Context, leaf *x509.Certificate) (*Window, error) {
+	if leaf == nil {
 		return nil, errors.New("no certificate")
 	}
 	base, err := m.renewalInfoURL(ctx)
 	if err != nil || base == "" {
 		return nil, err
 	}
-	id, err := CertID(m.leaf)
+	id, err := CertID(leaf)
 	if err != nil {
 		return nil, err
 	}

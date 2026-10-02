@@ -56,6 +56,20 @@ func rewriteSameFile(path string, data []byte, measured os.FileInfo) error {
 	return truncateWriteClose(f, data)
 }
 
+func openForCopy(path string, perm os.FileMode) (*os.File, error) {
+	f, _, err := openForReplace(path, perm, os.O_CREATE)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+var errCrossDevice error = syscall.EXDEV
+
 func truncateWriteClose(f *os.File, data []byte) error {
 	if err := f.Truncate(0); err != nil {
 		f.Close()

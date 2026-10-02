@@ -9,6 +9,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/escrow"
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
+	"github.com/aiii-dot-id/aii-os/internal/updates"
 )
 
 func substratePlaces(cfg Config, home string) []*firewall.Rule {
@@ -68,6 +69,10 @@ func substrateObjects(cfg Config, home string) []*firewall.Rule {
 		place("sub.snapshot-key", escrow.SnapshotKeyPath(cfg.Identity.KeyPath), kept)
 	}
 	place("sub.plugins", "plugins", "Your installed plugins are the host's: they change by install, never by a file write.")
+
+	if program, err := updates.Program(); err == nil {
+		place("sub.binary", program, "Your running program is your body — self-modification is not available to you.")
+	}
 	for _, prof := range cfg.Plugins.AuthProfiles {
 		for _, f := range []string{prof.SecretFile, prof.ClientSecretFile, prof.TokenFile} {
 			place("sub.profile", f, "A credential your operator keeps for a plugin — it is not yours to read.")
@@ -79,7 +84,8 @@ func substrateObjects(cfg Config, home string) []*firewall.Rule {
 func (a *App) applySubstrate(cfg Config) bool {
 	policy := a.ensureRing5Policy()
 	before := policy.Places()
-	policy.SetPlaces(substratePlaces(cfg, cfg.Tools.CWD))
+
+	policy.SetPlaces(substratePlaces(a.activeConfig(cfg), cfg.Tools.CWD))
 	return !slices.Equal(before, policy.Places())
 }
 
@@ -101,17 +107,16 @@ func uiSurfacePaths(ledgerPath string) []string {
 
 type pluginSandbox struct {
 	reg     *tools.Registry
-	policy  *firewall.Policy
 	surface []*firewall.Rule
 }
 
-func newPluginSandbox(reg *tools.Registry, policy *firewall.Policy, ledgerPath string) pluginSandbox {
+func newPluginSandbox(reg *tools.Registry, ledgerPath string) pluginSandbox {
 	var surface []*firewall.Rule
 	for _, p := range uiSurfacePaths(ledgerPath) {
 		surface = append(surface, &firewall.Rule{ID: "sub.ui", Kind: firewall.KindSubstrate, Path: p, Enforced: true,
 			Reason: "The dashboard's frame, colours and layout are your operator's and the identity's to re-form, not a plugin's."})
 	}
-	return pluginSandbox{reg: reg, policy: policy, surface: surface}
+	return pluginSandbox{reg: reg, surface: surface}
 }
 
 func (s pluginSandbox) Admit(op, path string) (dir, rel string, err error) {
@@ -122,7 +127,6 @@ func (s pluginSandbox) Admit(op, path string) (dir, rel string, err error) {
 	admitted := filepath.Join(dir, rel)
 	for _, r := range s.surface {
 		if r.Covers(admitted) {
-			s.policy.Record(op, path, r)
 			return "", "", &tools.SubstrateError{Rule: r}
 		}
 	}

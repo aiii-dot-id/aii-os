@@ -15,7 +15,7 @@ const (
 	capInteractionRead = "interaction.read"
 )
 
-func (b *Binding) dispatchInteraction(_ context.Context, p invokeParams, g Grant) ([]byte, error) {
+func (b *Binding) dispatchInteraction(ctx context.Context, p invokeParams, g Grant) ([]byte, error) {
 	declared := false
 	for _, cap := range b.envelope {
 		declared = declared || cap == capInteractionRead
@@ -74,14 +74,14 @@ func (b *Binding) dispatchInteraction(_ context.Context, p invokeParams, g Grant
 		if err := interaction.Strict(p.Arguments, &q); err != nil {
 			return reply(nil, err)
 		}
-		value, err := b.host.cfg.Interactions.QueryInteractions(q)
+		value, err := b.host.cfg.Interactions.QueryInteractions(ctx, q)
 		return reply(value, err)
 	case opInteractionRead:
 		var r interaction.ReadRequest
 		if err := interaction.Strict(p.Arguments, &r); err != nil {
 			return reply(nil, err)
 		}
-		value, err := b.host.cfg.Interactions.ReadInteraction(r)
+		value, err := b.host.cfg.Interactions.ReadInteraction(ctx, r)
 		return reply(value, err)
 	default:
 		return reply(nil, interaction.Invalid("unknown interaction operation"))

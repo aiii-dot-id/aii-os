@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
@@ -34,7 +35,20 @@ type Result struct {
 	Error     string
 
 	ReasonCode string
+
+	Refused bool
 }
+
+func Refusal(code, msg string) Result {
+	return Result{Error: msg, ReasonCode: code, Refused: true}
+}
+
+const (
+	ReasonPathRefused = "PATH_REFUSED"
+	ReasonRootItself  = "ROOT_ITSELF"
+	ReasonRootInside  = "ROOT_INSIDE"
+	ReasonShellWall   = "SHELL_WALL"
+)
 
 const ReasonHostOnly = "HOST_ONLY"
 
@@ -108,6 +122,7 @@ type Registry struct {
 	standing     []StandingSeat
 	persistOffer func([]StandingSeat)
 	told         map[string]bool
+	persistMu    sync.Mutex
 	webFetch     *WebFetchTool
 	extraRoots   []string
 	cwd          string
@@ -128,9 +143,7 @@ type Registry struct {
 	fetchObserver func(url string)
 }
 
-var safeBlockedTools = map[string]bool{
-	"write": true, "edit": true, "shell": true, "web_fetch": true,
-}
+var safeContinues = map[string]bool{"read": true, "grep": true, "ls": true}
 
 func (r *Registry) SetSafeSource(fn func() (string, bool)) { r.safeSource = fn }
 
@@ -216,17 +229,11 @@ type builtin struct {
 func (r *Registry) builtins(canShell, canWrite bool) []builtin {
 	return []builtin{
 		{&ReadTool{maxBytes: 51200}, true},
-		{&WriteTool{}, canWrite},
+		{&WriteTool{deny: func(p string) bool { return r.walkDenied("write", p) }}, canWrite},
 		{&EditTool{}, canWrite},
 		{&ShellTool{timeout: r.timeouts.shell(), sandbox: r.sandbox}, canShell},
-		{&GrepTool{deny: func(p string) bool {
-
-			if r.policy == nil {
-				return false
-			}
-			return !r.policy.Check("grep", p).Allowed
-		}}, true},
-		{&LsTool{}, true},
+		{&GrepTool{deny: func(p string) bool { return r.walkDenied("grep", p) }}, true},
+		{&LsTool{deny: func(p string) bool { return r.walkDenied("ls", p) }}, true},
 
 		{&WebFetchTool{maxBytes: 100000, timeout: r.timeouts.webFetch(), onFetch: r.NotifyFetch}, true},
 	}
@@ -281,6 +288,10 @@ func (r *Registry) Builtins() []string {
 }
 
 func (r *Registry) RegisterDynamic(t Tool, origin string) error {
+	return r.register(t, origin, false)
+}
+
+func (r *Registry) register(t Tool, origin string, hostOnly bool) error {
 	if origin == "" || origin == "builtin" {
 		return fmt.Errorf("dynamic tool %q requires a non-builtin origin, got %q", t.Name(), origin)
 	}
@@ -291,22 +302,18 @@ func (r *Registry) RegisterDynamic(t Tool, origin string) error {
 	}
 	r.tools[t.Name()] = t
 	r.sources[t.Name()] = origin
+	if hostOnly {
+		if r.hostOnly == nil {
+			r.hostOnly = map[string]bool{}
+		}
+		r.hostOnly[t.Name()] = true
+	}
 	r.reseatLocked(t.Name())
 	return nil
 }
 
 func (r *Registry) RegisterHostOp(t Tool, origin string) error {
-	if err := r.RegisterDynamic(t, origin); err != nil {
-		return err
-	}
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	if r.hostOnly == nil {
-		r.hostOnly = map[string]bool{}
-	}
-	r.hostOnly[t.Name()] = true
-	r.unofferLocked(t.Name())
-	return nil
+	return r.register(t, origin, true)
 }
 
 func (r *Registry) Deregister(name string) {
@@ -408,7 +415,7 @@ func (r *Registry) RootRejectionReason(path string) string {
 		abs = rr
 	}
 	if rootExposesSubstrate(abs, r.sandbox, r.policy.Places()) {
-		return "would expose the identity's own substrate (ledger, keys, config, data, or home) — refused"
+		return "would expose the identity's own substrate (ledger, keys, config, data, the running program, or home) — refused"
 	}
 	return ""
 }
@@ -474,6 +481,18 @@ func (r *Registry) holder(resolved string) string {
 	return best
 }
 
+func (r *Registry) rootTakenBy(target string) string {
+	t := resolveForContainment(target)
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	for _, root := range append([]string{r.sandbox}, r.extraRoots...) {
+		if within(t, resolveForContainment(root)) {
+			return root
+		}
+	}
+	return ""
+}
+
 func (r *Registry) Roots() (string, []string) {
 	r.regMu.RLock()
 	defer r.regMu.RUnlock()
@@ -524,29 +543,8 @@ func (r *Registry) lookupWithHostOnly(name string) (Tool, bool, bool, string) {
 }
 
 func (r *Registry) inExtraRoot(path string) bool {
-	abs := path
-	if !isRooted(abs) {
-		abs = filepath.Join(r.sandbox, path)
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
-
-	r.regMu.RLock()
-	defer r.regMu.RUnlock()
-	for _, root := range r.extraRoots {
-		if within(root, abs) {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Registry) registeredNonBuiltin(name string) bool {
-	r.regMu.RLock()
-	defer r.regMu.RUnlock()
-	_, exists := r.tools[name]
-	return exists && r.sources[name] != "builtin"
+	h := r.holder(resolveForContainment(r.rooted(path)))
+	return h != "" && h != r.sandbox
 }
 
 func (r *Registry) ObserveFetches(fn func(url string)) {
@@ -628,7 +626,7 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]int
 	if expected != nil {
 		owned, yes := t.(dispatchOwned)
 		if !yes || owned.DispatchOwner() != expected {
-			return Result{Error: "host dispatch owner changed", ReasonCode: "HOST_OWNER_CHANGED"}, nil
+			return Refusal("HOST_OWNER_CHANGED", "host dispatch owner changed"), nil
 		}
 	}
 
@@ -648,60 +646,78 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]int
 		return nil
 	})
 	if model && hostOnly {
-		return Result{Error: name + " is host-only; only its host ceremony may call it", ReasonCode: ReasonHostOnly}, nil
+		return Refusal(ReasonHostOnly, name+" is host-only; only its host ceremony may call it"), nil
 	}
 	if !r.ToolEnabled(name) {
-		return Result{Error: "access denied: tool disabled by operator", ReasonCode: ReasonOperatorDisabled}, nil
+		return Refusal(ReasonOperatorDisabled, "access denied: tool disabled by operator"), nil
 	}
 
 	if msg := validateRequired(t, name, args); msg != "" {
 		r.malformedCalls.Add(1)
-		return Result{Error: msg, ReasonCode: ReasonArgumentsRequired}, nil
+		return Refusal(ReasonArgumentsRequired, msg), nil
 	}
 
-	if r.safeSource != nil && (safeBlockedTools[name] || r.registeredNonBuiltin(name)) {
+	if r.safeSource != nil && ok && (source != "builtin" || !safeContinues[name]) {
 		if reason, safe := r.safeSource(); safe {
-			return Result{Error: fmt.Sprintf("refused: I am in safe mode — %s. Only read-only tools continue while SAFE holds.", reason), ReasonCode: ReasonSafeSuspended}, nil
+			return Refusal(ReasonSafeSuspended, fmt.Sprintf("refused: I am in safe mode — %s. Only read-only tools continue while SAFE holds.", reason)), nil
 		}
 	}
 
 	if name == "read" || name == "write" || name == "edit" {
-		if path, ok := args["file_path"].(string); ok {
+		for _, key := range []string{"file_path", "to"} {
+			path, ok := args[key].(string)
+			if !ok || key == "to" && (name != "write" || path == "") {
+				continue
+			}
 
 			resolved := path
 			if !isRooted(resolved) {
 				resolved = filepath.Join(r.sandbox, resolved)
-				args["file_path"] = resolved
+				args[key] = resolved
 			}
-			if _, _, err := r.Admit(name, resolved); err != nil {
-				return Result{Error: "access denied: " + err.Error()}, nil
+			_, rel, err := r.Admit(name, resolved)
+			if err != nil {
+				if key == "to" {
+					return Refusal(ReasonPathRefused, "access denied: to "+err.Error()), nil
+				}
+				return Refusal(ReasonPathRefused, "access denied: "+err.Error()), nil
+			}
+
+			if action, _ := args["action"].(string); key == "file_path" && (action == "delete" || action == "move") {
+				if rel == "." {
+					return Refusal(ReasonRootItself, "access denied: "+resolved+" is the home or a granted root itself; what is inside it may be "+action+"d, not the root"), nil
+				}
+				if root := r.rootTakenBy(resolved); root != "" {
+					return Refusal(ReasonRootInside, "access denied: "+resolved+" holds "+root+", the home or a granted root, which may not be "+action+"d with it; the operator removes that grant first"), nil
+				}
 			}
 		}
 	}
 
 	if name == "shell" {
 		if cmd, ok := args["command"].(string); ok {
-			if why := r.shellRefusal(cmd); why != "" {
-				return Result{Error: "access denied: " + why +
-					" (best-effort check; run under a container for a hard boundary)"}, nil
+			if why, outside := r.shellWall(cmd); why != "" {
+				return Refusal(ReasonShellWall, "access denied: "+why+
+					" (best-effort check; run under a container for a hard boundary)"+slashSearchHint(cmd, outside)), nil
 			}
 		}
 	}
 
 	if name == "grep" || name == "ls" {
 		key := "path"
-		if path, ok := args[key].(string); ok && path != "" {
+
+		if v, given := args[key]; !given || v == nil || v == "" {
+			args[key] = r.sandbox
+		}
+		if path, ok := args[key].(string); ok {
 			resolved := path
 			if !isRooted(resolved) {
 				resolved = filepath.Join(r.sandbox, resolved)
 				args[key] = resolved
 			}
-			if name == "grep" {
-				if _, _, err := r.Admit(name, resolved); err != nil {
-					return Result{Error: "access denied: " + err.Error()}, nil
-				}
-			} else if r.isOutsideSandbox(resolved) {
-				return Result{Error: "access denied: outside sandbox"}, nil
+
+			if _, _, err := r.Admit(name, resolved); err != nil {
+				return Refusal(ReasonPathRefused, "access denied: "+err.Error()), nil
 			}
 		}
 	}
@@ -720,6 +736,10 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]int
 		}
 	}
 	result, runErr := t.Execute(ctx, args)
+	if result.ReasonCode == ReasonArgumentsRequired && source == "builtin" {
+
+		r.malformedCalls.Add(1)
+	}
 	if !model || source == "" || source == "builtin" {
 		return result, runErr
 	}
@@ -795,7 +815,6 @@ func (r *Registry) substrateDenied(tool, path string) *firewall.Rule {
 
 	for _, form := range []string{resolved, abs} {
 		if rule := r.policy.Covered(form); rule != nil {
-			r.policy.Record(tool, path, rule)
 			return rule
 		}
 	}
@@ -806,11 +825,23 @@ func (r *Registry) substrateDenied(tool, path string) *firewall.Rule {
 
 	for _, form := range []string{resolved, abs, path} {
 		if v := r.policy.Check(tool, form); !v.Allowed {
-			r.policy.Record(tool, path, v.Rule)
 			return v.Rule
 		}
 	}
 	return nil
+}
+
+func (r *Registry) walkDenied(tool, path string) bool {
+	if r.policy == nil {
+		return false
+	}
+	if r.policy.Check(tool, path).Allowed {
+		return false
+	}
+	if r.policy.Covered(path) != nil {
+		return true
+	}
+	return !r.inExtraRoot(path)
 }
 
 func (r *Registry) isOutsideSandbox(path string) bool {
@@ -840,11 +871,14 @@ func (r *Registry) floorRefusal(tokens []shellToken, denied string) string {
 		" a relative path is matched on the name alone)"
 }
 
-func (r *Registry) shellCommandEscapes(cmd string) bool { return r.shellRefusal(cmd) != "" }
-
 func (r *Registry) shellRefusal(cmd string) string {
+	why, _ := r.shellWall(cmd)
+	return why
+}
+
+func (r *Registry) shellWall(cmd string) (why, outside string) {
 	if strings.Contains(cmd, "~") || strings.Contains(cmd, "$HOME") {
-		return "the command references ~ or $HOME, which this check cannot resolve — write the path out in full (the sandbox is " + r.sandbox + ")"
+		return "the command references ~ or $HOME, which this check cannot resolve — write the path out in full (the sandbox is " + r.sandbox + ")", ""
 	}
 
 	tokens := r.shellTokens(cmd)
@@ -864,7 +898,7 @@ func (r *Registry) shellRefusal(cmd string) string {
 
 	for _, c := range checks {
 		if v := r.policy.Check("bash", c); !v.Allowed {
-			return r.floorRefusal(tokens, v.Rule.Pattern)
+			return r.floorRefusal(tokens, v.Rule.Pattern), ""
 		}
 	}
 
@@ -874,14 +908,11 @@ func (r *Registry) shellRefusal(cmd string) string {
 		}
 		f := tok.text
 
-		clean := filepath.Clean(f)
-		if filepath.IsAbs(clean) && (strings.HasPrefix(clean, "/usr/") || strings.HasPrefix(clean, "/bin/") ||
-			clean == "/usr" || clean == "/bin" || clean == "/lib" || clean == "/etc/alternatives" ||
-			clean == "/dev/null" || clean == "/dev/zero" || clean == "/dev/stdin" || clean == "/dev/stdout" || clean == "/dev/stderr") {
+		if invocationExempt(f) {
 			continue
 		}
 		if r.isOutsideSandbox(f) {
-			return f + " is outside the sandbox " + r.sandbox
+			return f + " is outside the sandbox " + r.sandbox, f
 		}
 	}
 
@@ -902,16 +933,32 @@ func (r *Registry) shellRefusal(cmd string) string {
 		abs := r.rooted(tok)
 		for _, form := range []string{resolveForContainment(abs), abs} {
 			if rule := r.policy.Covered(form); rule != nil {
-				r.policy.Record("shell", tok, rule)
-				return tok + " is inside " + filepath.Base(rule.Path) + ", which the host keeps: " + rule.Reason
+				return tok + " is inside " + filepath.Base(rule.Path) + ", which the host keeps: " + rule.Reason, ""
 			}
 		}
 
 		if !r.inExtraRoot(tok) {
 			if v := r.policy.CheckFileIdentity("shell", abs); !v.Allowed {
-				r.policy.Record("shell", tok, v.Rule)
-				return tok + " reaches the protected name " + v.Rule.Pattern + "; the sandbox is " + r.sandbox
+				return tok + " reaches the protected name " + v.Rule.Pattern + "; the sandbox is " + r.sandbox, ""
 			}
+		}
+	}
+	return "", ""
+}
+
+var searchPrograms = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true, "ack": true}
+
+func slashSearchHint(cmd, refused string) string {
+	if !strings.HasPrefix(refused, "/") {
+		return ""
+	}
+	for _, w := range shellWords(cmd) {
+		if searchPrograms[strings.TrimSuffix(filepath.Base(w), ".exe")] {
+			if w == refused {
+
+				return ""
+			}
+			return fmt.Sprintf("\nif that is search text and not a path, the grep tool takes any pattern: grep pattern=%q path=\"…\"", refused)
 		}
 	}
 	return ""
@@ -991,29 +1038,29 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-func (r *Registry) ToolDefinitions() []interface{} {
-
+func (r *Registry) ToolDefinitions() []wire.ToolDefinition {
 	names := r.PromptNames()
-	defs := make([]interface{}, 0, len(names))
+	defs := make([]wire.ToolDefinition, 0, len(names))
 	for _, name := range names {
 		t, ok := r.lookup(name)
 		if !ok {
 			continue
 		}
-		defs = append(defs, map[string]interface{}{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        name,
-				"description": t.Description(),
-				"parameters":  t.Parameters(),
-			},
-		})
+		params := t.Parameters()
+		if params == nil {
+			params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+		}
+		defs = append(defs, wire.ToolDefinition{Type: "function", Function: wire.ToolFunction{
+			Name:        name,
+			Description: t.Description(),
+			Parameters:  params,
+		}})
 	}
 	return defs
 }
 
 func (r *Registry) SetLocalFetch(entries []string, refuse func(net.IP, int) bool) []string {
-	scopes, rejected := LocalScopes(entries)
+	scopes, rejected := firewall.LocalScopes(entries)
 	if r.webFetch != nil {
 		r.webFetch.local, r.webFetch.refuse = scopes, refuse
 	}

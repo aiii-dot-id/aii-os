@@ -21,6 +21,6 @@ func StartCommand(slot, dir string) string {
 	return "aii -dir " + dir
 }
 
-func Stop(slot string) error {
-	return fmt.Errorf("stopping a service is not automated on %s — stop the process by hand", runtime.GOOS)
-}
+var ErrNoServiceManager = fmt.Errorf("stopping a service is not automated on %s — stop the process by hand", runtime.GOOS)
+
+func Stop(slot string) error { return ErrNoServiceManager }

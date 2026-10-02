@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/google/uuid"
 )
@@ -39,8 +40,9 @@ func scanInteraction(row interface{ Scan(...any) error }) (interaction.Record, e
 	if sk != "" {
 		r.Source = &interaction.Source{Kind: sk, ID: si}
 	}
-	if err = interaction.Strict([]byte(details), &r.Details); err != nil {
-		return r, err
+
+	if err = canonicaljson.DecodeStrict([]byte(details), &r.Details); err != nil {
+		return r, &interaction.Error{Code: "INTERACTION_CONTENT_UNAVAILABLE", Detail: "historical details do not decode (" + err.Error() + "); the original bytes remain in the read-only database"}
 	}
 	return r, nil
 }
@@ -101,7 +103,7 @@ func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *inte
 	return rows.Err()
 }
 
-func (s *Store) QueryInteractions(q interaction.Query) (out *interaction.Page, retErr error) {
+func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out *interaction.Page, retErr error) {
 	if err := q.Normalize(); err != nil {
 		return nil, err
 	}
@@ -113,7 +115,8 @@ func (s *Store) QueryInteractions(q interaction.Query) (out *interaction.Page, r
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -254,7 +257,7 @@ func (s *Store) QueryInteractions(q interaction.Query) (out *interaction.Page, r
 	interaction.Seal(page)
 	return page, nil
 }
-func (s *Store) ReadInteraction(req interaction.ReadRequest) (out *interaction.ReadResult, retErr error) {
+func (s *Store) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (out *interaction.ReadResult, retErr error) {
 	if err := interaction.ValidateRead(&req); err != nil {
 		return nil, err
 	}
@@ -264,7 +267,8 @@ func (s *Store) ReadInteraction(req interaction.ReadRequest) (out *interaction.R
 	if req.Incarnation != s.InteractionIncarnation() {
 		return nil, &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "source retired"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	s.mu.RLock()
 	defer s.mu.RUnlock()

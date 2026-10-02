@@ -3,6 +3,7 @@ package packagefmt
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,12 @@ type Result struct {
 	ReviewedCapabilities []string
 
 	FileDigests map[string]string
+}
+
+func (r *Result) MemberDigest(rel string, raw []byte) (want, got string, ok bool) {
+	sum := sha256.Sum256(raw)
+	want, got = r.FileDigests[rel], "sha256:"+hex.EncodeToString(sum[:])
+	return want, got, got == want
 }
 
 func VerifyFile(path string, roots TrustRoots) (*Result, error) {

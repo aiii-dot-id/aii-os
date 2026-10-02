@@ -15,8 +15,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/cognitive/landing"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
-	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/store/cursor"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type DreamConfig struct {
@@ -58,12 +58,12 @@ type DreamFacility struct {
 
 type ExperienceStore interface {
 	UnprocessedExperienceCount() (int, error)
-	ListRawExperiences(n int) ([]store.Experience, error)
+	ListRawExperiences(n int) ([]rows.Experience, error)
 }
 
 type DreamStore interface {
 	ExperienceStore
-	ListRawExperiencesExcept(n int, idPrefix string) ([]store.Experience, error)
+	ListRawExperiencesExcept(n int, idPrefix string) ([]rows.Experience, error)
 }
 
 type LLMCaller interface {
@@ -126,7 +126,7 @@ func (d *DreamFacility) pass(ctx context.Context) (passOutcome, error) {
 	var expTexts, expIDs []string
 	if d.Predicate(ctx) {
 
-		experiences, err := d.store.ListRawExperiencesExcept(20, store.OutcomeObservationPrefix)
+		experiences, err := d.store.ListRawExperiencesExcept(20, rows.OutcomeObservationPrefix)
 		if err != nil {
 			return passStalled, fmt.Errorf("dream: list raw experiences: %w", err)
 		}
@@ -229,7 +229,7 @@ func (d *DreamFacility) pass(ctx context.Context) (passOutcome, error) {
 	return passAdvanced, nil
 }
 
-func (d *DreamFacility) request(expTexts []string, talk cursor.ConversationBatch, calls map[string][]store.ToolCall) string {
+func (d *DreamFacility) request(expTexts []string, talk cursor.ConversationBatch, calls map[string][]rows.ToolCall) string {
 	var parts []string
 	if len(expTexts) > 0 {
 		parts = append(parts, fmt.Sprintf("Experiences:\n%s", joinLines(expTexts)))

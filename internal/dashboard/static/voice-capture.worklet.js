@@ -1,17 +1,3 @@
-// voice-capture.worklet.js — bounded microphone capture for the resident
-// conversation and push-to-talk. An AudioWorkletProcessor
-// accumulates the input into fixed frames and posts each whole frame to
-// the page thread; it holds AT MOST one partial frame, so a slow reader
-// can never make it grow without bound. On a flush request it posts that
-// held partial (if any) TOGETHER with an acknowledgement naming the
-// samples flushed, then stops capturing — so the page can admit the exact
-// tail BEFORE it names the session's one input cutoff, and nothing can be
-// captured after the acknowledgement. voice.js falls back to the deprecated
-// ScriptProcessor where AudioWorklet is unavailable.
-//
-// Testable off the audio thread: outside an AudioWorkletGlobalScope the
-// base class and the registration are stubbed, so the page's browser
-// proofs can import this file and drive process() and port.onmessage.
 const CaptureBase = typeof AudioWorkletProcessor === 'function' ? AudioWorkletProcessor : class {
   constructor() { this.port = { postMessage() {}, onmessage: null }; }
 };
@@ -30,9 +16,6 @@ class CaptureProcessor extends CaptureBase {
       if (m && m.flush !== undefined) this.flush(m.flush);
     };
   }
-  // flush posts the held partial and the acknowledgement in ONE message,
-  // then stops: after the ack no further samples exist, so the page's
-  // admitted sample clock is exact when it names the cutoff.
   flush(id) {
     const n = this.n;
     const buffer = n > 0 ? this.buf.slice(0, n * this.channels).buffer : null;
@@ -49,8 +32,6 @@ class CaptureProcessor extends CaptureBase {
     if (ch) {
       for (let i = 0; i < ch.length; i++) {
         this.buf[this.n * this.channels] = ch[i];
-        // Input 1 is the connected playback mix on this SAME AudioContext.
-        // No active sources means known graph silence, not a late TTS queue.
         if (this.channels === 2) this.buf[this.n * 2 + 1] = ref ? ref[i] : 0;
         this.n++;
         if (this.n === this.size) {

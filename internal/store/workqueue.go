@@ -1,32 +1,16 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"strings"
 	"time"
 )
-
-type WorkItem struct {
-	ID         string
-	Kind       string
-	Payload    string
-	DedupKey   string
-	Source     string
-	State      string
-	Priority   int
-	Scheduled  int64
-	ClaimedAt  int64
-	LeaseMs    int64
-	DoneAt     int64
-	RetryCount int
-	MaxRetries int
-	Error      string
-	CreatedMs  int64
-}
 
 func (s *Store) EnqueueWork(item *WorkItem) (string, error) {
 	s.mu.Lock()
@@ -110,14 +94,6 @@ func (s *Store) claimExclusionLocked() (string, []interface{}) {
 	return clause, args
 }
 
-func (s *Store) RunningWorkCount(kind string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM work_queue WHERE kind = ? AND state = 'CLAIMED'`, kind).Scan(&n)
-	return n, err
-}
-
 func (s *Store) SubagentQueueStates(kind string) (map[string]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -172,7 +148,16 @@ func (s *Store) ClaimWork(kinds []string, nowMs int64) (*WorkItem, error) {
 		      ORDER BY priority ASC, created_ms ASC LIMIT 1`
 		args = append(append([]interface{}{nowMs}, exclArgs...), args[1+len(exclArgs):]...)
 	}
-	err := s.db.QueryRow(q, args...).Scan(&row.id)
+
+	tx, err := s.w().Begin()
+	if errors.As(err, new(*FrozenError)) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim: %w", err)
+	}
+	defer tx.Rollback()
+	err = tx.QueryRow(q, args...).Scan(&row.id)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -183,7 +168,7 @@ func (s *Store) ClaimWork(kinds []string, nowMs int64) (*WorkItem, error) {
 
 	var w WorkItem
 	var dedup sql.NullString
-	err = s.db.QueryRow(
+	err = tx.QueryRow(
 		`UPDATE work_queue SET state = 'CLAIMED', claimed_at = ?
 		 WHERE id = ? AND state = 'PENDING' RETURNING id, kind, payload, dedup_key, source, state, priority, scheduled_ms, claimed_at, lease_ms, retry_count, max_retries, created_ms`,
 		nowMs, row.id,
@@ -191,6 +176,9 @@ func (s *Store) ClaimWork(kinds []string, nowMs int64) (*WorkItem, error) {
 		&w.Scheduled, &w.ClaimedAt, &w.LeaseMs, &w.RetryCount, &w.MaxRetries, &w.CreatedMs)
 	w.DedupKey = dedup.String
 	if err != nil {
+		return nil, fmt.Errorf("claim %s: %w", row.id, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("claim %s: %w", row.id, err)
 	}
 	return &w, nil
@@ -343,7 +331,7 @@ func (s *Store) EnqueueWorkWithSessionBelowLimit(item *WorkItem, limit int, sess
 	); err != nil {
 		return live, false, err
 	}
-	if err := s.recordWorkChangeTx(tx, interaction.WorkChange{Session: sessionID}, "", "Work queued: "+description); err != nil {
+	if err := s.recordWorkChangeTx(context.Background(), tx, interaction.WorkChange{Session: sessionID}, "", "Work queued: "+description); err != nil {
 		return live, false, err
 	}
 	changed = true

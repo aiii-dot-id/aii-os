@@ -9,14 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
@@ -51,21 +49,23 @@ func readTailEvents(f *os.File, k int) ([]*Event, error) {
 			break
 		}
 	}
-	lines := bytes.Split(buf, []byte{'\n'})
-	events := make([]*Event, 0, k+1)
-	for _, ln := range lines {
-		ln = bytes.TrimSpace(ln)
-		if len(ln) == 0 {
-			continue
+
+	var lines [][]byte
+	for _, ln := range bytes.Split(buf, []byte{'\n'}) {
+		if ln = bytes.TrimSpace(ln); len(ln) != 0 {
+			lines = append(lines, ln)
 		}
+	}
+	if len(lines) > k+1 {
+		lines = lines[len(lines)-k-1:]
+	}
+	events := make([]*Event, 0, len(lines))
+	for _, ln := range lines {
 		e, err := decodeEvent(ln)
 		if err != nil {
 			return nil, fmt.Errorf("tail parse: %w", err)
 		}
 		events = append(events, &e)
-	}
-	if len(events) > k+1 {
-		events = events[len(events)-k-1:]
 	}
 	return events, nil
 }
@@ -83,6 +83,8 @@ type Event struct {
 	readAsPriorShape bool
 
 	sealed bool
+
+	closing bool
 
 	container string
 }
@@ -106,9 +108,11 @@ func (e *Event) EntryBytes() []byte {
 }
 
 func (e *Event) EntryHash() string {
-	sum := sha256.Sum256(e.EntryBytes())
+	sum := e.entrySum()
 	return hex.EncodeToString(sum[:])
 }
+
+func (e *Event) entrySum() [32]byte { return sha256.Sum256(e.EntryBytes()) }
 
 func jsonString(s string) []byte {
 	var b bytes.Buffer
@@ -395,7 +399,6 @@ func openLedger(path string, beforeCleanup func() error) (*Ledger, error) {
 
 func (l *Ledger) readChainState(file *os.File) error {
 	r := bufio.NewReaderSize(file, 64*1024)
-	var goodBytes int64
 	first := true
 	for {
 		piece, err := r.ReadBytes('\n')
@@ -405,24 +408,13 @@ func (l *Ledger) readChainState(file *os.File) error {
 		terminated := bytes.HasSuffix(piece, []byte("\n"))
 		line := bytes.TrimSpace(piece)
 		if len(line) == 0 {
-			goodBytes += int64(len(piece))
 			if err == io.EOF {
 				return nil
 			}
 			continue
 		}
-
 		if !terminated {
-			sidecar := fmt.Sprintf("%s.torn-%d", l.path, time.Now().UTC().UnixNano())
-			if err := os.WriteFile(sidecar, piece, 0600); err != nil {
-				return fmt.Errorf("torn trailing line, quarantine failed (refusing to truncate unpreserved bytes): %w", err)
-			}
-
-			if err := os.Truncate(l.path, goodBytes); err != nil {
-				return fmt.Errorf("torn trailing line, truncate failed: %w", err)
-			}
-			logsink.Warn("ledger.error", "dropped a torn trailing line (%d bytes) — quarantined at %s; if the projection mirror remembers more events than the ledger now holds, this was NOT crash debris", len(piece), sidecar)
-			return nil
+			return fmt.Errorf("%w: %s ends in a line without its newline (%d bytes); New does not recover it: boot's OpenVerified does, after the record proves, preserving those bytes before it truncates", ErrRecordUnreadable, l.path, len(piece))
 		}
 		evt, err := decodeEvent(line)
 		if err != nil {
@@ -434,7 +426,6 @@ func (l *Ledger) readChainState(file *os.File) error {
 		first = false
 		l.lastSeq = evt.Seq
 		l.lastHash = evt.EntryHash()
-		goodBytes += int64(len(piece))
 		if err == io.EOF {
 			return nil
 		}
@@ -674,6 +665,12 @@ func (l *Ledger) LastHash() string {
 	return l.lastHash
 }
 
+func (l *Ledger) Last() Boundary {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return Boundary{Seq: l.lastSeq, Hash: l.lastHash}
+}
+
 func (l *Ledger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -766,16 +763,12 @@ func decodeEvent(raw []byte) (Event, error) {
 	if _, err := canonicaljson.CanonicalizeV1(raw); err != nil {
 		return Event{}, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var evt *Event
-	if err := dec.Decode(&evt); err != nil {
+
+	var e Event
+	if err := e.UnmarshalJSON(raw); err != nil {
 		return Event{}, err
 	}
-	if evt == nil {
-		return Event{}, fmt.Errorf("event must be a JSON object")
-	}
-	return *evt, nil
+	return e, nil
 }
 
 func VerifyChain(path string, pubKey []byte, heads HeadVerifier) (int, error) {
@@ -795,6 +788,8 @@ func verifyChain(source func(func(*Event) error) error, pubKey []byte, heads Hea
 	var expectedPrev string
 	var expectedSeq uint64
 	var proved, traversed Boundary
+
+	var since recordsSince
 	n := 0
 	refuse := func(evt *Event, requirement, expected, observed string, err error) error {
 		return &VerifyFailure{
@@ -821,7 +816,9 @@ func verifyChain(source func(func(*Event) error) error, pubKey []byte, heads Hea
 			return refuse(evt, "content mismatch — the payload is not the payload the entry names", evt.Content, observed, err)
 		}
 
-		traversed = Boundary{Seq: evt.Seq, Hash: evt.EntryHash()}
+		sum := evt.entrySum()
+		entryHash := hex.EncodeToString(sum[:])
+		traversed = Boundary{Seq: evt.Seq, Hash: entryHash}
 		if evt.sealed && heads == nil {
 			return refuse(evt, ErrSealedWithoutWitness.Error(), "", "", ErrSealedWithoutWitness)
 		}
@@ -834,7 +831,8 @@ func verifyChain(source func(func(*Event) error) error, pubKey []byte, heads Hea
 			return refuse(evt, ErrUnsignedRecord.Error(), "", "", ErrUnsignedRecord)
 		}
 		if evt.Type == EventSystemWitnessed && heads != nil {
-			if err := heads.VerifyHead(evt); err != nil {
+			attested, err := heads.VerifyHead(evt, since.hashAt)
+			if err != nil {
 				if !evt.sealed && errors.Is(err, ErrWitnessKeyUnknown) {
 
 				} else {
@@ -843,13 +841,17 @@ func verifyChain(source func(func(*Event) error) error, pubKey []byte, heads Hea
 					return refuse(evt, "witness head: "+said, "", "", err)
 				}
 			}
+			since.forget(attested)
 		}
 		if visit != nil {
 			if err := visit(evt); err != nil {
 				return &visitStopped{err}
 			}
 		}
-		expectedPrev = evt.EntryHash()
+		if heads != nil {
+			since.keep(evt.Seq, sum)
+		}
+		expectedPrev = entryHash
 		n++
 		return nil
 	})
@@ -869,6 +871,37 @@ func verifyChain(source func(func(*Event) error) error, pubKey []byte, heads Hea
 		}
 	}
 	return n, nil
+}
+
+type recordsSince struct {
+	first uint64
+	sums  [][32]byte
+}
+
+func (w *recordsSince) hashAt(seq uint64) (string, bool) {
+	if seq < w.first || seq-w.first >= uint64(len(w.sums)) {
+		return "", false
+	}
+	return hex.EncodeToString(w.sums[seq-w.first][:]), true
+}
+
+func (w *recordsSince) keep(seq uint64, sum [32]byte) {
+	if len(w.sums) == 0 {
+		w.first = seq
+	}
+	w.sums = append(w.sums, sum)
+}
+
+func (w *recordsSince) forget(through uint64) {
+	if len(w.sums) == 0 || through < w.first {
+		return
+	}
+	if k := through - w.first + 1; k < uint64(len(w.sums)) {
+		w.sums = append(w.sums[:0], w.sums[k:]...)
+		w.first = through + 1
+		return
+	}
+	w.sums = w.sums[:0]
 }
 
 var (
@@ -925,9 +958,5 @@ func stampModelID(payload []byte, modelID string) ([]byte, error) {
 	}
 	object["model_id"] = stamp
 
-	stamped, err := json.Marshal(object)
-	if err != nil {
-		return nil, err
-	}
-	return canonicaljson.CanonicalizeV1(stamped)
+	return json.Marshal(object)
 }

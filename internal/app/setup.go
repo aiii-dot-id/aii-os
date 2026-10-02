@@ -124,6 +124,38 @@ func contactStates(contacts []Contact) []dashboard.ContactState {
 	return out
 }
 
+var errConfigMoved = errors.New("the configuration changed while this change was checked; nothing was saved — save it again")
+
+func (a *App) commitConfig(orig Config, mutate func(*Config), custody func() error, settle func()) error {
+	candidate := orig
+	mutate(&candidate)
+	published := false
+	err := func() error {
+		a.providers.custody.mu.Lock()
+		defer a.providers.custody.mu.Unlock()
+		a.cfgMu.Lock()
+		defer a.cfgMu.Unlock()
+		if !reflect.DeepEqual(*a.cfg, orig) {
+			return errConfigMoved
+		}
+		if custody != nil {
+			if err := custody(); err != nil {
+				return err
+			}
+		}
+		var err error
+		published, err = a.persistLocked(&candidate, saveConfig)
+		if published && settle != nil {
+			settle()
+		}
+		return err
+	}()
+	if published {
+		a.profileChanged()
+	}
+	return err
+}
+
 const ceilingBound = 1_000_000_000
 
 func (a *App) applyConfigChange(changes map[string]interface{}) (*dashboard.ConfigState, error) {
@@ -449,7 +481,7 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 			case "plugins.runtime.roots_kept":
 				r.RootsKept = n
 			}
-			pluginsChanged = true
+			restart = append(restart, key)
 
 		case "speech.stt.monthly_minutes", "speech.tts.monthly_characters":
 			n := 0
@@ -654,6 +686,8 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 	}
 
 	var validatedClient *llm.Client
+	var measured substrateCapability
+	probed := false
 	var resolvedEntry providerEntry
 	var resolvedRegistry *providerRegistry
 	var providerPath string
@@ -671,15 +705,17 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 		candidateBudget, _ := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
 		validatedClient = a.newLLMClient(cc, candidateBudget)
 		if substrateChanged {
-			if err := a.probeSubstrate(validatedClient, cc, entry, reg, cfg.LLM.ProbeTimeoutSeconds); err != nil {
+			m, err := a.probeSubstrate(validatedClient, cc, entry, reg, cfg.LLM.ProbeTimeoutSeconds)
+			if err != nil {
 				return nil, err
 			}
+			measured, probed = m, true
 		}
 		resolvedEntry = entry
 	}
 
-	sttNetwork := sttChanged && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineServes(cfg.Speech.STT.Provider)
-	ttsNetwork := ttsChanged && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineServes(cfg.Speech.TTS.Provider)
+	sttNetwork := sttChanged && strings.TrimSpace(cfg.Speech.STT.Provider) != "" && !a.engineInstalled(cfg.Speech.STT.Provider)
+	ttsNetwork := ttsChanged && strings.TrimSpace(cfg.Speech.TTS.Provider) != "" && !a.engineInstalled(cfg.Speech.TTS.Provider)
 	if sttNetwork || ttsNetwork {
 		if resolvedRegistry == nil {
 			providerPath = a.providersPath()
@@ -708,7 +744,7 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 		a.cfgMu.Lock()
 		defer a.cfgMu.Unlock()
 		if !reflect.DeepEqual(*a.cfg, orig) {
-			return fmt.Errorf("config changed while the candidate was checked; retry")
+			return errConfigMoved
 		}
 		if resolvedRegistry != nil {
 			current, err := loadProvidersFile(providerPath)
@@ -719,23 +755,19 @@ func (a *App) applyConfigChangeWith(changes map[string]interface{}, persist func
 				return fmt.Errorf("providers changed while the candidate was checked; retry")
 			}
 		}
-		published, persistErr := persist(cfg)
-		if persistErr != nil && !published {
-			return fmt.Errorf("persist config: %w", persistErr)
-		}
-		configPublished = published
-		if published {
-			*a.cfg = *cfg
+		var err error
+		configPublished, err = a.persistLocked(cfg, persist)
+		if configPublished {
 			a.publishVoiceMode(cfg.Speech.Mode)
 
 			if holdTurn {
 				a.activateLLMRuntime(validatedClient, resolvedEntry, cfg.Prompt.MaxTokens)
+				if probed {
+					a.setSubstrateCapability(measured)
+				}
 			}
 		}
-		if persistErr != nil {
-			return fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", persistErr)
-		}
-		return nil
+		return err
 	}()
 	if holdTurn {
 		a.releaseTurn()
@@ -781,7 +813,7 @@ func SetDashboardPort(path string, port int) error {
 	if err := validDashboardPort(port); err != nil {
 		return err
 	}
-	cfg, err := LoadConfig(path)
+	cfg, err := ReadConfig(path)
 	if err != nil {
 		return err
 	}
@@ -842,9 +874,9 @@ func checkTimeout(serviceSeconds, ceilingSeconds int) time.Duration {
 	return ceiling
 }
 
-func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry providerEntry, reg *providerRegistry, timeoutSeconds int) error {
+func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry providerEntry, reg *providerRegistry, timeoutSeconds int) (substrateCapability, error) {
 	if a.bgCtx == nil {
-		return fmt.Errorf("substrate refused: application lifecycle is unavailable")
+		return substrateCapability{}, fmt.Errorf("substrate refused: application lifecycle is unavailable")
 	}
 	bound := probeTimeout(cc, timeoutSeconds)
 	vctx, cancel := context.WithTimeout(a.bgCtx, bound)
@@ -879,32 +911,31 @@ func (a *App) probeSubstrate(client *llm.Client, cc llm.ClientConfig, entry prov
 	}}, llm.ChatOptions{ThinkingBudget: cc.ThinkingBudget})
 	if err != nil {
 		if cc.APIKey == "" && cc.Credential == nil {
-			return fmt.Errorf("substrate refused: provider %q has no configured credential; if it requires one, store it in Settings → Providers → %s; current substrate kept: %w", entry.Name, entry.Name, err)
+			return substrateCapability{}, fmt.Errorf("substrate refused: provider %q has no configured credential; if it requires one, store it in Settings → Providers → %s; current substrate kept: %w", entry.Name, entry.Name, err)
 		}
 
 		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("substrate refused: provider %q model %q did not answer a minimal inference request within %s; current substrate kept: %w", entry.Name, cc.Model, bound, err)
+			return substrateCapability{}, fmt.Errorf("substrate refused: provider %q model %q did not answer a minimal inference request within %s; current substrate kept: %w", entry.Name, cc.Model, bound, err)
 		}
-		return fmt.Errorf("substrate refused: provider %q model %q cannot complete a minimal inference request; current substrate kept: %w", entry.Name, cc.Model, err)
+		return substrateCapability{}, fmt.Errorf("substrate refused: provider %q model %q cannot complete a minimal inference request; current substrate kept: %w", entry.Name, cc.Model, err)
 	}
 	if len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
-		return fmt.Errorf("substrate refused: provider %q model %q returned no visible answer to a minimal inference request; current substrate kept", entry.Name, cc.Model)
+		return substrateCapability{}, fmt.Errorf("substrate refused: provider %q model %q returned no visible answer to a minimal inference request; current substrate kept", entry.Name, cc.Model)
 	}
 
 	tool := <-toolCh
-	a.setSubstrateCapability(substrateCapability{
+	accepted = true
+	if tool.note != "" {
+		logsink.Info("boot.decision", "%s", tool.note)
+	}
+	return substrateCapability{
 		provider:    entry.Name,
 		model:       cc.Model,
 		toolCalls:   tool.state,
 		note:        tool.note,
 		modalityURL: modalityURL,
 		checkedAt:   time.Now(),
-	})
-	accepted = true
-	if tool.note != "" {
-		logsink.Info("boot.decision", "%s", tool.note)
-	}
-	return nil
+	}, nil
 }
 
 func (a *App) probeToolSelection(ctx context.Context, client *llm.Client, entry providerEntry, model string) (capState, string) {
@@ -944,4 +975,24 @@ func (a *App) advertisedOrigin() string {
 		return ""
 	}
 	return a.dashboard.Origin()
+}
+
+func (a *App) wireSettingsHooks(h *dashboard.WSHandler) {
+	h.GetConfig = func() (*dashboard.ConfigState, error) { return a.configState(), nil }
+	h.SetConfig = a.applyConfigChange
+	h.GetSandbox = a.sandboxState
+	h.SetSandbox = a.setSandboxRoots
+	h.GetTools = func() ([]dashboard.ToolState, error) {
+		states := a.toolReg.ToolStates()
+		out := make([]dashboard.ToolState, len(states))
+		for i, ts := range states {
+			out[i] = dashboard.ToolState{Name: ts.Name, Description: ts.Description, Enabled: ts.Enabled}
+		}
+		return out, nil
+	}
+	h.SetToolFunc = a.setToolEnabled
+	h.ListLogs = a.listLogs
+	h.TailLogs = a.tailLogs
+	h.DatabaseExport = a.exportDatabase
+	h.UpdateCheck = a.checkForUpdateNow
 }

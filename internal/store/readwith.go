@@ -1,9 +1,21 @@
 package store
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+	"errors"
+)
 
-func (s *Store) ReadWith(fn func(db *sql.DB) error) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return fn(s.db)
+type Reader interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (s *Store) ReadWith(ctx context.Context, fn func(Reader) error) error {
+	snap, err := s.beginReadSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	err = fn(snap)
+	return errors.Join(err, snap.Close())
 }

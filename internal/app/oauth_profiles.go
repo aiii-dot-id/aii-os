@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net"
 	"net/http"
@@ -20,7 +21,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const (
@@ -31,11 +31,17 @@ var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 func (a *App) credentialsDir() (string, error) {
 	a.cfgMu.RLock()
-	defer a.cfgMu.RUnlock()
-	if a.cfg == nil || a.cfg.Identity.LedgerPath == "" {
+	if a.cfg == nil {
+		a.cfgMu.RUnlock()
 		return "", errNoIdentityDir
 	}
-	return filepath.Join(identityCredentials(a.cfg.Identity.LedgerPath), "profiles"), nil
+	configured := a.cfg.Identity
+	a.cfgMu.RUnlock()
+	ledgerPath := a.activeIdentity(configured).LedgerPath
+	if ledgerPath == "" {
+		return "", errNoIdentityDir
+	}
+	return filepath.Join(identityCredentials(ledgerPath), "profiles"), nil
 }
 
 func identityCredentials(ledgerPath string) string {
@@ -61,7 +67,7 @@ func (a *App) authorityClient(endpoint string) (*http.Client, error) {
 	want := strings.ToLower(u.Host)
 	base := a.oauthGuard
 	if base == nil {
-		base = tools.FetchGuard
+		base = firewall.FetchGuard
 	}
 	guard := func(ctx context.Context, raw string) error {
 		if gerr := base(ctx, raw); gerr != nil {
@@ -69,11 +75,11 @@ func (a *App) authorityClient(endpoint string) (*http.Client, error) {
 		}
 		gu, perr := url.Parse(raw)
 		if perr != nil || !strings.EqualFold(gu.Host, want) {
-			return fmt.Errorf("%w: a consent dials only its authority (%s)", tools.ErrEgressBlocked, want)
+			return fmt.Errorf("%w: a consent dials only its authority (%s)", firewall.ErrEgressBlocked, want)
 		}
 		return nil
 	}
-	return tools.GuardedClient(30*time.Second, guard, a.oauthTransport), nil
+	return firewall.GuardedClient(30*time.Second, guard, a.oauthTransport), nil
 }
 
 func (a *App) contractFor(name string, prof broker.AuthProfile) (oauth.OAuthParams, oauth.Provider, error) {
@@ -189,11 +195,11 @@ func (a *App) DisconnectProfile(name string) error {
 	if prof.TokenFile != "" {
 		dest, _ = filepath.Abs(prof.TokenFile)
 	}
-	a.signInMu.Lock()
-	for key, p := range a.signIns {
+	a.providers.custody.mu.Lock()
+	for key, p := range a.providers.custody.signIns {
 		if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
 			p.cancel()
-			delete(a.signIns, key)
+			delete(a.providers.custody.signIns, key)
 		}
 	}
 
@@ -207,20 +213,20 @@ func (a *App) DisconnectProfile(name string) error {
 	}
 	removed := removeErr == nil && len(revokeRaw) > 0
 	if removed {
-		delete(a.unrevoked, name)
+		delete(a.providers.custody.unrevoked, name)
 	}
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Unlock()
 	if removeErr != nil {
 		return removeErr
 	}
 	if removed {
 		if rerr := a.revokeRemoved(name, prof, revokeRaw); rerr != nil {
-			a.signInMu.Lock()
-			if a.unrevoked == nil {
-				a.unrevoked = map[string]bool{}
+			a.providers.custody.mu.Lock()
+			if a.providers.custody.unrevoked == nil {
+				a.providers.custody.unrevoked = map[string]bool{}
 			}
-			a.unrevoked[name] = true
-			a.signInMu.Unlock()
+			a.providers.custody.unrevoked[name] = true
+			a.providers.custody.mu.Unlock()
 			if !errors.Is(rerr, errRevocationNotOffered) {
 				logsink.Warn("oauth.error", "%s: the credential is removed here; the authority did not confirm revoking it: %v", name, rerr)
 			}
@@ -249,7 +255,7 @@ func (a *App) revokeRemoved(name string, prof broker.AuthProfile, raw []byte) er
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(a.signInBase(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 20*time.Second)
 	defer cancel()
 	return oauth.Revoke(ctx, client, tpl.RevokeURL, tok, params)
 }
@@ -269,7 +275,7 @@ func refreshTokenOf(raw []byte) string {
 		Refresh string `json:"refresh_token"`
 		Access  string `json:"access_token"`
 	}
-	if err := jsonUnmarshal(raw, &f); err != nil {
+	if err := json.Unmarshal(raw, &f); err != nil {
 		return ""
 	}
 	if f.Refresh != "" {
@@ -335,12 +341,12 @@ func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
 			scopes = append(scopes, s)
 		}
 	}
-	scopes = dedupe(scopes)
+	scopes = mergeDistinct(scopes)
 	if len(scopes) == 0 && len(tpl.BaseScopes) == 0 {
 		return errors.New("choose at least one service, or name a scope")
 	}
 
-	hosts := dedupe(trimAll(edit.Hosts))
+	hosts := mergeDistinct(trimAll(edit.Hosts))
 	for _, h := range hosts {
 		if _, _, err := splitHostPort(h); err != nil {
 			return fmt.Errorf("host %q: want host:port", h)
@@ -405,9 +411,9 @@ func (a *App) DeleteAuthProfile(name string) error {
 	if err := a.DisconnectProfile(name); err != nil {
 		return err
 	}
-	a.signInMu.Lock()
-	unconfirmed := a.unrevoked[name]
-	a.signInMu.Unlock()
+	a.providers.custody.mu.Lock()
+	unconfirmed := a.providers.custody.unrevoked[name]
+	a.providers.custody.mu.Unlock()
 
 	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { delete(m, name) }); err != nil {
 		return err
@@ -423,7 +429,6 @@ func (a *App) DeleteAuthProfile(name string) error {
 
 func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broker.AuthProfile)) error {
 	orig := a.configSnapshot()
-	candidate := orig
 	next := make(map[string]broker.AuthProfile, len(orig.Plugins.AuthProfiles)+1)
 	for k, v := range orig.Plugins.AuthProfiles {
 		next[k] = v
@@ -432,17 +437,8 @@ func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broke
 	if len(next) == 0 {
 		next = nil
 	}
-	candidate.Plugins.AuthProfiles = next
-	published := false
-	err := func() error {
 
-		a.signInMu.Lock()
-		defer a.signInMu.Unlock()
-		a.cfgMu.Lock()
-		defer a.cfgMu.Unlock()
-		if !reflectEqualConfig(*a.cfg, orig) {
-			return errors.New("config changed while the profile was checked; retry")
-		}
+	custody := func() error {
 		for name, prof := range orig.Plugins.AuthProfiles {
 			nextProf, exists := next[name]
 			if name != editedName && exists && reflect.DeepEqual(prof, nextProf) {
@@ -452,10 +448,10 @@ func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broke
 			if prof.TokenFile != "" {
 				dest, _ = filepath.Abs(prof.TokenFile)
 			}
-			for key, p := range a.signIns {
+			for key, p := range a.providers.custody.signIns {
 				if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
 					p.cancel()
-					delete(a.signIns, key)
+					delete(a.providers.custody.signIns, key)
 				}
 			}
 			if !exists {
@@ -471,26 +467,16 @@ func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broke
 				}
 			}
 		}
-		var perr error
-		published, perr = saveConfig(&candidate)
-		if perr != nil && !published {
-			return fmt.Errorf("persist config: %w", perr)
-		}
-		*a.cfg = candidate
-		for name := range a.unrevoked {
+		return nil
+	}
+	settle := func() {
+		for name := range a.providers.custody.unrevoked {
 			if _, ok := next[name]; !ok {
-				delete(a.unrevoked, name)
+				delete(a.providers.custody.unrevoked, name)
 			}
 		}
-		if perr != nil {
-			return fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", perr)
-		}
-		return nil
-	}()
-	if published {
-		a.profileChanged()
 	}
-	return err
+	return a.commitConfig(orig, func(c *Config) { c.Plugins.AuthProfiles = next }, custody, settle)
 }
 
 func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
@@ -541,9 +527,9 @@ func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
 		} else {
 			v.Hosts = append([]string(nil), p.Hosts...)
 		}
-		a.signInMu.Lock()
-		unconfirmed := a.unrevoked[n]
-		a.signInMu.Unlock()
+		a.providers.custody.mu.Lock()
+		unconfirmed := a.providers.custody.unrevoked[n]
+		a.providers.custody.mu.Unlock()
 		v.Revocation = revocationNote(providerLabel(p), cerr != nil || tpl.RevokeURL != "", unconfirmed)
 		var st oauth.ProfileState
 		v.State, st = profileState(p)
@@ -609,26 +595,6 @@ func sameSet(a, b []string) bool {
 	return true
 }
 
-func dedupe(in []string) []string {
-	var out []string
-	for _, s := range in {
-		if s == "" {
-			continue
-		}
-		dup := false
-		for _, o := range out {
-			if o == s {
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func trimAll(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
@@ -636,10 +602,6 @@ func trimAll(in []string) []string {
 	}
 	return out
 }
-
-func jsonUnmarshal(raw []byte, v interface{}) error { return json.Unmarshal(raw, v) }
-
-func reflectEqualConfig(a, b Config) bool { return reflect.DeepEqual(a, b) }
 
 func splitHostPort(hp string) (string, string, error) {
 	h, p, err := net.SplitHostPort(hp)
@@ -650,4 +612,13 @@ func splitHostPort(hp string) (string, string, error) {
 		return "", "", fmt.Errorf("want host:port")
 	}
 	return h, p, nil
+}
+
+func (a *App) wireAuthProfileHooks(h *dashboard.WSHandler) {
+	h.SignInProfile = a.SignInProfile
+	h.CompleteProfileSignIn = a.CompleteProfileSignIn
+	h.DeviceSignInProfile = a.DeviceSignInProfile
+	h.DisconnectProfile = a.DisconnectProfile
+	h.SetAuthProfile = a.SetAuthProfile
+	h.DeleteAuthProfile = a.DeleteAuthProfile
 }

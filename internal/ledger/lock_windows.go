@@ -10,22 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func lockLedgerFile(file *os.File) error {
-
-	const lockOffset = uint64(1) << 62
-	overlapped := windows.Overlapped{
-		Offset:     uint32(lockOffset & 0xffffffff),
-		OffsetHigh: uint32(lockOffset >> 32),
-	}
-	err := windows.LockFileEx(windows.Handle(file.Fd()),
-		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
-		0, 1, 0, &overlapped)
-	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
-		return fmt.Errorf("%w: %w", ErrLedgerInUse, err)
-	}
-	return err
-}
-
 func openLedgerForRewrap(path string) (*os.File, error) {
 	return openRewrapFile(path, windows.OPEN_EXISTING)
 }

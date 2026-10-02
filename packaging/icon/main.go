@@ -22,7 +22,6 @@ type pngAsset struct {
 func pngAssets() []pngAsset {
 	var out []pngAsset
 	for _, s := range []int{16, 24, 32, 48, 64, 128, 256, 512} {
-		s := s
 		out = append(out, pngAsset{fmt.Sprintf("packaging/deb/icons/hicolor/%dx%d/apps/aii-os.png", s, s), func(m *fimg) *image.NRGBA { return free(m, s) }})
 	}
 	out = append(out, pngAsset{"shells/ios/AIIOS/Assets.xcassets/AppIcon.appiconset/AppIcon.png", func(m *fimg) *image.NRGBA { return opaque(m, 1024) }})
@@ -30,7 +29,6 @@ func pngAssets() []pngAsset {
 		name string
 		px   int
 	}{{"mdpi", 108}, {"hdpi", 162}, {"xhdpi", 216}, {"xxhdpi", 324}, {"xxxhdpi", 432}} {
-		d := d
 		out = append(out, pngAsset{"shells/android/app/src/main/res/mipmap-" + d.name + "/ic_launcher_foreground.png", func(m *fimg) *image.NRGBA { return foreground(m, d.px) }})
 	}
 	out = append(out,
@@ -115,14 +113,13 @@ func main() {
 		file := fs.String("file", "", "the executable's file name")
 		desc := fs.String("description", product, "what the executable is, as Windows shows it")
 		out := fs.String("o", "", "where to write the object")
-		icoIn := fs.String("ico", icoPath, "the icon")
 		_ = fs.Parse(os.Args[2:])
 		if *file == "" || *out == "" {
 			err = errors.New("syso needs -file and -o")
 			break
 		}
 		var icoData, obj []byte
-		if icoData, err = os.ReadFile(*icoIn); err != nil {
+		if icoData, err = os.ReadFile(icoPath); err != nil {
 			break
 		}
 		if obj, err = syso(*arch, icoData, versionInfo{*version, *file, *desc}); err != nil {

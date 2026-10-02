@@ -62,7 +62,7 @@ function clearProbe() {
   probeRequestID = '';
 }
 function connectionLost(socket) {
-  if (ws !== socket) return; // an older socket closed after its replacement opened
+  if (ws !== socket) return;
   ws = null;
   clearProbe();
   if (S.interactionLost) S.interactionLost();
@@ -71,8 +71,6 @@ function connectionLost(socket) {
   S.connected = false;
   if (canRetry()) recoverAuthentication();
   $('send-btn').disabled = true;
-  // Pending operations belong to the lost socket even if it never
-  // reached onopen. Each owner clears its slot once; retries are quiet.
   voiceConnectionLost();
   renderVoice();
   setThinking(false);
@@ -85,23 +83,18 @@ function connectionLost(socket) {
   abandonSignIn();
   firstbootConnectionLost();
   projectsConnectionLost();
-  renderPresence(); // the standing offline state, without a new chat error per retry
+  renderPresence();
   scheduleReconnect();
 }
 function retireStalled(socket) {
   if (ws !== socket) return;
   socket.onopen = socket.onclose = socket.onmessage = null;
-  try { socket.close(); } catch (err) { /* already gone */ }
+  try { socket.close(); } catch (err) { }
   connectionLost(socket);
 }
-// Mobile browsers can resume with an OPEN socket whose network path died
-// while the page slept. A handler-independent probe proves transport is
-// useful; its answer triggers the same history/status readback a reload gets.
 function probeConnection() {
   if (!foreground() || !ws || probeTimer !== null) return;
   const socket = ws;
-  // A queued timeout may still execute after cancellation. It belongs
-  // only to this probe, never to a later foreground visit.
   const expire = () => {
     if (probeTimer !== timer || !foreground()) return;
     retireStalled(socket);
@@ -158,9 +151,6 @@ export function connect() {
     query('ui.overlay');
 
     query('config'); query('asks'); query('work');
-    // The mode (normal, SAFE, witness dark) is standing state, not a view's:
-    // every connection asks for it, so what the page shows never depends on
-    // which pages were visited first.
     query('continuity');
     renderPresence();
     go(S.view);
@@ -170,12 +160,6 @@ export function connect() {
   socket.onmessage = e => { if (ws === socket) onMessage(e); };
 }
 
-// A closed socket says only that transport ended. Ask the HTTP server
-// whether the HttpOnly cookie was refused before asking the operator for
-// a credential; a Wi-Fi change or server restart must remain a reconnect.
-// The server is asked whatever the page knew when it loaded: a token can
-// be asked for from Settings while this page is open, and a page that
-// trusted its load would reconnect forever into a wall it cannot see.
 export async function recoverAuthentication() {
   if (!canRetry() || S.tokenPrompted || authCheck) return;
   authCheck = true;
@@ -201,8 +185,6 @@ export async function recoverAuthentication() {
       });
       if (reply.ok) { authCheck = false; wake(); }
     } catch (e) {
-      // The existing bounded reconnect loop retries. Never ask a phone user
-      // for a CLI token, cache a stale bearer, or weaken server admission.
     } finally { authCheck = false; }
     return;
   }
@@ -211,12 +193,6 @@ export async function recoverAuthentication() {
   showManualAuthentication();
 }
 
-// tokenAct is one of Settings' token acts: /auth/rotate for a new token,
-// /auth/require to start asking for one. Its answer carries this browser's
-// new cookie. The act has already closed this page's socket by then, so
-// recovery stands aside until the answer is in — asking the person for a
-// token this browser is about to hold would be wrong — and then reconnects
-// on the new cookie.
 async function tokenAct(path) {
   if (authCheck) return { ok: false, text: 'A sign-in is in progress; try again when it is done.' };
   authCheck = true;
@@ -234,8 +210,6 @@ async function tokenAct(path) {
 S.rotateAccessToken = () => tokenAct('/auth/rotate');
 S.requireAccessToken = () => tokenAct('/auth/require');
 
-// Manual recovery belongs only to browsers without a native bridge. There is
-// one form and one in-flight request; cancelling the UI cannot undo a cookie.
 let authForm = null, authDismissed = false, authFormRevision = 0;
 function clearManualAuthentication() {
   authFormRevision++;
@@ -246,8 +220,6 @@ function showManualAuthentication() {
   if (!foreground()) return;
   if (!authForm) {
     const box = document.createElement('section'); box.id = 'dashboard-signin'; box.setAttribute('aria-label', 'Dashboard sign-in');
-    // No role of its own: #dashboard-auth is the live region, it was there
-    // first, and the words arrive and change inside it.
     const note = document.createElement('p');
     note.textContent = 'Sign in to this dashboard. Read the access token with aii dashboard-token on the AII OS machine, in its identity directory.';
     const reveal = document.createElement('button'); reveal.type = 'button'; reveal.className = 'btn ghost'; reveal.textContent = 'Sign in';
@@ -283,8 +255,6 @@ function showManualAuthentication() {
   }
 }
 
-// Admission failure says nothing about an existing turn. Reuse the bounded
-// foreground probe; repeated refusal frames coalesce behind its current read.
 S.reconcileTurn = () => wake();
 export function wake() {
   if (!foreground()) return;
@@ -313,8 +283,6 @@ export function send(obj) {
 }
 export function query(q, extra) {
   if (q === 'history') { if (S.interactionWake) S.interactionWake(); return ''; }
-  // Continuity belongs to a born identity. Connection, view and foreground
-  // reads share this gate; the first born status requests it below.
   if (q === 'continuity' && !S.identityExists) return '';
   return send(Object.assign({ type: 'query', query: q }, extra || {}));
 }
@@ -350,8 +318,6 @@ function onMessage(e) {
   if (e.data instanceof ArrayBuffer) { if (voiceIn.receiveFrame) voiceIn.receiveFrame(e.data); return; }
   let msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
   if (probeRequestID && msg.type === 'probe' && msg.request_id === probeRequestID) {
-    // A final reply may have overtaken this snapshot on the socket. Live
-    // turn events received since the probe was sent are the newer truth.
     const newerTurnEvent = receivedTurnRevision !== probeTurnRevision || !!S.thinking !== probeThinkingAtSend;
     clearProbe();
     if (!newerTurnEvent) setThinking(!!msg.turn_active);
@@ -374,12 +340,9 @@ function onMessage(e) {
     case 'voice_session': if (voiceIn.sessionState) voiceIn.sessionState(msg.voice_session || {}); break;
     case 'voice_event': {
       const ve = msg.voice_event || {};
-      // Voice keeps its playback/capture duties. Speech and late attribution
-      // wake the shared record; they never supply a second set of rows.
       if (ve.type === 'transcript_final' && ve.operator && (ve.text || '').trim()) {
         receivedTurnRevision++; S.operatorTurnBegins?.(); setThinking(true); finishHistoryReadback();
       }
-      // The annotation owner supplies the label on the next readback.
       if (ve.type === 'speaker_observation' && ve.refers_to) {
         finishHistoryReadback();
       }
@@ -398,9 +361,6 @@ function onMessage(e) {
   renderSteering([]);
 
       if (msg.role === 'identity') {
-        // The turn ends here, with the reply's own words: they are said once,
-        // by name. Nothing else in the conversation is: not a stream frame,
-        // a step, the operator's own words, or a page read back later.
         announceWords(S.stats?.name || 'identity', msg.message);
         speak(msg.message, msg.voice_reply);
         if (S.view === 'memory' || S.view === 'identity') query('identity');
@@ -413,7 +373,7 @@ function onMessage(e) {
       toolEventLive(msg.name, msg.args);
       if (msg.name === 'work') query('work');
       break;
-    case 'history': break; // legacy frames cannot author this page’s history
+    case 'history': break;
     case 'interaction_changed': if (S.interactionChanged) S.interactionChanged(); break;
     case 'interaction_page': if (S.interactionPage) S.interactionPage(msg.interaction_page, msg.request_id, msg.interaction_window); break;
     case 'interaction_error': if (S.interactionError) S.interactionError(msg.interaction_reason, msg.message, msg.request_id); break;
@@ -475,7 +435,6 @@ function onMessage(e) {
     }
     case 'providers': S.providers = msg.providers || []; S.brokenProviders = msg.broken_providers || []; S.skipSignInWithValidToken = msg.skip_signin_with_valid_token !== false; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
     case 'provider_signin': case 'profile_signin': acceptSignIn(msg); break;
-    case 'profile_device': if (S.onProfileDevice) { S.onProfileDevice(msg.device); } break;
     case 'backups': applyBackups(msg.backups, msg.request_id); break;
     case 'restore_new': applyRestoreNew(msg.restore_new); break;
     case 'update_check': S.update = msg.update || null; if (S.renderUpdate) S.renderUpdate(); if (S.renderUpdateChip) S.renderUpdateChip(); break;
@@ -496,7 +455,7 @@ function onMessage(e) {
     case 'outbox': if (msg.outbox?.length) finishHistoryReadback(); break;
     case 'held_mail': acceptMailRepair(msg); break;
     case 'messages': acceptMessages(msg); break;
-    case 'steered': break; // admission is pending until the recording receipt
+    case 'steered': break;
     case 'steering': S.steering = msg.pending || []; renderSteering(S.steering); break;
     case 'cancelled': receivedTurnRevision++; setThinking(false); finishHistoryReadback(); break;
     case 'error': onError(msg.message || 'unknown error', msg.request_id, msg.provider); break;
@@ -508,9 +467,6 @@ function onStats(stats) {
   S.update = (stats && stats.update) || null;
   if (S.renderUpdate) S.renderUpdate();
   if (S.renderUpdateChip) S.renderUpdateChip();
-  // One notice per version, the first time the status carries it —
-  // the reminder a package-managed install (Ubuntu) would otherwise
-  // never flash; the sidebar chip stays as the standing one.
   const u = S.update, seen = u && (u.installed_version || u.available_version);
   if (seen && seen !== S.noticedUpdate) {
     S.noticedUpdate = seen;
@@ -535,7 +491,7 @@ function onError(text, requestID, provider) {
   abandonSignIn(requestID);
   if (!requestID) {
     receivedTurnRevision++;
-    setThinking(false); // an unrelated query must not end an active turn
+    setThinking(false);
     finishHistoryReadback();
   }
   if (S.stats && !S.identityExists) {
@@ -552,7 +508,7 @@ function onError(text, requestID, provider) {
     return;
   }
   if (rejectSettingsConfig(text, requestID)) { if (S.view === 'plugins') renderPlugins(); return; }
-  if (rejectSpeechLists(requestID, text)) return; // said on the card, beside the field it was asked for
+  if (rejectSpeechLists(requestID, text)) return;
   if (rejectProviderSave(text, requestID) || rejectSubstrateConfig(text, requestID) || rejectCreate(requestID) || rejectFocusSave(requestID) || rejectContractSave(requestID)) { toast(text); return; }
   if (requestID) { toast(text); return; }
   if (S.view === 'chat') sysLine(text, true); else toast(text);

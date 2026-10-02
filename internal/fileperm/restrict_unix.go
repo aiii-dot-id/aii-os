@@ -15,3 +15,7 @@ func IsRestrictedToOwner(path string) (bool, error) {
 	}
 	return fi.Mode().Perm()&0o077 == 0, nil
 }
+
+func IsClosedToOthers(path string) (bool, error) {
+	return IsRestrictedToOwner(path)
+}

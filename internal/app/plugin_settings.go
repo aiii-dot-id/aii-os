@@ -34,7 +34,7 @@ func (a *App) applyPluginSetting(cfg *Config, key string, v interface{}) error {
 	if ap == nil {
 		return fmt.Errorf("%s: no active plugin %q", key, id)
 	}
-	decl := settingDecl(ap, setting)
+	decl := ap.Setting(setting)
 
 	account := asksForAccount(decl)
 	previous, _ := cfg.Plugins.Settings[id][setting].(string)
@@ -193,7 +193,7 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 
 		var orphans []string
 		for k := range values {
-			if !pluginhost.DeclaresSetting(ap.Settings, k) {
+			if ap.Setting(k) == nil {
 				orphans = append(orphans, k)
 			}
 		}

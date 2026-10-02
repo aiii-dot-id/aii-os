@@ -1,21 +1,15 @@
 package app
 
-import (
-	"encoding/json"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
-)
-
-func (a *App) acceptSpeakerObservation(ev pluginhost.Event) bool {
-	var body speakerObservation
-	if json.Unmarshal(ev.Raw, &body) != nil {
+func (a *App) acceptSpeakerObservation(ev voiceFrame) bool {
+	if ev.err != nil {
 		return true
 	}
-	segmented := declaresSpeakerTrack(ev.Raw) || body.SpeakerUUID != "" || body.RegistryRevision != "" || body.Continuity != "" || body.DisplayLabel != ""
-	value, ok := a.voiceSessions.Load(ev.SessionID)
-	if !ok {
+	body := ev.observation()
+	segmented := ev.body.TrackDeclared || body.SpeakerUUID != "" || body.RegistryRevision != "" || body.Continuity != "" || body.DisplayLabel != ""
+	h := a.voiceHandle(ev.SessionID)
+	if h == nil {
 		return !segmented
 	}
-	h := value.(*voiceHandle)
 	h.heldMu.Lock()
 	held := h.held[body.RefersTo]
 	var expected speakerSegment
@@ -58,9 +52,9 @@ func (a *App) acceptSpeakerObservation(ev pluginhost.Event) bool {
 
 func decimalLess(a, b string) bool { return len(a) < len(b) || len(a) == len(b) && a < b }
 
-func (a *App) rememberSpeakerRevision(h *voiceHandle, ev pluginhost.Event) {
-	var body speakerObservation
-	if json.Unmarshal(ev.Raw, &body) != nil || !body.speakerSegment.valid() {
+func (a *App) rememberSpeakerRevision(h *voiceHandle, ev voiceFrame) {
+	body := ev.observation()
+	if ev.err != nil || !body.speakerSegment.valid() {
 		return
 	}
 	h.finalsMu.Lock()

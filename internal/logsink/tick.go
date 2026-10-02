@@ -72,7 +72,7 @@ func FlushDigest() {
 	if !since.IsZero() {
 		span = fmt.Sprintf("since %s — ", since.Format("15:04"))
 	}
-	Info("quiet", "%s%s", span, strings.Join(parts, " · "))
+	Info("logs.pass", "%s%s", span, strings.Join(parts, " · "))
 }
 
 func resetTicks() {

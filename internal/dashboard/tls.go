@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
-	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
 
 const (
@@ -245,35 +244,7 @@ func mintLeaf(ca *x509.Certificate, caKey *ecdsa.PrivateKey, host, certPath, key
 }
 
 func writePEM(path, blockType string, der []byte, mode os.FileMode) error {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-
-	if mode&0o077 == 0 {
-		if err := fileperm.RestrictToOwner(f); err != nil {
-			f.Close()
-			return fmt.Errorf("protect %s: %w", filepath.Base(path), err)
-		}
-	}
-	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
-	}
-	if err := pem.Encode(f, &pem.Block{Type: blockType, Bytes: der}); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	published, err := atomicfile.Replace(tmp, path)
+	published, err := atomicfile.WriteReplace(path, pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), mode)
 	if err != nil {
 		if published {
 

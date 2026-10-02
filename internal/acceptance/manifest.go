@@ -1,11 +1,11 @@
 package acceptance
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,14 +87,11 @@ func LoadManifest(path string) (*Manifest, error) {
 
 func ParseManifest(blob []byte) (*Manifest, error) {
 	var m Manifest
-	dec := json.NewDecoder(bytes.NewReader(blob))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
-		return nil, err
-	}
 
-	if dec.More() {
+	if err := canonicaljson.DecodeStrict(blob, &m); errors.Is(err, canonicaljson.ErrTrailingContent) {
 		return nil, fmt.Errorf("content after the manifest object")
+	} else if err != nil {
+		return nil, err
 	}
 	sum := sha256.Sum256(blob)
 	m.SHA256 = hex.EncodeToString(sum[:])

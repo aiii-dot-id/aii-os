@@ -1,12 +1,12 @@
 package speecheval
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/audio"
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,14 +53,11 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 	name := filepath.Base(path)
 	var m Manifest
-	dec := json.NewDecoder(bytes.NewReader(blob))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
-	}
 
-	if dec.More() {
+	if err := canonicaljson.DecodeStrict(blob, &m); errors.Is(err, canonicaljson.ErrTrailingContent) {
 		return nil, fmt.Errorf("%s: content after the manifest object", name)
+	} else if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	sum := sha256.Sum256(blob)
 	m.SourceSHA256 = hex.EncodeToString(sum[:])
@@ -192,10 +189,14 @@ func (m *Manifest) validateClips() error {
 }
 
 func (m *Manifest) VerifyClip(dir string, c Clip) error {
-	blob, err := os.ReadFile(filepath.Join(dir, c.File))
+	blob, err := readClip(filepath.Join(dir, c.File))
 	if err != nil {
 		return err
 	}
+	return m.VerifyBytes(c, blob)
+}
+
+func (m *Manifest) VerifyBytes(c Clip, blob []byte) error {
 	sum := sha256.Sum256(blob)
 	if got := hex.EncodeToString(sum[:]); got != strings.ToLower(c.SHA256) {
 		return fmt.Errorf("%s has changed since the corpus was frozen (have %s, want %s)", c.File, got[:12], strings.ToLower(c.SHA256)[:12])
@@ -224,55 +225,27 @@ type WAV struct {
 }
 
 func DecodeWAV(blob []byte) (WAV, error) {
-	var w WAV
-	if len(blob) < 12 || string(blob[0:4]) != "RIFF" || string(blob[8:12]) != "WAVE" {
-		return w, fmt.Errorf("not a RIFF/WAVE file")
-	}
-	var bits int
-	var haveFmt bool
-	for off := 12; off+8 <= len(blob); {
-		id := string(blob[off : off+4])
-		size := int(binary.LittleEndian.Uint32(blob[off+4 : off+8]))
-		body := off + 8
-		if size < 0 || body+size > len(blob) {
-			return w, fmt.Errorf("chunk %q runs past the end of the file", id)
-		}
-		switch id {
-		case "fmt ":
-			if size < 16 {
-				return w, fmt.Errorf("fmt chunk is %d bytes, need 16", size)
-			}
-			format := binary.LittleEndian.Uint16(blob[body : body+2])
-			if format != 1 {
-				return w, fmt.Errorf("audio format %d is not uncompressed PCM", format)
-			}
-			w.Channels = int(binary.LittleEndian.Uint16(blob[body+2 : body+4]))
-			w.SampleRate = int(binary.LittleEndian.Uint32(blob[body+4 : body+8]))
-			bits = int(binary.LittleEndian.Uint16(blob[body+14 : body+16]))
-			haveFmt = true
-		case "data":
-			w.PCM = blob[body : body+size]
-		}
-		off = body + size
-		if size%2 == 1 {
-			off++
-		}
+	a, err := audio.ReadWAV(blob)
+	if err != nil {
+		return WAV{}, err
 	}
 	switch {
-	case !haveFmt:
-		return w, fmt.Errorf("no fmt chunk")
-	case w.PCM == nil:
-		return w, fmt.Errorf("no data chunk")
-	case bits != 16:
-		return w, fmt.Errorf("%d-bit samples; the corpus is 16-bit PCM", bits)
-	case w.Channels < 1 || w.Channels > 2:
-		return w, fmt.Errorf("%d channels", w.Channels)
-	case w.SampleRate <= 0:
-		return w, fmt.Errorf("sample rate %d", w.SampleRate)
-	case len(w.PCM)%(2*w.Channels) != 0:
-		return w, fmt.Errorf("%d bytes of PCM is not a whole number of %d-channel frames", len(w.PCM), w.Channels)
+	case a.Tag != 1:
+		return WAV{}, fmt.Errorf("audio format %d is not uncompressed PCM", a.Tag)
+	case a.Bits != 16:
+		return WAV{}, fmt.Errorf("%d-bit samples; the corpus is 16-bit PCM", a.Bits)
+	case a.Format.Channels < 1 || a.Format.Channels > 2:
+		return WAV{}, fmt.Errorf("%d channels", a.Format.Channels)
+	case a.Format.Rate <= 0:
+		return WAV{}, fmt.Errorf("sample rate %d", a.Format.Rate)
+	case uint32(len(a.PCM)) != a.Size:
+		return WAV{}, fmt.Errorf("the data chunk declares %d bytes and the file holds %d", a.Size, len(a.PCM))
+	case len(a.PCM)%a.Format.BytesPerSample() != 0:
+		return WAV{}, fmt.Errorf("%d bytes of PCM is not a whole number of %d-channel frames", len(a.PCM), a.Format.Channels)
 	}
-	frames := len(w.PCM) / (2 * w.Channels)
-	w.Duration = time.Duration(float64(frames) / float64(w.SampleRate) * float64(time.Second))
-	return w, nil
+	frames := len(a.PCM) / a.Format.BytesPerSample()
+	return WAV{
+		PCM: a.PCM, SampleRate: a.Format.Rate, Channels: a.Format.Channels,
+		Duration: time.Duration(float64(frames) / float64(a.Format.Rate) * float64(time.Second)),
+	}, nil
 }

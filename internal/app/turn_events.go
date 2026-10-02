@@ -24,8 +24,8 @@ func eventExcerpt(s string) string {
 	return s + "\n[Excerpt; inspect the retained source row for the complete content.]"
 }
 
-func (a *App) appendPendingEvents(parts *[]string, current []string) error {
-	events, err := a.store.PendingTurnEvents(context.Background())
+func (a *App) appendPendingEvents(ctx context.Context, parts *[]string, current []string) error {
+	events, err := a.store.PendingTurnEvents(ctx)
 	if err != nil {
 		return fmt.Errorf("load pending turn events: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,9 +20,9 @@ import (
 type pluginRuntime struct{ a *App }
 
 type running struct {
-	id, version, dir, pkg, hash, kind string
-	ap                                *pluginhost.ActivePlugin
-	sec                               *sections.Section
+	id, version, dir, pkg, hash string
+	ap                          *pluginhost.ActivePlugin
+	sec                         *sections.Section
 
 	watching atomic.Bool
 
@@ -89,6 +90,8 @@ func (h pluginRuntime) Prepare(ctx context.Context, ev pluginfacility.Evidence) 
 	if res.Manifest.VariantPreference != nil {
 		cfg := h.a.configSnapshot()
 		opts.SelectionPolicy = pluginAdmissionPolicy(cfg)
+
+		opts.Replacing = h.a.servingProfile(ev.ID)
 	}
 	staged, err := pluginhost.StagePreparedContext(ctx, ev.Package, res, opts)
 	if err != nil {
@@ -109,6 +112,13 @@ func (h pluginRuntime) Prepare(ctx context.Context, ev pluginfacility.Evidence) 
 	}
 	out := pluginfacility.Prepared{Evidence: ev, Present: staged.Present(), Handle: staged,
 		HostBytes: host, DeviceBytes: sel.DeviceBytes, Backend: sel.Backend}
+	if res.Manifest.VariantPreference != nil {
+
+		out.Selection = &pluginfacility.Selection{Variant: sel.VariantID, Kept: sel.Kept}
+		for _, r := range sel.ResourceRefusals {
+			out.Selection.Excluded = append(out.Selection.Excluded, pluginfacility.Exclusion{Variant: r.VariantID, Reasons: append([]string(nil), r.Missing...)})
+		}
+	}
 	if st, ok := h.acquireStatus(ev.ID); ok {
 		out.Material = *st
 	}
@@ -166,11 +176,10 @@ func (h pluginRuntime) Start(ctx context.Context, p pluginfacility.Prepared, lea
 		switch {
 		case serr == nil:
 			sec.Allowed = lease.Authorized
-			out.kind, out.sec = "section", sec
+			out.sec = sec
 			return out, nil
 		case errors.Is(serr, sections.ErrAssetNotSection):
 
-			out.kind = "asset"
 			return out, nil
 		default:
 			return nil, serr
@@ -181,7 +190,7 @@ func (h pluginRuntime) Start(ctx context.Context, p pluginfacility.Prepared, lea
 			return nil, err
 		}
 		ap.Authorize(lease.Authorized)
-		out.kind, out.ap = "plugin", ap
+		out.ap = ap
 		return out, nil
 	}
 	return nil, fmt.Errorf("pluginhost: %s was not prepared", ev.ID)
@@ -203,8 +212,9 @@ func (h pluginRuntime) Redirect(from, to pluginfacility.Running) error {
 		return fmt.Errorf("pluginhost: nothing to admit")
 	}
 	prev, _ := from.(*running)
-	switch next.kind {
-	case "plugin":
+
+	switch {
+	case next.ap != nil:
 		var prevAp *pluginhost.ActivePlugin
 		if prev != nil {
 			prevAp = prev.ap
@@ -214,7 +224,7 @@ func (h pluginRuntime) Redirect(from, to pluginfacility.Running) error {
 		}
 		next.admitted.Store(true)
 		h.a.adoptPlugin(next, prevAp)
-	case "section":
+	case next.sec != nil:
 
 		if h.a.sections != nil {
 			var prevSec *sections.Section
@@ -233,6 +243,8 @@ func (h pluginRuntime) Redirect(from, to pluginfacility.Running) error {
 	h.a.afterPluginChange()
 	return nil
 }
+
+const pluginStopBudget = 5 * time.Second
 
 func (h pluginRuntime) Stop(ctx context.Context, r pluginfacility.Running) (pluginfacility.Retirement, error) {
 	act, ok := r.(*running)
@@ -264,7 +276,7 @@ func (h pluginRuntime) Stop(ctx context.Context, r pluginfacility.Running) (plug
 			Residue: []string{"a resident session is open; the engine runs until it closes or its child exits"}}, nil
 	}
 
-	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, pluginStopBudget)
 	defer cancel()
 	stop := ap.CloseQuiet
 	if act.admitted.Load() {
@@ -275,6 +287,33 @@ func (h pluginRuntime) Stop(ctx context.Context, r pluginfacility.Running) (plug
 	}
 	logsink.Info("plugins.end", "plugin %s stopped", act.id)
 	return pluginfacility.Retirement{Established: true}, nil
+}
+
+type pluginState struct {
+	pluginMu sync.RWMutex
+
+	plugins      []*pluginhost.ActivePlugin
+	retiring     []*pluginhost.ActivePlugin
+	sectionActs  []*sections.Section
+	activeMeta   map[string]activePkgMeta
+	pluginLife   map[string]pluginLifecycle
+	policyRev    uint64
+	policyFinger string
+	trustGen     uint64
+	subscribers  map[string]*pluginSubscriber
+	facility     *pluginfacility.Facility
+	facilityOnce sync.Once
+}
+
+func (a *App) servingProfile(id string) *pluginhost.AcceleratorProfile {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	meta, ok := a.activeMeta[id]
+	if !ok || meta.owner == nil || meta.owner.ap == nil || meta.owner.ap.Accelerator == nil {
+		return nil
+	}
+	p := *meta.owner.ap.Accelerator
+	return &p
 }
 
 func (a *App) adoptPlugin(next *running, prev *pluginhost.ActivePlugin) {
@@ -292,15 +331,16 @@ func (a *App) adoptPlugin(next *running, prev *pluginhost.ActivePlugin) {
 	if !replaced {
 		a.plugins = append(a.plugins, next.ap)
 	}
-	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, hash: next.hash, kind: "plugin", owner: next}
+	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, owner: next}
 
-	a.startSubscriber(next.ap)
+	a.startSubscriberLocked(next.ap)
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
 	if prev != nil {
 		logsink.Info("plugins.decision", "plugin %s: updated %s -> %s side by side; draining the predecessor", next.id, prev.Version, next.version)
 	} else {
-		logsink.Info("plugins.start", "plugin %s activated (%s, %s, variant %s): tools %v", next.ap.ID, next.ap.Tier, next.ap.Mode, next.ap.VariantID, next.ap.Tools())
+		logsink.Info("plugins.start", "plugin %s activated (%s, %s, variant %s, %s): tools %v", next.ap.ID, next.ap.Tier, next.ap.Mode, next.ap.VariantID,
+			activationPosture(next.ap.Capabilities, a.pluginGranted(next.ap.ID)), next.ap.Tools())
 	}
 }
 
@@ -318,7 +358,7 @@ func (a *App) adoptSection(next *running, prev *running) {
 		}
 	}
 	a.sectionActs = append(a.sectionActs, next.sec)
-	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, hash: next.hash, kind: "section", owner: next}
+	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, owner: next}
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
 	logsink.Info("plugins.start", "section %s activated (slot %s): commands %v topics %v", next.sec.PackageID, next.sec.Decl.Slot, next.sec.Decl.Commands, next.sec.Decl.Topics)
@@ -329,7 +369,7 @@ func (a *App) adoptAsset(next *running) {
 	if a.activeMeta == nil {
 		a.activeMeta = make(map[string]activePkgMeta)
 	}
-	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, hash: next.hash, kind: "asset", owner: next}
+	a.activeMeta[next.id] = activePkgMeta{dir: next.dir, pkg: next.pkg, owner: next}
 	a.pluginMu.Unlock()
 	a.markPlugin(next.id, next.version, "", "")
 	logsink.Info("plugins.refusal", "plugin %s: kind=asset without section.json — nothing activates for it yet", next.pkg)
@@ -364,6 +404,7 @@ func (a *App) watchPinnedPredecessor(act *running, v *pluginhost.VoiceSession) {
 	ap := act.ap
 	logsink.Info("plugins.decision", "plugin %s: %s holds an open session — pinned until it closes or its process exits", act.id, ap.Version)
 	a.retire(ap)
+
 	go func() {
 		released := v.PinReleased()
 		untrusted := v.Untrusted()
@@ -373,7 +414,7 @@ func (a *App) watchPinnedPredecessor(act *running, v *pluginhost.VoiceSession) {
 				if !a.claimRetiring(ap) {
 					return
 				}
-				cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				cctx, cancel := context.WithTimeout(context.Background(), pluginStopBudget)
 				if cerr := ap.CloseQuiet(cctx); cerr != nil {
 					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s stop: %v", act.id, ap.Version, cerr)
 				}
@@ -387,7 +428,7 @@ func (a *App) watchPinnedPredecessor(act *running, v *pluginhost.VoiceSession) {
 
 				untrusted = nil
 				logsink.Warn("plugins.refusal", "plugin %s: pinned predecessor %s: session untrusted (%s) — asking the engine to abort", act.id, ap.Version, v.FaultReason())
-				actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
+				actx, acancel := context.WithTimeout(context.Background(), pluginStopBudget)
 				if cerr := v.Close(actx, "abort", "host fault: "+v.FaultReason()); cerr != nil {
 					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s: abort not admitted (%v); waiting for the reap", act.id, ap.Version, cerr)
 				}
@@ -402,7 +443,7 @@ func (a *App) pluginFacility() *pluginfacility.Facility {
 		if a.facility != nil {
 			return
 		}
-		a.facility = pluginfacility.New(pluginfacility.Config{
+		f := pluginfacility.New(pluginfacility.Config{
 			Runtime:  pluginRuntime{a: a},
 			Capacity: hostCapacity{},
 			Discover: a.discoverPlugins,
@@ -411,6 +452,9 @@ func (a *App) pluginFacility() *pluginfacility.Facility {
 				logsink.Info("plugins.decision", format, args...)
 			},
 		})
+		a.pluginMu.Lock()
+		a.facility = f
+		a.pluginMu.Unlock()
 	})
 	return a.facility
 }
@@ -462,13 +506,17 @@ func safeHoldSentence(reason string) string {
 }
 
 func (a *App) afterPluginChange() {
+	a.wakeSweep()
+	a.pluginsChanged()
+}
+
+func (a *App) wakeSweep() {
 	if a.bgCtx != nil {
 		select {
 		case a.sweepPoke <- struct{}{}:
 		default:
 		}
 	}
-	a.pluginsChanged()
 }
 
 func (a *App) watchFacility(ctx context.Context) {
@@ -552,7 +600,7 @@ func lifecycleView(v pluginfacility.InstanceView) *dashboard.PluginLifecycleView
 		out.RetryAt = v.RetryAt.UTC().Format(time.RFC3339)
 	}
 	for _, a := range v.Activations {
-		av := dashboard.PluginActivationView{Gen: uint64(a.Gen), Role: string(a.Role), Version: a.Version}
+		av := dashboard.PluginActivationView{Gen: uint64(a.Gen), Role: string(a.Role), Version: a.Version, Selection: selectionView(a.Selection)}
 		if !a.Since.IsZero() {
 			av.Since = a.Since.UTC().Format(time.RFC3339)
 		}
@@ -566,6 +614,26 @@ func lifecycleView(v pluginfacility.InstanceView) *dashboard.PluginLifecycleView
 	}
 	out.Refusal = refusalView(v.Refusal)
 	return out
+}
+
+func selectionView(s *pluginfacility.Selection) *dashboard.PluginSelectionView {
+	if s == nil {
+		return nil
+	}
+	out := &dashboard.PluginSelectionView{Variant: s.Variant, Kept: s.Kept}
+	for _, e := range s.Excluded {
+		out.Excluded = append(out.Excluded, dashboard.PluginExclusionView{Variant: e.Variant, Reasons: append([]string(nil), e.Reasons...)})
+	}
+	return out
+}
+
+func latestSelection(v pluginfacility.InstanceView) *dashboard.PluginSelectionView {
+	for i := len(v.Activations) - 1; i >= 0; i-- {
+		if s := v.Activations[i].Selection; s != nil {
+			return selectionView(s)
+		}
+	}
+	return nil
 }
 
 func refusalView(r *pluginfacility.Refusal) *dashboard.PluginRefusalView {

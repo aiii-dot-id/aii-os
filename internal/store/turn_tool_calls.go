@@ -5,11 +5,6 @@ import (
 	"strings"
 )
 
-type ToolCall struct {
-	Tool    string
-	Outcome string
-}
-
 func (s *Store) TurnToolCalls(turnIDs []string) (map[string][]ToolCall, error) {
 	out := map[string][]ToolCall{}
 	var args []interface{}

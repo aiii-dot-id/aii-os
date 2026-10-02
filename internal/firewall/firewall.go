@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 )
 
 type RuleKind string
@@ -35,17 +34,8 @@ type Verdict struct {
 	Tool    string
 }
 
-type DenialRecord struct {
-	Time   time.Time `json:"time"`
-	Tool   string    `json:"tool"`
-	Path   string    `json:"path"`
-	RuleID string    `json:"rule_id"`
-	Reason string    `json:"reason"`
-}
-
 type Policy struct {
 	rules []*Rule
-	audit []DenialRecord
 	mu    sync.RWMutex
 }
 
@@ -61,9 +51,6 @@ func DefaultPolicy() *Policy {
 				Enforced: true},
 			{ID: "sub.db", Kind: KindSubstrate, Pattern: "aii.db",
 				Reason:   "Your database is a projection of the ledger — modifying it desyncs you from your own history.",
-				Enforced: true},
-			{ID: "sub.binary", Kind: KindSubstrate, Pattern: "aii-os",
-				Reason:   "Your runtime binary is your body — self-modification is not available to you.",
 				Enforced: true},
 
 			{ID: "sub.config", Kind: KindSubstrate, Pattern: "config.json",
@@ -260,71 +247,6 @@ func covers(r *Rule, pathLower string) bool {
 	return true
 }
 
-func (p *Policy) DenyPatterns() []string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	var out []string
-	for _, r := range p.rules {
-		if r.Enforced && r.Kind == KindSubstrate && r.Pattern != "" {
-			out = append(out, r.Pattern)
-		}
-	}
-	return out
-}
-
-func (p *Policy) AddRule(r *Rule) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.rules = append(p.rules, r)
-}
-
-func (p *Policy) Record(tool, path string, rule *Rule) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.audit = append(p.audit, DenialRecord{
-		Time:   time.Now().UTC(),
-		Tool:   tool,
-		Path:   path,
-		RuleID: rule.ID,
-		Reason: rule.Reason,
-	})
-}
-
-func (p *Policy) Audit() []DenialRecord {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	out := make([]DenialRecord, len(p.audit))
-	copy(out, p.audit)
-	return out
-}
-
-func (p *Policy) Rules() []*Rule {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	out := make([]*Rule, len(p.rules))
-	copy(out, p.rules)
-	return out
-}
-
-func (p *Policy) EnforcementSummary() map[string]interface{} {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	summary := map[string]interface{}{
-		"rules_total":    len(p.rules),
-		"rules_enforced": 0,
-		"denials_total":  len(p.audit),
-	}
-	byKind := map[string]int{}
-	for _, r := range p.rules {
-		if r.Enforced {
-			summary["rules_enforced"] = summary["rules_enforced"].(int) + 1
-		}
-		byKind[string(r.Kind)]++
-	}
-	summary["by_kind"] = byKind
-	return summary
-}
-
 func (p *Policy) LocalFloor() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -380,8 +302,4 @@ func (p *Policy) hasBoundary() bool {
 		}
 	}
 	return false
-}
-
-func DefaultLocalFloor() string {
-	return DefaultPolicy().LocalFloor()
 }

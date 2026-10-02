@@ -40,8 +40,8 @@ func NewPlatform(t testing.TB) *Platform {
 	now := time.Now().UTC()
 	keyID := "aiii_platform_test_" + mlKp.Fingerprint()[:12]
 	pubB64 := base64.StdEncoding.EncodeToString(pub.Bytes())
-	mlFp := sigenvelope.SHA256Prefixed([]byte(witness.FingerprintMaterial(witness.AlgMLDSA87, keyID, mlKp.PublicKeyB64())))
-	slhFp := sigenvelope.SHA256Prefixed([]byte(witness.FingerprintMaterial(witness.AlgSLHDSASHA2256, keyID, pubB64)))
+	mlFp := sigenvelope.PublicKeyFingerprint(witness.AlgMLDSA87, keyID, mlKp.PublicKeyB64())
+	slhFp := sigenvelope.PublicKeyFingerprint(witness.AlgSLHDSASHA2256, keyID, pubB64)
 	return &Platform{
 		Env: &witness.PublicKeyEnvelope{
 			V: 1, Kind: witness.PublicKeyEnvelopeKind, KeyID: keyID, KeyType: "platform", Profile: witness.ProfileRoot,
@@ -102,13 +102,13 @@ func (p *Platform) SignManifest(t testing.TB, witnessEnv *witness.PublicKeyEnvel
 	}
 	payloadSHA := sigenvelope.SHA256Prefixed(canonicalPayload)
 
-	mlFp := sigenvelope.SHA256Prefixed([]byte(witness.FingerprintMaterial(witness.AlgMLDSA87, p.Env.KeyID, p.mlKp.PublicKeyB64())))
+	mlFp := sigenvelope.PublicKeyFingerprint(witness.AlgMLDSA87, p.Env.KeyID, p.mlKp.PublicKeyB64())
 	in := sigenvelope.SignatureInput("witness.public_key_manifest", witness.ProfileRoot, witness.AlgMLDSA87, p.Env.KeyID, mlFp, payloadSHA)
 	sig, err := crypto.Sign(p.mlKp, []byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	slhFp := sigenvelope.SHA256Prefixed([]byte(witness.FingerprintMaterial(witness.AlgSLHDSASHA2256, p.Env.KeyID, p.slhPubB64)))
+	slhFp := sigenvelope.PublicKeyFingerprint(witness.AlgSLHDSASHA2256, p.Env.KeyID, p.slhPubB64)
 	in2 := sigenvelope.SignatureInput("witness.public_key_manifest", witness.ProfileRoot, witness.AlgSLHDSASHA2256, p.Env.KeyID, slhFp, payloadSHA)
 	sig2, err := p.slhSk.Sign(rand.Reader, []byte(in2), nil)
 	if err != nil {
@@ -151,6 +151,13 @@ type Witness struct {
 	mu        sync.Mutex
 	rows      map[string]*row
 	Bookmarks int
+	during    func()
+}
+
+func (w *Witness) Slowly(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.during = fn
 }
 
 func NewWitness(t testing.TB, p *Platform) *Witness {
@@ -166,7 +173,7 @@ func NewWitness(t testing.TB, p *Platform) *Witness {
 		CreatedAt: now.Format(time.RFC3339), NotBefore: now.Add(-time.Hour).Format(time.RFC3339), ExpiresAt: now.Add(24 * time.Hour).Format(time.RFC3339),
 		Keys: []witness.PublicKeyMaterial{{
 			Alg: witness.AlgMLDSA87, PublicKeyB64: kp.PublicKeyB64(),
-			PublicKeyFingerprint: sigenvelope.SHA256Prefixed([]byte(witness.FingerprintMaterial(witness.AlgMLDSA87, keyID, kp.PublicKeyB64()))),
+			PublicKeyFingerprint: sigenvelope.PublicKeyFingerprint(witness.AlgMLDSA87, keyID, kp.PublicKeyB64()),
 		}},
 	}
 	w := &Witness{Env: env, KeyID: keyID, kp: kp, rows: map[string]*row{}}
@@ -217,17 +224,17 @@ func (w *Witness) Holds() (ordinal int64, identities int) {
 	return ordinal, len(w.rows)
 }
 
-func (w *Witness) Reset() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.rows = map[string]*row{}
-}
-
 func (w *Witness) handleBookmark(rw http.ResponseWriter, r *http.Request) {
 	var req witness.WitnessRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(rw, "malformed", http.StatusBadRequest)
 		return
+	}
+	w.mu.Lock()
+	during := w.during
+	w.mu.Unlock()
+	if during != nil {
+		during()
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -281,11 +288,6 @@ func (w *Witness) handleBookmark(rw http.ResponseWriter, r *http.Request) {
 	receipt := w.sign(req, st.ordinal, st.hash)
 	st.ordinal, st.hash, st.receipt = req.LedgerOrdinal, req.LedgerHash, receipt
 	writeJSON(rw, receipt)
-}
-
-func (w *Witness) SignReceipt(t testing.TB, req witness.WitnessRequest, prevOrdinal int64, prevHash string) witness.WitnessReceipt {
-	t.Helper()
-	return w.sign(req, prevOrdinal, prevHash)
 }
 
 func (w *Witness) sign(req witness.WitnessRequest, prevOrdinal int64, prevHash string) witness.WitnessReceipt {

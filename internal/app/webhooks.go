@@ -167,18 +167,18 @@ func (a *App) takeAnswer(route channelRoute, pluginID, output string) (webhookRe
 }
 
 func (a *App) heldFor(pluginID string) []string {
-	a.heldMu.Lock()
-	defer a.heldMu.Unlock()
-	return append([]string{}, a.held[pluginID]...)
+	a.channels.mu.Lock()
+	defer a.channels.mu.Unlock()
+	return append([]string{}, a.channels.held[pluginID]...)
 }
 
 func (a *App) noteHeld(pluginID string, held []string) {
-	a.heldMu.Lock()
-	defer a.heldMu.Unlock()
-	if a.held == nil {
-		a.held = map[string][]string{}
+	a.channels.mu.Lock()
+	defer a.channels.mu.Unlock()
+	if a.channels.held == nil {
+		a.channels.held = map[string][]string{}
 	}
-	a.held[pluginID] = held
+	a.channels.held[pluginID] = held
 }
 
 func (a *App) webhookRoute(ctx context.Context, pluginID string) channelRoute {
@@ -309,8 +309,10 @@ func verifyWebhook(sig *pluginhost.WebhookSignature, secret string, r *http.Requ
 	default:
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(strings.ToLower(want))) == 1 && sig.Scheme != pluginhost.SchemeToken ||
-		sig.Scheme == pluginhost.SchemeToken && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+	if sig.Scheme == pluginhost.SchemeHMACSHA256Hex {
+		got = strings.ToLower(got)
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func parseForm(body string) map[string][]string {

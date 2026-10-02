@@ -13,8 +13,6 @@ type VoicePort interface {
 	SetMode(listen, speak string) (string, error)
 }
 
-func (e *Engine) SetVoice(v VoicePort) { e.voice = v }
-
 var (
 	voiceListenValues = []string{"off", "interactive", "meeting"}
 	voiceSpeakValues  = []string{"on", "off"}

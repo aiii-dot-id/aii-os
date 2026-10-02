@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type IdentityReviewConfig struct {
@@ -34,8 +34,8 @@ type ReviewSnapshot struct {
 }
 
 type ReviewStore interface {
-	ListBeliefs() ([]store.Belief, error)
-	ListIntentions() ([]store.Intention, error)
+	ListBeliefs() ([]rows.Belief, error)
+	ListIntentions() ([]rows.Intention, error)
 	UnprocessedExperienceCount() (int, error)
 	StandingSource
 	TensionsSource

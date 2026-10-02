@@ -61,15 +61,10 @@ export function go(v) {
   if (v === 'chat') S.interactionWake?.();
   renderPanel();
 }
-// A view may move the page (the connect card lands on Plugins) without
-// importing this module: the navigator rides the shared state.
 S.go = go;
-// A foreground probe asks for fresh data in the current view without
-// rebuilding forms or moving focus while the operator is editing.
 S.refreshCurrentView = read => { if (S.connected) requestView(S.view, read); };
 
 document.querySelectorAll('.nav-item').forEach(el => { el.onclick = () => go(el.dataset.view); });
-// The Plugins item counts catalog releases newer than what is installed.
 S.renderNavBadges = () => {
   const el = document.querySelector('.nav-item[data-view="plugins"]');
   if (!el) return;
@@ -80,8 +75,6 @@ S.renderNavBadges = () => {
   b.textContent = n;
   b.title = n + ' plugin update' + (n === 1 ? '' : 's') + ' available';
 };
-// The sidebar says when a release is ready, the way a browser does; the
-// click lands on Settings → Updates, where Relaunch is.
 S.renderUpdateChip = () => {
   const el = document.getElementById('nav-update');
   if (!el) return;
@@ -90,8 +83,6 @@ S.renderUpdateChip = () => {
   if (u && u.needs_restart) text = 'Restart to update';
   else if (u && u.available_version) text = 'Update ' + u.available_version;
   const t = document.getElementById('nav-update-text');
-  // A control that appears is news: its words are said when it appears or
-  // they change, not at every push that leaves it as it was.
   if (text && (el.hidden || !t || t.textContent !== text)) announce(text);
   el.hidden = !text;
   if (t) t.textContent = text;
@@ -127,7 +118,6 @@ window.addEventListener('hashchange', function () {
     if (S.view === 'projects' && S.viewedProject === route.project) return;
     import('./views/projects.js').then(m => m.viewProject(route.project));
   } else if (route.view === 'settings' && route.project) {
-    // A Settings section is an address too: #/settings/speech.
     const moved = S.settingsSection?.(route.project);
     if (S.view !== 'settings') go('settings');
     else if (moved) { S.requestSettingsSection?.(); renderSettings(); }
@@ -153,7 +143,6 @@ export function parseHash(h) {
   if (route.view && TITLES[route.view] && route.view !== 'projects') v = route.view;
   if (route.view === 'projects') v = 'projects';
   if (!TITLES[v]) v = 'chat';
-  // A reload lands on the Settings section it left, not the first one.
   if (v === 'settings' && route.project) S.settingsSection?.(route.project);
   go(v);
   if (route.view === 'projects' && route.project) {

@@ -176,7 +176,9 @@ func (a *App) performPendingRestore(ctx context.Context, cfg Config, kp *crypto.
 	withdraw := func(why string) error {
 		logsink.Error("restore.refusal", "the restore that was asked for was NOT performed: %s — nothing was touched", why)
 		f, _ := json.MarshalIndent(restoreFailure{At: time.Now().UTC().Format(time.RFC3339), Request: req, Why: why}, "", "  ")
-		_ = writeFileDurably(filepath.Join(dir, restoreFailedName), append(f, '\n'))
+		if err := writeFileDurably(filepath.Join(dir, restoreFailedName), append(f, '\n')); err != nil {
+			logsink.Error("restore.error", "the record of the refused restore was not written (%v); the log line above is the only account of it", err)
+		}
 		os.Remove(restoreRequestPath(cfg))
 		sweepRestoreStaging(dir)
 		return nil
@@ -308,8 +310,6 @@ func readRestoreJournal(cfg Config) (restoreJournal, bool, error) {
 	}
 	return j, true, nil
 }
-
-var restoreStep = func(step string) {}
 
 func (a *App) stageAndProve(ctx context.Context, cfg Config, kp *crypto.KeyPair, srcPath string, snap *keptSnapshot, set, scratch string) (uint64, error) {
 	if snap != nil && snap.Encrypted {
@@ -555,7 +555,9 @@ func (a *App) finishRestore(cfg Config, j restoreJournal) error {
 		if raw, err := os.ReadFile(src); err == nil && json.Unmarshal(raw, &was) == nil {
 			was.PutBackAt = j.Restored.SetAsideAt
 			if upd, merr := json.MarshalIndent(was, "", "  "); merr == nil {
-				_ = writeFileDurably(src, append(upd, '\n'))
+				if err := writeFileDurably(src, append(upd, '\n')); err != nil {
+					logsink.Error("restore.error", "the set-aside record %s does not say it was put back: %v", src, err)
+				}
 			}
 		}
 	}

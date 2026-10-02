@@ -3,17 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
-
-var modalityGuard = tools.FetchGuard
 
 const (
 	modalityMaxBytes = 256 << 10
@@ -114,7 +111,7 @@ func lookupModalities(ctx context.Context, url string, guard func(context.Contex
 		return modelModalities{}
 	}
 	req.Header.Set("User-Agent", "AII-OS/1.0 (model capability)")
-	resp, err := tools.GuardedClient(modalityTimeout, guard, nil).Do(req)
+	resp, err := firewall.GuardedClient(modalityTimeout, guard, nil).Do(req)
 	if err != nil {
 		return modelModalities{}
 	}

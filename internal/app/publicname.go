@@ -49,7 +49,7 @@ const (
 	certificateHourLocal = 5
 )
 
-var errPublicNameStopping = errors.New("public-name issuance is unavailable: application is stopping")
+var errPublicNameStopping = fmt.Errorf("public-name issuance is unavailable: %w", errStopping)
 
 type publicNameRuntime struct {
 	mu         sync.Mutex
@@ -97,7 +97,7 @@ func (a *App) publisherFor(cfg Config) (namePublisher, error) {
 		return nil, errors.New("not live")
 	}
 	key := witness.AsIdentityKey(a.keyPair)
-	canonical, env, err := witness.EnsureIdentityEnvelope(key, a.store)
+	canonical, env, err := witness.EnsureIdentityEnvelope(key, a.store, filepath.Dir(a.activeIdentity(cfg.Identity).LedgerPath))
 	if err != nil {
 		return nil, fmt.Errorf("identity envelope: %w", err)
 	}
@@ -148,7 +148,6 @@ func (a *App) wirePublicName(cfg Config) error {
 	origin := publicOrigin(pn.Name, port)
 	a.dashboard.SetPublicCertificate(pn.Name, mgr.Certificate)
 	a.dashboard.AllowHost(net.JoinHostPort(pn.Name, port))
-	a.learnServiceZone(pub)
 
 	if port == "443" {
 
@@ -207,7 +206,7 @@ func (a *App) startRelay(cfg Config, name string, endpoint certs.RelayEndpoint) 
 		return
 	}
 	key := witness.AsIdentityKey(a.keyPair)
-	canonical, env, err := witness.EnsureIdentityEnvelope(key, a.store)
+	canonical, env, err := witness.EnsureIdentityEnvelope(key, a.store, filepath.Dir(a.activeIdentity(cfg.Identity).LedgerPath))
 	if err != nil {
 		logsink.Warn("route.error", "identity envelope: %v", err)
 		return
@@ -254,8 +253,14 @@ func (a *App) startRelay(cfg Config, name string, endpoint certs.RelayEndpoint) 
 	a.pn.mu.Unlock()
 }
 
-func (a *App) learnServiceZone(pub namePublisher) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (a *App) learnServiceZone() {
+	a.pn.mu.Lock()
+	pub := a.pn.publisher
+	a.pn.mu.Unlock()
+	if pub == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.lifetime(), 10*time.Second)
 	defer cancel()
 	st, err := pub.ServiceStatus(ctx)
 	if err != nil {
@@ -295,7 +300,7 @@ func (a *App) movePublicName() (dashboard.PublicNameState, error) {
 	if err != nil {
 		return a.publicNameState(), err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 60*time.Second)
 	defer cancel()
 	st, err := pub.ServiceStatus(ctx)
 	if err != nil {
@@ -318,6 +323,9 @@ func (a *App) movePublicName() (dashboard.PublicNameState, error) {
 		return a.publicNameState(), fmt.Errorf("record the move: %w", err)
 	}
 	logsink.Info("route.decision", "moved from %s to %s — the previous name is retired", current.Name, name)
+	a.pn.mu.Lock()
+	a.pn.serviceZone, a.pn.service = zone, &st
+	a.pn.mu.Unlock()
 	if err := a.wirePublicName(cfg); err != nil {
 		return a.publicNameState(), err
 	}
@@ -325,11 +333,7 @@ func (a *App) movePublicName() (dashboard.PublicNameState, error) {
 }
 
 func (a *App) issuePublicCertificate(mgr certificateManager) {
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 10*time.Minute)
 	defer cancel()
 	a.pn.mu.Lock()
 	a.pn.status = publicNameClaiming
@@ -381,7 +385,7 @@ func (a *App) claimPublicName() (dashboard.PublicNameState, error) {
 	if err != nil {
 		return a.publicNameState(), err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 60*time.Second)
 	defer cancel()
 	claimed, err := pub.Claim(ctx, id)
 	name, zone := claimed.Name, claimed.Zone
@@ -392,6 +396,9 @@ func (a *App) claimPublicName() (dashboard.PublicNameState, error) {
 	if _, err := a.door.Append(ledger.EventNetworkNameClaimed, 0, store.PublicNamePayload{NameID: id, Name: name, Zone: zone}, ""); err != nil {
 		return a.publicNameState(), fmt.Errorf("record the claim: %w", err)
 	}
+	a.pn.mu.Lock()
+	a.pn.serviceZone = zone
+	a.pn.mu.Unlock()
 	if err := a.wirePublicName(cfg); err != nil {
 		return a.publicNameState(), err
 	}
@@ -415,8 +422,6 @@ func (a *App) retryPublicCertificate() (dashboard.PublicNameState, error) {
 	retryIssueStarted()
 	return a.publicNameState(), nil
 }
-
-var retryIssueStarted = func() {}
 
 func (a *App) publicNameState() dashboard.PublicNameState {
 	cfg := a.configSnapshot()
@@ -482,18 +487,9 @@ func (a *App) renewPublicCertificate() {
 		a.autoClaimPublicName(a.configSnapshot())
 		return
 	}
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 10*time.Minute)
 	defer cancel()
-	a.pn.mu.Lock()
-	pub := a.pn.publisher
-	a.pn.mu.Unlock()
-	if pub != nil {
-		a.learnServiceZone(pub)
-	}
+	a.learnServiceZone()
 	renewed, err := mgr.Renew(ctx)
 	days := mgr.DaysLeft()
 	a.pn.mu.Lock()
@@ -596,4 +592,11 @@ func dashboardAdvice(tlsOn bool, host string, st dashboard.PublicNameState, mat 
 			"  Windows: certutil -addstore -f Root "+mat.CACertPath)
 	}
 	return lines
+}
+
+func (a *App) wirePublicNameHooks(h *dashboard.WSHandler) {
+	h.PublicNameClaim = a.claimPublicName
+	h.PublicNameRetry = a.retryPublicCertificate
+	h.PublicNameMove = a.movePublicName
+	h.PublicNameState = a.publicNameState
 }

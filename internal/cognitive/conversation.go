@@ -7,8 +7,8 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive/landing"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/store/cursor"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
@@ -22,7 +22,7 @@ type conversationReader interface {
 }
 
 type toolCallReader interface {
-	TurnToolCalls(turnIDs []string) (map[string][]store.ToolCall, error)
+	TurnToolCalls(turnIDs []string) (map[string][]rows.ToolCall, error)
 }
 
 func (d *DreamFacility) SetConversation(src ConversationSource) {
@@ -68,7 +68,7 @@ func (d *DreamFacility) unreadConversation(budget int) cursor.ConversationBatch 
 	return cursor.ConversationBatch{}
 }
 
-func renderConversation(batch cursor.ConversationBatch, calls map[string][]store.ToolCall) string {
+func renderConversation(batch cursor.ConversationBatch, calls map[string][]rows.ToolCall) string {
 	last := map[string]int{}
 	for i, p := range batch.Parts {
 		if p.Role == "resident" && p.TurnID != "" {
@@ -113,7 +113,7 @@ func renderConversation(batch cursor.ConversationBatch, calls map[string][]store
 
 const maxCallGroups = 12
 
-func toolCallList(calls []store.ToolCall) string {
+func toolCallList(calls []rows.ToolCall) string {
 	if len(calls) == 0 {
 		return "none"
 	}
@@ -164,7 +164,7 @@ func toolCallList(calls []store.ToolCall) string {
 	return strings.Join(out, ", ")
 }
 
-func (d *DreamFacility) turnCalls(talk cursor.ConversationBatch) map[string][]store.ToolCall {
+func (d *DreamFacility) turnCalls(talk cursor.ConversationBatch) map[string][]rows.ToolCall {
 	if d.talkCalls == nil {
 		return nil
 	}
@@ -189,7 +189,7 @@ type InputChecker interface {
 	CheckSimple(ctx context.Context, systemPrompt, userMessage string) error
 }
 
-func (d *DreamFacility) fitConversation(ctx context.Context, systemPrompt string, expTexts []string, talk cursor.ConversationBatch, calls map[string][]store.ToolCall) (kept cursor.ConversationBatch, fits bool) {
+func (d *DreamFacility) fitConversation(ctx context.Context, systemPrompt string, expTexts []string, talk cursor.ConversationBatch, calls map[string][]rows.ToolCall) (kept cursor.ConversationBatch, fits bool) {
 	checker, ok := d.llm.(InputChecker)
 	if !ok {
 		return talk, true

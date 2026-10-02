@@ -24,11 +24,6 @@ var (
 
 const maxModelListBytes = 1 << 20
 
-func discoverModels(ctx context.Context, url, apiKey string) ([]string, error) {
-	models, _, err := discoverModelsWith(ctx, "", url, apiKey, false, nil, nil)
-	return models, err
-}
-
 func discoverModelsWith(ctx context.Context, dialect, base, token string, bearer bool, extra, query map[string]string) ([]string, map[string]modelMeta, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -250,16 +245,16 @@ func (a *App) discoverForProvider(ctx context.Context, reg *providerRegistry, na
 		models, meta, err := a.discoverMetaForEntry(ctx, p, apiKey)
 		if err == nil {
 
-			a.provMu.Lock()
-			if a.provStatus == nil {
-				a.provStatus = make(map[string]providerProbe)
+			a.providers.runtime.mu.Lock()
+			if a.providers.runtime.provStatus == nil {
+				a.providers.runtime.provStatus = make(map[string]providerProbe)
 			}
-			a.provStatus[p.Name] = providerProbe{state: "ok", models: models, meta: meta, checkedAt: time.Now(), key: probeKey(p)}
-			a.provMu.Unlock()
-			return mergeModels(p.Models, models), nil
+			a.providers.runtime.provStatus[p.Name] = providerProbe{state: "ok", models: models, meta: meta, checkedAt: time.Now(), key: probeKey(p)}
+			a.providers.runtime.mu.Unlock()
+			return mergeDistinct(p.Models, models), nil
 		}
 		if len(p.Models) > 0 {
-			return mergeModels(p.Models, nil), nil
+			return mergeDistinct(p.Models, nil), nil
 		}
 		return nil, err
 	}
@@ -276,7 +271,7 @@ func modelOffered(models []string, meta map[string]modelMeta, model string) bool
 	return ok
 }
 
-func mergeModels(lists ...[]string) []string {
+func mergeDistinct(lists ...[]string) []string {
 	seen := make(map[string]bool)
 	var models []string
 	for _, list := range lists {

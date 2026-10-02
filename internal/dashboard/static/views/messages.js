@@ -3,11 +3,6 @@ import { esc } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
-// What came in, what the identity sent to people, and the operator's own
-// notices with the route each took, read from the record when asked.
-// Nothing here changes anything: the contacts beside it are saved through
-// the configuration door. Every word a sender or an adapter wrote is shown
-// as text.
 const pending = pendingSlot();
 let state = null;
 let notice = 'Refresh to read what came in and what was sent.';
@@ -86,8 +81,6 @@ function sendHTML(s) {
   return html + activityHTML(s) + '</div>';
 }
 
-// A notice's route: the page took it, or a walk off the dashboard claimed
-// it — through which adapter, when one is recorded — or neither yet.
 function noticeRoute(n) {
   if (n.route === 'page') return 'Route: a page' + (n.delivered_at ? ', ' + when(Date.parse(n.delivered_at)) : '') + '.';
   if (n.route === 'channel') return 'Route: off the dashboard' + (n.via ? ' via ' + n.via : '') + (n.sent_ms ? ', sent ' + when(n.sent_ms) : '') + '.';

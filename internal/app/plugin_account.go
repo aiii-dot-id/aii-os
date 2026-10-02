@@ -33,15 +33,6 @@ func refuseAccount(requirement, format string, args ...interface{}) error {
 	return &AccountRefusal{Requirement: requirement, Text: fmt.Sprintf(format, args...)}
 }
 
-func settingDecl(ap *pluginhost.ActivePlugin, key string) *pluginhost.SettingDecl {
-	for i := range ap.Settings {
-		if ap.Settings[i].Key == key {
-			return &ap.Settings[i]
-		}
-	}
-	return nil
-}
-
 func asksForAccount(d *pluginhost.SettingDecl) bool {
 	return d != nil && d.Type == pluginhost.SettingSecret && d.OAuth != nil
 }

@@ -4,7 +4,9 @@ package tools
 
 import (
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -48,3 +50,10 @@ func (t *shellTree) kill(cmd *exec.Cmd) error {
 func (t *shellTree) close() {}
 
 func normalizeShellOutput(b []byte) []byte { return b }
+
+func invocationExempt(token string) bool {
+	clean := filepath.Clean(token)
+	return filepath.IsAbs(clean) && (strings.HasPrefix(clean, "/usr/") || strings.HasPrefix(clean, "/bin/") ||
+		clean == "/usr" || clean == "/bin" || clean == "/lib" || clean == "/etc/alternatives" ||
+		clean == "/dev/null" || clean == "/dev/zero" || clean == "/dev/stdin" || clean == "/dev/stdout" || clean == "/dev/stderr")
+}

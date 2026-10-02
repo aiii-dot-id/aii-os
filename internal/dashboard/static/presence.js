@@ -21,10 +21,6 @@ export function renderPresence() {
     : mode === 'safe' ? '<b>SAFE</b> — record frozen'
     : mode === 'degraded_witness' ? '<b>degraded</b> — witness dark'
     : '<b>present</b>';
-  // #p-state is a live region, and it is read out whenever it is written. A
-  // state written as itself — every chunk of a streamed reply, every retry of
-  // a lost connection — would be said again each time; it is written when it
-  // changes.
   if (st.innerHTML !== state) st.innerHTML = state;
 
   if (S.cont) {
@@ -34,7 +30,6 @@ export function renderPresence() {
     pm.innerHTML = 'mode <b>' + esc(mode) + '</b>';
   }
 }
-// One primary action: Send while idle, Stop while awaiting or running a reply.
 const SEND_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>';
 export function setThinking(on) {
   S.thinking = on;

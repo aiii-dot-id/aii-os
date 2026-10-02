@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -34,10 +33,7 @@ func (a *App) importLegacyContacts(persist func(*Config) (bool, error)) error {
 		return &store.SchemaError{Phase: "contact import", Cause: fmt.Errorf("no config source path; historical contacts retained, affected mail remains queued")}
 	}
 
-	if _, err := os.Stat(a.cfg.SourcePath); err != nil {
-		return &store.SchemaError{Phase: "contact import", Cause: err}
-	}
-	fresh, err := LoadConfig(a.cfg.SourcePath)
+	fresh, err := ReadConfig(a.cfg.SourcePath)
 	if err != nil {
 		return &store.SchemaError{Phase: "contact import", Cause: err}
 	}

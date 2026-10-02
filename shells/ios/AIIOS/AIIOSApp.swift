@@ -58,11 +58,11 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
 
     private let lock = NSLock()
     private let runtimeQueue = DispatchQueue(label: "id.aiii.shell.runtime")
-    private var state = RuntimeState() // lock guards snapshots across threads
-    private var retryFrom: MobileRuntime? // runtimeQueue only
-    private weak var observer: RuntimeHolder? // main thread only
-    private var foreground = false // main-thread lifecycle truth
-    private var target: Date? // the last next-due TIME asked for
+    private var state = RuntimeState()
+    private var retryFrom: MobileRuntime?
+    private weak var observer: RuntimeHolder?
+    private var foreground = false
+    private var target: Date?
 
     func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.taskID, using: nil) { task in
@@ -159,7 +159,6 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
             self.restart(previous)
         }
     }
-
 
     func schedule(_ atUnixMs: Int64) {
         let at = Date(timeIntervalSince1970: TimeInterval(atUnixMs) / 1000.0)

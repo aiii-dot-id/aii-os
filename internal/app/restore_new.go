@@ -379,8 +379,6 @@ func personWhy(why string) string {
 	return strings.TrimPrefix(why, "the source does not prove: ")
 }
 
-var afterKeyPublished = func(string) {}
-
 func fsWhy(err error) string {
 	switch {
 	case errors.Is(err, os.ErrPermission):

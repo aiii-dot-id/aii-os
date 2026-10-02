@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -95,8 +97,7 @@ type modelCapability struct {
 type providerRegistry struct {
 	ModelCatalogueURL *string `json:"model_catalogue_url,omitempty"`
 
-	OAuth       map[string]oauth.Provider `json:"oauth,omitempty"`
-	filledOAuth map[string]string
+	OAuth map[string]oauth.Provider `json:"oauth,omitempty"`
 
 	Providers []providerEntry `json:"providers"`
 
@@ -104,12 +105,7 @@ type providerRegistry struct {
 
 	DialectEffortFloor map[string][]string `json:"dialect_effort_floor,omitempty"`
 
-	filled map[string]map[string]string
-
-	filledEffort map[string]bool
-	filledAuthor map[string]bool
-
-	filledSpeech map[string]bool
+	lent map[string]*lentFacts
 
 	broken []brokenEntry
 
@@ -128,11 +124,7 @@ func requiredCredentialOptions(credential string) []string {
 	if credential == "" {
 		return nil
 	}
-	var base providerRegistry
-	if err := json.Unmarshal(embeddedProviders, &base); err != nil {
-		return nil
-	}
-	for _, e := range base.Providers {
+	for _, e := range embeddedRegistry().Providers {
 		if e.Credential != credential || len(e.CredentialOptions) == 0 {
 			continue
 		}
@@ -170,10 +162,7 @@ func fillEmbeddedCatalogueAuthors(reg *providerRegistry) {
 		}
 		if a, ok := shipped[e.Name]; ok {
 			e.CatalogueAuthor = a
-			if reg.filledAuthor == nil {
-				reg.filledAuthor = map[string]bool{}
-			}
-			reg.filledAuthor[e.Name] = true
+			reg.lentTo(e.Name).author = true
 		}
 	}
 }
@@ -185,7 +174,7 @@ func fillEmbeddedEffortLevels(reg *providerRegistry) {
 	for _, e := range base.Providers {
 		if len(e.EffortLevels) > 0 {
 
-			shipped[e.Name] = cloneLevels(e.EffortLevels)
+			shipped[e.Name] = slices.Clone(e.EffortLevels)
 		}
 	}
 	for i := range reg.Providers {
@@ -200,10 +189,7 @@ func fillEmbeddedEffortLevels(reg *providerRegistry) {
 		}
 		if ok {
 			e.EffortLevels = levels
-			if reg.filledEffort == nil {
-				reg.filledEffort = map[string]bool{}
-			}
-			reg.filledEffort[e.Name] = true
+			reg.lentTo(e.Name).effort = true
 		}
 	}
 }
@@ -236,13 +222,7 @@ func fillEmbeddedCredentialOptions(reg *providerRegistry) {
 			if _, set := e.CredentialOptions[k]; !set {
 				e.CredentialOptions[k] = v
 
-				if reg.filled == nil {
-					reg.filled = map[string]map[string]string{}
-				}
-				if reg.filled[e.Name] == nil {
-					reg.filled[e.Name] = map[string]string{}
-				}
-				reg.filled[e.Name][k] = v
+				reg.lentTo(e.Name).option(k, v)
 			}
 		}
 	}
@@ -257,18 +237,12 @@ func fillEmbeddedCredentialOptions(reg *providerRegistry) {
 			if e.Credential != shippedEntry.Credential {
 				continue
 			}
-			if reg.filled == nil {
-				reg.filled = map[string]map[string]string{}
-			}
-			if reg.filled[e.Name] == nil {
-				reg.filled[e.Name] = map[string]string{}
-			}
 			if e.CredentialOptions == nil {
 				e.CredentialOptions = map[string]string{}
 			}
 			ver := e.CredentialOptions["client_version"]
 			if ver == shippedVersion {
-				reg.filled[e.Name]["client_version"] = ver
+				reg.lentTo(e.Name).option("client_version", ver)
 			}
 			formats := shippedEntry.CredentialOptionFormats
 			if e.CredentialOptionFormats != nil {
@@ -277,56 +251,89 @@ func fillEmbeddedCredentialOptions(reg *providerRegistry) {
 			for key, format := range formats {
 				value := strings.ReplaceAll(format, "{client_version}", ver)
 				e.CredentialOptions[key] = value
-				reg.filled[e.Name][key] = value
+				reg.lentTo(e.Name).option(key, value)
 			}
 		}
 	}
 }
 
-func stripEmbeddedFills(reg *providerRegistry) *providerRegistry {
+type lentFacts struct {
+	options                map[string]string
+	oauth                  string
+	effort, author, speech bool
+}
 
-	if len(reg.filled) == 0 && len(reg.filledEffort) == 0 && len(reg.filledOAuth) == 0 &&
-		len(reg.filledAuthor) == 0 && len(reg.filledSpeech) == 0 {
-		return reg
+func (r *providerRegistry) lentTo(name string) *lentFacts {
+	if r.lent[name] == nil {
+		if r.lent == nil {
+			r.lent = map[string]*lentFacts{}
+		}
+		r.lent[name] = &lentFacts{}
+	}
+	return r.lent[name]
+}
+
+func (l *lentFacts) option(key, value string) {
+	if l.options == nil {
+		l.options = map[string]string{}
+	}
+	l.options[key] = value
+}
+
+func cloneLent(in map[string]*lentFacts) map[string]*lentFacts {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]*lentFacts, len(in))
+	for name, l := range in {
+		c := *l
+		c.options = maps.Clone(l.options)
+		out[name] = &c
+	}
+	return out
+}
+
+func (r *providerRegistry) operatorView() *providerRegistry {
+	if len(r.lent) == 0 {
+		return r
 	}
 
-	cp := *reg
-	cp.Providers = append([]providerEntry(nil), reg.Providers...)
-	out := &cp
-	for i := range out.Providers {
-		e := &out.Providers[i]
-		if ref, ok := reg.filledOAuth[e.Name]; ok && e.OAuth == ref {
+	cp := *r
+	cp.Providers = slices.Clone(r.Providers)
+	for i := range cp.Providers {
+		e := &cp.Providers[i]
+		l := r.lent[e.Name]
+		if l == nil {
+			continue
+		}
+		if l.oauth != "" && e.OAuth == l.oauth {
 			e.OAuth = ""
 		}
-
-		if reg.filledEffort[e.Name] {
+		if l.effort {
 			e.EffortLevels = nil
 		}
-
-		if reg.filledAuthor[e.Name] {
+		if l.author {
 			e.CatalogueAuthor = ""
 		}
-		if reg.filledSpeech[e.Name] {
+		if l.speech {
 			e.Speech = nil
 		}
-		ours, ok := reg.filled[e.Name]
-		if !ok || len(e.CredentialOptions) == 0 {
+		if len(l.options) == 0 || len(e.CredentialOptions) == 0 {
 			continue
 		}
 		kept := make(map[string]string, len(e.CredentialOptions))
 		for k, v := range e.CredentialOptions {
-			if mine, was := ours[k]; was && mine == v {
+			if lentValue, was := l.options[k]; was && lentValue == v {
 				continue
 			}
 			kept[k] = v
 		}
 		if len(kept) == 0 {
-			e.CredentialOptions = nil
-			continue
+			kept = nil
 		}
 		e.CredentialOptions = kept
 	}
-	return out
+	return &cp
 }
 
 func (r *providerRegistry) modelCatalogueURL() string {
@@ -418,7 +425,7 @@ func normalizeProviderAPIType(e *providerEntry) error {
 }
 
 func saveProvidersFile(path string, reg *providerRegistry) (bool, error) {
-	data, err := json.MarshalIndent(withBrokenEntries(stripEmbeddedFills(reg)), "", "  ")
+	data, err := json.MarshalIndent(withBrokenEntries(reg.operatorView()), "", "  ")
 	if err != nil {
 		return false, err
 	}
@@ -532,6 +539,7 @@ func candidateRegistry(before *providerRegistry, mutate func(*providerRegistry) 
 	cp.OAuth = cloneOAuth(before.OAuth)
 	cp.ModelCapabilities = cloneCapabilities(before.ModelCapabilities)
 	cp.DialectEffortFloor = cloneFloors(before.DialectEffortFloor)
+	cp.lent = cloneLent(before.lent)
 	candidate := &cp
 	if err := mutate(candidate); err != nil {
 		return nil, err
@@ -564,7 +572,7 @@ func cloneFloors(in map[string][]string) map[string][]string {
 	}
 	out := make(map[string][]string, len(in))
 	for k, v := range in {
-		out[k] = cloneLevels(v)
+		out[k] = slices.Clone(v)
 	}
 	return out
 }
@@ -594,7 +602,8 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		if published {
 			a.clearProviderStatus(name)
 			if reload {
-				go a.reloadConfig()
+
+				a.runBackground(a.reloadConfig)
 			}
 		}
 		if persistErr != nil {
@@ -643,8 +652,8 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 	}
 	candidateBudget, _ := promptBudgetFor(resolvedEntry, cfg.Prompt.MaxTokens)
 	client := a.newLLMClient(newCC, candidateBudget)
-	proved := a.substrateCapabilityRecord()
-	if err := a.probeSubstrate(client, newCC, resolvedEntry, candidate, cfg.LLM.ProbeTimeoutSeconds); err != nil {
+	measured, err := a.probeSubstrate(client, newCC, resolvedEntry, candidate, cfg.LLM.ProbeTimeoutSeconds)
+	if err != nil {
 		return err
 	}
 
@@ -663,8 +672,6 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 			return fmt.Errorf("recheck providers: %w", err)
 		}
 		if !reflect.DeepEqual(*a.cfg, cfg) || !reflect.DeepEqual(current, before) {
-
-			a.setSubstrateCapability(proved)
 			return fmt.Errorf("configuration changed while the provider was checked; retry")
 		}
 		var persistErr error
@@ -674,6 +681,7 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 		}
 		if published {
 			a.activateLLMRuntime(client, resolvedEntry, cfg.Prompt.MaxTokens)
+			a.setSubstrateCapability(measured)
 		}
 		if persistErr != nil {
 			return fmt.Errorf("providers were published and the live client was activated, but directory durability is unconfirmed: %w", persistErr)
@@ -789,16 +797,8 @@ func (s *effectiveCaps) dialectFloor(apiType string) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return cloneLevels(levels), true
-}
 
-func cloneLevels(in []string) []string {
-	if in == nil {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
+	return slices.Clone(levels), true
 }
 
 func effortLevelsFor(eff *effectiveCaps, e providerEntry, model string) []string {
@@ -824,8 +824,8 @@ func (c modelCapability) modernOutputLimit() bool {
 }
 
 func copyModelCapability(c modelCapability) modelCapability {
-	c.Effort = cloneLevels(c.Effort)
-	c.CacheRetentions = cloneLevels(c.CacheRetentions)
+	c.Effort = slices.Clone(c.Effort)
+	c.CacheRetentions = slices.Clone(c.CacheRetentions)
 	if c.CacheBreakpoints != nil {
 		v := *c.CacheBreakpoints
 		c.CacheBreakpoints = &v
@@ -871,10 +871,7 @@ func bindOAuth(reg *providerRegistry) error {
 		e := &reg.Providers[i]
 		if e.OAuth == "" && defaults[e.Credential] != "" {
 			e.OAuth = defaults[e.Credential]
-			if reg.filledOAuth == nil {
-				reg.filledOAuth = map[string]string{}
-			}
-			reg.filledOAuth[e.Name] = e.OAuth
+			reg.lentTo(e.Name).oauth = e.OAuth
 		}
 		e.signIn = oauth.Provider{}
 		if e.OAuth != "" {
@@ -885,7 +882,7 @@ func bindOAuth(reg *providerRegistry) error {
 			e.signIn = p
 		}
 
-		params, err := oauth.OverrideParams(e.signIn.Params(), e.CredentialOptions)
+		params, err := oauth.ParamsFromOptions(e.signIn.Params(), e.CredentialOptions)
 		if err != nil {
 			return fmt.Errorf("provider %q: %w", e.Name, err)
 		}
@@ -907,4 +904,23 @@ func (a *App) oauthContracts() (map[string]oauth.Provider, error) {
 		return nil, err
 	}
 	return reg.oauthContracts(), nil
+}
+
+func (a *App) wireProviderHooks(h *dashboard.WSHandler) {
+
+	h.GetProviders = a.providerDirectory
+	h.SetProvider = a.setProviderInfo
+	h.SetEffort = a.setActiveEffort
+	h.DeleteProvider = a.deleteProvider
+	h.RepairProvider = a.repairBrokenProvider
+	h.RemoveBrokenProvider = a.removeBrokenProvider
+
+	h.DiscoverModels = func(provider, baseURL, apiKey string) ([]string, error) {
+		reg, err := a.loadProviders()
+		if err != nil {
+			return nil, err
+		}
+
+		return a.discoverForProvider(a.lifetime(), reg, provider, baseURL, apiKey)
+	}
 }

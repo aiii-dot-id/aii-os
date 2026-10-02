@@ -62,7 +62,6 @@ func New(t *testing.T) *Relay {
 }
 
 func (f *Relay) Addr() string { return f.ln.Addr().String() }
-func (f *Relay) Name() string { return f.name }
 func (f *Relay) TLSConfig() *tls.Config {
 	roots := x509.NewCertPool()
 	roots.AddCert(f.cert.Leaf)
@@ -107,7 +106,7 @@ func (f *Relay) serve() {
 }
 
 func (f *Relay) handle(c net.Conn) {
-	sni, replay, err := relay.PeekServerName(c, 5*time.Second)
+	sni, replay, err := peekServerName(c, 5*time.Second)
 	if err != nil {
 		c.Close()
 		return
@@ -140,8 +139,9 @@ func (f *Relay) control(c *tls.Conn) {
 			c.Close()
 			return
 		}
+		name := m.Name
 		f.mu.Lock()
-		f.tunnels[m.Name] = c
+		f.tunnels[name] = c
 		f.mu.Unlock()
 		drop := f.dropCh()
 		_ = relay.WriteMessage(c, relay.Message{Type: "registered", Name: m.Name})
@@ -159,7 +159,9 @@ func (f *Relay) control(c *tls.Conn) {
 					continue
 				}
 				f.mu.Lock()
-				delete(f.tunnels, m.Name)
+				if f.tunnels[name] == c {
+					delete(f.tunnels, name)
+				}
 				f.mu.Unlock()
 				c.Close()
 				return

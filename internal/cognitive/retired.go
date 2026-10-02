@@ -5,16 +5,16 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 type RetiredSource interface {
-	RetiredBeliefs(after uint64, limit int) ([]store.RetiredBelief, int, error)
+	RetiredBeliefs(after uint64, limit int) ([]rows.RetiredBelief, int, error)
 }
 
 const retiredShown = 8
 
-func retiredBlock(retired []store.RetiredBelief, more int, listed map[string]bool) []string {
+func retiredBlock(retired []rows.RetiredBelief, more int, listed map[string]bool) []string {
 	if len(retired) == 0 {
 		return nil
 	}
@@ -35,7 +35,7 @@ func retiredBlock(retired []store.RetiredBelief, more int, listed map[string]boo
 	return lines
 }
 
-func (c *ConsolidateFacility) retiredSince(experiences []store.Experience) ([]store.RetiredBelief, int) {
+func (c *ConsolidateFacility) retiredSince(experiences []rows.Experience) ([]rows.RetiredBelief, int) {
 	if len(experiences) == 0 {
 		return nil, 0
 	}

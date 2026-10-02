@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -34,7 +33,7 @@ func (f *Facility) Calibration(ctx context.Context, policy string, now time.Time
 		now = time.Now()
 	}
 	var out []CalibrationRow
-	err := f.st.ReadWith(func(db *sql.DB) error {
+	err := f.st.ReadWith(ctx, func(db store.Reader) error {
 		for _, d := range stores {
 			if d.Name == "plugin_memories" {
 				continue
@@ -61,7 +60,7 @@ func (f *Facility) Calibration(ctx context.Context, policy string, now time.Time
 			for _, h := range hits {
 				ids = append(ids, h.ID)
 			}
-			access, err := memoryAccessesOn(db, d.Name, ids)
+			access, err := memoryAccessesOn(ctx, db, d.Name, ids)
 			if err != nil {
 				return fmt.Errorf("%s: access records: %w", d.Name, err)
 			}
@@ -106,7 +105,7 @@ func strengthUnder(policy string, class carrd.Class, at time.Time, a store.Memor
 	}
 }
 
-func memoryAccessesOn(db *sql.DB, storeName string, ids []string) (map[string]store.MemoryAccess, error) {
+func memoryAccessesOn(ctx context.Context, db store.Reader, storeName string, ids []string) (map[string]store.MemoryAccess, error) {
 	out := map[string]store.MemoryAccess{}
 	for start := 0; start < len(ids); start += 200 {
 		end := start + 200
@@ -123,7 +122,7 @@ func memoryAccessesOn(db *sql.DB, storeName string, ids []string) (map[string]st
 			marks += "?"
 			args = append(args, id)
 		}
-		rows, err := db.Query(`SELECT id, count, last_at, history FROM memory_access WHERE store = ? AND id IN (`+marks+`)`, args...)
+		rows, err := db.QueryContext(ctx, `SELECT id, count, last_at, history FROM memory_access WHERE store = ? AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}

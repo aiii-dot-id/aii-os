@@ -1,9 +1,12 @@
 package pluginhost
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
+
+var ErrNoResume = errors.New("the server does not resume")
 
 type VariantRefusal struct {
 	VariantID string

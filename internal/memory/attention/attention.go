@@ -9,12 +9,10 @@ const (
 	AttentionDecayAlert    = "decay_alert"
 	AttentionContradiction = "contradiction"
 	AttentionFollowup      = "followup"
-	AttentionConsolidation = "consolidation"
 	AttentionContinuity    = "continuity"
 )
 
 const (
-	CostSilent = "silent"
 	CostLow    = "low"
 	CostMedium = "medium"
 	CostHigh   = "high"

@@ -118,37 +118,3 @@ func sidecarHousekeeping(q sidecarQuerier) string {
 	}
 	return note
 }
-
-func (s *Store) SidecarStates() ([]SidecarState, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []SidecarState
-	for _, name := range SidecarNames() {
-		st, err := sidecarState(s.db, name)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, st)
-	}
-	return out, nil
-}
-
-func (s *Store) RebuildSidecars(names ...string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(names) == 0 {
-		names = SidecarNames()
-	}
-	for _, name := range names {
-		if err := rebuildSidecar(s.w(), name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) CheckSidecars() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return checkSidecarsOn(s.db)
-}

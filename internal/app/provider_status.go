@@ -9,7 +9,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -17,7 +16,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 )
 
-func (a *App) setProviderInfo(in dashboard.ProviderInfo) error {
+func (a *App) setProviderInfo(in dashboard.ProviderEdit) error {
 
 	var chat *bool
 	if in.Chat {
@@ -33,7 +32,7 @@ func (a *App) setProviderInfo(in dashboard.ProviderInfo) error {
 		ReasoningEffort: in.ReasoningEffort, ThinkingBudget: in.ThinkingBudget, ThinkingMode: in.ThinkingMode, ThinkingDisplay: in.ThinkingDisplay,
 		Temperature: in.Temperature, TopP: in.TopP, Extra: in.Extra, Cache: in.Cache,
 		Default: in.Default, Models: in.ConfiguredModels,
-	}, in.APIKey == "" && in.HasKey)
+	}, !in.ClearKey)
 }
 
 const providerStatusTTL = 60 * time.Second
@@ -60,9 +59,9 @@ func probeKey(e providerEntry) string {
 
 func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 	now := time.Now()
-	a.provMu.Lock()
-	if a.provStatus == nil {
-		a.provStatus = make(map[string]providerProbe)
+	a.providers.runtime.mu.Lock()
+	if a.providers.runtime.provStatus == nil {
+		a.providers.runtime.provStatus = make(map[string]providerProbe)
 	}
 	var stale []providerEntry
 	out := make(map[string]providerProbe, len(reg.Providers))
@@ -70,14 +69,14 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 		if !chatProvider(e) {
 			continue
 		}
-		st, ok := a.provStatus[e.Name]
+		st, ok := a.providers.runtime.provStatus[e.Name]
 		if ok && st.key == probeKey(e) && now.Sub(st.checkedAt) < providerStatusTTL {
 			out[e.Name] = st
 			continue
 		}
 		stale = append(stale, e)
 	}
-	a.provMu.Unlock()
+	a.providers.runtime.mu.Unlock()
 
 	if len(stale) > 0 {
 		type res struct {
@@ -94,10 +93,10 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 		for range stale {
 			results = append(results, <-ch)
 		}
-		a.provMu.Lock()
+		a.providers.runtime.mu.Lock()
 		for _, r := range results {
 			st := r.st
-			prev := a.provStatus[r.name]
+			prev := a.providers.runtime.provStatus[r.name]
 
 			if st.state != "ok" && len(prev.models) > 0 {
 				st.models, st.meta = prev.models, prev.meta
@@ -105,10 +104,10 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 			if st.state != prev.state || st.reason != prev.reason {
 				logsink.Info("providers.decision", "%s — %s%s (%d model(s) listed)", r.name, st.state, reasonSuffix(st.reason), len(st.models))
 			}
-			a.provStatus[r.name] = st
+			a.providers.runtime.provStatus[r.name] = st
 			out[r.name] = st
 		}
-		a.provMu.Unlock()
+		a.providers.runtime.mu.Unlock()
 	}
 	return out
 }
@@ -119,11 +118,7 @@ func (a *App) probeOne(e providerEntry) providerProbe {
 		st.state = "invalid_url"
 		return st
 	}
-	ctx := a.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(a.lifetime(), 3*time.Second)
 	defer cancel()
 
 	models, meta, err := a.discoverMetaForEntry(ctx, e, e.APIKey)
@@ -155,10 +150,6 @@ func classifyCredentialErr(err error) string {
 	return ""
 }
 
-func wrapUnavailable(err error) error {
-	return fmt.Errorf("%w: %w", errCredentialUnavailable, err)
-}
-
 func validProviderURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
@@ -186,24 +177,15 @@ func (a *App) providerDirectory() dashboard.ProviderDirectory {
 	return dir
 }
 
-func (a *App) providerDirectoryLive() []dashboard.ProviderInfo {
-	reg, err := a.loadProviders()
-	if err != nil {
-		logsink.Warn("providers.error", "%v", err)
-		return nil
-	}
-	return a.providerInfos(reg)
-}
-
 func (a *App) providerInfos(reg *providerRegistry) []dashboard.ProviderInfo {
 	probes := a.probeProviders(reg)
 	out := make([]dashboard.ProviderInfo, 0, len(reg.Providers))
 	for _, e := range reg.Providers {
 		pr := probes[e.Name]
 
-		models := mergeModels(e.Models, seedModelsFor(e.Name), pr.models)
+		models := mergeDistinct(e.Models, seedModelsFor(e.Name), pr.models)
 		if e.DefaultModel != "" {
-			models = mergeModels([]string{e.DefaultModel}, models)
+			models = mergeDistinct([]string{e.DefaultModel}, models)
 		}
 		dialect := entryDialect(e)
 		explicit := false
@@ -370,9 +352,9 @@ func apiVersionInPath(base string) bool {
 }
 
 func (a *App) discoveredMeta(provider, model string) (m modelMeta, found bool, listed int, named bool) {
-	a.provMu.Lock()
-	defer a.provMu.Unlock()
-	pr := a.provStatus[provider]
+	a.providers.runtime.mu.Lock()
+	defer a.providers.runtime.mu.Unlock()
+	pr := a.providers.runtime.provStatus[provider]
 	m, found = pr.meta[model]
 	return m, found, len(pr.models), modelOffered(pr.models, pr.meta, model)
 }
@@ -417,8 +399,8 @@ func (a *App) credentialInfo(e providerEntry) *dashboard.CredentialInfo {
 const credentialWarnWindow = 30 * time.Minute
 
 func (a *App) credentialWarning() string {
-	_, entry, err := a.resolveLLM()
-	if err != nil || entry.Credential == "" {
+	entry := a.currentProvider()
+	if entry.Credential == "" {
 		return ""
 	}
 	info := a.credentialInfo(entry)
@@ -473,22 +455,11 @@ func reasonSuffix(r string) string {
 	return ": " + r
 }
 
-var (
-	seedModelsOnce sync.Once
-	seedModels     map[string][]string
-)
-
 func seedModelsFor(name string) []string {
-	seedModelsOnce.Do(func() {
-		seedModels = map[string][]string{}
-		var reg providerRegistry
-		if err := json.Unmarshal(embeddedProviders, &reg); err == nil {
-			for _, e := range reg.Providers {
-				seedModels[e.Name] = e.Models
-			}
-		}
-	})
-	return seedModels[name]
+	if e := entryNamed(embeddedRegistry(), name); e != nil {
+		return e.Models
+	}
+	return nil
 }
 
 func (a *App) askWindowIfUndeclaredIn(reg *providerRegistry, llmCfg LLMConfig) {

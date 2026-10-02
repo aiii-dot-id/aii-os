@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -15,6 +16,8 @@ type Observed struct {
 	Package      string
 	Hash         string
 	ManifestHash string
+
+	Family string
 }
 
 type Policy struct {
@@ -65,6 +68,8 @@ type Config struct {
 	RetireTimeout time.Duration
 
 	AdmissionRefresh time.Duration
+
+	AfterWithdrawalSelected func()
 }
 
 const DefaultAdmissionRefresh = 5 * time.Second
@@ -209,7 +214,7 @@ func (f *Facility) observe(set []Observed, pol Policy, skips *[]Skip) bool {
 			f.instances[o.ID] = inst
 		}
 		inst.Package, inst.PackageHash, inst.Dir = o.Package, o.Hash, o.Dir
-		inst.ManifestHash = o.ManifestHash
+		inst.ManifestHash, inst.Family = o.ManifestHash, o.Family
 		inst.Desired = Desired{Active: true, Package: o.Package, Hash: o.Hash, ManifestHash: o.ManifestHash}
 	}
 	for id, inst := range f.instances {
@@ -229,8 +234,8 @@ func (f *Facility) observe(set []Observed, pol Policy, skips *[]Skip) bool {
 	f.ringDoorbellsLocked()
 	stale := f.overtakenLocked()
 	f.mu.Unlock()
-	if len(stale) > 0 && AuditAfterWithdrawalSelected != nil {
-		AuditAfterWithdrawalSelected()
+	if len(stale) > 0 && f.cfg.AfterWithdrawalSelected != nil {
+		f.cfg.AfterWithdrawalSelected()
 	}
 	for _, w := range stale {
 		w.withdraw()
@@ -238,8 +243,6 @@ func (f *Facility) observe(set []Observed, pol Policy, skips *[]Skip) bool {
 	f.Poke("observed")
 	return true
 }
-
-var AuditAfterWithdrawalSelected func()
 
 type withdrawal struct {
 	e     *executor
@@ -522,16 +525,21 @@ func (f *Facility) pass() {
 		}
 	}
 
+	var forgotten []*executor
 	for id, inst := range f.instances {
 		if inst.Forgettable() && inst.seal() {
 			if e := f.execs[id]; e != nil {
 				delete(f.execs, id)
-				go func(e *executor) { e.Close(); e.Wait() }(e)
+				forgotten = append(forgotten, e)
 			}
 			delete(f.instances, id)
 		}
 	}
 	f.mu.Unlock()
+
+	for _, e := range forgotten {
+		e.Close()
+	}
 
 	for _, w := range stale {
 		w.withdraw()
@@ -763,14 +771,11 @@ func (f *Facility) admissibleLocked(w *admitWaiter, p Prepared) (ok bool, why st
 func (f *Facility) fitsLocked(p Prepared) (ok bool, why string, never error) {
 	pol := f.policy.Admission
 	var reservedHost int64
-	inFlight, inDomain := 0, 0
+	inFlight := 0
 	for _, r := range f.reserved {
 		reservedHost += r.host
 		if !r.serving {
 			inFlight++
-			if p.Backend != "" && r.backend == p.Backend {
-				inDomain++
-			}
 		}
 	}
 	if pol.MaxConcurrentStarts > 0 && inFlight >= pol.MaxConcurrentStarts {
@@ -814,24 +819,31 @@ func (f *Facility) fitsLocked(p Prepared) (ok bool, why string, never error) {
 		}
 		sentence = fmt.Sprintf("admitted (host %s declared; capacity unknown on this platform — one start at a time, residency not bounded)", need)
 	}
-	if p.Backend != "" && p.Backend != "cpu" {
+	for _, dom := range deviceDomains(p.Backend) {
 
-		if d, known := cap.Devices[p.Backend]; known && d.Known && p.DeviceBytes != nil {
-			var reservedDev int64
-			for _, r := range f.reserved {
-				if r.backend == p.Backend && r.device != nil {
-					reservedDev += *r.device
-				}
+		var reservedDev int64
+		starting := 0
+		for _, r := range f.reserved {
+			if !slices.Contains(deviceDomains(r.backend), dom) {
+				continue
 			}
+			if r.device != nil {
+				reservedDev += *r.device
+			}
+			if !r.serving {
+				starting++
+			}
+		}
+		if d, known := cap.Devices[dom]; known && d.Known && p.DeviceBytes != nil {
 			if *p.DeviceBytes > d.Available-reservedDev {
-				return false, fmt.Sprintf("waiting for %s on %s: %s free, %s reserved", humanBytes(*p.DeviceBytes), p.Backend, humanBytes(d.Available), humanBytes(reservedDev)), nil
+				return false, fmt.Sprintf("waiting for %s on %s: %s free, %s reserved", humanBytes(*p.DeviceBytes), dom, humanBytes(d.Available), humanBytes(reservedDev)), nil
 			}
-			sentence += fmt.Sprintf("; %s %s on %s", humanBytes(*p.DeviceBytes), "admitted", p.Backend)
-		} else if inDomain > 0 {
-			return false, fmt.Sprintf("waiting: %s capacity is not measured, so one engine starts on it at a time", p.Backend), nil
+			sentence += fmt.Sprintf("; %s %s on %s", humanBytes(*p.DeviceBytes), "admitted", dom)
+		} else if starting > 0 {
+			return false, fmt.Sprintf("waiting: %s capacity is not measured, so one engine starts on it at a time", dom), nil
 		} else {
 
-			sentence += fmt.Sprintf("; %s capacity is not measured — one start on it at a time, residency on it not bounded", p.Backend)
+			sentence += fmt.Sprintf("; %s capacity is not measured — one start on it at a time, residency on it not bounded", dom)
 		}
 	}
 	return true, sentence, nil
@@ -908,13 +920,17 @@ func (f *Facility) record(ev Event) {
 		if act.Role == RoleStarting && inst.Active() != nil {
 			act.Role = RoleCandidate
 		}
+	case EventPrepared:
+		if act != nil && ev.Selection != nil {
+			act.Selection = ev.Selection
+		}
 	case EventProgress:
 		if act != nil && ev.Material != nil {
 			act.Material = ev.Material
 		}
-	case EventAdmitting:
+	case EventAdmitting, EventAdmitted:
 		if act != nil {
-			act.Waiting, act.Admission = true, ev.Admission
+			act.Waiting, act.Admission = ev.Kind == EventAdmitting, ev.Admission
 		}
 	case EventActive:
 
@@ -1038,6 +1054,14 @@ func describe(ev Event) string {
 		if ev.Refusal != nil {
 			return ev.Refusal.Error()
 		}
+	case EventPrepared:
+		if ev.Selection != nil {
+			s := "prepared component set " + ev.Selection.Variant
+			if ev.Selection.Kept {
+				s += " (kept)"
+			}
+			return s
+		}
 	case EventProgress:
 		if ev.Material != nil {
 			return fmt.Sprintf("preparing — %d of %d files present", ev.Material.FilesPresent, ev.Material.FilesTotal)
@@ -1049,6 +1073,10 @@ func describe(ev Event) string {
 	case EventAdmitting:
 		if ev.Admission != nil {
 			return "admitting — " + ev.Admission.Sentence
+		}
+	case EventAdmitted:
+		if ev.Admission != nil {
+			return ev.Admission.Sentence
 		}
 	case EventActive:
 		if ev.Admission != nil {
@@ -1078,9 +1106,9 @@ type InstanceView struct {
 	Wanted bool
 	Dir    string
 
-	Activations []ActivationView
+	Family string
 
-	Generations map[Generation]Role
+	Activations []ActivationView
 }
 
 type ActivationView struct {
@@ -1090,6 +1118,8 @@ type ActivationView struct {
 	Since   time.Time
 	Timings map[Stage]time.Duration
 	Refusal *Refusal
+
+	Selection *Selection
 }
 
 type Snapshot struct {
@@ -1105,12 +1135,11 @@ func (f *Facility) Snapshot() Snapshot {
 	out := Snapshot{Skips: skips, Revision: f.rev}
 	leases := map[string][]*Lease{}
 	for _, inst := range f.instances {
-		v := InstanceView{ID: inst.ID, Version: inst.Version, State: inst.State(), Since: inst.Since, Wanted: inst.Desired.Active, Dir: inst.Dir,
-			RetryAt: inst.RetryAt, Refusal: copyRefusal(inst.LastRefusal()), Generations: map[Generation]Role{}}
+		v := InstanceView{ID: inst.ID, Version: inst.Version, State: inst.State(), Since: inst.Since, Wanted: inst.Desired.Active, Dir: inst.Dir, Family: inst.Family,
+			RetryAt: inst.RetryAt, Refusal: copyRefusal(inst.LastRefusal())}
 		for _, a := range inst.Activations {
-			v.Generations[a.Gen] = a.Role
 			v.Activations = append(v.Activations, ActivationView{Gen: a.Gen, Role: a.Role, Version: a.Version, Since: a.Started,
-				Timings: copyTimings(a.Timings), Refusal: copyRefusal(a.Refusal)})
+				Timings: copyTimings(a.Timings), Refusal: copyRefusal(a.Refusal), Selection: copySelection(a.Selection)})
 
 			if a.Admission != nil && (a.Role == RoleStarting || a.Role == RoleCandidate || (v.Admission == "" && a.Role == RoleActive)) {
 				v.Admission = a.Admission.Sentence
