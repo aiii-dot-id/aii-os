@@ -1,0 +1,316 @@
+package identity
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/aiii-dot-id/aii-os/internal/ledger"
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
+	"github.com/aiii-dot-id/aii-os/internal/memory"
+	"github.com/aiii-dot-id/aii-os/internal/ring"
+	"github.com/aiii-dot-id/aii-os/internal/store"
+)
+
+type ToolInfo struct {
+	Name        string
+	Description string
+}
+
+type ToolDiscoverer interface {
+	Discover(depth int) []ToolInfo
+}
+
+type ToolPlane interface {
+	Brief() ToolBrief
+	Search(query string, limit int) []ToolHit
+	Show(ref string) (ToolCard, error)
+	Offer(ref string) (string, error)
+	Release(ref string) (string, error)
+}
+
+type ToolFamily struct {
+	Name  string
+	Count int
+	Names []string
+	More  int
+}
+
+type ToolBrief struct {
+	Total        int
+	Offered      int
+	Unavailable  int
+	Families     []ToolFamily
+	MoreFamilies int
+	OfferedNames []string
+}
+
+type ToolHit struct {
+	Name      string
+	Operation string
+	Plugin    string
+	Summary   string
+	Effects   string
+	State     string
+}
+
+type ToolCard struct {
+	Name           string
+	Operation      string
+	Plugin         string
+	Version        string
+	Tier           string
+	Family         string
+	Summary        string
+	Effects        string
+	Capabilities   []string
+	MaxResultBytes int
+	Examples       []string
+	State          string
+	Reason         string
+	Receipt        string
+	Parameters     map[string]any
+}
+
+type EventWriter interface {
+	Append(ledger.EventType, int, any, string) (*ledger.Event, error)
+}
+
+type storePort interface {
+	noteStore
+	commitStore
+	recallStore
+	workStore
+	sendStore
+	curiosityStore
+	skillStore
+	measureStore
+	timerMeterStore
+	hostStore
+}
+
+type Engine struct {
+	safeMu               sync.RWMutex
+	safeReason           string
+	safeTranscript       []SafeTurn
+	transientIncarnation string
+	transientSeq         uint64
+	transientLost        uint64
+	interactionObserver  func()
+
+	fetchMu      sync.Mutex
+	fetchedURLs  map[string]bool
+	fetchedOrder []string
+
+	agencyMu             sync.RWMutex
+	maxSubagentDepth     int
+	maxParallelSubagents int
+	maxSubagentMints     int
+	subagentWallSeconds  int
+
+	subagentWallSecondsLocal int
+
+	spawnQueueOff bool
+
+	spawnRounds, spawnCalls, spawnLegs int
+
+	store    storePort
+	ledger   EventWriter
+	rings    *ring.Manager
+	toolDisc ToolDiscoverer
+
+	instruments  *memory.Facility
+	projects     ProjectPort
+	voice        VoicePort
+	heardHistory func(string, uint64, int) (string, error)
+	continuity   ContinuityPort
+	timers       TimerSetter
+	reachable    func(name string) bool
+	askProposer  func(session, text string, choices []string, connector string) error
+	workWake     func()
+	yieldGate    func() (need bool, why string)
+	routeIsLocal func(role string) bool
+
+	toolResultChars int
+
+	alarmFirings func() int
+}
+
+type Ports struct {
+	Projects ProjectPort
+	Voice    VoicePort
+
+	HeardHistory func(query string, after uint64, limit int) (string, error)
+	Continuity   ContinuityPort
+	Timers       TimerSetter
+
+	Embedder memory.Embedder
+
+	ConversationWindow int
+
+	ToolResultChars int
+
+	AlarmFirings func() int
+
+	Reachable func(name string) bool
+
+	AskProposer func(session, text string, choices []string, connector string) error
+
+	WorkWake func()
+
+	YieldGate func() (need bool, why string)
+
+	RouteIsLocal func(role string) bool
+}
+
+func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscoverer, p Ports) *Engine {
+	e := &Engine{
+		store:        s,
+		ledger:       l,
+		rings:        rm,
+		toolDisc:     td,
+		instruments:  memory.New(s),
+		projects:     p.Projects,
+		voice:        p.Voice,
+		heardHistory: p.HeardHistory,
+		continuity:   p.Continuity,
+		timers:       p.Timers,
+		reachable:    p.Reachable,
+		askProposer:  p.AskProposer,
+		workWake:     p.WorkWake,
+		yieldGate:    p.YieldGate,
+		routeIsLocal: p.RouteIsLocal,
+
+		toolResultChars: p.ToolResultChars,
+		alarmFirings:    p.AlarmFirings,
+	}
+	e.instruments.SetEmbedder(p.Embedder)
+	e.instruments.SetConversationWindow(p.ConversationWindow)
+	return e
+}
+
+func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, args map[string]any) (string, error) {
+	switch actionType {
+	case "verb":
+		return e.executeVerb(ctx, name, args)
+	default:
+		return "", fmt.Errorf("unknown action type: %s", actionType)
+	}
+}
+
+func (e *Engine) append(ctx context.Context, eventType ledger.EventType, ring int, payload any) (*ledger.Event, error) {
+	return e.ledger.Append(eventType, ring, payload, wire.ModelIDFromContext(ctx))
+}
+
+type SubagentDepth struct{}
+
+type SubagentBudget struct{}
+
+type SubagentWorkSession struct{}
+
+func (e *Engine) SetSpawnQueue(on bool) {
+	e.agencyMu.Lock()
+	defer e.agencyMu.Unlock()
+	e.spawnQueueOff = !on
+}
+
+func (e *Engine) SetSpawnBudget(rounds, calls, legs int) {
+	e.agencyMu.Lock()
+	defer e.agencyMu.Unlock()
+	e.spawnRounds, e.spawnCalls, e.spawnLegs = rounds, calls, legs
+}
+
+func (e *Engine) spawnBudget() (rounds, calls, legs int) {
+	e.agencyMu.RLock()
+	defer e.agencyMu.RUnlock()
+	return e.spawnRounds, e.spawnCalls, e.spawnLegs
+}
+
+func (e *Engine) spawnBudgetLine(wallSeconds int) string {
+	rounds, calls, legs := e.spawnBudget()
+	if rounds <= 0 && calls <= 0 {
+		return ""
+	}
+	if legs < 1 {
+		legs = 1
+	}
+	return fmt.Sprintf(" Its budget: %d rounds and %d calls per leg, up to %d leg(s), %d s wall per leg — size the deliverable to that; a leg that ends at its budget continues from the child's recorded next move.", rounds, calls, legs, wallSeconds)
+}
+
+func (e *Engine) spawnQueueOn() bool {
+	e.agencyMu.RLock()
+	defer e.agencyMu.RUnlock()
+	return !e.spawnQueueOff
+}
+
+func (e *Engine) SetAgencyLimits(maxDepth, maxParallel, maxMints, wallSeconds int) {
+	e.agencyMu.Lock()
+	defer e.agencyMu.Unlock()
+	e.maxSubagentDepth = maxDepth
+	e.maxParallelSubagents = maxParallel
+	e.maxSubagentMints = maxMints
+	e.subagentWallSeconds = wallSeconds
+}
+
+func (e *Engine) SetLocalSpawnWall(seconds int) {
+	e.agencyMu.Lock()
+	defer e.agencyMu.Unlock()
+	e.subagentWallSecondsLocal = seconds
+}
+
+func (e *Engine) spawnWall(role string) int {
+	e.agencyMu.RLock()
+	wall, local := e.subagentWallSeconds, e.subagentWallSecondsLocal
+	e.agencyMu.RUnlock()
+	if e.routeIsLocal != nil && local > 0 && e.routeIsLocal(role) {
+		return local
+	}
+	return wall
+}
+
+func (e *Engine) agencyLimits() (maxDepth, maxParallel, maxMints, wallSeconds int) {
+	e.agencyMu.RLock()
+	defer e.agencyMu.RUnlock()
+	return e.maxSubagentDepth, e.maxParallelSubagents, e.maxSubagentMints, e.subagentWallSeconds
+}
+
+type SubagentMints struct{}
+
+var ErrMintEnvelope = errors.New("mint envelope reached")
+
+func (e *Engine) executeVerb(ctx context.Context, name string, args map[string]any) (string, error) {
+	if name == "work" {
+		delete(args, "_subagent_depth")
+		delete(args, "_subagent_budget")
+		if d, ok := ctx.Value(SubagentDepth{}).(int); ok {
+			args["_subagent_depth"] = d
+		}
+		if b, ok := ctx.Value(SubagentBudget{}).(int); ok {
+			args["_subagent_budget"] = b
+		}
+	}
+
+	if name == "note" || name == "commit" {
+		if counter, ok := ctx.Value(SubagentMints{}).(*int); ok && counter != nil {
+			_, _, maxMints, _ := e.agencyLimits()
+			if maxMints > 0 && *counter >= maxMints {
+				return "", fmt.Errorf("%w (%d ledger-writing verb calls this run — agency.subagent_max_mints): deliver your outcome; the person notes what else deserves the record", ErrMintEnvelope, maxMints)
+			}
+			out, err := e.dispatchVerb(ctx, name, args)
+			if err == nil {
+				*counter++
+			}
+			return out, err
+		}
+	}
+	return e.dispatchVerb(ctx, name, args)
+}
+
+func (e *Engine) dispatchVerb(ctx context.Context, name string, args map[string]any) (string, error) {
+
+	if v := lookupVerb(name); v != nil {
+		return v.Handler(e, ctx, args)
+	}
+	return "", fmt.Errorf("unknown verb: %s", name)
+}

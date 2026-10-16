@@ -1,0 +1,152 @@
+#!/bin/bash
+set -euo pipefail
+
+IDENTITY="${IDENTITY:?set a signing certificate identity}"
+ENTITLEMENTS="$(cd "$(dirname "$0")" && pwd)/entitlements.plist"
+PROFILE="${PROFILE:-aii-notary}"
+OUT="${OUT:-dist}"
+BIN_DIR="${BIN_DIR:-}"
+NOTARIZE="${NOTARIZE:-1}"
+GO="${GO:-go}"
+
+root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$root"
+authored=$(cat "$root/VERSION" 2>/dev/null) && [ -n "$authored" ] || { echo "build-dmg: no VERSION file at $root/VERSION" >&2; exit 1; }
+VERSION="${VERSION:-$authored}"
+if [ "$VERSION" != "$authored" ]; then
+  echo "build-dmg: VERSION=$VERSION is set, but the VERSION file says $authored — the binaries report the file's version (it is compiled in); unset VERSION or bump the file" >&2
+  exit 1
+fi
+mkdir -p "$OUT"
+
+app="$OUT/AII OS.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp LICENSE "$app/Contents/Resources/LICENSE"
+
+echo "==> binaries"
+if [ -n "$BIN_DIR" ]; then
+  cp "$BIN_DIR/aii" "$app/Contents/MacOS/aii"
+  cp "$BIN_DIR/aii-app" "$app/Contents/MacOS/AII OS"
+else
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 "$GO" build -trimpath \
+    -ldflags "-s -w" \
+    -o "$app/Contents/MacOS/aii" ./cmd/aii
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 "$GO" build -trimpath \
+    -ldflags "-s -w" -o "$app/Contents/MacOS/AII OS" ./cmd/aii-app
+fi
+chmod +x "$app/Contents/MacOS/aii" "$app/Contents/MacOS/AII OS"
+
+echo "==> third-party licences"
+. packaging/third-party-licenses.sh
+third_party_licenses "$GO"
+cp THIRD_PARTY_LICENSES "$app/Contents/Resources/THIRD_PARTY_LICENSES"
+
+echo "==> icon"
+mkdir -p "$app/Contents/Resources"
+cp packaging/macos/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+
+cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key><string>AII OS</string>
+	<key>CFBundleDisplayName</key><string>AII OS</string>
+	<key>CFBundleIdentifier</key><string>id.aiii.aii-os</string>
+	<key>CFBundleVersion</key><string>$VERSION</string>
+	<key>CFBundleShortVersionString</key><string>$VERSION</string>
+	<key>CFBundleExecutable</key><string>AII OS</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>LSMinimumSystemVersion</key><string>13.0</string>
+	<key>LSUIElement</key><true/>
+	<key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+
+bare="$OUT/macos-arm64.signed"
+rm -rf "$bare"; mkdir -p "$bare"
+cp "$app/Contents/MacOS/AII OS" "$bare/aii-app"
+
+echo "==> sign (inner binary first, then the bundle)"
+codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" -s "$IDENTITY" "$app/Contents/MacOS/aii"
+codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" -s "$IDENTITY" "$app"
+codesign --verify --strict --deep --verbose=1 "$app"
+codesign -d --entitlements - "$app/Contents/MacOS/aii" 2>/dev/null | grep -q "com.apple.security.cs.allow-unsigned-executable-memory" \
+  || { echo "build-dmg: aii carries no allow-unsigned-executable-memory entitlement; wasm plugins would be killed" >&2; exit 1; }
+FIXTURE="${WASM_FIXTURE:-internal/pluginworker/testdata/echo.wasm}"
+[ -f "$FIXTURE" ] || { echo "build-dmg: no module fixture at $FIXTURE" >&2; exit 1; }
+set +e
+proof=$("$app/Contents/MacOS/aii" plugin-worker -describe "$FIXTURE" 2>&1); proof_rc=$?
+set -e
+case "$proof_rc" in
+  0) ;;
+  2) echo "$proof" | grep -q "stage=describe" \
+       || { echo "build-dmg: the signed worker refused the fixture before running it: $proof" >&2; exit 1; } ;;
+  *) echo "build-dmg: the signed worker did not run the module (rc=$proof_rc; a death by signal is the hardened runtime killing it): $proof" >&2; exit 1 ;;
+esac
+echo "    worker proof: the signed aii ran a module (rc=$proof_rc)"
+
+echo "==> the bare pair (what the macOS update tarball carries)"
+cp "$app/Contents/MacOS/aii" "$bare/aii"
+codesign --force --timestamp --options runtime -s "$IDENTITY" "$bare/aii-app"
+codesign --verify --strict --verbose=1 "$bare/aii"
+codesign --verify --strict --verbose=1 "$bare/aii-app"
+cp LICENSE THIRD_PARTY_LICENSES "$bare/"
+
+APPZIP="${APPZIP:-$OUT/aii-os-app_${VERSION}_macos_arm64.zip}"
+
+if [ "$NOTARIZE" = "1" ]; then
+  echo "==> notarize the app"
+  zip="$APPZIP"
+  rm -f "$zip"
+  ditto -c -k --keepParent "$app" "$zip"
+  xcrun notarytool submit "$zip" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$app"
+  rm -f "$zip"
+
+  echo "==> update payload (stapled app archive)"
+  appzip="$APPZIP"
+  rm -f "$appzip"
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$appzip"
+
+  echo "==> notarize the bare pair"
+  barezip="$OUT/macos-arm64.signed.zip"
+  rm -f "$barezip"
+  zip -q -j "$barezip" "$bare/aii" "$bare/aii-app"
+  xcrun notarytool submit "$barezip" --keychain-profile "$PROFILE" --wait
+  rm -f "$barezip"
+
+  echo "==> verify the app as Gatekeeper sees it when it EXECUTES"
+  spctl -a -vv -t exec "$app"
+  xcrun stapler validate "$app"
+fi
+
+echo "==> dmg"
+dmg="$OUT/AII-OS-$VERSION.dmg"
+rm -f "$dmg"
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+cp -R "$app" "$stage/"
+ln -s /Applications "$stage/Applications"
+hdiutil create -volname "AII OS" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
+
+echo "==> sign the dmg"
+codesign --force --timestamp -s "$IDENTITY" "$dmg"
+
+if [ "$NOTARIZE" = "1" ]; then
+  echo "==> notarize the dmg"
+  xcrun notarytool submit "$dmg" --keychain-profile "$PROFILE" --wait
+  xcrun stapler staple "$dmg"
+  echo "==> verify as Gatekeeper will see it"
+  spctl -a -vv -t open --context context:primary-signature "$dmg"
+  xcrun stapler validate "$dmg"
+fi
+
+echo "$bare"
+echo "$dmg"
+if [ "$NOTARIZE" = "1" ]; then
+  echo "$APPZIP"
+fi

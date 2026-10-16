@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "kind": "aiii_plugin_sdk_trust_tiers",
+  "status": "active",
+  "purpose": "Define the public SDK trust-tier workflow in developer-facing command terms without creating a daemon registry or certification bypass.",
+  "source_policies": {
+    "signing_policy": "contracts/signing-policy.json",
+    "channel_status": "contracts/channel-status.json",
+    "manifest_contract_validator": "scripts/validate-manifest-contract.py"
+  },
+  "commands": {
+    "inspect": "aiii plugin trust --json",
+    "scaffold": "aiii plugin new <plugin.id> --type <family> --lang <language>",
+    "doctor": "aiii plugin doctor --project <plugin-dir> --json",
+    "build": "aiii plugin build --target <variant-id>",
+    "local_test": "aiii plugin test --local --target <variant-id>",
+    "hostile_test": "aiii plugin test --hostile --target <variant-id>",
+    "sign": "aiii plugin sign --target <variant-id>",
+    "install": "aiii plugin install <bundle.aiiospkg> --socket <daemon-socket>",
+    "invoke": "aiii plugin invoke <plugin-id> <operation-id> --args <json-object> --socket <daemon-socket>"
+  },
+  "invariants": {
+    "wasm_baseline_required_for_t0_t1_t2": true,
+    "platform_reserved_t3_wasm_baseline_required": false,
+    "service_process_standard_allowed_at_t0_plus": true,
+    "certified_native_allowed_at_t2_plus": true,
+    "canonical_publisher_certificate_chain_live": true,
+    "publisher_certificate_required_for_t1_t2": true,
+    "t2_requires_valid_t1": true,
+    "t3_requires_platform_release_signature": true,
+    "t3_requires_publisher_signature": false,
+    "certified_native_below_t2_denied_reason": "NATIVE_TRUST_TIER_INELIGIBLE",
+    "certified_channel_live": false,
+    "public_submissions_allowed": false,
+    "daemon_registry_dependency_required": false,
+    "plugin_output_is_not_proof": true,
+    "host_authored_receipts_are_proof": true
+  },
+  "tiers": [
+    {
+      "id": "T0",
+      "display_name": "Local or unsigned",
+      "developer_goal": "Build and test a portable WASM-baseline plugin locally.",
+      "eligible_variants": [
+        "wasm_component + wasm_sandbox",
+        "service_process + standard"
+      ],
+      "native_provider_eligible": true,
+      "signing": "not required for local source proof",
+      "admission_expectation": "daemon may admit only if local policy explicitly allows unsigned development packages",
+      "denial_examples": [
+        "missing required WASM baseline variants",
+        "certified_native profile without T2 evidence"
+      ]
+    },
+    {
+      "id": "T1",
+      "display_name": "AIII-certified publisher, author-signed",
+      "developer_goal": "Ship a portable WASM-baseline plugin signed by a publisher key certified by AIII.",
+      "eligible_variants": [
+        "wasm_component + wasm_sandbox",
+        "service_process + standard"
+      ],
+      "native_provider_eligible": true,
+      "signing": "the packaged signer requires an AIII-signed publisher certificate matching the publisher private key and emits an exact-release T1 candidate; signing does not assign a tier",
+      "admission_expectation": "the daemon classifies the candidate as T1 only after verifying the pinned AIII publisher-certifier chain, package and manifest hashes, publisher signature, WASM baseline, interface registration, capability policy, and receipts",
+      "denial_examples": [
+        "canonical_signer_required",
+        "certified_native profile without T2 evidence"
+      ]
+    },
+    {
+      "id": "T2",
+      "display_name": "Certified native/provider",
+      "developer_goal": "Add reviewed native or provider variants to a portable WASM baseline.",
+      "eligible_variants": [
+        "wasm_component + wasm_sandbox",
+        "service_process + standard",
+        "service_process + certified_native",
+        "certified app-contained native/provider variants"
+      ],
+      "native_provider_eligible": true,
+      "signing": "T2 requires a daemon-verified T1 proof plus a separate AIII reviewer attestation for the exact release; public Certified Channel submission is not yet live in this SDK staging release",
+      "admission_expectation": "daemon admits only after trust-tier classification, platform match, containment/probe availability, per-invocation capability evaluation, and host-authored receipts",
+      "denial_examples": [
+        "Certified Channel is not live",
+        "capability_denied"
+      ]
+    },
+    {
+      "id": "T3",
+      "display_name": "Platform-reserved native/provider",
+      "developer_goal": "Use first-party platform-owned native/data-plane providers as platform-reserved exact releases; optional WASM variants may be shipped for compatibility or regression proof.",
+      "eligible_variants": [
+        "native_t3_component + platform_reserved",
+        "optional wasm_component + wasm_sandbox compatibility/regression variants"
+      ],
+      "native_provider_eligible": true,
+      "signing": "T3 requires one AIII platform_release signature and no publisher or reviewer proof; first-party platform release tooling is separate from the public publisher signer",
+      "admission_expectation": "target daemon admits only after platform release signature verification, platform policy, per-invocation capability evaluation, containment, lifecycle proof, revocation handling, and host-authored receipts",
+      "denial_examples": [
+        "runtime_unavailable",
+        "capability_denied"
+      ]
+    }
+  ]
+}

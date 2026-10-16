@@ -1,0 +1,1317 @@
+package supervisor
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/bbb"
+	"github.com/aiii-dot-id/aii-os/internal/consolewin"
+	"github.com/aiii-dot-id/aii-os/internal/hostcap"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
+)
+
+type State string
+
+const (
+	StateStarting   State = "starting"
+	StateRunning    State = "running"
+	StateRestarting State = "restarting"
+	StateStopped    State = "stopped"
+)
+
+const (
+	DefaultBackoffInitial = 250 * time.Millisecond
+
+	DefaultBackoffMax = 8 * time.Second
+
+	DefaultMaxRestarts = 5
+
+	DefaultRestartWindow = 10 * time.Minute
+
+	DefaultReadyTimeout = 30 * time.Second
+
+	closeGraceEOF = 3 * time.Second
+
+	closeGraceTerm = 2 * time.Second
+
+	stderrTailLines = 8
+
+	maxStderrLineBytes = 4096
+)
+
+type Dispatcher interface {
+	Dispatch(ctx context.Context, method string, params []byte) (reply []byte, err error)
+}
+
+type Backoff struct {
+	Initial     time.Duration
+	Max         time.Duration
+	MaxRestarts int
+
+	Window time.Duration
+}
+
+func (b Backoff) window() time.Duration {
+	if b.Window > 0 {
+		return b.Window
+	}
+	return DefaultRestartWindow
+}
+
+func (b Backoff) initial() time.Duration {
+	if b.Initial > 0 {
+		return b.Initial
+	}
+	return DefaultBackoffInitial
+}
+func (b Backoff) max() time.Duration {
+	if b.Max > 0 {
+		return b.Max
+	}
+	return DefaultBackoffMax
+}
+func (b Backoff) maxRestarts() int {
+	if b.MaxRestarts > 0 {
+		return b.MaxRestarts
+	}
+	return DefaultMaxRestarts
+}
+
+func (b Backoff) delay(n int) time.Duration {
+	d := b.initial()
+	for i := 1; i < n; i++ {
+		d *= 2
+		if d >= b.max() {
+			return b.max()
+		}
+	}
+	if d > b.max() {
+		return b.max()
+	}
+	return d
+}
+
+type Spec struct {
+	SessionMode bool
+
+	PluginID string
+
+	Argv []string
+
+	ArgvContainment Containment
+
+	Env []string
+
+	ReadyMark string
+
+	ReadyTimeout time.Duration
+
+	ReadyAllowance string
+
+	ReadyRemedy string
+
+	RLimitASBytes uint64
+
+	Backoff Backoff
+
+	ExtraFiles []*os.File
+
+	Artifact io.Closer
+
+	AudioPair bool
+
+	AppContainer *AppContainer
+
+	VerifyArtifact func() error
+
+	ExitMeaning func(code int) string
+}
+
+func (s Spec) readyProvenance() string {
+	if s.ReadyAllowance == "" {
+		return ""
+	}
+	return " (" + s.ReadyAllowance + ")"
+}
+
+func (s Spec) readyTimeout() time.Duration {
+	if s.ReadyTimeout > 0 {
+		return s.ReadyTimeout
+	}
+	return DefaultReadyTimeout
+}
+
+func WorkerExitMeaning(code int) string {
+	switch code {
+	case bbb.ExitClean:
+		return "clean shutdown (stdin EOF)"
+	case bbb.ExitUsage:
+		return "usage error"
+	case bbb.ExitAdmission:
+		return "module load/admission failure"
+	case bbb.ExitInvocation:
+		return "fatal invocation failure (trap, timeout, resource kill, ABI or frame-budget violation)"
+	case bbb.ExitStream:
+		return "stream failure (framing violation or broken pipe)"
+	case bbb.ExitDescriptorMismatch:
+		return "descriptor disagrees with the packaged contract"
+	case bbb.ExitDescriptorUnasked:
+		return "descriptor proof failed before comparison"
+	case -1:
+		return "killed by signal (no exit code)"
+	}
+	return "unrecognized exit code"
+}
+
+type Supervisor struct {
+	nextGeneration uint64
+	spec           Spec
+	dispatcher     Dispatcher
+
+	invokeGate chan struct{}
+
+	mu         sync.Mutex
+	state      State
+	stopReason error
+	child      *child
+	restarts   int
+
+	restartTimes []time.Time
+	gen          int
+	spawning     chan struct{}
+	artifactOnce sync.Once
+	artifactErr  error
+	changed      chan struct{}
+	terminated   chan struct{}
+}
+
+type child struct {
+	generation uint64
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     io.ReadCloser
+	stderr     io.ReadCloser
+
+	started time.Time
+	called  atomic.Bool
+
+	contained  func() error
+	isolation  Containment
+	cleanupErr error
+	frames     chan []byte
+	pumps      sync.WaitGroup
+
+	abandonOnce sync.Once
+	abandon     chan struct{}
+
+	readErrMu sync.Mutex
+	readErr   error
+
+	exited chan struct{}
+
+	audioIn  *os.File
+	audioOut *os.File
+
+	stdoutEOF atomic.Bool
+	exitErr   error
+
+	cancelled atomic.Bool
+
+	readyOnce sync.Once
+	ready     chan struct{}
+	readyLine string
+
+	built atomic.Bool
+
+	tailMu sync.Mutex
+	tail   []string
+}
+
+func (c *child) abandonNow() { c.abandonOnce.Do(func() { close(c.abandon) }) }
+
+func (c *child) markReady() { c.readyOnce.Do(func() { close(c.ready) }) }
+
+func (c *child) noteRead(err error) {
+	c.readErrMu.Lock()
+	if c.readErr == nil {
+		c.readErr = err
+	}
+	c.readErrMu.Unlock()
+}
+
+func (c *child) readError() error {
+	c.readErrMu.Lock()
+	defer c.readErrMu.Unlock()
+	return c.readErr
+}
+
+func (c *child) noteLine(line string) {
+	c.tailMu.Lock()
+	c.tail = append(c.tail, line)
+	if len(c.tail) > stderrTailLines {
+		c.tail = c.tail[len(c.tail)-stderrTailLines:]
+	}
+	c.tailMu.Unlock()
+}
+
+func (c *child) tailLines() []string {
+	c.tailMu.Lock()
+	defer c.tailMu.Unlock()
+	return append([]string(nil), c.tail...)
+}
+
+func Start(spec Spec, dispatcher Dispatcher) (*Supervisor, error) {
+	return StartContext(context.Background(), spec, dispatcher)
+}
+
+func StartContext(ctx context.Context, spec Spec, dispatcher Dispatcher) (*Supervisor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(spec.Argv) == 0 {
+		return nil, fmt.Errorf("supervisor: %s: empty argv", spec.PluginID)
+	}
+	s := &Supervisor{spec: spec, dispatcher: dispatcher, state: StateStarting, invokeGate: make(chan struct{}, 1), changed: make(chan struct{}), terminated: make(chan struct{})}
+	if err := s.spawnAndAwaitReady(ctx); err != nil {
+		s.mu.Lock()
+		s.state = StateStopped
+		s.stopReason = err
+		s.publishStateLocked()
+		s.mu.Unlock()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Supervisor) State() (State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, s.stopReason
+}
+
+func (s *Supervisor) SessionChannels() (frames <-chan []byte, stdin io.Writer, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != StateRunning || s.child == nil {
+		return nil, nil, false
+	}
+
+	select {
+	case <-s.child.exited:
+		return nil, nil, false
+	default:
+	}
+	if s.child.stdoutEOF.Load() {
+		return nil, nil, false
+	}
+	return s.child.frames, s.child.stdin, true
+}
+
+func (s *Supervisor) AudioPair() (in io.WriteCloser, out io.ReadCloser, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != StateRunning || s.child == nil || s.child.audioIn == nil {
+		return nil, nil, false
+	}
+	select {
+	case <-s.child.exited:
+		return nil, nil, false
+	default:
+	}
+	if s.child.stdoutEOF.Load() {
+		return nil, nil, false
+	}
+	return s.child.audioIn, s.child.audioOut, true
+}
+
+func (s *Supervisor) Exited() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.child == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return s.child.exited
+}
+
+func (s *Supervisor) Dispatcher() Dispatcher { return s.dispatcher }
+
+func (s *Supervisor) ReadyLine() string {
+	s.mu.Lock()
+	c := s.child
+	s.mu.Unlock()
+	if c == nil {
+		return ""
+	}
+	c.tailMu.Lock()
+	defer c.tailMu.Unlock()
+	return c.readyLine
+}
+
+func (s *Supervisor) Restarts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restarts
+}
+
+func (s *Supervisor) Pid() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.child != nil && s.child.cmd.Process != nil {
+		select {
+		case <-s.child.exited:
+			return 0
+		default:
+		}
+		return s.child.cmd.Process.Pid
+	}
+	return 0
+}
+
+func (s *Supervisor) KillChild() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.child == nil || s.child.cmd.Process == nil {
+		return false, nil
+	}
+	select {
+	case <-s.child.exited:
+		return false, nil
+	default:
+	}
+	return true, s.child.cmd.Process.Kill()
+}
+
+var applyLimit = applyAddressSpaceLimit
+
+func (s *Supervisor) spawnAndAwaitReady(ctx context.Context) error {
+	for attempt := 1; ; attempt++ {
+		err := s.spawnOnceAndAwaitReady(ctx)
+		var exit *ChildExitError
+		if !errors.As(err, &exit) || exit.Phase != PhaseContainment || attempt == ContainmentBuildAttempts {
+			return err
+		}
+		logsink.Info("plugins.start", "plugin %s: containment not built (attempt %d of %d), the plugin never ran; spawning again",
+			s.spec.PluginID, attempt, ContainmentBuildAttempts)
+	}
+}
+
+func (s *Supervisor) spawnOnceAndAwaitReady(ctx context.Context) (spawnErr error) {
+	s.mu.Lock()
+	if s.state == StateStopped {
+		s.mu.Unlock()
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errClosed}
+	}
+	done := make(chan struct{})
+	s.spawning = done
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		var cleanup *ContainmentCleanupError
+		if errors.As(spawnErr, &cleanup) {
+			s.state, s.stopReason = StateStopped, spawnErr
+			s.publishStateLocked()
+		}
+		if s.spawning == done {
+			close(done)
+			s.spawning = nil
+		}
+		s.mu.Unlock()
+	}()
+
+	if nc := hostcap.Can(hostcap.NativeChild); !nc.Available {
+		return &SpawnRefusedError{PluginID: s.spec.PluginID,
+			Cause: fmt.Errorf("this host cannot run native children: %s", nc.Reason)}
+	}
+	if s.spec.VerifyArtifact != nil {
+		if err := s.spec.VerifyArtifact(); err != nil {
+
+			return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+		}
+	}
+
+	c, walled, err := s.launch()
+	if err != nil {
+		return err
+	}
+	if err := s.contain(c, walled); err != nil {
+		return err
+	}
+	gen, err := s.publish(c, done)
+	if err != nil {
+		return err
+	}
+
+	c.pumps.Add(2)
+	go func() {
+		defer c.pumps.Done()
+		defer c.stdout.Close()
+		s.pumpFrames(c, c.stdout)
+	}()
+	go func() {
+		defer c.pumps.Done()
+		defer c.stderr.Close()
+		s.pumpStderr(c, c.stderr)
+	}()
+	go s.reap(c, gen)
+
+	if err := s.awaitReady(ctx, c); err != nil {
+		return err
+	}
+	return s.promote(c)
+}
+
+func (s *Supervisor) launch() (*child, *launched, error) {
+	cmd := exec.Command(s.spec.Argv[0], s.spec.Argv[1:]...)
+	cmd.ExtraFiles = s.spec.ExtraFiles
+
+	filtered, err := s.spec.ArgvContainment.Attach(cmd)
+	if err != nil {
+		return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+	}
+
+	defer filtered()
+
+	env := s.spec.Env
+	if env == nil {
+		env = []string{}
+	}
+	var pair *audioPair
+	if s.spec.AudioPair {
+		var err error
+		if pair, env, err = prepareAudioPair(cmd, env, cmd.ExtraFiles); err != nil {
+			return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: fmt.Errorf("audio pair: %w", err)}
+		}
+	}
+
+	cmd.Env = env
+
+	var stdin io.WriteCloser
+	var stdout, stderr io.ReadCloser
+	var walled *launched
+	if s.spec.AppContainer != nil {
+
+		var lerr error
+		if walled, lerr = launchContained(cmd, s.spec.AppContainer, s.spec.RLimitASBytes); lerr != nil {
+			pair.release(true)
+			return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: lerr}
+		}
+		stdin, stdout, stderr = walled.stdin, walled.stdout, walled.stderr
+	} else {
+		var err error
+		if stdin, err = cmd.StdinPipe(); err != nil {
+			pair.release(true)
+			return nil, nil, fmt.Errorf("supervisor: %s: stdin pipe: %w", s.spec.PluginID, err)
+		}
+		if stdout, err = cmd.StdoutPipe(); err != nil {
+			pair.release(true)
+			return nil, nil, fmt.Errorf("supervisor: %s: stdout pipe: %w", s.spec.PluginID, err)
+		}
+		if stderr, err = cmd.StderrPipe(); err != nil {
+			pair.release(true)
+			return nil, nil, fmt.Errorf("supervisor: %s: stderr pipe: %w", s.spec.PluginID, err)
+		}
+
+		consolewin.Hide(cmd)
+		if err := cmd.Start(); err != nil {
+			pair.release(true)
+			return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+		}
+	}
+
+	pair.release(false)
+	hostIn, hostOut := pair.ends()
+
+	c := &child{
+		started: time.Now(),
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  stdout,
+		stderr:  stderr,
+		frames:  make(chan []byte, 4),
+		audioIn: hostIn, audioOut: hostOut,
+		abandon: make(chan struct{}),
+		exited:  make(chan struct{}),
+		ready:   make(chan struct{}),
+	}
+	return c, walled, nil
+}
+
+func (s *Supervisor) contain(c *child, walled *launched) error {
+
+	var contained func() error
+	var cmsg string
+	var cerr error
+	c.isolation = s.spec.ArgvContainment
+	if walled != nil {
+
+		contained, cmsg = walled.contained, walled.containment.Description
+		c.isolation = walled.containment
+	} else {
+		contained, cmsg, cerr = containProcess(c.cmd.Process.Pid, s.spec.RLimitASBytes)
+	}
+	if cerr != nil {
+
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: cerr}
+	}
+	if cmsg != "" {
+		logsink.Info("plugins.start", "plugin %s: native child %s", s.spec.PluginID, cmsg)
+	}
+	c.contained = contained
+	if s.spec.RLimitASBytes > 0 {
+
+		msg, err := applyLimit(c.cmd.Process.Pid, s.spec.RLimitASBytes)
+		if err != nil {
+			_ = c.cmd.Process.Kill()
+			_ = c.cmd.Wait()
+			if c.contained != nil {
+				err = errors.Join(err, c.contained())
+			}
+			return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+		}
+		if msg != "" {
+			logsink.Info("plugins.start", "plugin %s: resource envelope: %s", s.spec.PluginID, msg)
+		}
+	}
+	return nil
+}
+
+func (s *Supervisor) publish(c *child, done chan struct{}) (int, error) {
+	s.mu.Lock()
+	if s.state == StateStopped {
+
+		s.mu.Unlock()
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+		var cleanupErr error
+		if c.contained != nil {
+			cleanupErr = c.contained()
+		}
+		if cleanupErr != nil {
+			return 0, &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: cleanupErr}
+		}
+		return 0, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errors.Join(errClosed, cleanupErr)}
+	}
+	s.gen++
+	gen := s.gen
+	s.nextGeneration++
+	c.generation = s.nextGeneration
+	s.child = c
+	close(done)
+	s.spawning = nil
+	s.mu.Unlock()
+	return gen, nil
+}
+
+func (s *Supervisor) awaitReady(ctx context.Context, c *child) error {
+
+	if s.spec.ReadyMark == "" && s.spec.ArgvContainment.BuiltMark == "" {
+		c.markReady()
+	}
+	select {
+	case <-c.ready:
+	case <-c.exited:
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+
+		phase := "start"
+		if s.spec.ArgvContainment.BuiltMark != "" && !c.built.Load() {
+			phase = PhaseContainment
+		}
+		return s.exitError(c, phase)
+	case <-ctx.Done():
+
+		s.kill(c, true)
+		select {
+		case <-c.exited:
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+		default:
+			if pending := s.retirementPending(c, fmt.Errorf("start cancelled; child retirement still pending")); pending != nil {
+				return pending
+			}
+		}
+		return &StartCancelledError{PluginID: s.spec.PluginID, Cause: ctx.Err(), StderrTail: c.tailLines()}
+	case <-time.After(s.spec.readyTimeout()):
+		s.kill(c, false)
+		select {
+		case <-c.exited:
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+		default:
+			if pending := s.retirementPending(c, fmt.Errorf("startup deadline exceeded; child retirement still pending")); pending != nil {
+				return pending
+			}
+		}
+		return &NotReadyError{PluginID: s.spec.PluginID, Allowance: s.spec.readyTimeout(), Remedy: s.spec.ReadyRemedy,
+			Exit: &ChildExitError{
+				PluginID: s.spec.PluginID, Code: -1,
+				Meaning: fmt.Sprintf("no readiness mark within %s%s; killed", s.spec.readyTimeout(), s.spec.readyProvenance()),
+				Phase:   "start", StderrTail: c.tailLines(),
+			}}
+	}
+	return nil
+}
+
+func (s *Supervisor) promote(c *child) error {
+
+	s.mu.Lock()
+	if s.state == StateStopped {
+
+		s.mu.Unlock()
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errClosed}
+	}
+	select {
+	case <-c.exited:
+		s.mu.Unlock()
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+		return s.exitError(c, "start")
+	default:
+	}
+	s.state = StateRunning
+	s.publishStateLocked()
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Supervisor) pumpFrames(c *child, stdout io.Reader) {
+	defer func() {
+		c.stdoutEOF.Store(true)
+		close(c.frames)
+	}()
+	for {
+		payload, err := bbb.ReadFrame(stdout, bbb.MaxControlFrameBytes)
+		if err != nil {
+			c.noteRead(err)
+			return
+		}
+		select {
+		case c.frames <- payload:
+		case <-c.abandon:
+			return
+		}
+	}
+}
+
+func (s *Supervisor) pumpStderr(c *child, stderr io.Reader) {
+	br := bufio.NewReader(stderr)
+	buf := make([]byte, 0, 256)
+	flush := func() {
+		if len(buf) == 0 {
+			return
+		}
+		line := string(buf)
+		buf = buf[:0]
+		c.noteLine(line)
+		logsink.Debug("plugins.session", "plugin %s: %s", s.spec.PluginID, line)
+		if m := s.spec.ArgvContainment.BuiltMark; m != "" && line == m {
+			c.built.Store(true)
+			if s.spec.ReadyMark == "" {
+				c.markReady()
+			}
+		}
+		if s.spec.ReadyMark != "" && strings.Contains(line, s.spec.ReadyMark) {
+			c.tailMu.Lock()
+			if c.readyLine == "" {
+				c.readyLine = line
+			}
+			c.tailMu.Unlock()
+			c.markReady()
+		}
+	}
+	for {
+		b, err := br.ReadByte()
+		if err == nil {
+			if b == '\n' {
+				flush()
+			} else if len(buf) < maxStderrLineBytes {
+
+				buf = append(buf, b)
+			}
+			continue
+		}
+		flush()
+		return
+	}
+}
+
+func (s *Supervisor) reap(c *child, gen int) {
+
+	state, err := c.cmd.Process.Wait()
+	if err == nil {
+		c.cmd.ProcessState = state
+		if !state.Success() {
+			err = &exec.ExitError{ProcessState: state}
+		}
+	}
+	if c.contained != nil {
+
+		if err := c.contained(); err != nil {
+			c.cleanupErr = &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
+		}
+	}
+	drained := make(chan struct{})
+	go func() {
+		c.pumps.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(closeGraceEOF):
+		c.abandonNow()
+		_ = c.stdout.Close()
+		_ = c.stderr.Close()
+		<-drained
+	}
+
+	if c.audioIn != nil {
+		_ = c.audioIn.Close()
+	}
+	if c.audioOut != nil {
+		_ = c.audioOut.Close()
+	}
+	_ = c.stdin.Close()
+	c.exitErr = err
+	close(c.exited)
+
+	s.mu.Lock()
+	if s.gen != gen {
+		s.mu.Unlock()
+		return
+	}
+
+	if c.cleanupErr != nil {
+		s.state = StateStopped
+		s.stopReason = c.cleanupErr
+		s.publishStateLocked()
+		s.mu.Unlock()
+		logsink.Warn("plugins.error", "plugin %s: %v", s.spec.PluginID, c.cleanupErr)
+		return
+	}
+	if s.state == StateStopped {
+
+		s.mu.Unlock()
+		return
+	}
+	code := exitCode(err)
+	meaning, restarts := s.exitMeaning(code), s.restarts
+
+	var lastWords string
+	if tail := c.tailLines(); code != 0 && len(tail) > 0 {
+		lastWords = "; stderr tail: " + strings.Join(tail, " | ")
+	}
+	exited := func() {
+		logsink.Info("plugins.end", "plugin %s: child exited code=%d meaning=%q restarts=%d%s",
+			s.spec.PluginID, code, meaning, restarts, lastWords)
+	}
+
+	if s.state == StateStarting {
+
+		s.mu.Unlock()
+		exited()
+		return
+	}
+	if c.cancelled.Load() {
+
+		n := s.restarts
+		s.state = StateRestarting
+		s.child = nil
+		s.mu.Unlock()
+		exited()
+		logsink.Info("plugins.end", "plugin %s: child exited on the host's cancel of a call; reviving now, not counted (restarts=%d)",
+			s.spec.PluginID, n)
+		go s.restart(n)
+		return
+	}
+
+	last := &ChildExitError{PluginID: s.spec.PluginID, Code: code,
+		Meaning: meaning, Phase: "run", StderrTail: c.tailLines()}
+	if !s.countRestartLocked(time.Now(), last) {
+		reason := s.stopReason
+		s.mu.Unlock()
+		exited()
+		logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, reason)
+		return
+	}
+	n := s.restarts
+	s.state = StateRestarting
+	s.child = nil
+	s.mu.Unlock()
+	exited()
+
+	delay := s.spec.Backoff.delay(n)
+	logsink.Info("plugins.end", "plugin %s: restart %d/%d in %s",
+		s.spec.PluginID, n, s.spec.Backoff.maxRestarts(), delay)
+	time.AfterFunc(delay, func() { s.restart(n) })
+}
+
+func restartsWithin(ts []time.Time, cutoff time.Time) []time.Time {
+	out := ts[:0]
+	for _, t := range ts {
+		if !t.Before(cutoff) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (s *Supervisor) restart(n int) {
+	s.mu.Lock()
+	if s.state != StateRestarting || s.restarts != n {
+		s.mu.Unlock()
+		return
+	}
+	s.state = StateStarting
+	s.mu.Unlock()
+
+	if err := s.spawnAndAwaitReady(context.Background()); err != nil {
+		s.mu.Lock()
+		if s.state == StateStopped {
+			s.mu.Unlock()
+			return
+		}
+		var refused *SpawnRefusedError
+		if errors.As(err, &refused) {
+
+			s.state = StateStopped
+			s.stopReason = err
+			s.publishStateLocked()
+			s.mu.Unlock()
+			logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, err)
+			return
+		}
+		if !s.countRestartLocked(time.Now(), err) {
+			reason := s.stopReason
+			s.mu.Unlock()
+			logsink.Warn("plugins.refusal", "plugin %s: DEACTIVATED: %v", s.spec.PluginID, reason)
+			return
+		}
+		next := s.restarts
+		s.state = StateRestarting
+		s.mu.Unlock()
+		delay := s.spec.Backoff.delay(next)
+		logsink.Info("plugins.end", "plugin %s: restart %d/%d in %s (previous respawn failed: %v)",
+			s.spec.PluginID, next, s.spec.Backoff.maxRestarts(), delay, err)
+		time.AfterFunc(delay, func() { s.restart(next) })
+	}
+}
+
+func (s *Supervisor) exitMeaning(code int) string {
+	if s.spec.ExitMeaning != nil {
+		return s.spec.ExitMeaning(code)
+	}
+	return fmt.Sprintf("exit code %d", code)
+}
+
+func (s *Supervisor) exitError(c *child, phase string) *ChildExitError {
+	code := exitCode(c.exitErr)
+	return &ChildExitError{PluginID: s.spec.PluginID, Code: code,
+		Meaning: s.exitMeaning(code), Phase: phase, StderrTail: c.tailLines()}
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+func (s *Supervisor) kill(c *child, cancelled bool) {
+	if cancelled {
+		c.cancelled.Store(true)
+	}
+	c.abandonNow()
+	_ = c.stdin.Close()
+	if c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	s.awaitReaped(c)
+}
+
+const startedLayout = "2006/01/02 15:04:05"
+
+func (s *Supervisor) tellCall(c *child, first bool, took time.Duration, answered bool) {
+	what := "answered in"
+	if !answered {
+		what = "failed after"
+	}
+	cold := ""
+	if first {
+		cold = ", the first since its child started " + c.started.Format(startedLayout)
+	}
+	logsink.Debug("plugins.return", "plugin %s: a call %s %s%s", s.spec.PluginID, what, took.Round(time.Millisecond), cold)
+}
+
+func (s *Supervisor) Generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != StateRunning || s.child == nil || s.child.stdoutEOF.Load() {
+		return 0
+	}
+	return s.child.generation
+}
+
+func (s *Supervisor) InvokeGeneration(ctx context.Context, frame []byte, expected uint64) ([]byte, error) {
+	if expected == 0 {
+		return nil, ErrGenerationChanged
+	}
+	return s.invoke(ctx, frame, expected)
+}
+
+var ErrGenerationChanged = errors.New("supervisor: child generation changed")
+
+func (s *Supervisor) Invoke(ctx context.Context, frame []byte) ([]byte, error) {
+	return s.invoke(ctx, frame, 0)
+}
+
+func (s *Supervisor) invoke(ctx context.Context, frame []byte, expected uint64) (_ []byte, err error) {
+
+	select {
+	case s.invokeGate <- struct{}{}:
+		defer func() { <-s.invokeGate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if s.spec.SessionMode {
+		return nil, fmt.Errorf("supervisor: %s runs as a resident session — Invoke is not available on the session lane", s.spec.PluginID)
+	}
+
+	s.mu.Lock()
+	if s.state != StateRunning || s.child == nil {
+		state, reason := s.state, s.stopReason
+		s.mu.Unlock()
+		return nil, &UnavailableError{PluginID: s.spec.PluginID, State: state, Reason: reason}
+	}
+	c := s.child
+	if expected != 0 && (c.generation != expected || c.stdoutEOF.Load()) {
+		s.mu.Unlock()
+		return nil, ErrGenerationChanged
+	}
+	s.mu.Unlock()
+
+	if len(frame) > bbb.MaxControlFrameBytes {
+
+		return nil, fmt.Errorf("supervisor: %s: request frame is %d bytes, over the %d-byte plugin-side ceiling: %w",
+			s.spec.PluginID, len(frame), bbb.MaxControlFrameBytes, bbb.ErrFrameTooLarge)
+	}
+
+	first := !c.called.Swap(true)
+	defer func(began time.Time) { s.tellCall(c, first, time.Since(began), err == nil) }(time.Now())
+	if err := s.writeOwned(ctx, c, frame, "write"); err != nil {
+		return nil, err
+	}
+
+	for {
+
+		var payload []byte
+		var ok bool
+		select {
+		case payload, ok = <-c.frames:
+		default:
+			select {
+			case payload, ok = <-c.frames:
+			case <-c.exited:
+				return nil, s.exitError(c, "invoke")
+			case <-ctx.Done():
+
+				s.kill(c, true)
+				return nil, &InvokeTimeoutError{PluginID: s.spec.PluginID, Started: c.started, Err: ctx.Err()}
+			}
+		}
+		if !ok {
+
+			readErr := c.readError()
+
+			if errors.Is(readErr, bbb.ErrFrameTooLarge) {
+				s.kill(c, false)
+				return nil, &ChildIOError{PluginID: s.spec.PluginID, Op: "read", Err: readErr}
+			}
+			select {
+			case <-c.exited:
+				return nil, s.exitError(c, "invoke")
+			case <-time.After(closeGraceEOF):
+			}
+			s.kill(c, false)
+			return nil, &ChildIOError{PluginID: s.spec.PluginID, Op: "read", Err: readErr}
+		}
+		done, resp, err := s.consumeFrame(ctx, c, payload)
+		if err != nil {
+
+			return nil, err
+		}
+		if done {
+			return resp, nil
+		}
+	}
+}
+
+func (s *Supervisor) consumeFrame(ctx context.Context, c *child, payload []byte) (done bool, resp []byte, err error) {
+	var members map[string]json.RawMessage
+	if uerr := json.Unmarshal(payload, &members); uerr == nil {
+		if _, isRequest := members["method"]; isRequest {
+			if herr := s.answerUpstream(ctx, c, members); herr != nil {
+				return false, nil, herr
+			}
+			return false, nil, nil
+		}
+	}
+	return true, payload, nil
+}
+
+func (s *Supervisor) answerUpstream(ctx context.Context, c *child, members map[string]json.RawMessage) error {
+	var method string
+	if err := json.Unmarshal(members["method"], &method); err != nil {
+		s.kill(c, false)
+		return &ProtocolError{PluginID: s.spec.PluginID,
+			Requirement: "request method must be a string", Evidence: excerpt(members["method"])}
+	}
+	idRaw, hasID := members["id"]
+	if !hasID {
+
+		idRaw = json.RawMessage("null")
+	}
+	params := members["params"]
+	if len(params) == 0 {
+		params = json.RawMessage("{}")
+	}
+
+	var reply []byte
+	importName, known := bbb.ImportForMethod(method)
+	switch {
+	case !known:
+
+		reply = mustJSON(rpcErrorObject{Code: -32601, Message: "method not found"})
+	case s.dispatcher == nil:
+
+		reply = mustJSON(rpcErrorObject{
+			Code:    -32000,
+			Message: fmt.Sprintf("no capability broker attached to this worker; %s denied", importName),
+			Data:    &rpcErrorData{ReasonCode: "POLICY_DENY"},
+		})
+	default:
+		var derr error
+		reply, derr = s.dispatcher.Dispatch(ctx, importName, params)
+		if derr != nil {
+
+			logsink.Warn("plugins.error", "plugin %s: upstream %s dispatch failed: %v", s.spec.PluginID, method, derr)
+			reply = mustJSON(rpcErrorObject{Code: -32603, Message: "host dispatch failed"})
+		}
+	}
+
+	envelope := map[string]json.RawMessage{
+		"jsonrpc": json.RawMessage(`"2.0"`),
+		"id":      idRaw,
+	}
+	if isErrorObject(reply) {
+		envelope["error"] = reply
+	} else {
+		envelope["result"] = reply
+	}
+	frame, err := json.Marshal(envelope)
+	if err != nil {
+		s.kill(c, false)
+		return fmt.Errorf("supervisor: %s: encode upstream response: %w", s.spec.PluginID, err)
+	}
+
+	return s.writeOwned(ctx, c, frame, "write upstream response")
+}
+
+func (s *Supervisor) writeOwned(ctx context.Context, c *child, frame []byte, op string) error {
+	wrote := make(chan error, 1)
+	go func() { wrote <- bbb.WriteFrame(c.stdin, frame, bbb.MaxControlFrameBytes) }()
+	select {
+	case err := <-wrote:
+		if err != nil {
+
+			s.kill(c, false)
+			return &ChildIOError{PluginID: s.spec.PluginID, Op: op, Err: err}
+		}
+		return nil
+	case <-ctx.Done():
+
+		s.kill(c, true)
+		return &InvokeTimeoutError{PluginID: s.spec.PluginID, Started: c.started, Err: ctx.Err()}
+	}
+}
+
+func (s *Supervisor) Close() error { return s.CloseContext(context.Background()) }
+
+func (s *Supervisor) CloseContext(ctx context.Context) error {
+	s.mu.Lock()
+	if s.state == StateStopped {
+		c, err := s.child, s.stopReason
+		s.mu.Unlock()
+
+		if c != nil {
+			if !s.awaitReaped(c) {
+				return fmt.Errorf("supervisor: %s: containment retirement still pending", s.spec.PluginID)
+			}
+			if c.cleanupErr != nil {
+				return c.cleanupErr
+			}
+			return s.releaseArtifact()
+		}
+		var cleanup *ContainmentCleanupError
+		if errors.As(err, &cleanup) {
+			return err
+		}
+		return s.releaseArtifact()
+	}
+	s.state = StateStopped
+	if s.stopReason == nil {
+		s.stopReason = errClosed
+	}
+	s.publishStateLocked()
+	c := s.child
+	s.mu.Unlock()
+
+	if c == nil {
+		return s.releaseArtifact()
+	}
+	c.abandonNow()
+	_ = c.stdin.Close()
+	select {
+	case <-c.exited:
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+		return s.releaseArtifact()
+	case <-time.After(closeGraceEOF):
+	case <-ctx.Done():
+	}
+	signalTerm(c.cmd)
+	select {
+	case <-c.exited:
+		if c.cleanupErr != nil {
+			return c.cleanupErr
+		}
+		return s.releaseArtifact()
+	case <-time.After(closeGraceTerm):
+	case <-ctx.Done():
+	}
+	if c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	if !s.awaitReaped(c) {
+		return fmt.Errorf("supervisor: %s: child survived SIGKILL and is orphaned", s.spec.PluginID)
+	}
+	if c.cleanupErr != nil {
+		return c.cleanupErr
+	}
+	return s.releaseArtifact()
+}
+
+var closeGraceKill = 5 * time.Second
+
+func (s *Supervisor) awaitReaped(c *child) bool {
+	select {
+	case <-c.exited:
+		return true
+	case <-time.After(closeGraceKill):
+		pid := -1
+		if c.cmd != nil && c.cmd.Process != nil {
+			pid = c.cmd.Process.Pid
+		}
+		logsink.Warn("plugins.error", "plugin %s: SIGKILL did not reap pid %d within %s — abandoning the wait; the process is unkillable (uninterruptible I/O) and is now ORPHANED",
+			s.spec.PluginID, pid, closeGraceKill)
+		return false
+	}
+}
+
+var errClosed = errors.New("supervisor closed")
+
+type rpcErrorObject struct {
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
+	Data    *rpcErrorData `json:"data,omitempty"`
+}
+
+type rpcErrorData struct {
+	ReasonCode string `json:"reasonCode"`
+}
+
+func mustJSON(v any) []byte {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("supervisor: static marshal failed: %v", err))
+	}
+	return raw
+}
+
+func isErrorObject(reply []byte) bool {
+	var probe struct {
+		Code json.RawMessage `json:"code"`
+	}
+	if err := json.Unmarshal(reply, &probe); err != nil {
+		return false
+	}
+	if len(probe.Code) == 0 {
+		return false
+	}
+	var n float64
+	return json.Unmarshal(probe.Code, &n) == nil
+}
+
+func excerpt(b []byte) string {
+	const max = 256
+	if len(b) > max {
+		return string(b[:max]) + fmt.Sprintf("… (%d bytes)", len(b))
+	}
+	return string(b)
+}
+
+func (s *Supervisor) retirementPending(c *child, err error) error {
+	if c != nil && c.contained != nil {
+		return &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
+	}
+	return nil
+}
+
+func (s *Supervisor) releaseArtifact() error {
+
+	s.mu.Lock()
+	done := s.spawning
+	s.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(closeGraceKill):
+			return &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: fmt.Errorf("in-flight spawn retirement still pending")}
+		}
+	}
+	s.mu.Lock()
+	reason := s.stopReason
+	s.mu.Unlock()
+	var cleanup *ContainmentCleanupError
+	if errors.As(reason, &cleanup) {
+		return reason
+	}
+	s.artifactOnce.Do(func() {
+		if s.spec.Artifact != nil {
+			s.artifactErr = s.spec.Artifact.Close()
+		}
+	})
+	return s.artifactErr
+}

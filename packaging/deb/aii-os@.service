@@ -1,0 +1,21 @@
+[Unit]
+Description=AII OS identity (%i)
+Documentation=https://aiii.id
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/aii -dir %h/.aii/%i
+WorkingDirectory=%h/.aii/%i
+Restart=on-failure
+RestartSec=5s
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.aii/%i
+
+[Install]
+WantedBy=default.target
