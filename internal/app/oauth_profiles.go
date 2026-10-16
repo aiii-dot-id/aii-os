@@ -1,0 +1,792 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/broker"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/oauth"
+)
+
+const (
+	profileSignInPrefix = "profile:"
+)
+
+var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+func (a *App) credentialsDir() (string, error) {
+	a.cfgMu.RLock()
+	if a.cfg == nil {
+		a.cfgMu.RUnlock()
+		return "", errNoIdentityDir
+	}
+	configured := a.cfg.Identity
+	a.cfgMu.RUnlock()
+	ledgerPath := a.activeIdentity(configured).LedgerPath
+	if ledgerPath == "" {
+		return "", errNoIdentityDir
+	}
+	return profilesDir(ledgerPath), nil
+}
+
+func profilesDir(ledgerPath string) string {
+	return filepath.Join(identityCredentials(ledgerPath), "profiles")
+}
+
+func (a *App) tokenFile(prof broker.AuthProfile) (path string, owned bool, err error) {
+	dir, err := a.credentialsDir()
+	if err != nil {
+		return "", false, err
+	}
+	path, owned = prof.TokenPath(dir)
+	return path, owned, nil
+}
+
+var errTokenFileBorrowed = errors.New("this profile is pinned to a borrowed token file")
+
+func (a *App) signInDest(prof broker.AuthProfile) (string, error) {
+	if prof.TokenFile == "" {
+		return "", errors.New("profile has no token file")
+	}
+	path, owned, err := a.tokenFile(prof)
+	if err != nil {
+		return "", err
+	}
+	if !owned {
+		return "", fmt.Errorf("%w (%s); disconnect it before signing in here", errTokenFileBorrowed, path)
+	}
+	return path, nil
+}
+
+func borrowedNote(path string) string {
+	return "Borrowed: " + path + " is outside this identity's credentials directory, so it is read and never written. When its token expires, refresh it with its own tool. Disconnect forgets it and leaves the file."
+}
+
+func identityCredentials(ledgerPath string) string {
+	return filepath.Join(identityDataDir(ledgerPath), "credentials")
+}
+
+func (a *App) authProfile(name string) (broker.AuthProfile, error) {
+	prof, ok := a.configSnapshot().Plugins.AuthProfiles[name]
+	if !ok {
+		return broker.AuthProfile{}, fmt.Errorf("no auth profile %q", name)
+	}
+	if prof.Scheme != broker.SchemeOAuth2 {
+		return broker.AuthProfile{}, fmt.Errorf("auth profile %q is not an oauth2 profile", name)
+	}
+	return prof, nil
+}
+
+func (a *App) authorityClient(endpoint string) (*http.Client, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("an authority endpoint must be an https URL, got %q", endpoint)
+	}
+	want := strings.ToLower(u.Host)
+	base := a.oauthGuard
+	if base == nil {
+		base = firewall.FetchGuard
+	}
+	guard := func(ctx context.Context, raw string) error {
+		if gerr := base(ctx, raw); gerr != nil {
+			return gerr
+		}
+		gu, perr := url.Parse(raw)
+		if perr != nil || !strings.EqualFold(gu.Host, want) {
+			return fmt.Errorf("%w: a consent dials only its authority (%s)", firewall.ErrEgressBlocked, want)
+		}
+		return nil
+	}
+	return firewall.GuardedClient(30*time.Second, guard, a.oauthTransport), nil
+}
+
+func (a *App) contractFor(name string, prof broker.AuthProfile) (oauth.OAuthParams, oauth.Provider, error) {
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return oauth.OAuthParams{}, oauth.Provider{}, err
+	}
+	params, tpl, err := prof.Contract(catalog)
+	if err != nil {
+		return params, tpl, err
+	}
+	if strings.TrimSpace(params.Scope) == "" {
+		return params, tpl, fmt.Errorf("auth profile %q names no scopes; choose what the consent is for", name)
+	}
+	switch {
+	case prof.ClientSecretEnv != "":
+		params.ClientSecret = os.Getenv(prof.ClientSecretEnv)
+	case prof.ClientSecretFile != "":
+		raw, rerr := os.ReadFile(prof.ClientSecretFile)
+		if rerr != nil {
+			return params, tpl, fmt.Errorf("auth profile %q: the client secret file cannot be read: %w", name, rerr)
+		}
+		params.ClientSecret = strings.TrimSpace(string(raw))
+	}
+	return params, tpl, nil
+}
+
+func (a *App) SignInProfile(name string) (string, error) {
+	prof, err := a.authProfile(name)
+	if err != nil {
+		return "", err
+	}
+	params, tpl, err := a.contractFor(name, prof)
+	if err != nil {
+		return "", err
+	}
+	dest, err := a.signInDest(prof)
+	if err != nil {
+		return "", err
+	}
+	return a.startSignIn(profileSignInPrefix+name, profileSignInPrefix+name, dest, tpl, params, &prof)
+}
+
+func (a *App) CompleteProfileSignIn(name, input string) error {
+	return a.completeSignIn(profileSignInPrefix+name, input)
+}
+
+func (a *App) profileChanged() {
+	if a.pluginOpts != nil && a.pluginOpts.Broker != nil {
+		a.replacePolicy()
+	}
+	if a.dashboard != nil {
+		a.dashboard.BroadcastConfig()
+	}
+}
+
+func (a *App) DeviceSignInProfile(name string) (*dashboard.DeviceCodeView, error) {
+	prof, err := a.authProfile(name)
+	if err != nil {
+		return nil, err
+	}
+	params, tpl, err := a.contractFor(name, prof)
+	if err != nil {
+		return nil, err
+	}
+	if tpl.DeviceURL == "" {
+		return nil, errors.New("this authority offers no device-code sign-in")
+	}
+	if svc := deviceExcluded(tpl, prof.Scopes); svc != "" {
+		return nil, fmt.Errorf("%s does not serve %s through device sign-in", providerLabel(prof), svc)
+	}
+	if tpl.SignIn != "openai_device" {
+		tpl.SignIn = "device"
+	}
+	dest, err := a.signInDest(prof)
+	if err != nil {
+		return nil, err
+	}
+	key := profileSignInPrefix + name
+	if _, err := a.startSignIn(key, key, dest, tpl, params, &prof); err != nil {
+		return nil, err
+	}
+	v := a.signInView(key)
+	if v == nil {
+		return nil, errNoSignIn
+	}
+	return v.Device, nil
+}
+
+func providerLabel(prof broker.AuthProfile) string {
+	if prof.Provider == "" || prof.Provider == "custom" {
+		return "this authority"
+	}
+	return prof.Provider
+}
+
+func deviceExcluded(tpl oauth.Provider, scopes []string) string {
+	for _, svc := range tpl.DeviceScopesUnsupported {
+		set := tpl.Scopes[svc]
+		for _, s := range scopes {
+			for _, x := range append(append([]string(nil), set.Read...), set.Modify...) {
+				if s == x {
+					return svc
+				}
+			}
+		}
+	}
+	return ""
+}
+
+var errTokenFileLeft = errors.New("its borrowed token file was left where it is")
+
+func (a *App) DisconnectProfile(name string) error {
+	left, err := a.disconnectProfile(name)
+	if err == nil && left != "" {
+		return fmt.Errorf("the profile is disconnected: %w (%s)", errTokenFileLeft, left)
+	}
+	return err
+}
+
+func (a *App) disconnectProfile(name string) (left string, err error) {
+	prof, err := a.authProfile(name)
+	if err != nil {
+		return "", err
+	}
+	dest, owned, err := a.tokenFile(prof)
+	if err != nil {
+		return "", err
+	}
+	if !owned && prof.TokenFile != "" {
+		dir, err := a.credentialsDir()
+		if err != nil {
+			return "", err
+		}
+
+		chosen := name + ".json"
+		if err := a.commitAuthProfilesChecked(name, func(m map[string]broker.AuthProfile) error {
+			taken := func(file string) (bool, error) {
+				want, own := broker.AuthProfile{TokenFile: file}.TokenPath(dir)
+				var info os.FileInfo
+				if own {
+					var err error
+					info, err = os.Stat(want)
+					if err != nil && !errors.Is(err, os.ErrNotExist) {
+						return false, err
+					}
+				}
+
+				for other, op := range m {
+					if op.TokenFile == "" {
+						continue
+					}
+					p, _ := op.TokenPath(dir)
+					if other == name {
+						p = dest
+					} else if p == want {
+						return true, nil
+					}
+					if info != nil {
+						at, err := os.Stat(p)
+						if err != nil && !errors.Is(err, os.ErrNotExist) {
+							return false, err
+						}
+						if err == nil && os.SameFile(info, at) {
+							return true, nil
+						}
+					}
+				}
+				return false, nil
+			}
+			for n := 2; ; n++ {
+				used, err := taken(chosen)
+				if err != nil {
+					return fmt.Errorf("cannot choose the profile's own token file: %w", err)
+				}
+				if !used {
+					break
+				}
+				chosen = fmt.Sprintf("%s-%d.json", name, n)
+			}
+			if p, ok := m[name]; ok {
+				p.TokenFile = chosen
+				m[name] = p
+			}
+			return nil
+		}); err != nil {
+			return "", err
+		}
+		logsink.Info("oauth.end", "%s: forgot the borrowed token file %s; the file was left where it is", name, dest)
+		left = dest
+		if prof, err = a.authProfile(name); err != nil {
+			return left, err
+		}
+		if dest, owned, err = a.tokenFile(prof); err != nil {
+			return left, err
+		}
+		if !owned {
+
+			if _, err := oauth.RemoveTokenFile(filepath.Join(dir, chosen)); err != nil {
+				return left, err
+			}
+		}
+	}
+	if !owned {
+		dest = ""
+	}
+	a.providers.custody.mu.Lock()
+	for key, p := range a.providers.custody.signIns {
+		if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
+			p.cancel()
+			delete(a.providers.custody.signIns, key)
+		}
+	}
+
+	var revokeRaw []byte
+	var removeErr error
+	if dest != "" {
+		if tokenRemovalWindow != nil {
+			tokenRemovalWindow(dest)
+		}
+		revokeRaw, removeErr = oauth.RemoveTokenFile(dest)
+	}
+	removed := removeErr == nil && len(revokeRaw) > 0
+	if removed {
+		delete(a.providers.custody.unrevoked, name)
+	}
+	a.providers.custody.mu.Unlock()
+
+	if removeErr != nil {
+		if len(revokeRaw) > 0 {
+			rerr := a.revokeRemoved(name, prof, revokeRaw)
+			a.providers.custody.mu.Lock()
+			if rerr == nil {
+				delete(a.providers.custody.unrevoked, name)
+			} else {
+				if a.providers.custody.unrevoked == nil {
+					a.providers.custody.unrevoked = map[string]bool{}
+				}
+				a.providers.custody.unrevoked[name] = true
+			}
+			a.providers.custody.mu.Unlock()
+			if rerr != nil && !errors.Is(rerr, errRevocationNotOffered) {
+				logsink.Warn("oauth.error", "%s: the credential could not be removed here, and the authority did not confirm revoking it: %v", name, rerr)
+			}
+		}
+		return left, removeErr
+	}
+	if removed {
+		if rerr := a.revokeRemoved(name, prof, revokeRaw); rerr != nil {
+			a.providers.custody.mu.Lock()
+			if a.providers.custody.unrevoked == nil {
+				a.providers.custody.unrevoked = map[string]bool{}
+			}
+			a.providers.custody.unrevoked[name] = true
+			a.providers.custody.mu.Unlock()
+			if !errors.Is(rerr, errRevocationNotOffered) {
+				logsink.Warn("oauth.error", "%s: the credential is removed here; the authority did not confirm revoking it: %v", name, rerr)
+			}
+		}
+	}
+	logsink.Info("oauth.end", "%s: disconnected", name)
+	a.profileChanged()
+	return left, nil
+}
+
+var errRevocationNotOffered = errors.New("the authority offers no revocation endpoint")
+
+func (a *App) revokeRemoved(name string, prof broker.AuthProfile, raw []byte) error {
+	params, tpl, err := a.contractFor(name, prof)
+	if err != nil {
+		return err
+	}
+	if tpl.RevokeURL == "" {
+		return errRevocationNotOffered
+	}
+	tok := refreshTokenOf(raw)
+	if tok == "" {
+		return errors.New("the removed file held no token this host could read")
+	}
+	client, err := a.authorityClient(tpl.RevokeURL)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(a.lifetime(), 20*time.Second)
+	defer cancel()
+	return oauth.Revoke(ctx, client, tpl.RevokeURL, tok, params)
+}
+
+func revocationNote(label string, offered, unconfirmed bool) string {
+	switch {
+	case !offered:
+		return "Revocation is not available for " + label + ": disconnecting removes the credential from this host only; revoke the grant on " + label + "'s account page."
+	case unconfirmed:
+		return "The credential was removed from this host, but " + label + " did not confirm revoking it: revoke the grant on " + label + "'s account page."
+	}
+	return ""
+}
+
+func refreshTokenOf(raw []byte) string {
+	var f struct {
+		Refresh string `json:"refresh_token"`
+		Access  string `json:"access_token"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return ""
+	}
+	if f.Refresh != "" {
+		return f.Refresh
+	}
+	return f.Access
+}
+
+func (a *App) SetAuthProfile(edit dashboard.AuthProfileEdit) error {
+	name := strings.TrimSpace(edit.Name)
+	if !profileNameRe.MatchString(name) {
+		return fmt.Errorf("a profile name is a token: lowercase letters, digits, dots, dashes, underscores (got %q)", edit.Name)
+	}
+	dir, err := a.credentialsDir()
+	if err != nil {
+		return err
+	}
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return err
+	}
+	provider := strings.TrimSpace(edit.Provider)
+	var tpl oauth.Provider
+	if provider != "custom" {
+		t, ok := oauth.ProviderTemplate(provider, catalog)
+		if !ok {
+			return fmt.Errorf("provider %q is not one this host knows (%s) — choose custom and name the endpoints", provider, strings.Join(oauth.ProviderNames(catalog), ", "))
+		}
+		tpl = t
+	} else if edit.AuthorizeURL == "" || edit.TokenURL == "" {
+		return errors.New("a custom provider needs its authorize and token endpoints")
+	}
+	clientID := strings.TrimSpace(edit.ClientID)
+	if clientID == "" && tpl.ClientID == "" {
+		return errors.New("the client id is the registration the authority knows you by; it is required")
+	}
+	var scopes []string
+	svcNames := make([]string, 0, len(edit.Services))
+	for svc := range edit.Services {
+		svcNames = append(svcNames, svc)
+	}
+	sort.Strings(svcNames)
+	for _, svc := range svcNames {
+		set, ok := tpl.Scopes[svc]
+		if !ok {
+			return fmt.Errorf("%s has no service %q", provider, svc)
+		}
+		switch edit.Services[svc] {
+		case "read":
+			if len(set.Read) == 0 {
+				return fmt.Errorf("%s has no read-only consent for %s; choose modify, or no", provider, svc)
+			}
+			scopes = append(scopes, set.Read...)
+		case "modify":
+			scopes = append(scopes, set.Read...)
+			scopes = append(scopes, set.Modify...)
+		default:
+			return fmt.Errorf("service %q: want read or modify, got %q", svc, edit.Services[svc])
+		}
+	}
+	for _, s := range edit.Scopes {
+		if s = strings.TrimSpace(s); s != "" {
+			scopes = append(scopes, s)
+		}
+	}
+	scopes = mergeDistinct(scopes)
+	if len(scopes) == 0 && len(tpl.BaseScopes) == 0 {
+		return errors.New("choose at least one service, or name a scope")
+	}
+
+	hosts := mergeDistinct(trimAll(edit.Hosts))
+	for _, h := range hosts {
+		if _, _, err := splitHostPort(h); err != nil {
+			return fmt.Errorf("host %q: want host:port", h)
+		}
+	}
+	if provider != "custom" && sameSet(hosts, tpl.Hosts) {
+		hosts = nil
+	}
+	if len(hosts) == 0 && len(tpl.Hosts) == 0 {
+		return errors.New("name at least one host the access token may ride to")
+	}
+	existing := a.configSnapshot().Plugins.AuthProfiles[name]
+	if existing.Scheme != "" && existing.Scheme != broker.SchemeOAuth2 {
+		return fmt.Errorf("auth profile %q is a %s profile, edited in the config file", name, existing.Scheme)
+	}
+	prof := broker.AuthProfile{Scheme: broker.SchemeOAuth2, Provider: provider, ClientID: clientID, Scopes: scopes, Hosts: hosts,
+		TokenFile: existing.TokenFile, ClientSecretFile: existing.ClientSecretFile, ClientSecretEnv: existing.ClientSecretEnv, RedirectURI: strings.TrimSpace(edit.RedirectURI)}
+	if prof.RedirectURI == "" {
+		prof.RedirectURI = existing.RedirectURI
+	}
+	if prof.RedirectURI == tpl.RedirectURI {
+		prof.RedirectURI = ""
+	}
+	if prof.TokenFile == "" {
+		prof.TokenFile = name + ".json"
+	}
+	if provider == "custom" {
+		prof.AuthorizeURL, prof.TokenURL, prof.DeviceURL, prof.RevokeURL = strings.TrimSpace(edit.AuthorizeURL), strings.TrimSpace(edit.TokenURL), strings.TrimSpace(edit.DeviceURL), strings.TrimSpace(edit.RevokeURL)
+		for _, u := range []string{prof.AuthorizeURL, prof.TokenURL, prof.DeviceURL, prof.RevokeURL} {
+			if u == "" {
+				continue
+			}
+			if pu, perr := url.Parse(u); perr != nil || pu.Scheme != "https" || pu.Host == "" {
+				return fmt.Errorf("endpoint %q must be an https URL", u)
+			}
+		}
+	}
+	if secret := strings.TrimSpace(edit.ClientSecret); secret != "" {
+		path := filepath.Join(dir, name+".client")
+		if err := oauth.WritePrivateFile(path, []byte(secret+"\n")); err != nil {
+			return fmt.Errorf("store the client secret: %w", err)
+		}
+		prof.ClientSecretFile, prof.ClientSecretEnv = path, ""
+	}
+	if _, _, err := prof.Contract(catalog); err != nil {
+		return err
+	}
+	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { m[name] = prof }); err != nil {
+		return err
+	}
+	logsink.Info("oauth.decision", "%s: %s (%s, %d scope(s), %d host(s))", name, map[bool]string{true: "updated", false: "created"}[existing.Scheme != ""], provider, len(scopes), len(hosts))
+	return nil
+}
+
+var errDeletedUnrevoked = errors.New("the profile is deleted")
+
+func (a *App) DeleteAuthProfile(name string) error {
+	prof, err := a.authProfile(name)
+	if err != nil {
+		return err
+	}
+	left, err := a.disconnectProfile(name)
+	if err != nil {
+		return err
+	}
+	a.providers.custody.mu.Lock()
+	unconfirmed := a.providers.custody.unrevoked[name]
+	a.providers.custody.mu.Unlock()
+
+	if err := a.commitAuthProfiles(name, func(m map[string]broker.AuthProfile) { delete(m, name) }); err != nil {
+		return err
+	}
+	logsink.Info("oauth.end", "%s: deleted", name)
+	var unrevoked error
+	if unconfirmed {
+		catalog, _ := a.oauthContracts()
+		_, tpl, cerr := prof.Contract(catalog)
+		unrevoked = fmt.Errorf("%w. %s", errDeletedUnrevoked, revocationNote(providerLabel(prof), cerr != nil || tpl.RevokeURL != "", true))
+	}
+	switch {
+	case left != "" && unrevoked != nil:
+		return fmt.Errorf("%w And %w (%s)", unrevoked, errTokenFileLeft, left)
+	case left != "":
+		return fmt.Errorf("the profile is deleted: %w (%s)", errTokenFileLeft, left)
+	}
+	return unrevoked
+}
+
+func (a *App) commitAuthProfiles(editedName string, mutate func(map[string]broker.AuthProfile)) error {
+	return a.commitAuthProfilesChecked(editedName, func(m map[string]broker.AuthProfile) error {
+		mutate(m)
+		return nil
+	})
+}
+
+func (a *App) commitAuthProfilesChecked(editedName string, mutate func(map[string]broker.AuthProfile) error) error {
+
+	dir, _ := a.credentialsDir()
+	orig := a.configSnapshot()
+	next := make(map[string]broker.AuthProfile, len(orig.Plugins.AuthProfiles)+1)
+	for k, v := range orig.Plugins.AuthProfiles {
+		next[k] = v
+	}
+	if err := mutate(next); err != nil {
+		return err
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+
+	custody := func() error {
+		for name, prof := range orig.Plugins.AuthProfiles {
+			nextProf, exists := next[name]
+			if name != editedName && exists && reflect.DeepEqual(prof, nextProf) {
+				continue
+			}
+			dest, owned := prof.TokenPath(dir)
+			for key, p := range a.providers.custody.signIns {
+				if key == profileSignInPrefix+name || (dest != "" && p.dest == dest) {
+					p.cancel()
+					delete(a.providers.custody.signIns, key)
+				}
+			}
+			if !exists {
+
+				if owned {
+					if _, err := oauth.RemoveTokenFile(dest); err != nil {
+						return err
+					}
+				}
+				if prof.ClientSecretFile != "" {
+
+					if err := atomicfile.Remove(prof.ClientSecretFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf("remove the client secret file: %w", err)
+					}
+				}
+			}
+		}
+		return nil
+	}
+	settle := func() {
+		for name := range a.providers.custody.unrevoked {
+			if _, ok := next[name]; !ok {
+				delete(a.providers.custody.unrevoked, name)
+			}
+		}
+	}
+	return a.commitConfig(orig, func(c *Config) { c.Plugins.AuthProfiles = next }, custody, settle)
+}
+
+func (a *App) authProfileViews(c *Config) []dashboard.AuthProfileView {
+	catalog, _ := a.oauthContracts()
+	if len(c.Plugins.AuthProfiles) == 0 {
+		return nil
+	}
+	handlesOf := map[string][]string{}
+	for pid, g := range c.Plugins.Grants {
+		for _, h := range g.CredentialHandles {
+			handlesOf[h] = append(handlesOf[h], pid)
+		}
+	}
+	names := make([]string, 0, len(c.Plugins.AuthProfiles))
+	for n := range c.Plugins.AuthProfiles {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	dir, _ := a.credentialsDir()
+	out := make([]dashboard.AuthProfileView, 0, len(names))
+	for _, n := range names {
+		p := c.Plugins.AuthProfiles[n]
+		v := dashboard.AuthProfileView{Name: n, Scheme: p.Scheme, Handles: handlesOf[n]}
+		sort.Strings(v.Handles)
+		if v.Scheme == "" {
+			v.Scheme = "bearer"
+		}
+		if p.Scheme != broker.SchemeOAuth2 {
+			v.State, v.Host, v.Port = "static", p.Host, p.Port
+			switch {
+			case p.SecretFile != "":
+				v.SecretSource = "file"
+			case p.SecretEnv != "":
+				v.SecretSource = "env"
+			}
+			out = append(out, v)
+			continue
+		}
+		v.Provider, v.ClientID, v.Scopes = p.Provider, p.ClientID, append([]string(nil), p.Scopes...)
+		v.HasClientSecret = p.ClientSecretFile != "" || p.ClientSecretEnv != ""
+		v.Custom = p.Provider == "" || p.Provider == "custom"
+		params, tpl, cerr := p.Contract(catalog)
+		if cerr == nil {
+			if v.ClientID == "" {
+				v.ClientID = params.ClientID
+			}
+			v.Hosts = tpl.Hosts
+			v.CanDevice = tpl.DeviceURL != "" && deviceExcluded(tpl, p.Scopes) == ""
+		} else {
+			v.Hosts = append([]string(nil), p.Hosts...)
+		}
+		a.providers.custody.mu.Lock()
+		unconfirmed := a.providers.custody.unrevoked[n]
+		a.providers.custody.mu.Unlock()
+		v.Revocation = revocationNote(providerLabel(p), cerr != nil || tpl.RevokeURL != "", unconfirmed)
+		var st oauth.ProfileState
+		path, owned := p.TokenPath(dir)
+		v.State, st = profileState(path, owned)
+		if !owned && path != "" {
+			v.Borrowed = borrowedNote(path)
+			if !unconfirmed {
+				v.Revocation = ""
+			}
+		}
+		if !st.Expires.IsZero() {
+			v.ExpiresAt = st.Expires.UTC().Format(time.RFC3339)
+		}
+		v.SignIn = a.signInView(profileSignInPrefix + n)
+		if v.SignIn != nil {
+			v.Device = v.SignIn.Device
+		}
+		v.RedirectURI = p.RedirectURI
+		out = append(out, v)
+	}
+	return out
+}
+
+func profileState(path string, owned bool) (string, oauth.ProfileState) {
+	st, err := oauth.ReadProfileState(path)
+	switch {
+	case err != nil, !st.Connected:
+		return "disconnected", st
+	case (!owned || !st.Refreshable) && !st.Expires.IsZero() && time.Now().After(st.Expires):
+		return "expired", st
+	}
+	return "connected", st
+}
+
+func (a *App) providerViews() []dashboard.ProviderView {
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		return nil
+	}
+	var out []dashboard.ProviderView
+	for _, name := range oauth.ProviderNames(catalog) {
+		tpl, _ := oauth.ProviderTemplate(name, catalog)
+		pv := dashboard.ProviderView{Name: name, SignIn: tpl.SignIn, RedirectURI: tpl.RedirectURI, Hosts: tpl.Hosts, Device: tpl.DeviceURL != "", DeviceExcludes: tpl.DeviceScopesUnsupported}
+		svcs := make([]string, 0, len(tpl.Scopes))
+		for s := range tpl.Scopes {
+			svcs = append(svcs, s)
+		}
+		sort.Strings(svcs)
+		for _, s := range svcs {
+			pv.Services = append(pv.Services, dashboard.ServiceView{Name: s, Read: tpl.Scopes[s].Read, Modify: tpl.Scopes[s].Modify})
+		}
+		out = append(out, pv)
+	}
+	return out
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, x := range a {
+		seen[strings.ToLower(x)] = true
+	}
+	for _, y := range b {
+		if !seen[strings.ToLower(y)] {
+			return false
+		}
+	}
+	return true
+}
+
+func trimAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		out = append(out, strings.TrimSpace(s))
+	}
+	return out
+}
+
+func splitHostPort(hp string) (string, string, error) {
+	h, p, err := net.SplitHostPort(hp)
+	if err != nil {
+		return "", "", err
+	}
+	if h == "" || p == "" {
+		return "", "", fmt.Errorf("want host:port")
+	}
+	return h, p, nil
+}
+
+func (a *App) wireAuthProfileHooks(h *dashboard.WSHandler) {
+	h.SignInProfile = a.SignInProfile
+	h.CompleteProfileSignIn = a.CompleteProfileSignIn
+	h.DeviceSignInProfile = a.DeviceSignInProfile
+	h.DisconnectProfile = a.DisconnectProfile
+	h.SetAuthProfile = a.SetAuthProfile
+	h.DeleteAuthProfile = a.DeleteAuthProfile
+}

@@ -1,0 +1,730 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
+
+	"github.com/aiii-dot-id/aii-os/internal/broker"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
+	"github.com/aiii-dot-id/aii-os/internal/fsdir"
+	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
+	"github.com/aiii-dot-id/aii-os/internal/updates"
+)
+
+const WorkerSubcommand = "plugin-worker"
+
+func provisionPluginTrust(dir string, roots packagefmt.TrustRoots) {
+	wrote, err := packagefmt.ProvisionShippedStatus(dir, roots)
+	for _, name := range wrote {
+		logsink.Info("plugins.decision", "trust: %s was not in %s — wrote the one this build ships; it is held to this identity's accepted epoch like any other", name, dir)
+	}
+	if err != nil {
+		logsink.Warn("plugins.error", "trust: a shipped status file could not be written to %s (%v) — a signed tier whose file is absent stays unavailable", dir, err)
+	}
+}
+
+func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door *ledgerAdapter) (*pluginhost.Options, error) {
+	cfg := a.configSnapshot()
+	opts := &pluginhost.Options{WebhookURL: a.webhookURL}
+
+	opts.ResourceFacts = func(ctx context.Context) (pluginfacility.Availability, error) {
+		return measureSelectionResources(ctx, a.configSnapshot().Plugins.Runtime.hardwareQuery())
+	}
+	opts.SelectionPolicy = pluginAdmissionPolicy(cfg)
+	opts.StorageUpgradeReady = func() error {
+		return updates.RequireSettledBootUpdate(identityDataDir(a.configSnapshot().Identity.LedgerPath))
+	}
+	opts.LegacyStorageOwners = func(ctx context.Context) ([]string, error) {
+		var ids []string
+		evidence, err := a.pluginFacility().VerifiedPackages(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, ev := range evidence {
+			if res, ok := ev.Handle.(*packagefmt.Result); ok && res != nil && res.Manifest != nil && res.Tier.PublisherProven() && res.Manifest.Kind == "plugin" {
+				ids = append(ids, res.Manifest.ID)
+			}
+		}
+		return ids, nil
+	}
+	opts.NativePlaces = func() ([]*firewall.Rule, error) {
+		current := a.configSnapshot()
+		active := a.activeConfig(current)
+
+		others, err := otherIdentitiesPlaces(active, ".")
+		if err != nil {
+			return nil, err
+		}
+		return append(substrateObjects(active, current.Tools.CWD), others...), nil
+	}
+	var err error
+	if err := pluginLimits(opts, cfg); err != nil {
+		return nil, err
+	}
+	if opts.Roots.PublisherCertifier, err = packagefmt.PinnedOrShipped(cfg.Plugins.CertifierRoot, packagefmt.KeyTypePublisherCertifier); err != nil {
+		return nil, fmt.Errorf("plugins.certifier_root: %w", err)
+	}
+	if opts.Roots.Reviewer, err = packagefmt.PinnedOrShipped(cfg.Plugins.ReviewerRoot, packagefmt.KeyTypeReviewer); err != nil {
+		return nil, fmt.Errorf("plugins.reviewer_root: %w", err)
+	}
+	if opts.Roots.PlatformRelease, err = packagefmt.PinnedOrShipped(cfg.Plugins.PlatformRoot, packagefmt.KeyTypePlatformRelease); err != nil {
+		return nil, fmt.Errorf("plugins.platform_root: %w", err)
+	}
+
+	trustDir := filepath.Join(filepath.Dir(cfg.Identity.LedgerPath), "trust")
+	a.trustDir, a.trustGuard = trustDir, trustEpochGuard{door: door, st: st}
+
+	if cfg.Identity.LedgerPath != "" {
+		provisionPluginTrust(trustDir, opts.Roots)
+	}
+	a.trustFinger = trustFingerprint(trustDir)
+	opts.Roots.Revocation = packagefmt.LoadRevocationStatus(trustDir, opts.Roots, a.trustGuard)
+	for _, line := range opts.Roots.Revocation.Describe() {
+		logsink.Info("plugins.decision", "%s", line)
+	}
+	a.catalog.Open(cfg.Plugins.CatalogDir, filepath.Join(filepath.Dir(cfg.Identity.LedgerPath), "plugins-catalog"), opts.Roots.PlatformRelease, a.effectiveCatalogURL)
+
+	opts.Facilities = hostFacilities()
+	if opts.WorkerBinary, opts.WorkerArgs, err = a.resolveWorkerBinary(); err != nil {
+		return nil, err
+	}
+
+	if opts.WorkerBinary == "" {
+		logsink.Info("plugins.start", "lane in-process (no supervised worker on this platform)")
+	} else {
+		logsink.Info("plugins.start", "lane supervised: %s", strings.Join(append([]string{opts.WorkerBinary}, opts.WorkerArgs...), " "))
+	}
+
+	opts.Settings = a.pluginSettingsSource
+	opts.Acts = actProposer{a}
+
+	dataDir := identityDataDir(cfg.Identity.LedgerPath)
+	opts.PluginDataDir = filepath.Join(dataDir, "plugins-data")
+
+	opts.StoreDir = a.pluginStoreDir(cfg)
+	opts.AdoptModelsDir = filepath.Join(dataDir, "plugins-models")
+	opts.AdoptRuntimeDir = filepath.Join(dataDir, "plugins-runtime")
+
+	opts.Acquirer = pluginhost.NewAcquirer(pluginhost.AcquirerConfig{
+		Materialize: a.materializer(),
+		Spawn:       a.runBackground, Ready: a.materialReady, Changed: a.pluginsChanged,
+	})
+
+	a.lateModels = pluginhost.NewAcquirer(pluginhost.AcquirerConfig{
+		Materialize: a.materializer(),
+		Spawn:       a.runBackground, Ready: a.lateModelsReady, Changed: a.pluginsChanged,
+	})
+	{
+
+		catalog, cerr := a.oauthContracts()
+		if cerr != nil {
+			return nil, cerr
+		}
+		profiles, _ := a.credentialsDir()
+		opts.Broker, err = broker.New(broker.Config{
+			Interactions:   a,
+			OAuthProviders: catalog,
+			Store:          st,
+
+			Later:  a.runBackground,
+			Grants: cfg.Plugins.Grants,
+
+			SlowStorageCall: time.Duration(cfg.Plugins.Runtime.SlowStorageCallMs) * time.Millisecond,
+			AuthProfiles:    cfg.Plugins.AuthProfiles,
+
+			ProfilesDir:  profiles,
+			ObserveFetch: toolReg.NotifyFetch,
+
+			Voice: voiceObserver{a},
+
+			Embed: providerEmbedder{a},
+
+			Meaning: sourceEmbedder{a},
+
+			InSAFE: func() bool { return a.currentMode() == ModeSafe },
+
+			Sandbox: newPluginSandbox(toolReg, cfg.Identity.LedgerPath),
+
+			OwnListener: a.ownListener,
+			Guard:       a.brokerGuard,
+			Transport:   a.brokerTransport,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return opts, nil
+}
+
+func pluginLimits(opts *pluginhost.Options, cfg Config) error {
+	opts.RuntimeLimits = cfg.Plugins.Runtime.TreeLimits()
+	opts.SelectionPolicy = pluginAdmissionPolicy(cfg)
+
+	opts.StartupCeiling = 0
+	if cfg.Plugins.Runtime.MaxStartupMS != 0 {
+		ceiling, err := cfg.Plugins.Runtime.startupCeiling()
+		if err != nil {
+			return fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
+		}
+		opts.StartupCeiling = ceiling
+	}
+	opts.MemoryMax, opts.StreamMax, opts.FilesMax, opts.ReadyTimeout = nil, nil, nil, nil
+	if len(cfg.Plugins.Resources) > 0 {
+		opts.MemoryMax = make(map[string]uint64, len(cfg.Plugins.Resources))
+		opts.StreamMax = make(map[string]int, len(cfg.Plugins.Resources))
+		opts.FilesMax = make(map[string]int, len(cfg.Plugins.Resources))
+		opts.ReadyTimeout = make(map[string]time.Duration, len(cfg.Plugins.Resources))
+		for id, r := range cfg.Plugins.Resources {
+			deadline, err := r.startupTimeout()
+			if err != nil {
+				return fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
+			}
+			opts.ReadyTimeout[id] = deadline
+			opts.MemoryMax[id] = r.MemoryMaxBytes
+			opts.StreamMax[id] = r.StreamMaxBytes
+			opts.FilesMax[id] = r.FilesMaxBytes
+		}
+	}
+	return nil
+}
+
+func pluginLimitsMoved(before, after *Config) bool {
+	b, f := before.Plugins.Runtime, after.Plugins.Runtime
+	b.SlowStorageCallMs, f.SlowStorageCallMs = 0, 0
+	return !reflect.DeepEqual(b, f) || !reflect.DeepEqual(before.Plugins.Resources, after.Plugins.Resources)
+}
+
+func (a *App) applyPluginLimits() error {
+	applied, err := func() (bool, error) {
+		a.pluginMu.Lock()
+		defer a.pluginMu.Unlock()
+		cfg := a.configSnapshot()
+		limitsStep("read")
+		if a.pluginOpts == nil {
+			return false, nil
+		}
+		probe := *a.pluginOpts
+		if err := pluginLimits(&probe, cfg); err != nil {
+			return false, err
+		}
+		_ = pluginLimits(a.pluginOpts, cfg)
+		return true, nil
+	}()
+	if err != nil || !applied {
+		return err
+	}
+	a.pluginFacility().Rejudge(pluginfacility.InputConfig, "the operator's plugin limits changed")
+	a.pokePluginSweep()
+	return nil
+}
+
+func (a *App) pokePluginSweep() {
+	select {
+	case a.sweepPoke <- struct{}{}:
+	default:
+	}
+
+	a.pluginMu.Lock()
+	f := a.facility
+	a.pluginMu.Unlock()
+	if f != nil {
+		f.Poke("app")
+	}
+}
+
+func (a *App) startPluginSweep(ctx context.Context) {
+
+	a.pluginFacility().Attach(ctx)
+	a.watchFacility(ctx)
+
+	if acq := a.acquirer(); acq != nil {
+		acq.Attach(ctx)
+	}
+	if a.lateModels != nil {
+		a.lateModels.Attach(ctx)
+	}
+
+	if err := os.MkdirAll("plugins", 0o750); err != nil {
+		logsink.Warn("plugins.error", "cannot create plugins/ (%v) — drop-ins wait for the heartbeat", err)
+	}
+	w := fsdir.New(ctx, a.gate, "plugins", fsdir.Options{Depth: 1})
+
+	var trustC <-chan struct{}
+	if a.trustDir != "" {
+		trustC = fsdir.New(ctx, a.gate, a.trustDir, fsdir.Options{}).C
+	}
+	a.runBackground(func() { a.runPluginSweep(ctx, w.C, trustC) })
+}
+
+func (a *App) runPluginSweep(ctx context.Context, packages, trust <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-packages:
+		case <-trust:
+		case <-a.sweepPoke:
+		}
+
+		a.rescanPlugins(ctx)
+	}
+}
+
+func (a *App) discoverPlugins() pluginfacility.Discovery {
+	var out pluginfacility.Discovery
+	dirs, _ := filepath.Glob(filepath.Join("plugins", "*"))
+	sort.Strings(dirs)
+	for _, pdir := range dirs {
+		if st, err := os.Stat(pdir); err != nil || !st.IsDir() {
+			continue
+		}
+		pkgs, _ := filepath.Glob(filepath.Join(pdir, "*.aiiospkg"))
+		if len(pkgs) == 0 {
+			continue
+		}
+		if len(pkgs) > 1 {
+			out.Ambiguous = append(out.Ambiguous, pdir)
+			continue
+		}
+		st, err := os.Stat(pkgs[0])
+		if err != nil {
+			continue
+		}
+		out.Found = append(out.Found, pluginfacility.Found{Dir: pdir, Package: pkgs[0], Size: st.Size(), MTime: st.ModTime().UnixNano()})
+	}
+	return out
+}
+
+func (a *App) rescanPlugins(ctx context.Context) {
+	cfg := a.configSnapshot()
+	autoload := cfg.Plugins.Autoload
+	minTier, _, tierOK := autoloadTier(autoload)
+	if !tierOK {
+		logsink.Warn("plugins.refusal", "autoload %q is not a level (none, T0..T3) — using T1", autoload)
+		minTier = packagefmt.TierT1
+	}
+
+	trustChanged := false
+	if a.pluginOpts != nil && a.trustDir != "" {
+		if tf := trustFingerprint(a.trustDir); tf != a.trustFinger {
+			var roots packagefmt.TrustRoots
+			if opts := a.pluginOptions(); opts != nil {
+				roots = opts.Roots
+			}
+
+			if a.configSnapshot().Identity.LedgerPath != "" {
+				provisionPluginTrust(a.trustDir, roots)
+			}
+			a.trustFinger = trustFingerprint(a.trustDir)
+			status := packagefmt.LoadRevocationStatus(a.trustDir, roots, a.trustGuard)
+			a.publishPluginRevocations(status)
+			for _, line := range status.Describe() {
+				logsink.Info("plugins.decision", "trust directory changed — %s", line)
+			}
+			trustChanged = true
+		}
+	}
+
+	f := a.pluginFacility()
+	f.Rescan(a.pluginPolicy(cfg, minTier, trustChanged))
+
+	wanted := map[string]bool{}
+	for _, v := range f.Snapshot().Instances {
+		if v.Wanted {
+			wanted[v.ID] = true
+		}
+	}
+	_, safe := a.SafeMode()
+	if acq := a.acquirer(); acq != nil {
+		if safe {
+
+			acq.Keep(map[string]bool{})
+		} else {
+			acq.Keep(wanted)
+		}
+	}
+
+	a.reconcileLateModels()
+	installed := installedPluginIDs(f.Snapshot())
+	a.retireUnreferencedRuntimes(installed)
+
+	a.reconcileStoreRefs(ctx, installed, safe, cfg.Plugins.Runtime.RootsKept)
+	granted := make([]string, 0, len(cfg.Plugins.Grants))
+	for gid := range cfg.Plugins.Grants {
+		granted = append(granted, gid)
+	}
+	for _, gid := range orphanedGrants(granted, wanted) {
+		logsink.Info("plugins.refusal", "grant for %q references no package this host wants — orphaned or below-threshold policy (harmless)", gid)
+	}
+
+	if !safe {
+		a.convergeChannels(ctx)
+	}
+	a.convergeSchedules(ctx)
+
+	a.pluginsChanged()
+}
+
+func installedPluginIDs(snap pluginfacility.Snapshot) map[string]bool {
+	dirs, err := filepath.Glob(filepath.Join("plugins", "*"))
+	if err != nil {
+		return nil
+	}
+	installed := map[string]bool{}
+	for _, v := range snap.Instances {
+		if v.Installed {
+			installed[v.ID] = true
+		}
+	}
+	for _, sk := range snap.Skips {
+		if sk.ID != "" {
+			installed[sk.ID] = true
+		}
+	}
+	for _, d := range dirs {
+		installed[filepath.Base(d)] = true
+	}
+	return installed
+}
+
+func (a *App) retireUnreferencedRuntimes(installedSet map[string]bool) {
+	opts := a.pluginOptions()
+	if opts == nil || opts.AdoptRuntimeDir == "" || installedSet == nil {
+		return
+	}
+	installed := make([]string, 0, len(installedSet))
+	for id := range installedSet {
+		installed = append(installed, id)
+	}
+	removed, rerr := pluginhost.RetireUninstalledSlotMaterial(opts.AdoptRuntimeDir, installed)
+	if len(removed) > 0 {
+		logsink.Info("plugins.end", "this identity's own runtime material of %d uninstalled plugin(s) was retired", len(removed))
+	}
+	if rerr != nil {
+		logsink.Warn("plugins.error", "retiring this identity's own runtime material of uninstalled plugins: %v", rerr)
+	}
+}
+
+func (a *App) publishPluginRevocations(status *packagefmt.RevocationStatusSet) {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	a.pluginOpts.Roots.Revocation = status
+}
+
+func orphanedGrants(granted []string, wanted map[string]bool) []string {
+	var out []string
+	for _, gid := range granted {
+		if !wanted[gid] {
+			out = append(out, gid)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (a *App) pluginSkipViews() []dashboard.PluginSkipView {
+	skips := a.pluginFacility().Skips()
+	out := make([]dashboard.PluginSkipView, 0, len(skips))
+	for _, sk := range skips {
+		out = append(out, dashboard.PluginSkipView{Kind: sk.Kind, Dir: sk.Dir, Package: sk.Package, ID: sk.ID, Tier: sk.Tier, Reason: sk.Reason})
+	}
+	return out
+}
+
+func (a *App) replacePolicy() {
+	a.policyMu.Lock()
+	defer a.policyMu.Unlock()
+	cfg := a.configSnapshot()
+
+	if a.toolReg != nil && a.applySubstrate(cfg) {
+		a.loadRing5()
+	}
+	if a.pluginOpts == nil || a.pluginOpts.Broker == nil {
+		return
+	}
+
+	catalog, err := a.oauthContracts()
+	if err != nil {
+		logsink.Warn("plugins.refusal", "OAuth configuration: %v", err)
+	}
+	a.pluginOpts.Broker.ReplacePolicy(cfg.Plugins.Grants, cfg.Plugins.AuthProfiles, catalog)
+}
+
+func trustFingerprint(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "absent"
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		info, ierr := e.Info()
+		if ierr != nil || e.IsDir() {
+			continue
+		}
+		fmt.Fprintf(&b, "%s:%d:%d|", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return b.String()
+}
+
+func (a *App) retire(ap *pluginhost.ActivePlugin) {
+	a.pluginMu.Lock()
+	a.retiring = append(a.retiring, ap)
+	a.pluginMu.Unlock()
+}
+
+func (a *App) claimRetiring(ap *pluginhost.ActivePlugin) bool {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	for i, r := range a.retiring {
+		if r == ap {
+			a.retiring = append(a.retiring[:i], a.retiring[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func activationPosture(capabilities []string, granted bool) string {
+	signed := "signed for nothing"
+	if len(capabilities) > 0 {
+		signed = "signed for " + strings.Join(capabilities, ", ")
+	}
+
+	var inEffect []string
+	for _, c := range capabilities {
+		if broker.EnvelopeOnly(c) {
+			inEffect = append(inEffect, c)
+		}
+	}
+	if len(inEffect) > 0 {
+		signed += fmt.Sprintf(" (%s needs no grant and is in effect)", strings.Join(inEffect, ", "))
+	}
+	if granted {
+		return signed + ", brokered (operator grant active)"
+	}
+	return signed + ", quarantine, no operator grant"
+}
+
+func (a *App) pluginGranted(id string) bool {
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	if a.cfg == nil {
+		return false
+	}
+	_, ok := a.cfg.Plugins.Grants[id]
+	return ok
+}
+
+func (a *App) acquirer() *pluginhost.Acquirer {
+	if a.pluginOpts == nil {
+		return nil
+	}
+	return a.pluginOpts.Acquirer
+}
+
+func (a *App) forgetAcquisition(id string) {
+	if acq := a.acquirer(); acq != nil {
+		acq.Forget(id)
+	}
+}
+
+func (a *App) materialReady(id string) {
+	a.rerunPluginSweep()
+	a.pluginsChanged()
+}
+
+func (a *App) rerunPluginSweep() { a.pokePluginSweep() }
+
+func (a *App) pluginsChanged() {
+	if a.dashboard != nil {
+		a.dashboard.BroadcastConfig()
+	}
+}
+
+const (
+	lifeStarting = "starting"
+	lifeRefused  = "refused"
+
+	lifeRetiring = "retiring"
+
+	lifeHeld = "held"
+)
+
+type pluginLifecycle struct {
+	note                   string
+	version, phase, reason string
+	since                  time.Time
+
+	view pluginfacility.InstanceView
+}
+
+func (a *App) markPlugin(id, version, phase, reason string) {
+	a.pluginMu.Lock()
+	if phase == "" {
+		delete(a.pluginLife, id)
+	} else {
+		if a.pluginLife == nil {
+			a.pluginLife = map[string]pluginLifecycle{}
+		}
+		a.pluginLife[id] = pluginLifecycle{version: version, phase: phase, reason: reason, since: time.Now()}
+	}
+	a.pluginMu.Unlock()
+	a.pluginsChanged()
+}
+
+func (a *App) RetryPlugin(id string) error {
+	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return fmt.Errorf("plugins: refusing to retry %q — not a plain plugin id", id)
+	}
+
+	if acq := a.acquirer(); acq != nil {
+		acq.Reselect(id)
+	}
+
+	f := a.pluginFacility()
+	if !slices.ContainsFunc(f.Snapshot().Instances, func(v pluginfacility.InstanceView) bool { return v.ID == id }) {
+		return fmt.Errorf("plugins: %q is not a plugin this host has — nothing to try again", id)
+	}
+
+	a.mode.mu.RLock()
+	if a.mode.mode != ModeSafe {
+		for _, acq := range []*pluginhost.Acquirer{a.acquirer(), a.lateModels} {
+			if acq != nil {
+				acq.Retry(id)
+			}
+		}
+	}
+	a.mode.mu.RUnlock()
+	if !f.Retry(id) {
+		return fmt.Errorf("plugins: %q is not a plugin this host has — nothing to try again", id)
+	}
+
+	a.rerunPluginSweep()
+	logsink.Info("plugins.decision", "retrying %s at the operator's word", id)
+	return nil
+}
+
+type pendingMark struct{ phase, text, needs string }
+
+func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
+	byID := map[string]dashboard.PluginPendingView{}
+
+	chosen := map[string]*dashboard.PluginSelectionView{}
+	serving := map[string]bool{}
+	for _, v := range a.pluginFacility().Snapshot().Instances {
+		if s := latestSelection(v); s != nil {
+			chosen[v.ID] = s
+		}
+		serving[v.ID] = v.State == pluginfacility.StateActive
+	}
+	if acq := a.acquirer(); acq != nil {
+		for _, st := range acq.Snapshot() {
+
+			if st.Phase == pluginhost.PhaseReady && serving[st.PluginID] {
+				continue
+			}
+			v := dashboard.PluginPendingView{ID: st.PluginID, Version: st.Version, Phase: st.Phase, Summary: st.Summary(),
+				Attempt: st.Attempt, LastError: st.LastError, Remedy: st.Remedy,
+				BytesPresent: st.BytesPresent, BytesTotal: st.BytesTotal, FilesPresent: st.FilesPresent, FilesTotal: st.FilesTotal,
+				RuntimeDeclared: st.RuntimeDeclared, RuntimePresent: st.RuntimePresent, RuntimeBytes: st.RuntimeBytes}
+			if !st.RetryAt.IsZero() {
+				v.RetryAt = st.RetryAt.UTC().Format(time.RFC3339)
+			}
+			for _, ms := range st.Models {
+				v.Models = append(v.Models, dashboard.ModelView{Name: ms.Name, Size: ms.Size, Present: ms.Present, Partial: ms.Partial})
+			}
+			byID[st.PluginID] = v
+		}
+	}
+	a.pluginMu.Lock()
+	for id, l := range a.pluginLife {
+
+		pv := dashboard.PluginPendingView{ID: id, Version: l.version, Phase: l.phase, Summary: lifecycleText(l), Since: l.since.UTC().Format(time.RFC3339),
+			Refusal: refusalView(l.view.Refusal), Residue: append([]string(nil), l.view.Residue...)}
+		if !l.view.RetryAt.IsZero() {
+			pv.RetryAt = l.view.RetryAt.UTC().Format(time.RFC3339)
+		}
+
+		if fetching, ok := byID[id]; ok && l.phase == lifeRefused {
+			pv.LastError, pv.Remedy, pv.Attempt = fetching.LastError, fetching.Remedy, fetching.Attempt
+			pv.BytesPresent, pv.BytesTotal, pv.FilesPresent, pv.FilesTotal = fetching.BytesPresent, fetching.BytesTotal, fetching.FilesPresent, fetching.FilesTotal
+			pv.RuntimeDeclared, pv.RuntimePresent, pv.RuntimeBytes = fetching.RuntimeDeclared, fetching.RuntimePresent, fetching.RuntimeBytes
+			pv.Models = fetching.Models
+		}
+		if l.phase == lifeRetiring {
+
+			pv.Lifecycle = lifecycleView(l.view)
+			pv.RetryAt = ""
+			if !l.view.CleanupAt.IsZero() {
+				pv.CleanupAt = l.view.CleanupAt.UTC().Format(time.RFC3339)
+			}
+		}
+		byID[id] = pv
+	}
+	a.pluginMu.Unlock()
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]dashboard.PluginPendingView, 0, len(byID))
+	for id, v := range byID {
+		v.Selection = chosen[id]
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func lifecycleText(l pluginLifecycle) string {
+	if l.phase == lifeRefused {
+		return l.reason
+	}
+	if l.phase == lifeRetiring {
+		return "stopping — what it held has not all come back"
+	}
+	if l.note != "" {
+		return l.note
+	}
+	return "verifying its files and starting it"
+}
+
+func (a *App) pendingSummaries() map[string]pendingMark {
+	out := map[string]pendingMark{}
+	for _, v := range a.pluginPendingViews() {
+		m := pendingMark{phase: v.Phase, text: v.Summary}
+		if v.Selection != nil {
+			m.needs = v.Selection.Needs
+		}
+		out[v.ID] = m
+	}
+	return out
+}
+
+func autoloadTier(s string) (packagefmt.Tier, bool, bool) {
+	switch s {
+	case "none":
+		return 0, true, true
+	case "T0":
+		return packagefmt.TierT0, false, true
+	case "T1":
+		return packagefmt.TierT1, false, true
+	case "T2":
+		return packagefmt.TierT2, false, true
+	case "T3":
+		return packagefmt.TierT3, false, true
+	}
+	return packagefmt.TierT1, false, false
+}

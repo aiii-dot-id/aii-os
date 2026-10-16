@@ -1,0 +1,171 @@
+#!/bin/sh
+set -e
+
+#AII_UNITS_SH#
+
+aii_purge_account() {
+  home=$1 known=$2; shift 2
+  m="$home/.aii/machine"
+  if [ ! -d "$m" ]; then
+    aii_purge_stores "$@"
+    return
+  fi
+  aii_service_opened= aii_service_rc=1
+  {
+    aii_service_opened=1
+    if flock -n -x 9; then
+      aii_purge_held "$m" "$known" "$@" && aii_service_rc=0
+    else
+      echo "kept $m and every store it names: a machine service holds its lock (it runs from it)"
+    fi
+  } 9<>"$m/machine.lock" || true
+  [ -n "$aii_service_opened" ] || echo "kept $m and every store it names: its lock does not open"
+  return "$aii_service_rc"
+}
+
+aii_purge_held() {
+  m=$1 known=$2; shift 2
+  if ! aii_purge_stores "$@"; then
+    [ -L "$m" ] || echo "kept $m: a store it names is kept, and its state is the only record of where that store lies"
+    return 1
+  fi
+  [ ! -L "$m" ] || return 0
+  if [ "$known" != known ]; then
+    echo "kept $m: where its stores lie was not read at remove, and its state may name one; remove it by hand once you know"
+    return 1
+  fi
+  for n in "$m/link" "$m/relaunch.json" "$m/relaunch.lock" "$m/failure.json" "$m"/.state.json.tmp-* "$m"/.relaunch.json.tmp-* "$m"/.failure.json.tmp-* "$m/state.json" "$m/machine.lock"; do
+    if [ -e "$n" ] || [ -L "$n" ]; then
+      rm -f "$n" || { echo "kept $m: $n, the service's own, could not be removed"; return 1; }
+    fi
+  done
+  rmdir "$m" 2>/dev/null || echo "kept $m: it holds names the service did not make"
+  return 0
+}
+
+aii_purge_stores() {
+  aii_stores_kept=0
+  for s in "$@"; do
+    aii_purge_store "$s" || aii_stores_kept=1
+  done
+  return "$aii_stores_kept"
+}
+
+aii_purge_store() {
+  dir=$1
+  [ -e "$dir" ] || [ -L "$dir" ] || {
+    [ -d "$(dirname "$dir")" ] && return 0
+    [ "$dir" = "$home/.aii/plugins" ] && return 0
+    echo "kept $dir: the directory that holds it is not there (a volume not mounted)"; return 1
+  }
+  if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+    echo "kept $dir: it is not a directory where it lies"; return 1
+  fi
+  case "$(stat -f -c %T "$dir" 2>/dev/null)" in
+    nfs*|cifs|smb*|fuse*)
+      echo "kept $dir: it is on a network or FUSE file system"; return 1 ;;
+  esac
+  if [ ! -f "$dir/.lock" ]; then
+    aii_purge_records
+    return
+  fi
+  [ -r "$dir/.lock" ] || { echo "kept $dir: its lock does not open"; return 1; }
+  {
+    flock -n -x 4 || { echo "kept $dir: its writer holds $dir/.lock (a machine service runs from it)"; return 1; }
+    aii_purge_records
+  } 4<"$dir/.lock"
+}
+
+aii_purge_records() {
+  set --
+  for f in "$dir"/r/*.record.json "$dir"/v/*.record.json; do
+    if [ -f "$f" ]; then set -- "$@" "$f"; fi
+  done
+  aii_hold_records "$@"
+}
+
+aii_hold_records() {
+  if [ $# -eq 0 ]; then
+    aii_remove_store_names
+    return
+  fi
+  [ -r "$1" ] || { echo "kept $dir: $1 does not open"; return 1; }
+  {
+    flock -n -x 3 || { echo "kept $dir: something holds $1 (an identity runs a plugin from it)"; return 1; }
+    shift
+    aii_hold_records "$@"
+  } 3<"$1"
+}
+
+aii_remove_store_names() {
+  for n in a r b v .trash .lock; do
+    if [ -e "$dir/$n" ] || [ -L "$dir/$n" ]; then
+      rm -rf "$dir/$n" || { echo "kept $dir: $dir/$n, the store's own, could not be removed"; return 1; }
+    fi
+  done
+  rmdir "$dir" 2>/dev/null || echo "kept $dir: it holds names the store did not make"
+  return 0
+}
+
+aii_purge_home() {
+  home=$1 user=$2 uid=$3
+  d=$(aii_unit_dir "$home")
+  for l in "$d"/default.target.wants/aii-os@identity-*.service "$d"/default.target.wants/aii-os-machine.service "$d"/sockets.target.wants/aii-os-machine.socket; do
+    [ -L "$l" ] && aii_as "$user" rm -f "$l"
+  done
+  for f in "$d/aii-os-machine.service" "$d/aii-os-machine.socket"; do
+    [ -f "$f" ] && aii_as "$user" rm -f "$f"
+  done
+  stash="$AII_STATE/accounts/$uid"
+  known=known
+  if [ ! -f "$stash" ] || grep -qx stores-unknown "$stash"; then known=unknown; fi
+  stores=$({
+    printf '%s\n' "$home/.aii/plugins"
+    if [ -f "$stash" ]; then sed -n 's/^store //p' "$stash"; fi
+  } | sort -u)
+  set -- "$home" "$known"
+  while IFS= read -r s; do
+    if [ -n "$s" ]; then set -- "$@" "$s"; fi
+  done <<STORES
+$stores
+STORES
+  rc=0
+  aii_as "$user" sh "$0" aii-purge-account "$@" || rc=$?
+  if [ "$rc" != 0 ]; then
+    [ "$rc" = 1 ] || echo "kept what the purge did not remove in $home: its removal as $user did not run to its end (exit $rc)"
+    if [ -f "$stash" ]; then echo "$uid" >> "$AII_STATE/purge-kept"; fi
+  fi
+}
+
+aii_purge_state() {
+  [ -e "$AII_STATE" ] || return 0
+  if [ ! -s "$AII_STATE/purge-kept" ]; then
+    rm -rf "$AII_STATE"
+    return 0
+  fi
+  for s in "$AII_STATE"/accounts/*; do
+    if [ -f "$s" ] && ! grep -qx "$(basename "$s")" "$AII_STATE/purge-kept"; then rm -f "$s"; fi
+  done
+  rm -f "$AII_STATE/purge-kept"
+  echo "kept $AII_STATE/accounts: for each account above that kept something, where its stores lie, as its remove found them"
+}
+
+if [ "${1:-}" = aii-purge-account ]; then
+  shift
+  aii_purge_account "$@" || exit 1
+  exit 0
+fi
+
+case "$1" in
+  remove|purge)
+    systemctl --global daemon-reload >/dev/null 2>&1 || true
+    ;;
+esac
+
+if [ "$1" = purge ] && [ -z "${DPKG_ROOT:-}" ]; then
+  rm -f "$AII_STATE/purge-kept"
+  aii_each_home aii_purge_home || true
+  aii_purge_state || true
+fi
+
+exit 0

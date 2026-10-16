@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+. /usr/share/aii-os/aii-units.sh
+
+case "$1" in
+  configure|abort-upgrade|abort-deconfigure|abort-remove)
+    systemctl --global daemon-reload >/dev/null 2>&1 || true
+
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+      units=$(aii_units)
+      if [ -n "$units" ]; then
+        deb-systemd-invoke --user daemon-reload >/dev/null || true
+        aii_restart_running
+      fi
+    fi
+
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d "$AII_STATE/accounts" ]; then
+      for stash in "$AII_STATE"/accounts/*; do
+        [ -f "$stash" ] && aii_machine_on "$stash" || true
+      done
+    fi
+
+    if [ -z "$2" ]; then
+      cat <<'MSG'
+
+AII OS is installed.
+
+  aii init      create an identity slot and start it
+  aii slots     list your slots
+
+Your identities live in ~/.aii/, which this package does not own and
+will never remove. apt remove stops the program and keeps everything;
+apt purge also removes each account's machine service and plugin store
+(models and runtimes it can fetch again), never an identity. To uninstall
+from one account only: aii uninstall.
+
+MSG
+    fi
+    ;;
+esac
+
+exit 0

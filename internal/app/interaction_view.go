@@ -1,0 +1,141 @@
+package app
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"sort"
+
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
+)
+
+func (a *App) QueryInteractions(ctx context.Context, q interaction.Query) (*interaction.Page, error) {
+	if err := q.Normalize(); err != nil {
+		return nil, err
+	}
+	var p *interaction.Page
+	var err error
+	if q.Source == "recorded" {
+		if a.store == nil {
+			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "recorded history unavailable"}
+		}
+		p, err = a.store.QueryInteractions(ctx, q)
+	} else {
+		if a.engine == nil {
+			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "transient owner unavailable"}
+		}
+		inc, rows, lost := a.transientInteractions()
+		p, err = interaction.MemoryPage(q, inc, rows, lost)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if a.keyPair != nil {
+		p.Identity = a.keyPair.Fingerprint()
+	}
+	interaction.Seal(p)
+	return p, nil
+}
+func (a *App) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (*interaction.ReadResult, error) {
+	if err := interaction.ValidateRead(&req); err != nil {
+		return nil, err
+	}
+	if req.Source == "recorded" {
+		if a.store == nil {
+			return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "recorded history unavailable"}
+		}
+		return a.store.ReadInteraction(ctx, req)
+	}
+	if a.engine == nil {
+		return nil, &interaction.Error{Code: "INTERACTION_SOURCE_UNAVAILABLE", Detail: "transient owner unavailable"}
+	}
+	inc, rows, _ := a.transientInteractions()
+	if inc != req.Incarnation {
+		return nil, &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "transient source retired"}
+	}
+	for _, r := range rows {
+		if r.ID == req.ID {
+			raw, err := json.Marshal(r)
+			if err != nil {
+				return nil, err
+			}
+			return interaction.DetailRead(req, raw)
+		}
+	}
+	return nil, &interaction.Error{Code: "INTERACTION_CONTENT_UNAVAILABLE", Detail: "transient record was not retained"}
+}
+func (a *App) wireInteractionView() {
+	if a.dashboard == nil {
+		return
+	}
+	if a.store != nil {
+		a.store.SetInteractionObserver(a.dashboard.PokeInteractions)
+	}
+	if a.engine != nil {
+		a.engine.SetInteractionObserver(a.dashboard.PokeInteractions)
+	}
+	a.dashboard.PokeInteractions()
+}
+
+func (a *App) transientInteractions() (string, []interaction.Record, uint64) {
+	if a.safeTools == nil {
+		return a.engine.TransientInteractions()
+	}
+	t := a.safeTools
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	inc, rows, lost := a.engine.TransientInteractions()
+	for _, e := range t.events {
+		id := fmt.Sprintf("safe_tool_%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", e.TurnID, e.Ordinal))))
+		details := interaction.Details{Tool: e.Tool, Model: e.Model, Ordinal: e.Ordinal, Origin: "safe_tool", Reason: "arguments and result bodies are not retained"}
+		if e.StartSequence > 0 {
+			rows = append(rows, interaction.Record{ID: id, Sequence: e.StartSequence, Kind: interaction.ToolCall, Role: interaction.System, TurnID: e.TurnID, CreatedAt: e.StartedAt, RecordedAt: e.StartedAt, Details: details})
+		}
+		if e.DoneSequence > 0 {
+			parent, kind := id, interaction.ToolResult
+			if e.ExecutionID != "" {
+				parent = e.DurableParent
+				details.Reason = "attempt recorded durably; completion retained only in this process; arguments and result bodies not retained"
+				if parent == "" {
+					kind = interaction.Notice
+				}
+			}
+			outcome := e.Outcome
+			rows = append(rows, interaction.Record{ID: id + "_result", RelatedID: parent, Sequence: e.DoneSequence, Kind: kind, Role: interaction.System, TurnID: e.TurnID, CreatedAt: e.DoneAt, RecordedAt: e.DoneAt, Outcome: outcome, Details: details})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Sequence < rows[j].Sequence })
+	return inc, rows, lost + t.lost
+}
+
+func observedOutcome(obs conversation.Observation) interaction.Outcome {
+	switch {
+	case obs.Refused:
+		return interaction.Refused
+	case obs.Cancelled:
+		return interaction.Cancelled
+	case obs.Failed:
+		return interaction.Failed
+	}
+	return interaction.Succeeded
+}
+
+func (a *App) wireInteractionHooks(h *dashboard.WSHandler) {
+	h.Interactions = a
+	h.Thinking = a.thinkingOfTurn
+	h.HeardSpeech = a.heardSpeechPage
+}
+
+func (a *App) thinkingOfTurn(ctx context.Context, turn uint64) (dashboard.ThinkingRecord, bool, error) {
+	if a.store == nil {
+		return dashboard.ThinkingRecord{}, false, nil
+	}
+	r, ok, err := a.store.ReasoningOfTurn(turn)
+	if err != nil || !ok {
+		return dashboard.ThinkingRecord{}, false, err
+	}
+	return dashboard.ThinkingRecord{Models: r.Models, CreatedAt: r.CreatedAt, MayBeSummary: r.AccountMarked(), Content: r.Content}, true, nil
+}
