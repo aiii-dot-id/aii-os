@@ -533,24 +533,7 @@ func (a *App) startLive() (retErr error) {
 	a.composer.SetName(a.store.IdentityName())
 
 	a.composer.SetPluginOperations(pluginOperations(toolReg))
-
-	if recorded, err := st.StandingOffer(); err != nil {
-		logsink.Warn("tools.error", "standing offer unreadable; plugin operations start inspect-only this run: %v", err)
-	} else {
-		seats := make([]tools.StandingSeat, 0, len(recorded))
-		for _, s := range recorded {
-			seats = append(seats, tools.StandingSeat{Name: s.Name, Print: s.Print})
-		}
-		toolReg.SetStandingOffer(seats, func(seats []tools.StandingSeat) {
-			record := make([]store.StandingSeat, 0, len(seats))
-			for _, s := range seats {
-				record = append(record, store.StandingSeat{Name: s.Name, Print: s.Print})
-			}
-			if err := st.SetStandingOffer(record); err != nil {
-				logsink.Warn("tools.error", "standing offer not recorded; it holds until this process ends: %v", err)
-			}
-		})
-	}
+	restoreStandingOffer(st, toolReg)
 
 	a.applySubstrate(cfg)
 	toolReg.SetExtraRoots(cfg.Tools.ExtraRoots)
@@ -953,4 +936,26 @@ func (a *App) newComposer(promptBudget int) *prompt.Composer {
 	c := prompt.New(a.rings, promptBudget)
 	c.SetClosing(conversation.SystemAdditions())
 	return c
+}
+
+func restoreStandingOffer(st *store.Store, toolReg *tools.Registry) {
+
+	if recorded, err := st.StandingOffer(); err != nil {
+		logsink.Warn("tools.error", "standing offer unreadable; plugin operations start inspect-only this run: %v", err)
+		toolReg.SetStandingOffer(nil, func([]tools.StandingSeat) error {
+			return fmt.Errorf("standing choices are unavailable until their saved record can be read: %w", err)
+		})
+	} else {
+		seats := make([]tools.StandingSeat, 0, len(recorded))
+		for _, s := range recorded {
+			seats = append(seats, tools.StandingSeat{Name: s.Name, Print: s.Print})
+		}
+		toolReg.SetStandingOffer(seats, func(seats []tools.StandingSeat) error {
+			record := make([]store.StandingSeat, 0, len(seats))
+			for _, s := range seats {
+				record = append(record, store.StandingSeat{Name: s.Name, Print: s.Print})
+			}
+			return st.SetStandingOffer(record)
+		})
+	}
 }

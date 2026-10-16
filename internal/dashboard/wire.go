@@ -523,15 +523,19 @@ type PluginView struct {
 	Publisher   string `json:"publisher,omitempty"`
 	PublisherID string `json:"publisher_id,omitempty"`
 
-	Title        string              `json:"title,omitempty"`
-	Description  string              `json:"description,omitempty"`
-	Family       string              `json:"family,omitempty"`
-	Interfaces   []string            `json:"interfaces,omitempty"`
-	Capabilities []string            `json:"capabilities,omitempty"`
-	Runtime      string              `json:"runtime,omitempty"`
-	PackageHash  string              `json:"package_hash,omitempty"`
-	Tools        []string            `json:"tools,omitempty"`
-	Settings     []PluginSettingView `json:"settings,omitempty"`
+	Title          string              `json:"title,omitempty"`
+	Description    string              `json:"description,omitempty"`
+	Family         string              `json:"family,omitempty"`
+	Interfaces     []string            `json:"interfaces,omitempty"`
+	Capabilities   []string            `json:"capabilities,omitempty"`
+	Runtime        string              `json:"runtime,omitempty"`
+	PackageHash    string              `json:"package_hash,omitempty"`
+	Tools          []string            `json:"tools,omitempty"`
+	PrimaryTools   []string            `json:"primary_tools,omitempty"`
+	ToolsSelected  bool                `json:"tools_selected,omitempty"`
+	ToolsWaiting   int                 `json:"tools_waiting,omitempty"`
+	PrimaryOffered bool                `json:"primary_offered,omitempty"`
+	Settings       []PluginSettingView `json:"settings,omitempty"`
 
 	Applies string `json:"applies,omitempty"`
 

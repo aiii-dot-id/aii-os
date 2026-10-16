@@ -122,7 +122,8 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	a.settlePictures(ctx, result, err)
 	if err != nil {
 
-		a.recordInterruptedTurnContext(ctx, result)
+		kept := a.recordInterruptedTurnContext(ctx, result)
+		a.resumeTimedOutTurn(ctx, err, kept)
 		return result, err
 	}
 	a.recordTurnCost(ctx, result)

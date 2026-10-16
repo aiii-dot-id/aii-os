@@ -11,6 +11,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
 	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 func (a *App) activePlugin(id string) *pluginhost.ActivePlugin {
@@ -138,6 +139,18 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 	views := make([]dashboard.PluginView, 0, len(active))
 	for _, ap := range active {
 		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Mode: ap.Mode, Variant: ap.VariantID, Tools: ap.Tools()}
+		if a.toolReg != nil {
+			view.ToolsSelected, view.ToolsWaiting = a.toolReg.PluginSelection(ap.ID)
+			view.PrimaryOffered = true
+			for _, name := range view.Tools {
+				c, err := a.toolReg.Show(name)
+				if err == nil && c.Plugin == ap.ID && c.Primary {
+					view.PrimaryTools = append(view.PrimaryTools, c.Operation)
+					view.PrimaryOffered = view.PrimaryOffered && c.State == tools.StateOffered
+				}
+			}
+			view.PrimaryOffered = view.PrimaryOffered && len(view.PrimaryTools) > 0
+		}
 		view.Publisher, view.PublisherID, view.Family, view.Runtime, view.PackageHash = ap.Publisher, ap.PublisherID, ap.Family, ap.Runtime, ap.PackageHash
 		view.Title, view.Description = ap.Title, ap.Description
 		view.Interfaces, view.Capabilities = append([]string(nil), ap.Interfaces...), append([]string(nil), ap.Capabilities...)

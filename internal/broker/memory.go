@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -34,6 +35,8 @@ const (
 	DefaultMaxMemories = 10000
 
 	memoryTargetBytes = 80
+
+	memoryRecallResultBytes = 256 << 10
 )
 
 func (c Config) maxMemoryTextBytes() int {
@@ -72,11 +75,13 @@ func (b *Binding) dispatchMemory(ctx context.Context, p invokeParams, g Grant) (
 
 func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([]byte, error) {
 	var args struct {
-		Text       string `json:"text"`
-		Supersedes string `json:"supersedes"`
+		Text          string                    `json:"text"`
+		Supersedes    string                    `json:"supersedes"`
+		Applicability string                    `json:"applicability"`
+		Evidence      []store.MemoryEvidenceRef `json:"evidence"`
 	}
 	if len(p.Arguments) > 0 {
-		if err := json.Unmarshal(p.Arguments, &args); err != nil {
+		if err := canonicaljson.DecodeStrict(p.Arguments, &args); err != nil {
 			return b.resultReply(p.Operation, p.PluginOperation, "", outcome{
 				status: statusDenied, reason: reasonArgumentInvalid, detail: "arguments must be an object"})
 		}
@@ -93,12 +98,17 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 	}
 	st := b.host.cfg.Store
 	temp := !b.tier.PublisherProven()
-	scope := "persistent"
-	if temp {
-		scope = "temp"
-	}
 	now := time.Now()
-	project := st.ActiveProjectID()
+	binding, err := b.memoryWriteContext(args.Applicability)
+	if err != nil {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: err.Error()})
+	}
+	evidence, err := b.validateMemoryEvidence(ctx, args.Evidence)
+	if err != nil {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: err.Error()})
+	}
+	note := store.PluginMemory{Text: text, Project: binding.ProjectID, Applicability: binding.Applicability, WorkSession: binding.WorkSessionID, SourceIncarnation: binding.SourceIncarnation, Evidence: evidence, Temp: temp, CreatedAt: now}
+	selection := store.PluginMemorySelection{Kind: binding.Applicability, Project: binding.ProjectID, WorkSession: binding.WorkSessionID}
 
 	if args.Supersedes != "" {
 		old, found, err := st.PluginMemoryGet(b.storageScope(), args.Supersedes)
@@ -110,16 +120,31 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 				status: statusFailed, reason: reasonMemoryNotFound, transportOK: true,
 				detail: fmt.Sprintf("%s is not a current memory of this plugin", args.Supersedes)})
 		}
-		id, refusal, err := b.addMemory(p, st, text, project, temp, now, args.Supersedes)
+		id, refusal, err := b.addMemory(p, st, note, args.Supersedes, false)
 		if refusal != nil || err != nil {
 			return refusal, err
 		}
-		return b.memoryRemembered(p, id, "updated", args.Supersedes, now, scope)
+		return b.memoryRemembered(ctx, p, id, "updated", args.Supersedes)
+	}
+
+	if binding.Applicability != "legacy" || len(args.Evidence) > 0 {
+		note.ID = "pm_" + randomHex(16)
+		id, refusal, err := b.addMemory(p, st, note, "", true)
+		if refusal != nil || err != nil {
+			return refusal, err
+		}
+		if id != note.ID {
+			if err := st.RecordMemoryAccess(now, store.MemoryRef{Store: "plugin_memories", ID: id}); err != nil {
+				return nil, err
+			}
+			return b.memoryRemembered(ctx, p, id, "reinforced", id)
+		}
+		return b.memoryRemembered(ctx, p, id, "created", "")
 	}
 
 	res, err := b.host.instruments.Recall(ctx, memory.Query{
 		Text: text, Stores: []string{"plugin_memories"}, PluginID: b.pluginID, Activation: b.storageScope().Activation,
-		Limit: 3, Decay: memory.DecayNone, Now: now, WordsOnly: true,
+		Limit: 3, Decay: memory.DecayNone, Now: now, WordsOnly: true, Selection: selection,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("broker: memory.remember: %w", err)
@@ -136,28 +161,34 @@ func (b *Binding) dispatchMemoryRemember(ctx context.Context, p invokeParams) ([
 		if err := st.RecordMemoryAccess(now, store.MemoryRef{Store: "plugin_memories", ID: bestID}); err != nil {
 			return nil, fmt.Errorf("broker: memory.remember: reinforce: %w", err)
 		}
-		return b.memoryRemembered(p, bestID, "reinforced", bestID, now, scope)
+		return b.memoryRemembered(ctx, p, bestID, "reinforced", bestID)
 	case bestID != "" && best >= updateSimilarity:
-		id, refusal, err := b.addMemory(p, st, text, project, temp, now, bestID)
+		id, refusal, err := b.addMemory(p, st, note, bestID, false)
 		if refusal != nil || err != nil {
 			return refusal, err
 		}
-		return b.memoryRemembered(p, id, "updated", bestID, now, scope)
+		return b.memoryRemembered(ctx, p, id, "updated", bestID)
 	default:
-		id, refusal, err := b.addMemory(p, st, text, project, temp, now, "")
+		id, refusal, err := b.addMemory(p, st, note, "", false)
 		if refusal != nil || err != nil {
 			return refusal, err
 		}
-		return b.memoryRemembered(p, id, "created", "", now, scope)
+		return b.memoryRemembered(ctx, p, id, "created", "")
 	}
 }
 
-func (b *Binding) addMemory(p invokeParams, st *store.Store, text, project string, temp bool, now time.Time, supersedes string) (string, []byte, error) {
-	id := "pm_" + randomHex(16)
-	err := st.PluginMemoryAdd(b.storageScope(), store.PluginMemory{
-		ID: id, PluginID: b.pluginID, Text: text, Project: project,
-		Attribution: "plugin", Temp: temp, CreatedAt: now,
-	}, b.host.cfg.maxMemories(), supersedes)
+func (b *Binding) addMemory(p invokeParams, st *store.Store, note store.PluginMemory, supersedes string, exact bool) (string, []byte, error) {
+	id := note.ID
+	if id == "" {
+		id = "pm_" + randomHex(16)
+	}
+	note.ID, note.PluginID, note.Attribution = id, b.pluginID, "plugin"
+	var err error
+	if exact {
+		id, err = st.PluginMemoryAddExact(b.storageScope(), note, b.host.cfg.maxMemories())
+	} else {
+		err = st.PluginMemoryAdd(b.storageScope(), note, b.host.cfg.maxMemories(), supersedes)
+	}
 	if errors.Is(err, store.ErrPluginMemoryQuota) {
 		r, e := b.resultReply(p.Operation, p.PluginOperation, "", outcome{
 			status: statusFailed, reason: reasonMemoryQuotaExceeded, transportOK: true, detail: err.Error()})
@@ -174,10 +205,26 @@ func (b *Binding) addMemory(p invokeParams, st *store.Store, text, project strin
 	return id, nil, nil
 }
 
-func (b *Binding) memoryRemembered(p invokeParams, id, outcomeWord, of string, now time.Time, scope string) ([]byte, error) {
+func (b *Binding) memoryRemembered(ctx context.Context, p invokeParams, id, outcomeWord, of string) ([]byte, error) {
+	m, found, err := b.host.cfg.Store.PluginMemoryGet(b.storageScope(), id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("remembered memory is no longer available")
+	}
+	evidence, err := b.memoryEvidence(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	scope := "persistent"
+	if m.Temp {
+		scope = "temp"
+	}
 	or, err := json.Marshal(map[string]any{
+		"context": contextOfMemory(m), "evidence": evidence,
 		"id": id, "outcome": outcomeWord, "of": of,
-		"created_at": now.UTC().Format(time.RFC3339Nano), "scope": scope,
+		"created_at": m.CreatedAt.UTC().Format(time.RFC3339Nano), "scope": scope,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("broker: memory.remember encode: %w", err)
@@ -188,27 +235,55 @@ func (b *Binding) memoryRemembered(p invokeParams, id, outcomeWord, of string, n
 
 func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]byte, error) {
 	var args struct {
-		Query  string `json:"query"`
-		Exact  bool   `json:"exact"`
-		Since  string `json:"since"`
-		Before string `json:"before"`
-		Limit  int    `json:"limit"`
-		ID     string `json:"id"`
-		Decay  string `json:"decay"`
+		Query     string `json:"query"`
+		Exact     bool   `json:"exact"`
+		Since     string `json:"since"`
+		Before    string `json:"before"`
+		Limit     int    `json:"limit"`
+		ID        string `json:"id"`
+		Decay     string `json:"decay"`
+		Selection string `json:"selection"`
+		Recent    bool   `json:"recent"`
 	}
 	if len(p.Arguments) > 0 {
-		if err := json.Unmarshal(p.Arguments, &args); err != nil {
+		if err := canonicaljson.DecodeStrict(p.Arguments, &args); err != nil {
 			return b.resultReply(p.Operation, p.PluginOperation, "", outcome{
 				status: statusDenied, reason: reasonArgumentInvalid, detail: "arguments must be an object"})
 		}
 	}
 	st := b.host.cfg.Store
 	now := time.Now()
-
+	selection, err := b.memorySelection(args.Selection)
+	if err != nil {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: err.Error()})
+	}
+	selectors := 0
+	if strings.TrimSpace(args.Query) != "" {
+		selectors++
+	}
+	if args.ID != "" {
+		selectors++
+	}
+	if args.Recent {
+		selectors++
+	}
+	if selectors != 1 {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: "select exactly one of query, id or recent"})
+	}
+	if args.ID != "" && (args.Exact || args.Since != "" || args.Before != "" || args.Limit != 0 || args.Decay != "") {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: "by-ID read does not accept query filters"})
+	}
 	if args.ID != "" {
 		m, found, err := st.PluginMemoryGet(b.storageScope(), args.ID)
 		if err != nil {
 			return nil, fmt.Errorf("broker: memory.recall: %w", err)
+		}
+		if found {
+			selected, selectErr := st.PluginMemorySelected(m.ID, selection)
+			if selectErr != nil {
+				return nil, selectErr
+			}
+			found = selected
 		}
 		if !found {
 			return b.resultReply(p.Operation, p.PluginOperation, args.ID, outcome{
@@ -222,7 +297,12 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 		if a, ok, _ := st.MemoryAccessOf(ref); ok {
 			accesses = a.Count
 		}
+		evidence, err := b.memoryEvidence(ctx, m)
+		if err != nil {
+			return nil, err
+		}
 		hit := map[string]any{
+			"context": contextOfMemory(m), "evidence": evidence,
 			"id": m.ID, "text": m.Text, "snippet": memory.Excerpt(m.Text, nil, memory.SnippetWords),
 			"match": "id", "score": 1.0, "strength": 1.0, "attribution": m.Attribution,
 			"ring": memory.RingWorking, "time": m.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -240,7 +320,7 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	}
 
 	query := strings.TrimSpace(args.Query)
-	if query == "" {
+	if query == "" && !args.Recent {
 		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{
 			status: statusDenied, reason: reasonArgumentInvalid, detail: "memory.recall requires arguments.query (a non-empty string) or arguments.id"})
 	}
@@ -250,7 +330,6 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 			detail: fmt.Sprintf("memory.recall limit must be 1..%d (0 for the default %d)", memory.MaxLimit, memory.DefaultLimit)})
 	}
 	var since, before time.Time
-	var err error
 	if args.Since != "" {
 		if since, err = time.Parse(time.RFC3339, args.Since); err != nil {
 			return b.resultReply(p.Operation, p.PluginOperation, "", outcome{
@@ -270,7 +349,7 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	res, err := b.host.instruments.Recall(ctx, memory.Query{
 		Text: query, Exact: args.Exact, Since: since, Before: before, Limit: args.Limit,
 		Stores: []string{"plugin_memories"}, PluginID: b.pluginID, Activation: b.storageScope().Activation,
-		Decay: args.Decay, Reinforce: true, Now: now,
+		Decay: args.Decay, Reinforce: false, Now: now, Selection: selection, Recent: args.Recent,
 	})
 	if err != nil {
 		return b.resultReply(p.Operation, p.PluginOperation, target, outcome{
@@ -286,20 +365,54 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	}
 	hits := make([]any, 0, len(res.Hits))
 	for _, h := range res.Hits {
+		m, found, err := st.PluginMemoryGet(b.storageScope(), h.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("recalled memory became unavailable")
+		}
+		evidence, err := b.memoryEvidence(ctx, m)
+		if err != nil {
+			return nil, err
+		}
 		hits = append(hits, map[string]any{
+			"context": contextOfMemory(m), "evidence": evidence, "superseded_by": m.SupersededBy,
 			"id": h.ID, "text": h.Text, "snippet": h.Snippet, "match": h.Match,
 			"score": h.Score, "strength": h.Strength, "fused": h.Fused,
 			"attribution": h.Attribution, "ring": h.Ring, "time": h.Time.UTC().Format(time.RFC3339Nano),
 			"accesses": h.Accesses, "class": string(h.Class), "similarity": h.Similarity, "graph": h.Graph,
 		})
 	}
-	or, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"hits": hits, "status": src.Status, "matched": src.Matched, "shown": src.Shown,
 		"policy": res.Policy, "truncated": res.Truncated, "warnings": res.Warnings,
 		"meaning": map[string]any{"status": res.Meaning.Status, "detail": res.Meaning.Detail, "basis": res.Meaning.Basis, "floor": res.Meaning.Floor},
-	})
+	}
+	or, err := json.Marshal(payload)
+	for err == nil && len(or) > memoryRecallResultBytes && len(hits) > 0 {
+		hits = hits[:len(hits)-1]
+		payload["hits"], payload["shown"], payload["truncated"], payload["status"] = hits, len(hits), true, memory.StatusPartial
+		or, err = json.Marshal(payload)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("broker: memory.recall encode: %w", err)
+	}
+	if len(or) > memoryRecallResultBytes {
+		return b.resultReply(p.Operation, p.PluginOperation, target, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory result metadata exceeds the response budget"})
+	}
+
+	if !args.Recent && len(hits) > 0 {
+		if err := b.host.instruments.Reinforce(now, res.Hits[:len(hits)]); err != nil {
+			payload["warnings"] = append(res.Warnings, "reinforcement not recorded: "+err.Error())
+			or, err = json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			if len(or) > memoryRecallResultBytes {
+				return b.resultReply(p.Operation, p.PluginOperation, target, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory result with reinforcement warning exceeds the response budget"})
+			}
+		}
 	}
 	return b.resultReply(p.Operation, p.PluginOperation, target, outcome{
 		status: statusSucceeded, transportOK: true, operationResult: or})

@@ -19,7 +19,7 @@ import { acceptMailRepair, rejectMailRepair } from './views/mail-repair.js';
 import { acceptMessages, rejectMessages } from './views/messages.js';
 import { acceptExpertConfig, rejectExpertConfig, expertStatus, expertConnectionLost } from './views/expert.js';
 import { applyRestoreNew } from './firstboot-restore.js';
-import { renderPlugins } from './views/plugins.js';
+import { renderPlugins, rejectPluginAction } from './views/plugins.js';
 import { applySettingChoices } from './views/plugin-setting.js';
 import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptDashboardToken, acceptAccessCode, rejectAccessCode, settingsConnectionLost } from './views/settings.js';
 import { renderProviderOptions, discoveryAnswered, discoveryFailed, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
@@ -209,8 +209,10 @@ export async function recoverAuthentication() {
 async function tokenAct(path) {
   if (authCheck) return { ok: false, text: 'A sign-in is in progress; try again when it is done.' };
   authCheck = true;
+  const previous = ws;
   try {
     const reply = await fetch(path, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+    if (reply.ok && previous && ws === previous) retireStalled(previous);
     return { ok: reply.ok, text: reply.ok ? '' : (await reply.text()).trim() };
   } catch (e) {
     return { ok: false, text: 'The answer could not be confirmed. Check the connection; if this page then asks you to sign in, read the token with aii dashboard-token on this machine.' };
@@ -539,6 +541,7 @@ function onError(text, requestID, provider, needsKey) {
     $('fb-birth').disabled = false;
     return;
   }
+  if (rejectPluginAction(requestID)) { toast(text); return; }
   if (rejectAccessCode(text, requestID)) return;
   if (rejectSettingsConfig(text, requestID)) { if (S.view === 'plugins') renderPlugins(); return; }
   if (rejectSpeechLists(requestID, text)) return;
@@ -641,7 +644,9 @@ class ChannelSocket {
 
 export function settle(socket, adopt, lost, makePeer) {
   let pc = null, channel = null, timer = null, over = false, negotiating = false;
-  const finish = () => { over = true; clearTimeout(timer); };
+  let offered = false, answered = false, answering = false;
+  let localCandidates = [], remoteCandidates = [];
+  const finish = () => { over = true; clearTimeout(timer); localCandidates = []; remoteCandidates = []; };
   const abandon = () => {
     try { socket.close(); } catch (_) { }
     if (channel) channel.onclose = null;
@@ -669,11 +674,22 @@ export function settle(socket, adopt, lost, makePeer) {
       finish();
       adopt(channel);
     };
-    pc.onicecandidate = e => say(e.candidate
-      ? { type: 'transport_candidate', candidate: e.candidate.candidate, sdp_mid: e.candidate.sdpMid, sdp_mline_index: e.candidate.sdpMLineIndex }
-      : { type: 'transport_candidates_done' });
+    pc.onicecandidate = e => {
+      if (over) return;
+      const message = e.candidate
+        ? { type: 'transport_candidate', candidate: e.candidate.candidate, sdp_mid: e.candidate.sdpMid, sdp_mline_index: e.candidate.sdpMLineIndex }
+        : { type: 'transport_candidates_done' };
+      if (offered) say(message);
+      else localCandidates.push(message);
+    };
     pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer).then(() => say({ type: 'transport_offer', sdp: offer.sdp })))
+      .then(offer => pc.setLocalDescription(offer).then(() => {
+        if (over) return;
+        say({ type: 'transport_offer', sdp: offer.sdp });
+        offered = true;
+        for (const candidate of localCandidates) say(candidate);
+        localCandidates = [];
+      }))
       .catch(() => { });
   };
 
@@ -694,8 +710,19 @@ export function settle(socket, adopt, lost, makePeer) {
       return;
     }
     if (!message) return;
-    if (message.type === 'transport_answer') pc.setRemoteDescription({ type: 'answer', sdp: message.sdp }).catch(() => {});
-    else if (message.type === 'transport_candidate') pc.addIceCandidate({ candidate: message.candidate, sdpMid: message.sdp_mid, sdpMLineIndex: message.sdp_mline_index }).catch(() => {});
+    if (message.type === 'transport_answer' && !answering) {
+      answering = true;
+      pc.setRemoteDescription({ type: 'answer', sdp: message.sdp }).then(() => {
+        if (over) return;
+        answered = true;
+        for (const candidate of remoteCandidates) pc.addIceCandidate(candidate).catch(() => {});
+        remoteCandidates = [];
+      }).catch(() => {});
+    } else if (message.type === 'transport_candidate') {
+      const candidate = { candidate: message.candidate, sdpMid: message.sdp_mid, sdpMLineIndex: message.sdp_mline_index };
+      if (answered) pc.addIceCandidate(candidate).catch(() => {});
+      else remoteCandidates.push(candidate);
+    }
     else if (message.type === 'transport_ready') onSocket();
   };
   return { readyState: 0, close: () => { if (over) return; finish(); abandon(); } };

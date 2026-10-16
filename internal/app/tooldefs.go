@@ -8,6 +8,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 	"strings"
 	"time"
 
@@ -31,45 +32,6 @@ func (a *App) buildToolDefinitions() []llm.ToolDefinition {
 
 func (a *App) toolDefinitions(turn conversation.Checkpoint) []llm.ToolDefinition {
 	defs := a.toolReg.ToolDefinitions()
-
-	for _, d := range a.toolReg.Shadows() {
-		if d.Conflicted() {
-
-			logsink.Warn("plugins.refusal", "no %s door: %s both publish that family — retire one", d.Name, strings.Join(d.Conflict, " and "))
-			continue
-		}
-		actions := make([]any, 0, len(d.Actions))
-		lines := make([]string, 0, len(d.Actions))
-		for _, act := range d.Actions {
-			actions = append(actions, act.Action)
-			line := act.Action
-			if act.Summary != "" {
-				line += " — " + act.Summary
-			}
-			if act.OperatorConfirms {
-				line += " (runs only when the operator confirms it)"
-			}
-			lines = append(lines, line)
-		}
-		defs = append(defs, llm.ToolDefinition{Type: "function", Function: llm.ToolFunction{
-			Name:        d.Name,
-			Description: d.Description + " Actions: " + strings.Join(lines, "; "),
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"action": map[string]any{
-						"type": "string", "enum": actions,
-						"description": "which operation to perform",
-					},
-					"args": map[string]any{
-						"type":        "object",
-						"description": "that operation's own arguments; it checks them and says what it wanted",
-					},
-				},
-				"required": []any{"action"},
-			},
-		}})
-	}
 
 	for _, v := range identity.VerbsAt(turn) {
 		defs = append(defs, llm.ToolDefinition{Type: "function", Function: llm.ToolFunction{
@@ -197,7 +159,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		if seat.actor == actorSubagent {
 
 			if name == "work" {
-				a.noteSubagentWorkCall(seat.session, args)
+				a.noteSubagentWorkCall(seat.session, args, tc.EmissionOrdinal)
 			}
 			return
 		}
@@ -262,7 +224,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		return obs
 	}
 
-	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: seat.session, Reason: seat.reason})
+	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: seat.session, Reason: seat.reason, CallID: store.ToolCallRecordID(interaction.TurnID(ctx), tc.EmissionOrdinal)})
 	a.keepSandboxOffPlaces()
 	started := time.Now()
 	result, err := a.toolReg.ExecuteModel(ctx, name, args)

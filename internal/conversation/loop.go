@@ -121,6 +121,10 @@ type Transcript interface {
 	TranscriptResultExcerptLimit() int
 }
 
+type durableToolTranscript interface {
+	RecordToolDoneDurable(turnID string, ordinal int, tool, args string, obs Observation) (bool, error)
+}
+
 type Emitter interface {
 	EmitToolEvent(kind, name, args string)
 }
@@ -143,7 +147,7 @@ type Config struct {
 
 	TurnTokenBudget int
 
-	PredictedThisTurn func() int
+	PredictedThisTurn func() (remaining, ordinal int)
 
 	Checkpoint Checkpoint
 
@@ -213,6 +217,10 @@ type Result struct {
 	RoundsUsed int
 
 	ToolCallsUsed int
+
+	ToolCallsEmitted int
+
+	ToolCallCoverageComplete bool
 
 	ExhaustedBudget bool
 
@@ -454,7 +462,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 
 		t.drainedSteering = t.drainedSteering[:0]
 
-		choice := resp.Choices[0]
+		choice := t.numberEmissions(resp.Choices[0])
 		if !resp.Usage.Reported {
 			silentSpent += estimateSilentCall(t.messages, t.toolDefs, choice.Message.Content)
 		}
@@ -483,11 +491,17 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 
 		if note := unhandledStop(choice.FinishReason); note != "" {
+			if err := t.refuseCalls(resp.ModelID, choice.Message.ToolCalls, ReasonToolStopRefused, "Not run: the provider ended this response with an unsupported or refused stop reason."); err != nil {
+				return t.fail(err)
+			}
 			t.spoken = append(t.spoken, note)
 			break
 		}
 
 		if degenerateEmission(choice.Message.Content) {
+			if err := t.refuseCalls(resp.ModelID, choice.Message.ToolCalls, ReasonToolDegenerate, "Not run: degenerate repetition made this response's calls untrustworthy."); err != nil {
+				return t.fail(err)
+			}
 			if degenNudged {
 				t.spoken = append(t.spoken, declare("Degenerate repetition was detected in the model's output twice this turn; the turn ends here rather than spending further."))
 				logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: second detection (len %d) — turn ended", len(choice.Message.Content))
@@ -533,6 +547,9 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 
 		if len(callBudgetSurplus) > 0 {
+			if err := t.refuseCalls(resp.ModelID, callBudgetSurplus, ReasonToolCallBudget, "not executed: child call budget exhausted"); err != nil {
+				return t.fail(err)
+			}
 			for _, tc := range callBudgetSurplus {
 				t.messages = append(t.messages, llm.FormatToolResult(tc.ID,
 					"not executed: child call budget exhausted"))
@@ -546,17 +563,20 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 
 		if softCapFinal < 0 && t.cfg.PredictedThisTurn != nil && len(t.messages) > 0 {
 			limit, grace := t.cfg.Checkpoint.Calls, t.cfg.Checkpoint.GraceRounds
-			declared := 0
-			if p := t.cfg.PredictedThisTurn(); p > 0 {
-				declared = p
+			declared, declarationOrdinal := 0, 0
+			spent := t.toolCallsSoFar
+			if p, ordinal := t.cfg.PredictedThisTurn(); p > 0 && ordinal >= 0 && ordinal <= t.ordinal {
+				declared, declarationOrdinal = p, ordinal
 				limit = t.cfg.Checkpoint.declaredLimit(p)
+
+				spent = t.ordinal - ordinal
 			}
 
-			if t.toolCallsSoFar >= limit && grace < t.cfg.MaxIterations-1-i {
+			if spent >= limit && grace < t.cfg.MaxIterations-1-i {
 				softCapFinal = i + grace
-				t.messages[len(t.messages)-1].Content += checkpointNote(declared, t.toolCallsSoFar, grace)
-				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent (declared %d, limit %d) — turn will continue in a fresh turn after %d more rounds",
-					i+1, t.toolCallsSoFar, declared, limit, grace)
+				t.messages[len(t.messages)-1].Content += checkpointNote(declared, spent, grace)
+				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %d) — turn will continue in a fresh turn after %d more rounds",
+					i+1, spent, declared, declarationOrdinal, limit, grace)
 			}
 		}
 
@@ -620,7 +640,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 	}
 
-	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, Reasoning: t.reasoning, budgetLine: budgetLine}
+	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), Reasoning: t.reasoning, budgetLine: budgetLine}
 
 	if format := requestResponseFormat(t.ctx); format != nil {
 		result.ContractErr = llm.ValidateStructuredOutput(format, t.finalText)
@@ -641,11 +661,13 @@ type turn struct {
 	toolDefs           []llm.ToolDefinition
 	previousResponseID string
 
-	spoken         []string
-	finalText      string
-	modelID        string
-	turnUsage      TurnUsage
-	toolCallsSoFar int
+	spoken                     []string
+	finalText                  string
+	modelID                    string
+	turnUsage                  TurnUsage
+	toolCallsSoFar             int
+	toolCallsRecorded          int
+	emissionCoverageIncomplete bool
 
 	schemaRefusals int
 
@@ -758,7 +780,7 @@ func (t *turn) keepReasoning(r *llm.Response) {
 }
 
 func (t *turn) fail(err error) (Result, error) {
-	r := Result{Usage: t.turnUsage, ModelID: t.modelID, ToolCallsUsed: t.toolCallsSoFar, RoundsUsed: t.roundsUsed, Reasoning: t.reasoning}
+	r := Result{Usage: t.turnUsage, ModelID: t.modelID, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), RoundsUsed: t.roundsUsed, Reasoning: t.reasoning}
 	if len(t.drainedSteering) > 0 {
 		r.Unanswered = append([]string(nil), t.drainedSteering...)
 	}
@@ -853,10 +875,84 @@ func (t *turn) leaveOutRefusedImages(err error) bool {
 func (t *turn) ask(opts func() llm.ChatOptions) (*llm.Response, error) {
 	resp, err := t.l.llm.Chat(t.ctx, t.messages, opts())
 	for err != nil && (t.leaveOutRefusedTool(err) || t.leaveOutRefusedImages(err)) {
+		if llm.UnknownAttempts(err) > 0 {
+			t.emissionCoverageIncomplete = true
+		}
 		t.turnUsage.failed(err)
 		resp, err = t.l.llm.Chat(t.ctx, t.messages, opts())
 	}
+
+	if err != nil || resp == nil || len(resp.Choices) == 0 {
+		t.emissionCoverageIncomplete = true
+	} else if resp.Usage.UnknownAttempts > 0 {
+		t.emissionCoverageIncomplete = true
+	}
 	return resp, err
+}
+
+func (t *turn) numberEmissions(choice llm.Choice) llm.Choice {
+	if choice.FinishReason == "length" || choice.FinishReason == "model_context_window_exceeded" {
+
+		t.emissionCoverageIncomplete = true
+	}
+	choice.Message.ToolCalls = slices.Clone(choice.Message.ToolCalls)
+	for i := range choice.Message.ToolCalls {
+		t.ordinal++
+		choice.Message.ToolCalls[i].EmissionOrdinal = t.ordinal
+	}
+	return choice
+}
+
+func (t *turn) emissionCoverageComplete() bool {
+	return t.l.transcript != nil && !t.emissionCoverageIncomplete && t.toolCallsRecorded == t.ordinal
+}
+
+func (t *turn) recordToolStart(model string, tc llm.ToolCall) error {
+	if t.l.transcript != nil {
+		if err := t.l.transcript.RecordToolStart(t.turnID, tc.EmissionOrdinal, tc.ID, tc.Function.Name, tc.Function.Arguments, model); err != nil {
+			return fmt.Errorf("record tool start: %w", err)
+		}
+	}
+	return nil
+}
+
+func (t *turn) recordToolDone(tc llm.ToolCall, obs Observation) error {
+	if t.l.transcript != nil {
+		durable := true
+		var err error
+		if tr, ok := t.l.transcript.(durableToolTranscript); ok {
+			durable, err = tr.RecordToolDoneDurable(t.turnID, tc.EmissionOrdinal, tc.Function.Name, tc.Function.Arguments, obs)
+		} else {
+			err = t.l.transcript.RecordToolDone(t.turnID, tc.EmissionOrdinal, tc.Function.Name, tc.Function.Arguments, obs)
+		}
+		if err != nil {
+			return fmt.Errorf("record tool result: %w", err)
+		}
+		if durable {
+			t.toolCallsRecorded++
+		}
+	}
+	return nil
+}
+
+const (
+	ReasonToolStopRefused = "TOOL_RESPONSE_STOP_REFUSED"
+	ReasonToolDegenerate  = "TOOL_DEGENERATE_RESPONSE"
+	ReasonToolCallBudget  = "TOOL_CALL_BUDGET_EXHAUSTED"
+	ReasonToolDisabled    = "TOOL_DISABLED_FOR_FINAL_RESPONSE"
+	ReasonToolNoExecutor  = "TOOL_EXECUTOR_UNAVAILABLE"
+)
+
+func (t *turn) refuseCalls(model string, calls []llm.ToolCall, reason, text string) error {
+	for _, tc := range calls {
+		if err := t.recordToolStart(model, tc); err != nil {
+			return err
+		}
+		if err := t.recordToolDone(tc, Observation{Text: text, Failed: true, Refused: true, ReasonCode: reason}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *turn) execute(ctx context.Context, tc llm.ToolCall) Observation {
@@ -887,12 +983,6 @@ func withoutRefused(defs []llm.ToolDefinition, refused map[string]bool) []llm.To
 }
 
 func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, yieldAnswer string, err error) {
-
-	respOrdinals := make([]int, len(calls))
-	for idx := range calls {
-		t.ordinal++
-		respOrdinals[idx] = t.ordinal
-	}
 	t.toolCallsSoFar += len(calls)
 
 	preObs := map[int]Observation{}
@@ -913,10 +1003,8 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 				if t.l.emit != nil {
 					t.l.emit.EmitToolEvent("tool_call", tc.Function.Name, tc.Function.Arguments)
 				}
-				if t.l.transcript != nil {
-					if err := t.l.transcript.RecordToolStart(t.turnID, respOrdinals[idx], tc.ID, tc.Function.Name, tc.Function.Arguments, model); err != nil {
-						return false, "", fmt.Errorf("record tool start: %w", err)
-					}
+				if err := t.recordToolStart(model, tc); err != nil {
+					return false, "", err
 				}
 				preStarted[idx] = true
 			}
@@ -926,7 +1014,6 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 			for idx := range calls {
 				idx := idx
 				tc := calls[idx]
-				tc.EmissionOrdinal = respOrdinals[idx]
 				wg.Add(1)
 				sem <- struct{}{}
 				go func() {
@@ -954,7 +1041,6 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 	}
 
 	for tcIdx, tc := range calls {
-		tc.EmissionOrdinal = respOrdinals[tcIdx]
 
 		if !preStarted[tcIdx] {
 			logsink.InfoCtx(t.ctx, "tool.start", "Tool call: %s(%s)", tc.Function.Name, logPreview(tc.Function.Arguments))
@@ -963,12 +1049,15 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 			}
 		}
 		if t.l.tools == nil {
+			if err := t.refuseCalls(model, calls[tcIdx:], ReasonToolNoExecutor, "Not run: no tool executor is available."); err != nil {
+				return false, "", err
+			}
 			return false, "", fmt.Errorf("tool %q requested but no executor is available", tc.Function.Name)
 		}
 		obs, pre := preObs[tcIdx]
-		if t.l.transcript != nil && !preStarted[tcIdx] {
-			if err := t.l.transcript.RecordToolStart(t.turnID, respOrdinals[tcIdx], tc.ID, tc.Function.Name, tc.Function.Arguments, model); err != nil {
-				return false, "", fmt.Errorf("record tool start: %w", err)
+		if !preStarted[tcIdx] {
+			if err := t.recordToolStart(model, tc); err != nil {
+				return false, "", err
 			}
 		}
 		if !pre {
@@ -991,10 +1080,8 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 		}
 
 		heard := isHeardRecall(tc.Function.Name, tc.Function.Arguments)
-		if t.l.transcript != nil {
-			if err := t.l.transcript.RecordToolDone(t.turnID, respOrdinals[tcIdx], tc.Function.Name, tc.Function.Arguments, obs); err != nil {
-				return false, "", fmt.Errorf("record tool result: %w", err)
-			}
+		if err := t.recordToolDone(tc, obs); err != nil {
+			return false, "", err
 		}
 		logsink.InfoCtx(t.ctx, "tool.end", "Tool result: %s", logPreview(result))
 
@@ -1051,8 +1138,17 @@ func (t *turn) finalCall(failed, circumstance string, afterTools bool) error {
 		t.turnUsage.failed(err)
 		return fmt.Errorf("%s: %w", failed, err)
 	}
-	t.turnUsage.add(resp.Usage)
-	t.keepReasoning(resp)
+	if resp != nil {
+		t.turnUsage.add(resp.Usage)
+		t.keepReasoning(resp)
+		if len(resp.Choices) > 0 {
+			choice := t.numberEmissions(resp.Choices[0])
+			t.modelID = resp.ModelID
+			if err := t.refuseCalls(resp.ModelID, choice.Message.ToolCalls, ReasonToolDisabled, "Not run: tools were disabled for this closing response."); err != nil {
+				return err
+			}
+		}
+	}
 
 	t.finalText, t.modelID, err = finalResponse(resp, circumstance)
 	return err
@@ -1729,7 +1825,7 @@ func steeringNote(said []string) string {
 
 func checkpointNote(declared, spent, grace int) string {
 	if declared > 0 {
-		return declare("Declared budget reached: you estimated %d calls and have spent %d. "+
+		return declare("Declared budget reached: you estimated %d remaining calls and have spent %d since that declaration. "+
 			"Checkpoint NOW — `work update next_move=` with the exact resume point (revise plan= if it drifted), "+
 			"and say which this is: done with its scope, continue from that point, or stop with why. "+
 			"You have %s; then this turn ends and, while its work session is still active, the work continues automatically in a fresh turn.",

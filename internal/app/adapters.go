@@ -386,6 +386,10 @@ func (t appTranscript) RecordToolDone(turnID string, ordinal int, tool, args str
 	return err
 }
 
+func (t appTranscript) RecordToolDoneDurable(turnID string, ordinal int, tool, args string, obs conversation.Observation) (bool, error) {
+	return t.recordToolDoneObservedDurable(turnID, ordinal, tool, args, obs)
+}
+
 func (t appTranscript) recordToolDoneObservedDurable(turnID string, ordinal int, tool, args string, obs conversation.Observation) (bool, error) {
 	return t.recordToolDoneDurable(turnID, ordinal, tool, args, obs.Text, observedOutcome(obs), obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS, ExitStatus: obs.ExitStatus, WorkSession: obs.WorkSession, SessionReason: obs.SessionReason, ReasonCode: obs.ReasonCode})
 }
@@ -521,7 +525,7 @@ func (t toolDiscovererAdapter) Search(query string, limit int) []identity.ToolHi
 	hits := t.reg.Search(query, limit)
 	out := make([]identity.ToolHit, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, identity.ToolHit{Name: h.Name, Operation: h.Operation, Plugin: h.Plugin, Summary: h.Summary, Effects: h.Effects, State: string(h.State)})
+		out = append(out, identity.ToolHit{Name: h.Name, Operation: h.Operation, Plugin: h.Plugin, Summary: h.Summary, Effects: h.Effects, Primary: h.Primary, State: string(h.State)})
 	}
 	return out
 }
@@ -533,7 +537,11 @@ func (t toolDiscovererAdapter) Show(ref string) (identity.ToolCard, error) {
 	}
 	return identity.ToolCard{Name: c.Name, Operation: c.Operation, Plugin: c.Plugin, Version: c.Version, Tier: c.Tier,
 		Family: c.Family, Summary: c.Summary, Effects: c.Effects, Capabilities: c.Capabilities, MaxResultBytes: c.MaxResultBytes,
-		Examples: c.Examples, State: string(c.State), Reason: c.Reason, Receipt: c.Receipt, Parameters: c.Parameters}, nil
+		Examples: c.Examples, Primary: c.Primary, State: string(c.State), Reason: c.Reason, Receipt: c.Receipt, Parameters: c.Parameters}, nil
+}
+
+func (t toolDiscovererAdapter) OfferPrimary(plugin string) ([]string, error) {
+	return t.reg.OfferPrimary(plugin)
 }
 
 func (t toolDiscovererAdapter) Offer(ref string) (string, error)   { return t.reg.Offer(ref) }

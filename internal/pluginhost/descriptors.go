@@ -58,6 +58,7 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 			Family   string   `json:"family"`
 			Keywords []string `json:"keywords"`
 			Examples []string `json:"examples"`
+			Primary  bool     `json:"primary"`
 
 			OperatorConfirms bool `json:"operator_confirms"`
 		}
@@ -82,7 +83,7 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 			}
 			d := &opDescriptor{effects: op.Effects, maxResult: op.MaxResult,
 				summary: op.Summary, family: op.Family, keywords: op.Keywords, examples: op.Examples,
-				operatorConfirms: op.OperatorConfirms}
+				operatorConfirms: op.OperatorConfirms, primary: op.Primary}
 			if len(op.Capabilities) > 0 {
 
 				d.capsDeclared = true

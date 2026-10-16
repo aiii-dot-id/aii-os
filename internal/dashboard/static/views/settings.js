@@ -821,6 +821,8 @@ function tokenActHTML(act, label, busyLabel, secretsOK, privateNote) {
     (tokenSaid ? '<span class="config-result ' + tokenSaid.kind + '" data-token-' + tokenSaid.act + '-said data-announce>' + esc(tokenSaid.text) + '</span>' : '') + '</div>';
 }
 function dashboardTokenHTML(required, secretsOK) {
+  const revealWaiting = !tokenShown && (!S.connected || !!tokenBusy);
+  const revealTitle = revealWaiting ? (tokenBusy ? 'Wait for the access-token change' : 'Reconnect to show access token') : 'Show access token';
   if (!required) {
     return '<label class="f">ACCESS TOKEN</label>' +
       '<div data-token-open>This dashboard asks no browser for a token: any browser on this machine that opens it is its operator.</div>' +
@@ -829,7 +831,7 @@ function dashboardTokenHTML(required, secretsOK) {
   }
   return '<label class="f" for="cfg-dtoken">ACCESS TOKEN</label>' +
     '<div style="display:flex;align-items:center;gap:6px"><input id="cfg-dtoken" type="password" value="' + esc(tokenShown) + '" readonly autocomplete="off" spellcheck="false" style="flex:1" placeholder="press the eye to show it">' +
-    '<button type="button" class="copyb" data-token-reveal title="Show access token" aria-label="Show access token" aria-pressed="' + (tokenShown ? 'true' : 'false') + '">' + TOKEN_EYE + '</button>' +
+    '<button type="button" class="copyb" data-token-reveal title="' + revealTitle + '" aria-label="' + revealTitle + '" aria-pressed="' + (tokenShown ? 'true' : 'false') + '"' + (revealWaiting ? ' disabled' : '') + '>' + TOKEN_EYE + '</button>' +
     '<button type="button" class="copyb" data-token-copy title="' + (tokenShown ? 'Copy access token' : 'Show the token first') + '" aria-label="Copy access token"' + (tokenShown ? '' : ' disabled') + '>' + TOKEN_COPY + '</button></div>' +
     '<div class="muted" style="font-size:12px;margin-top:6px">This is the credential for another browser or device, kept in config.json. Rotating replaces it: every other browser and device signs in again with the new one, and this one stays signed in.</div>' +
     tokenActHTML('rotate', 'Rotate access token', 'Rotating\u2026', secretsOK, 'Rotating the token is offered over a private connection only \u2014 open this page on the machine itself, or over HTTPS.') +
@@ -900,6 +902,7 @@ function wireDashboardToken(root) {
   const copy = root.querySelector('[data-token-copy]');
   reveal.onclick = () => {
     if (!field.value) {
+      if (!S.connected || tokenBusy) return;
       tokenAsk = query('dashboard_token') || '';
       return;
     }
@@ -2234,6 +2237,13 @@ export function savebarHTML(section, note, more) {
 }
 
 export function settingsConnectionLost() {
+  tokenAsk = '';
+  const reveal = document.querySelector('[data-token-reveal]');
+  if (reveal && !tokenShown) {
+    reveal.disabled = true;
+    reveal.title = 'Reconnect to show access token';
+    reveal.setAttribute('aria-label', reveal.title);
+  }
   mailRepairDisconnected();
   messagesDisconnected();
   let changed = false;

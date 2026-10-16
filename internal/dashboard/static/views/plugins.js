@@ -250,6 +250,19 @@ function pendingHTML(pending) {
   }).join('');
 }
 
+function primaryToolsHTML(p) {
+  let html = '';
+  if (p.primary_tools && p.primary_tools.length) {
+    html += '<div class="dim-note">Primary tools: ' + esc(p.primary_tools.join(', ')) + '</div>' +
+      '<div class="savebar"><button class="btn sm" data-plugin="offer:' + esc(p.id) + '"' + (p.primary_offered ? ' disabled' : '') + '>' +
+      (p.primary_offered ? 'Primary tools in use' : 'Use primary tools') + '</button></div>';
+  }
+  if (p.tools_waiting > 0) html += '<div class="dim-note">' + esc(p.tools_waiting) + ' selected operation' + (p.tools_waiting === 1 ? '' : 's') + ' waiting for free offer space.</div>';
+  if (p.tools_selected) html += '<div class="savebar"><button class="btn sm ghost" data-plugin="release:' + esc(p.id) + '">Stop using tools</button></div>' +
+    '<div class="dim-note">Stops using all selected operations of this plugin.</div>';
+  return html;
+}
+
 function installedHTML(installed) {
   if (!installed || !installed.length) return '';
   return installed.map(p => {
@@ -258,8 +271,8 @@ function installedHTML(installed) {
       (p.title ? '<div class="dim-note pkg-id">' + esc(p.id) + '</div>' : '') +
       (p.description ? '<div class="pkg-desc">' + esc(p.description) + '</div>' : '') +
       '<div class="dim-note">' + esc(p.mode) + ', variant ' + esc(p.variant) +
-      (p.tools && p.tools.length ? ' · ' + p.tools.length + ' operation' + (p.tools.length === 1 ? '' : 's') + ', reached through the tools organ, never listed in the prompt' : '') + '</div>' +
-      readinessHTML(p) + checksHTML(p) + startupHTML(p) + lifecycleHTML(p) + componentSetsHTML(servingSelection(p)) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
+      (p.tools && p.tools.length ? ' · ' + p.tools.length + ' operation' + (p.tools.length === 1 ? '' : 's') + ', available through the tools organ; selected operations carry their full arguments in the prompt' : '') + '</div>' +
+      primaryToolsHTML(p) + readinessHTML(p) + checksHTML(p) + startupHTML(p) + lifecycleHTML(p) + componentSetsHTML(servingSelection(p)) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
     const all = p.settings || [];
     const elsewhere = all.filter(s => s.scope === 'hearing' || s.scope === 'speaking');
     const own = all.filter(s => !(s.scope === 'hearing' || s.scope === 'speaking'));
@@ -525,11 +538,29 @@ function wireList(st) {
   }; });
   st.querySelectorAll('[data-plugin]').forEach(btn => { btn.onclick = () => {
     const spec = btn.dataset.plugin, i = spec.indexOf(':'), action = spec.slice(0, i), id = spec.slice(i + 1);
-    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : action === 'retry' ? 'Retrying…' : 'Removing…';
-    send({ type: 'plugin', plugin: { action: action, id: id } });
+    btn.dataset.pluginLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : action === 'retry' ? 'Retrying…' : action === 'offer' ? 'Selecting…' : action === 'release' ? 'Stopping use…' : 'Removing…';
+    const requestID = send({ type: 'plugin', plugin: { action: action, id: id } });
+    if (requestID) btn.dataset.pluginRequest = requestID;
+    else restorePluginAction(btn);
   }; });
   const rf = st.querySelector('[data-catalog-refresh]');
   if (rf) rf.onclick = () => { rf.disabled = true; rf.textContent = 'Refreshing…'; send({ type: 'catalog_refresh' }); };
+}
+
+function restorePluginAction(btn) {
+  btn.disabled = false;
+  btn.textContent = btn.dataset.pluginLabel;
+  delete btn.dataset.pluginRequest;
+  delete btn.dataset.pluginLabel;
+}
+
+export function rejectPluginAction(requestID) {
+  if (!requestID) return false;
+  const btn = [...document.querySelectorAll('[data-plugin-request]')].find(b => b.dataset.pluginRequest === requestID);
+  if (!btn) return false;
+  restorePluginAction(btn);
+  return true;
 }
 
 export function connectPrefill(req, providers, installed) {

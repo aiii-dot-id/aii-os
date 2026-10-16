@@ -277,6 +277,8 @@ CREATE TABLE IF NOT EXISTS turn_metrics (
     provider TEXT,
     model    TEXT,
     turn_id  TEXT,
+    emitted_calls INTEGER CHECK (emitted_calls >= 0),
+    emission_coverage_complete INTEGER CHECK (emission_coverage_complete IN (0, 1)),
     prompt_tokens         INTEGER,
     completion_tokens     INTEGER,
     total_tokens          INTEGER,
@@ -330,7 +332,9 @@ CREATE TABLE IF NOT EXISTS subagent_metrics (
     failed     INTEGER NOT NULL,
     role       TEXT NOT NULL DEFAULT '',
     model      TEXT NOT NULL DEFAULT '',
-    legs       INTEGER NOT NULL DEFAULT 1
+    legs       INTEGER NOT NULL DEFAULT 1,
+    emitted_calls INTEGER CHECK (emitted_calls >= 0),
+    emission_coverage_complete INTEGER CHECK (emission_coverage_complete IN (0, 1))
 ) STRICT;
 
 -- retired-table: tool_events
@@ -480,6 +484,10 @@ CREATE TABLE IF NOT EXISTS plugin_memories (
     plugin_id     TEXT NOT NULL,
     activation    TEXT NOT NULL DEFAULT '',
     overrides     TEXT REFERENCES plugin_memories(id),
+    applicability TEXT NOT NULL DEFAULT 'legacy' CHECK (applicability IN ('legacy','task','project','reusable')),
+    work_session  TEXT NOT NULL DEFAULT '',
+    source_incarnation TEXT NOT NULL DEFAULT '',
+    evidence      TEXT NOT NULL DEFAULT '[]',
     text          TEXT NOT NULL,
     project       TEXT NOT NULL DEFAULT '',
     attribution   TEXT NOT NULL DEFAULT 'plugin'

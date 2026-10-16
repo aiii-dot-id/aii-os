@@ -208,11 +208,16 @@ func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string
 				line += fmt.Sprintf(", %d.%02d calls per model round", batchCenti/100, batchCenti%100)
 			}
 
-			if plans, predicted, actual, cerr := a.store.PlanCalibration(48 * time.Hour); cerr != nil {
+			if calibration, cerr := a.store.PlanCalibration(48 * time.Hour); cerr != nil {
 
 				logsink.Warn("prompt.error", "plan calibration unreadable this turn: %v", cerr)
-			} else if plans > 0 {
-				line += fmt.Sprintf("\nOf those, %d turn(s) stated a plan of %d calls in advance and took %d.", plans, predicted, actual)
+			} else {
+				if calibration.Plans > 0 {
+					line += fmt.Sprintf("\nAcross %d fully measured turn(s), first estimates totaled %d remaining tool-call requests; %d were emitted after those declarations, including refused requests.", calibration.Plans, calibration.Predicted, calibration.Actual)
+				}
+				if calibration.Unmeasured > 0 {
+					line += fmt.Sprintf("\nExcluded %d stated estimate(s) without a valid, complete request window. New work update steps= estimates can be compared when their turn's request count is complete.", calibration.Unmeasured)
+				}
 			}
 
 			if done, failedN, truncN, terr := a.store.ToolResultStats(48 * time.Hour); terr != nil {

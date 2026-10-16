@@ -380,8 +380,8 @@ const toolGuidance = `# How You Act
 The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed, and continue until the task is done. Before you set off into a run of tool calls, tell your human operator what you intend to do: they are beside you in the work, not waiting outside it, and an identity that disappears into its tools leaves them alone.`
 
 const (
-	pluginHintHead = "Plugin operations installed beside you — named here, not in your tool list until you offer one:"
-	pluginHintTail = "Reach them through your tools organ: tools action=show name=… inspects one, its arguments and its receipt rule; tools action=offer name=… makes it callable from your next turn and keeps it so, across restarts, until action=release returns the seat or the operation changes what it declares — eight at a time; tools action=search query=… finds one by need. A plugin's success is what the host's receipt says, never the plugin's own text."
+	pluginHintHead = "Installed plugin families; offered operations already appear in your tool list:"
+	pluginHintTail = "Use offered operations directly with their declared arguments. tools action=offer plugin=… selects an exact plugin's declared primary operations; tools action=offer name=… selects one operation. Newly offered operations are callable from your next turn. Choices remain remembered across restarts; the active offer holds eight at a time, subject to operator controls, SAFE and matching declarations. tools action=search query=… finds an operation by need; tools action=show name=… inspects current availability, arguments and effect requirements. Selection does not widen grants. The host records execution outcome; inspect the operation's returned result and evidence as well. Neither successful execution nor a plugin's own success claim independently proves task correctness."
 )
 
 var pluginNameGrammar = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)

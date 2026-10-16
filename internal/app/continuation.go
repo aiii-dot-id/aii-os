@@ -26,6 +26,7 @@ const (
 	capDeclared
 	capContext
 	capTokenFence
+	capDeadline
 )
 
 func capReasonOf(r conversation.Result) capReason {
@@ -42,6 +43,8 @@ func capReasonOf(r conversation.Result) capReason {
 
 func (r capReason) how() string {
 	switch r {
+	case capDeadline:
+		return "because it ran out of time"
 	case capContext:
 		return "because its context filled"
 	case capTokenFence:
@@ -107,23 +110,53 @@ func (a *App) scheduleContinuation(reason capReason, from string) (bool, string)
 		logsink.Warn("continuation.error", "not scheduled: the active work session could not be read: %v", err)
 		return false, "the host could not read the work session"
 	}
-	if ws == nil {
+	if ws == nil && reason != capDeadline {
 		return false, "no work session is active"
+	}
+	sessionID := ""
+	if ws != nil {
+		sessionID = ws.ID
 	}
 	a.turn.mu.Lock()
 	a.turn.contChain++
 	leg := a.turn.contChain
 	a.turn.mu.Unlock()
 	if leg > bound {
-		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s, and agency.max_turn_continuations is %d — standing down so the operator can look", leg-1, ws.ID, bound)
+		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s, and agency.max_turn_continuations is %d — standing down so the operator can look", leg-1, sessionID, bound)
 		return false, chainSpentWhy(bound)
 	}
-	sessionID := ws.ID
 	if !a.runBackground(func() { a.continueCappedTurn(sessionID, leg, reason, from) }) {
 		logsink.Info("continuation.refusal", "not scheduled for %s: runtime stopping", sessionID)
 		return false, "the identity is stopping"
 	}
 	return true, ""
+}
+
+func (a *App) resumeTimedOutTurn(ctx context.Context, err error, recorded bool) {
+	if !recorded || a.lifetime().Err() != nil || errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		return
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return
+	}
+
+	if _, constrained := conversation.RequestOptionsFromContext(ctx); constrained {
+		return
+	}
+	switch source, _ := ctx.Value(turnSourceKey{}).(string); source {
+	case turnSourceOperator, turnSourceSteer, turnSourceArrival, turnSourceVoice, turnSourceHarvest, turnSourceContinuation:
+	default:
+		return
+	}
+	scheduled, why := a.scheduleContinuation(capDeadline, interaction.TurnID(ctx))
+	message := "The turn ran out of time. Its unfinished request is scheduled to resume in a fresh turn from the recorded state; completed tool calls are not automatically replayed."
+	if !scheduled {
+		message = "The turn ran out of time. Nothing continues by itself: " + why + ". Ask again to continue."
+	}
+	id := fmt.Sprintf("continuation_timeout_%d", time.Now().UTC().UnixNano())
+	if e := a.store.AddOutboxNotice(id, "operator", "", message, nil); e != nil {
+		logsink.Warn("continuation.error", "timeout disposition could not be recorded: %v", e)
+	}
 }
 
 func chainSpentWhy(bound int) string {
@@ -137,12 +170,13 @@ func chainSpentWhy(bound int) string {
 type legMeter struct {
 	mu        sync.Mutex
 	predicted int
+	ordinal   int
 }
 
-func (m *legMeter) get() int {
+func (m *legMeter) get() (remaining, ordinal int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.predicted
+	return m.predicted, m.ordinal
 }
 
 func (a *App) registerLegMeter(sessionID string) (*legMeter, func()) {
@@ -160,7 +194,7 @@ func (a *App) registerLegMeter(sessionID string) (*legMeter, func()) {
 	}
 }
 
-func (a *App) noteSubagentWorkCall(sessionID string, args map[string]any) {
+func (a *App) noteSubagentWorkCall(sessionID string, args map[string]any, ordinal int) {
 	_, predicted, _ := workDeclaration(args)
 	if predicted <= 0 {
 		return
@@ -172,7 +206,9 @@ func (a *App) noteSubagentWorkCall(sessionID string, args map[string]any) {
 		return
 	}
 	m.mu.Lock()
-	m.predicted = predicted
+	if ordinal >= m.ordinal {
+		m.predicted, m.ordinal = predicted, ordinal
+	}
 	m.mu.Unlock()
 }
 
@@ -220,12 +256,19 @@ func (a *App) continueCappedTurn(sessionID string, leg int, reason capReason, fr
 	}
 	defer a.releaseTurn()
 
-	if ws, err := a.store.WorkSessionByID(sessionID); err != nil {
+	if ws, err := a.store.WorkSessionByID(sessionID); sessionID != "" && err != nil {
 		logsink.Warn("continuation.error", "%s: the session could not be read before leg %d began: %v", sessionID, leg, err)
 	} else if ws != nil && ws.Status != "active" {
 		logsink.Info("continuation.refusal", "%s: leg %d stands down — the session was %s before it began", sessionID, leg, ws.Status)
 		a.legStoodDown(sessionID, leg, from)
 		return
+	}
+	if reason == capDeadline {
+		selected, err := a.store.ActiveWorkSession()
+		if err != nil || (selected == nil && sessionID != "") || (selected != nil && selected.ID != sessionID) {
+			a.legDidNotRun(sessionID, leg, from, fmt.Errorf("the work selection changed or could not be read; the timed-out request was not resumed"))
+			return
+		}
 	}
 
 	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceContinuation), a.turnWall(continuationWallSetting))
@@ -240,10 +283,16 @@ func (a *App) continueCappedTurn(sessionID string, leg int, reason capReason, fr
 		}
 	}
 	fact := fmt.Sprintf("[budget checkpoint — continuation %d] %s Work session %s is still active: resume from plan= and next_move= in your working state, and declare steps= for this leg.", leg, ended, sessionID)
+	if reason == capDeadline {
+		fact = fmt.Sprintf("[timeout checkpoint — continuation %d] %s Resume the unfinished request from the recorded state. Inspect the recorded results before deciding what remains; completed tool calls are not to be replayed merely because the turn timed out. Do not assume an interrupted external action failed or repeat it without checking its outcome.", leg, ended)
+		if sessionID != "" {
+			fact += " Work session " + sessionID + " remains active."
+		}
+	}
 
 	if ws, err := a.store.ActiveWorkSession(); err != nil {
 		logsink.Warn("continuation.error", "%s: resume card unreadable: %v", sessionID, err)
-	} else if ws != nil {
+	} else if ws != nil && (reason != capDeadline || ws.ID == sessionID) {
 		if card := resumeCardFor(ws); card != "" {
 			fact += "\n\n" + card
 		}
@@ -375,8 +424,8 @@ const (
 	noticeCauseChars = 300
 )
 
-func (a *App) predictedThisTurn() int {
+func (a *App) predictedThisTurn() (remaining, ordinal int) {
 	a.turn.mu.Lock()
 	defer a.turn.mu.Unlock()
-	return a.turn.turnPredicted
+	return a.turn.turnPredicted, a.turn.turnPredictedOrdinal
 }

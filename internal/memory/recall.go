@@ -73,6 +73,10 @@ type Query struct {
 
 	Activation string
 
+	Selection store.PluginMemorySelection
+
+	Recent bool
+
 	Decay string
 
 	Reinforce bool
@@ -149,6 +153,9 @@ type Facility struct {
 func New(st *store.Store) *Facility { return &Facility{st: st} }
 
 func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
+	if q.Recent {
+		return f.recentPluginMemories(ctx, q)
+	}
 	now := q.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -615,6 +622,9 @@ func predicates(d Store, q Query, ranked bool) (string, []any) {
 		where, scopedArgs := store.PluginMemoryPredicate(store.PluginScope{PluginID: q.PluginID, Activation: q.Activation}, ranked)
 		parts = append(parts, where)
 		args = append(args, scopedArgs...)
+		selection, selectionArgs := q.Selection.Predicate()
+		parts = append(parts, "("+selection+")")
+		args = append(args, selectionArgs...)
 	}
 	return strings.Join(parts, " AND "), args
 }

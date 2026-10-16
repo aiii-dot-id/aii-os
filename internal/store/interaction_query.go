@@ -48,7 +48,7 @@ func scanInteraction(row rowScanner) (interaction.Record, error) {
 	}
 	return r, nil
 }
-func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *interaction.Record) error {
+func (s *Store) interactionBody(ctx context.Context, tx *readSnapshot, r *interaction.Record) error {
 	if r.Source != nil && r.Source.Kind == "outbox" {
 		var text string
 		err := tx.QueryRowContext(ctx, `SELECT content FROM outbox WHERE id=? AND to_role='operator'`, r.Source.ID).Scan(&text)
@@ -59,6 +59,12 @@ func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *inte
 		} else {
 			r.Content = text
 		}
+	}
+	return nil
+}
+func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *interaction.Record) error {
+	if err := s.interactionBody(ctx, tx, r); err != nil {
+		return err
 	}
 	if !s.historicalInteractions {
 		deliveries, err := tx.QueryContext(ctx, `SELECT id,delivered,COALESCE(delivered_via,''),delivered_at,attempts,parked,effect,last_error FROM outbox WHERE interaction_id=? AND to_role='operator' ORDER BY id`, r.ID)
@@ -134,8 +140,18 @@ func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out
 	}()
 	where := []string{interactionAudience}
 	args := []any{}
+	ancestryComplete := true
+	if q.Filter.IncludeDescendants {
+		predicate, complete, err := interactionDescendants(ctx, tx, q.Filter.WorkSession)
+		if err != nil {
+			return nil, err
+		}
+		ancestryComplete = complete
+		where = append(where, predicate)
+		args = append(args, q.Filter.WorkSession)
+	}
 	for _, pair := range [][2]string{{"c.role", string(q.Filter.Role)}, {"c.turn_id", q.Filter.TurnID}, {"c.session_id", q.Filter.SessionID}, {"c.project_id", q.Filter.ProjectID}, {"c.related_id", q.Filter.RelatedID}, {"json_extract(c.details,'$.work_session_id')", q.Filter.WorkSession}} {
-		if pair[1] != "" {
+		if pair[1] != "" && !(q.Filter.IncludeDescendants && pair[0] == "json_extract(c.details,'$.work_session_id')") {
 			where = append(where, pair[0]+" = ?")
 			args = append(args, pair[1])
 		}
@@ -193,6 +209,8 @@ func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out
 	page := &interaction.Page{Version: interaction.Version, Identity: "", Incarnation: inc, Source: q.Source, Filter: q.Filter, Cursor: q.Cursor, Rows: []interaction.Record{}, Availability: "complete"}
 	if s.historicalInteractions {
 		page.Availability = "historical_schema"
+	} else if !ancestryComplete {
+		page.Availability = "ancestry_incomplete"
 	}
 	var last uint64
 	for rows.Next() {

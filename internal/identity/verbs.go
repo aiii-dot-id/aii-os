@@ -30,6 +30,10 @@ type ToolPlane interface {
 	Release(ref string) (string, error)
 }
 
+type ToolPrimaryOffer interface {
+	OfferPrimary(plugin string) ([]string, error)
+}
+
 type ToolFamily struct {
 	Name  string
 	Count int
@@ -52,6 +56,7 @@ type ToolHit struct {
 	Plugin    string
 	Summary   string
 	Effects   string
+	Primary   bool
 	State     string
 }
 
@@ -67,6 +72,7 @@ type ToolCard struct {
 	Capabilities   []string
 	MaxResultBytes int
 	Examples       []string
+	Primary        bool
 	State          string
 	Reason         string
 	Receipt        string

@@ -95,7 +95,8 @@ func (a *App) recordTurnCost(ctx context.Context, result conversation.Result) {
 	logsink.Info("turn.budget", "Turn cost: %s (in %d, out %d)", text, u.PromptTokens, u.CompletionTokens)
 
 	source, _ := ctx.Value(turnSourceKey{}).(string)
-	a.logTurnSummary(turnLoop{source: source, provider: a.currentProvider().Name, model: result.ModelID, turn: interaction.TurnID(ctx), usage: &u})
+	a.logTurnSummary(turnLoop{source: source, provider: a.currentProvider().Name, model: result.ModelID, turn: interaction.TurnID(ctx), usage: &u,
+		emissions: &store.ToolCallEmissions{Count: result.ToolCallsEmitted, Complete: result.ToolCallCoverageComplete}})
 	a.turn.mu.Lock()
 	a.turn.lastTurn = text
 	a.turn.mu.Unlock()
@@ -165,8 +166,9 @@ func (a *App) resetTurnMeter() {
 type turnLoop struct {
 	source, provider, model string
 
-	turn  string
-	usage *conversation.TurnUsage
+	turn      string
+	usage     *conversation.TurnUsage
+	emissions *store.ToolCallEmissions
 }
 
 func (a *App) logTurnSummary(loop turnLoop) {
@@ -198,6 +200,7 @@ func (a *App) logTurnSummary(loop turnLoop) {
 			Model:           loop.model,
 			TurnID:          loop.turn,
 			Usage:           usage,
+			Emissions:       loop.emissions,
 		}); err != nil {
 
 			logsink.Warn("turn.error", "turn metric not recorded: %v", err)

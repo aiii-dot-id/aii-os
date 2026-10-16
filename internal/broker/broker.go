@@ -655,11 +655,14 @@ func IsReadEffect(effects string) bool {
 }
 
 type OperationScope struct {
-	Operation    string
-	Effects      string
-	Capabilities []string
-	Declared     bool
-	Validation   bool
+	Operation     string
+	Effects       string
+	Capabilities  []string
+	Declared      bool
+	Validation    bool
+	WorkSession   string
+	SessionReason string
+	CallID        string
 }
 
 func (b *Binding) BeginOperation(s OperationScope) {

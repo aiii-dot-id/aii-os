@@ -16,10 +16,7 @@ type sessionInvoker struct{ voice func() *VoiceSession }
 
 func (s sessionInvoker) Invoke(ctx context.Context, frame []byte) ([]byte, error) {
 	var req struct {
-		Params struct {
-			Operation string         `json:"operation"`
-			Arguments map[string]any `json:"arguments"`
-		} `json:"params"`
+		Params json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal(frame, &req); err != nil {
 		return nil, fmt.Errorf("pluginhost: encode a resident operation: %w", err)
@@ -39,7 +36,7 @@ func (s sessionInvoker) Invoke(ctx context.Context, frame []byte) ([]byte, error
 		ctx, cancel = context.WithTimeout(ctx, SessionOperationCeiling)
 		defer cancel()
 	}
-	raw, err := v.control(ctx, req.Params.Operation, req.Params.Arguments)
+	raw, err := v.c.ControlParams(ctx, req.Params)
 	if err != nil {
 
 		var refused *supervisor.SessionRefusedError

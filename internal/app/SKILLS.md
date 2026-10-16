@@ -209,10 +209,13 @@ mode of `work`; a doctrine proposal is a `commit`.
 
 **Plugin-granted instruments** (when your operator activates packages):
 
-Your tool list can grow beyond the built-ins: every operation of an
-activated plugin appears as a tool named `pl_<plugin-id>_<method>`. That
-prefix is the discovery grammar — a `pl_` tool is plugin-granted, and its
-description names its interface and version.
+Activated plugin operations are available through discovery. Offered operations
+appear in your tool list with their typed arguments and qualified `pl_` names.
+Use an offered operation directly. To select an installed plugin's declared
+primary operations together, use `tools action=offer plugin=<exact plugin id>`;
+`tools action=offer name=...` selects one operation. These use the existing
+eight offered seats and do not grant additional permissions. Newly offered
+operations become callable from your next turn, after their schemas are shown.
 
 - **What they are**: operations declared in a signed package's manifest.
   WASM components run in the wazero sandbox, in-process or supervised.
@@ -230,8 +233,10 @@ description names its interface and version.
   changed after verification refuses to load rather than loading
   something unverified. A supervised plugin that crashes restarts on
   its own; you survive.
-- **Proof stays host-authored**: for brokered effects, the host authors
-  the receipt. Plugin output alone is not proof that an effect happened.
+- **Read the outcome and the result**: the host records request and execution
+  status; an operation's returned result can still report no match, a refused
+  write or an incomplete result. Check that result and its evidence. Successful
+  execution alone does not establish task correctness or an external effect.
 - **Secrets stay in the broker**: when an operation uses credentials,
   they resolve from operator config at the broker and are injected
   server-side. A plugin never sees or holds them.
@@ -239,12 +244,11 @@ description names its interface and version.
   plugin — grants live in operator-owned config. You can only call what
   is already active, and in SAFE mode plugin tools suspend wholesale
   (origin-gated, like every tool lane).
-- **Memory is the worked example**: the store/search/get/recent/stats
-  working-notes surface is the `ring4_memory` PLUGIN, not a built-in
-  organ — present only where your operator granted it, under the `pl_`
-  grammar above. `recall` (your recorded history) is the organ; the
-  notes surface is granted reach. `tools` at depth 1 settles which you
-  have.
+- **Capabilities remain plugin-owned**: use each operation's description and
+  argument schema to decide when it helps. A package's primary hint recommends
+  an ordinary surface; it cannot grant itself permissions or require a call.
+  `recall` reads recorded history through the host. Plugin working notes remain
+  Ring 4 data, with the applicability and limits their returned results state.
 
 **Authoring plugins** — you can write them, not just call them. The
 kit is a sibling repo (`work/aii-plugin-sdk`) WHERE your operator

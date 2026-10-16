@@ -119,6 +119,10 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	legsOn := agencyOn(cfg.Agency.SubagentContinuation)
 
 	if h.sessionDelivered(p.SessionID) {
+
+		if err := h.a.store.MarkUnmeasuredSubagentLegIncomplete(p.SessionID); err != nil {
+			return fmt.Errorf("subagent %s: reconcile emission coverage: %w", p.SessionID, err)
+		}
 		logsink.InfoCtx(ctx, "subagent.refusal", "%s: leg %d not run — the session is already delivered", p.SessionID, leg)
 		return nil
 	}
@@ -176,7 +180,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "compose", err)
 	}
 
-	var predictedNow func() int
+	var predictedNow func() (remaining, ordinal int)
 	if legsOn {
 		meter, release := h.a.registerLegMeter(p.SessionID)
 		defer release()
@@ -223,6 +227,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	accCalls := p.AccCalls + result.ToolCallsUsed
 	accTokens := p.AccTokens + result.Usage.TotalTokens
 	accWall := p.AccWallMs + runWall.Milliseconds()
+	p.AccEmissions = accumulateEmissions(p.AccEmissions, leg, result)
 
 	if delivered, ok := h.deliveredResult(p.SessionID); ok {
 		logsink.InfoCtx(ctx, "subagent.end", "%s: leg %d delivered by the child itself after %d calls — chain closed", p.SessionID, leg, result.ToolCallsUsed)
@@ -240,6 +245,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			SessionID: p.SessionID, TsMs: time.Now().UTC().UnixMilli(),
 			Calls: accCalls, Tokens: accTokens, WallMs: accWall, Failed: false,
 			Role: p.Role, Model: modelIDOf(result, target), Legs: leg,
+			Emissions: p.AccEmissions,
 		}); merr != nil {
 			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d metric not recorded: %v", p.SessionID, leg, merr)
 		}
@@ -363,6 +369,8 @@ func (h *subagentHandler) recoverStartedLeg(ctx context.Context, p identity.Suba
 		return nil
 	}
 	h.a.markFleetSpent()
+
+	p.AccEmissions = accumulateEmissions(p.AccEmissions, leg, conversation.Result{})
 	h.closeChild(p, leg, p.AccCalls, p.AccTokens, p.AccWallMs, "", errLegInterrupted, outcome, compactText(outcome, 120))
 	return nil
 }
@@ -492,7 +500,9 @@ func buildSubagentGoal(depth int, goal string, rounds, calls, legs, wallSeconds 
 		"Work it to completion with your tools, staying strictly on this sub-goal — "+
 		"do not expand scope. Finish with `work deliver result=` beginning served:, partial: or "+
 		"unserved: — your verdict on this sub-goal — then what you established; that delivery ends "+
-		"your run and is what your parent reads. A final message without it is delivered as it "+
+		"your run and is what your parent reads. Omit evidence to use worker_report_only; "+
+		"locally_verified and host_receipted are unavailable from this worker session. "+
+		"A final message without it is delivered as it "+
 		"stands. Make it usable by your synthesizing self:\n"+
 		"- VERDICT first (one line: what you established)\n"+
 		"- EVIDENCE second (file:line, command output, or citation for each claim)\n"+
@@ -627,6 +637,7 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 		Calls: calls, Tokens: tokens,
 		WallMs: wallMs, Failed: runErr != nil,
 		Role: p.Role, Model: modelID, Legs: leg,
+		Emissions: p.AccEmissions,
 	}); merr != nil {
 		logsink.Warn("subagent.error", "%s: child metric not recorded: %v", p.SessionID, merr)
 	}
@@ -652,6 +663,17 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 		logsink.Warn("subagent.error", "%s: outbox notice failed: %v", p.SessionID, oerr)
 	}
 
+}
+
+func accumulateEmissions(prior *store.ToolCallEmissions, leg int, result conversation.Result) *store.ToolCallEmissions {
+	out := &store.ToolCallEmissions{Count: result.ToolCallsEmitted, Complete: result.ToolCallCoverageComplete}
+	if prior != nil {
+		out.Count += prior.Count
+		out.Complete = out.Complete && prior.Complete
+	} else if leg > 1 {
+		out.Complete = false
+	}
+	return out
 }
 
 func (h *subagentHandler) deliveredResult(id string) (string, bool) {

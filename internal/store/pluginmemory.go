@@ -12,22 +12,41 @@ var ErrPluginMemoryQuota = errors.New("plugin memory quota exceeded")
 var ErrPluginMemoryNotFound = errors.New("plugin memory not found")
 
 type PluginMemory struct {
-	ID           string
-	PluginID     string
-	Text         string
-	Project      string
-	Attribution  string
-	SupersededBy string
-	Temp         bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                string
+	PluginID          string
+	Text              string
+	Project           string
+	Attribution       string
+	Applicability     string
+	WorkSession       string
+	SourceIncarnation string
+	Evidence          string
+	SupersededBy      string
+	Temp              bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 func (s *Store) PluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories int, supersedes string) error {
+	_, err := s.pluginMemoryAdd(scope, m, maxMemories, supersedes, false)
+	return err
+}
+
+func (s *Store) PluginMemoryAddExact(scope PluginScope, m PluginMemory, maxMemories int) (string, error) {
+	return s.pluginMemoryAdd(scope, m, maxMemories, "", true)
+}
+
+func (s *Store) pluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories int, supersedes string, exact bool) (string, error) {
 	if m.ID == "" || scope.PluginID == "" || m.Text == "" || (m.PluginID != "" && m.PluginID != scope.PluginID) {
-		return errors.New("plugin memory: id, plugin id and text are required")
+		return "", errors.New("plugin memory: id, plugin id and text are required")
 	}
 	m.PluginID = scope.PluginID
+	if m.Applicability == "" {
+		m.Applicability = "legacy"
+	}
+	if m.Evidence == "" {
+		m.Evidence = "[]"
+	}
 	if m.Attribution == "" {
 		m.Attribution = "plugin"
 	}
@@ -46,23 +65,36 @@ func (s *Store) PluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories i
 	defer s.mu.Unlock()
 	tx, err := s.w().Begin()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
+	if exact {
+		id, err := pluginMemoryEquivalent(tx, scope, m)
+		if err != nil {
+			return "", err
+		}
+		if id != "" {
+			return id, nil
+		}
+	}
 	where, args := PluginMemoryPredicate(scope, true)
 	var overrides any
 	var oldTemp bool
 	var root string
+	var oldApplicability, oldProject, oldSession string
 	if supersedes != "" {
 		if supersedes == m.ID {
-			return ErrPluginMemoryNotFound
+			return "", ErrPluginMemoryNotFound
 		}
-		err := tx.QueryRow(`SELECT b.temp, COALESCE(b.overrides, '') FROM plugin_memories b WHERE `+where+` AND b.id = ?`, append(args, supersedes)...).Scan(&oldTemp, &root)
+		err := tx.QueryRow(`SELECT b.temp, COALESCE(b.overrides, ''), b.applicability, b.project, b.work_session FROM plugin_memories b WHERE `+where+` AND b.id = ?`, append(args, supersedes)...).Scan(&oldTemp, &root, &oldApplicability, &oldProject, &oldSession)
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %s is not current in this activation", ErrPluginMemoryNotFound, supersedes)
+			return "", fmt.Errorf("%w: %s is not current in this activation", ErrPluginMemoryNotFound, supersedes)
 		}
 		if err != nil {
-			return err
+			return "", err
+		}
+		if oldApplicability != m.Applicability || (m.Applicability == "task" && (oldSession != m.WorkSession || oldProject != m.Project)) || (m.Applicability == "project" && oldProject != m.Project) {
+			return "", fmt.Errorf("%w: applicability differs", ErrPluginMemoryNotFound)
 		}
 		if !oldTemp {
 			root = supersedes
@@ -73,33 +105,33 @@ func (s *Store) PluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories i
 	}
 	var current int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM plugin_memories b WHERE `+where, args...).Scan(&current); err != nil {
-		return err
+		return "", err
 	}
 	if supersedes != "" {
 		current--
 	}
 	if maxMemories > 0 && current+1 > maxMemories {
-		return fmt.Errorf("%w: %d memories at the %d-memory ceiling", ErrPluginMemoryQuota, current+1, maxMemories)
+		return "", fmt.Errorf("%w: %d memories at the %d-memory ceiling", ErrPluginMemoryQuota, current+1, maxMemories)
 	}
-	if _, err := tx.Exec(`INSERT INTO plugin_memories (id, plugin_id, activation, overrides, text, project, attribution, superseded_by, temp, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-		m.ID, m.PluginID, activation, overrides, m.Text, m.Project, m.Attribution, temp, stamp, stamp); err != nil {
-		return err
+	if _, err := tx.Exec(`INSERT INTO plugin_memories (id, plugin_id, activation, overrides, text, project, attribution, superseded_by, temp, created_at, updated_at, applicability, work_session, source_incarnation, evidence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.PluginID, activation, overrides, m.Text, m.Project, m.Attribution, temp, stamp, stamp, m.Applicability, m.WorkSession, m.SourceIncarnation, m.Evidence); err != nil {
+		return "", err
 	}
 	if supersedes != "" {
 
 		if oldTemp || !m.Temp {
 			if _, err := tx.Exec(`UPDATE plugin_memories SET superseded_by = ?, updated_at = ? WHERE id = ? AND plugin_id = ?`, m.ID, stamp, supersedes, scope.PluginID); err != nil {
-				return err
+				return "", err
 			}
 		}
 		if !m.Temp && oldTemp && root != "" {
 			if _, err := tx.Exec(`UPDATE plugin_memories SET superseded_by = ?, updated_at = ? WHERE id = ? AND plugin_id = ?`, m.ID, stamp, root, scope.PluginID); err != nil {
-				return err
+				return "", err
 			}
 		}
 	}
-	return tx.Commit()
+	return m.ID, tx.Commit()
 }
 
 func (s *Store) PluginMemoryGet(scope PluginScope, id string) (PluginMemory, bool, error) {
@@ -112,9 +144,9 @@ func (s *Store) PluginMemoryGet(scope PluginScope, id string) (PluginMemory, boo
 	where, whereArgs := PluginMemoryPredicate(scope, false)
 	args = append(args, whereArgs...)
 	args = append(args, id)
-	err := s.db.QueryRow(`SELECT b.id, b.plugin_id, b.text, b.project, b.attribution, COALESCE(`+successor+`, ''), b.temp, b.created_at, b.updated_at
+	err := s.db.QueryRow(`SELECT b.id, b.plugin_id, b.text, b.project, b.attribution, COALESCE(`+successor+`, ''), b.temp, b.created_at, b.updated_at, b.applicability, b.work_session, b.source_incarnation, b.evidence
 		FROM plugin_memories b WHERE `+where+` AND b.id = ?`, args...).
-		Scan(&m.ID, &m.PluginID, &m.Text, &m.Project, &m.Attribution, &m.SupersededBy, &temp, &created, &updated)
+		Scan(&m.ID, &m.PluginID, &m.Text, &m.Project, &m.Attribution, &m.SupersededBy, &temp, &created, &updated, &m.Applicability, &m.WorkSession, &m.SourceIncarnation, &m.Evidence)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PluginMemory{}, false, nil
 	}

@@ -226,13 +226,14 @@ func init() {
 				"new_id":                str("(belief.supersede) the replacing belief id"),
 			}, "variant")},
 		{Name: "tools",
-			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you, which are not listed in your prompt: brief them by family, search by need, show one, offer it into your callable set (eight seats; it stays, across restarts, until you release it or it changes what it declares), release it.",
+			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you: brief them by family, search by need, show one, offer it into your callable set (eight active seats; choices persist across restarts; show reports current availability), release it.",
 			Handler:     (*Engine).verbTools,
 			Params: obj(map[string]any{
 				"depth":  integer("1 = names, 2 = +descriptions, 3 = full detail (progressive disclosure)"),
-				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | offer (name: make it callable from your next turn, until you release it) | release (name)"),
+				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | offer (name: one operation, or plugin: its primary operations; selection saved for later turns, subject to current availability) | release (name)"),
 				"query":  str("(search) what you need, in your own words"),
 				"name":   str("(show, offer, release) the operation id as your prompt or the brief names it, or its tool name"),
+				"plugin": str("(offer only, instead of name) exact installed plugin id; offer its declared primary operations together within the eight-seat limit"),
 			})},
 	}
 

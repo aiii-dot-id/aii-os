@@ -16,7 +16,7 @@ import (
 const CalibrationV1 = "calibration_v1"
 const MaxCalibrationCounter uint64 = 1<<53 - 1
 
-type ActingSession struct{ ID, Reason string }
+type ActingSession struct{ ID, Reason, CallID string }
 type actingSessionKey struct{}
 
 func WithActingSession(ctx context.Context, s ActingSession) context.Context {

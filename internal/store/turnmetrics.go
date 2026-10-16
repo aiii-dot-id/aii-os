@@ -33,6 +33,20 @@ type TurnMetric struct {
 	TurnID string
 
 	Usage *TurnUsage
+
+	Emissions *ToolCallEmissions
+}
+
+type ToolCallEmissions struct {
+	Count    int  `json:"count"`
+	Complete bool `json:"complete"`
+}
+
+func (m *ToolCallEmissions) columns() (any, any) {
+	if m == nil {
+		return nil, nil
+	}
+	return m.Count, m.Complete
 }
 
 type TurnUsage struct {
@@ -73,6 +87,8 @@ func (s *Store) InsertTurnMetric(m TurnMetric) error {
 	}
 	args := append([]any{m.TsMs, m.Calls, m.ReadOnly, m.Spawned, m.Harvested, m.Predicted, m.DeclaredOrdinal, m.Independent, m.Rounds,
 		nullable(m.Source), nullable(m.Provider), nullable(m.Model), nullable(m.TurnID)}, usage...)
+	emitted, complete := m.Emissions.columns()
+	args = append(args, emitted, complete)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for slot := int64(0); slot < turnMetricSlots; slot++ {
@@ -81,8 +97,9 @@ func (s *Store) InsertTurnMetric(m TurnMetric) error {
 			source, provider, model, turn_id,
 			prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens,
 			cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
-			cache_read_reports, cache_write_reports, unknown_attempts, silent_calls)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
+			cache_read_reports, cache_write_reports, unknown_attempts, silent_calls,
+			emitted_calls, emission_coverage_complete)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...)
 		var taken *sqlite.Error
 		if !errors.As(err, &taken) || taken.Code() != sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY {
 			return err
@@ -102,6 +119,8 @@ type SubagentMetric struct {
 	Model     string
 
 	Legs int
+
+	Emissions *ToolCallEmissions
 }
 
 func (s *Store) InsertSubagentMetric(m SubagentMetric) error {
@@ -115,8 +134,18 @@ func (s *Store) InsertSubagentMetric(m SubagentMetric) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.w().Exec(`INSERT OR REPLACE INTO subagent_metrics (session_id, ts_ms, calls, tokens, wall_ms, failed, role, model, legs)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.SessionID, m.TsMs, m.Calls, m.Tokens, m.WallMs, failed, m.Role, m.Model, legs)
+	emitted, complete := m.Emissions.columns()
+	_, err := s.w().Exec(`INSERT OR REPLACE INTO subagent_metrics (session_id, ts_ms, calls, tokens, wall_ms, failed, role, model, legs, emitted_calls, emission_coverage_complete)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.SessionID, m.TsMs, m.Calls, m.Tokens, m.WallMs, failed, m.Role, m.Model, legs, emitted, complete)
+	return err
+}
+
+func (s *Store) MarkUnmeasuredSubagentLegIncomplete(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.w().Exec(`UPDATE subagent_metrics SET emission_coverage_complete = 0
+		WHERE session_id = ? AND emission_coverage_complete = 1
+		AND legs < (SELECT started_leg FROM work_sessions WHERE id = ?)`, sessionID, sessionID)
 	return err
 }
 
@@ -149,21 +178,38 @@ func (s *Store) BetaUnplannedDeepCount(sinceMs int64) (int, error) {
 	return n, err
 }
 
-func (s *Store) PlanCalibration(window time.Duration) (plans int, predicted int, actual int, err error) {
+type PlanCalibrationStats struct {
+	Plans, Predicted, Actual, Unmeasured int
+}
+
+func (s *Store) PlanCalibration(window time.Duration) (PlanCalibrationStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	var out PlanCalibrationStats
 	cutoff := time.Now().UTC().Add(-window).UnixMilli()
 
-	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(predicted),0), COALESCE(SUM(calls),0)
-		FROM turn_metrics WHERE ts_ms >= ? AND predicted > 0
-		  AND declared_ordinal BETWEEN 1 AND ? AND `+s.mainTurns(), cutoff, timelyDeclarationMax)
-	if e := row.Scan(&plans, &predicted, &actual); e != nil {
-		if errors.Is(e, sql.ErrNoRows) {
-			return 0, 0, 0, nil
-		}
-		return 0, 0, 0, e
+	var columns int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('turn_metrics')
+		WHERE name IN ('emitted_calls', 'emission_coverage_complete')`).Scan(&columns); err != nil {
+		return out, err
 	}
-	return plans, predicted, actual, nil
+	if columns != 2 {
+		err := s.db.QueryRow(`SELECT COUNT(*) FROM turn_metrics
+			WHERE ts_ms >= ? AND predicted > 0 AND `+s.mainTurns(), cutoff).Scan(&out.Unmeasured)
+		return out, err
+	}
+
+	err := s.db.QueryRow(`SELECT
+		COALESCE(SUM(measured),0),
+		COALESCE(SUM(CASE WHEN measured = 1 THEN predicted ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN measured = 1 THEN remaining ELSE 0 END),0),
+		COUNT(*) - COALESCE(SUM(measured),0)
+		FROM (SELECT predicted, emitted_calls - declared_ordinal AS remaining,
+			CASE WHEN emission_coverage_complete = 1 AND declared_ordinal > 0
+				AND emitted_calls >= declared_ordinal THEN 1 ELSE 0 END AS measured
+			FROM turn_metrics WHERE ts_ms >= ? AND predicted > 0 AND `+s.mainTurns()+`)
+		`, cutoff).Scan(&out.Plans, &out.Predicted, &out.Actual, &out.Unmeasured)
+	return out, err
 }
 
 func (s *Store) RhythmStats(window time.Duration) (turns int, calls int, readOnlyPct int, spawns int, harvests int, rounds int, err error) {

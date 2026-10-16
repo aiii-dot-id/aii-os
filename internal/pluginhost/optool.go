@@ -36,6 +36,7 @@ type opDescriptor struct {
 	examples []string
 
 	operatorConfirms bool
+	primary          bool
 }
 
 func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.Discovery {
@@ -49,6 +50,7 @@ func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.
 	disc.Keywords = append([]string(nil), d.keywords...)
 	disc.Examples = append([]string(nil), d.examples...)
 	disc.OperatorConfirms = d.operatorConfirms
+	disc.Primary = d.primary
 	disc.OutputSchema = d.outputRaw
 	return disc
 }
@@ -112,8 +114,9 @@ type invokeRequest struct {
 }
 
 type invokeParams struct {
-	Operation string         `json:"operation"`
-	Arguments map[string]any `json:"arguments"`
+	Operation   string         `json:"operation"`
+	Arguments   map[string]any `json:"arguments"`
+	WorkSession map[string]any `json:"_host_work_session,omitempty"`
 }
 
 type invokeResult struct {
@@ -197,6 +200,13 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 		return tools.Refusal(ReasonNotAdmitted, "activation not admitted"), nil
 	}
 	injected["_host_now_ms"] = time.Now().UnixMilli()
+	acting := ActingSession{}
+	var workSession map[string]any
+	if !checking {
+		acting = ActingSessionFrom(ctx)
+
+		workSession = map[string]any{"id": acting.ID, "reason": acting.Reason, "call_id": acting.CallID}
+	}
 
 	if urls := t.owner.webhookURLs(); len(urls) > 0 && !checking {
 		injected["_host_webhooks"] = urls
@@ -250,12 +260,13 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 			return tools.Result{Error: err.Error(), ReasonCode: "CALIBRATION_UNAVAILABLE"}, nil
 		}
 	}
-	frame, err := json.Marshal(invokeRequest{JSONRPC: "2.0", ID: harnessRequestID, Method: "invoke.call", Params: invokeParams{Operation: t.operation, Arguments: injected}})
+	frame, err := json.Marshal(invokeRequest{JSONRPC: "2.0", ID: harnessRequestID, Method: "invoke.call", Params: invokeParams{Operation: t.operation, Arguments: injected, WorkSession: workSession}})
 	if err != nil {
 		return tools.Result{}, err
 	}
 	if t.seam != nil && (t.desc != nil || checking) {
 		scope := broker.OperationScope{Operation: t.operation, Validation: checking}
+		scope.WorkSession, scope.SessionReason, scope.CallID = acting.ID, acting.Reason, acting.CallID
 		if t.desc != nil {
 			scope.Effects, scope.Capabilities, scope.Declared = t.desc.effects, t.desc.capabilities, t.desc.capsDeclared
 		}

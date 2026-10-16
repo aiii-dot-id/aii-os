@@ -15,13 +15,15 @@ import (
 const SubagentWorkKind = store.SubagentWorkKind
 
 type SubagentRequest struct {
-	Goal           string `json:"goal"`
-	Depth          int    `json:"depth"`
-	SessionID      string `json:"ws_id"`
-	ThinkingBudget int    `json:"thinking_budget"`
-	Context        string `json:"context"`
-	ParentBudget   int    `json:"parent_budget"`
-	Role           string `json:"role"`
+	Goal      string `json:"goal"`
+	Depth     int    `json:"depth"`
+	SessionID string `json:"ws_id"`
+
+	ParentSessionID string `json:"parent_work_session_id,omitempty"`
+	ThinkingBudget  int    `json:"thinking_budget"`
+	Context         string `json:"context"`
+	ParentBudget    int    `json:"parent_budget"`
+	Role            string `json:"role"`
 
 	WallSeconds int `json:"wall_seconds,omitempty"`
 
@@ -29,6 +31,8 @@ type SubagentRequest struct {
 	AccCalls  int   `json:"acc_calls,omitempty"`
 	AccTokens int   `json:"acc_tokens,omitempty"`
 	AccWallMs int64 `json:"acc_wall_ms,omitempty"`
+
+	AccEmissions *store.ToolCallEmissions `json:"acc_emissions,omitempty"`
 }
 
 func (r SubagentRequest) Validate() error {
@@ -97,6 +101,17 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if depth+1 > maxDepth {
 			return "", fmt.Errorf("spawn refused: depth %d would exceed agency.max_subagent_depth %d — finish this level's goal or ask your operator to raise the ceiling", depth+1, maxDepth)
 		}
+		parentSession, _ := ctx.Value(SubagentWorkSession{}).(string)
+		if parentSession == "" {
+			parent, err := e.store.ActiveWorkSession()
+			if err != nil {
+				return "", fmt.Errorf("spawn parent: %w", err)
+			}
+			if parent != nil {
+				parentSession = parent.ID
+			}
+		}
+
 		wsID := "ws_" + uuid.New().String()
 
 		thinking := 0
@@ -115,7 +130,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 
 		wallSeconds := e.spawnWall(role)
 		request := SubagentRequest{
-			Goal: goal, Depth: depth + 1, SessionID: wsID,
+			Goal: goal, Depth: depth + 1, SessionID: wsID, ParentSessionID: parentSession,
 			ThinkingBudget: thinking, Context: ctxScope,
 			ParentBudget: parentBudget, Role: role,
 			WallSeconds: wallSeconds,
@@ -196,6 +211,9 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		return strings.TrimRight(b.String(), "\n"), nil
 
 	case "start":
+		if child, ok := ctx.Value(SubagentWorkSession{}).(string); ok && child != "" {
+			return "", fmt.Errorf("rejected_before_effect (start.worker_session): no effect — your work session is already %s; use work update or work deliver on that session", child)
+		}
 		desc, _ := args["description"].(string)
 		if desc == "" {
 			desc, _ = args["_positional"].(string)

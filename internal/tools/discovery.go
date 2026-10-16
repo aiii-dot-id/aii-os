@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -42,6 +44,7 @@ type Discovery struct {
 	MaxResultBytes int
 	Keywords       []string
 	Examples       []string
+	Primary        bool
 
 	OperatorConfirms bool
 
@@ -72,15 +75,15 @@ func familyOf(plugin, operation string) string {
 func ReceiptRule(effects string) string {
 	switch effects {
 	case "read.internal":
-		return "no host effect: the result is the plugin's own text, and there is nothing beyond it to prove"
+		return "declares an internal read; check the returned data, its scope and coverage before relying on it"
 	case "read.external":
-		return "each outward read the plugin makes is a host-written receipt; the result text is the plugin's account of what it read"
+		return "for brokered reads, check the host outcome and returned source data; a refused or failed read does not establish retrieval"
 	case "write.local":
-		return "each write to the plugin's scoped store is a host-written receipt; the receipt, not the result text, is the proof the write happened"
+		return "for brokered writes, check the host outcome and the operation's write result and persistence scope; a receipt can record a refusal"
 	case "write.external":
-		return "each external effect is a host-written receipt; a result claiming an effect without its receipt is unproven"
+		return "for brokered external effects, check the host outcome and evidence of the claimed effect; a successful invocation alone does not prove that effect"
 	case "exec":
-		return "each invocation is a host-written receipt; trusted native only"
+		return "trusted native only; inspect execution outcome and returned results, then verify the claimed task effects"
 	}
 	return "undeclared effect class: treat every claim in the result as unproven"
 }
@@ -108,6 +111,7 @@ type Hit struct {
 	Plugin    string
 	Summary   string
 	Effects   string
+	Primary   bool
 	State     State
 }
 
@@ -123,6 +127,7 @@ type Card struct {
 	Capabilities   []string
 	MaxResultBytes int
 	Examples       []string
+	Primary        bool
 	State          State
 	Reason         string
 	Receipt        string
@@ -184,19 +189,24 @@ func (r *Registry) HasDynamic() bool {
 func (r *Registry) PromptNames() []string {
 	r.regMu.RLock()
 	names := make([]string, 0, len(r.tools))
-	var builtins []string
+	var builtins, plugins []string
 	for name := range r.tools {
 		switch {
 		case r.hostOnly[name]:
 		case r.sources[name] == "builtin":
 			builtins = append(builtins, name)
 		case r.offered[name]:
-			names = append(names, name)
+			plugins = append(plugins, name)
 		}
 	}
 	r.regMu.RUnlock()
 	for _, name := range builtins {
 		if r.ToolEnabled(name) {
+			names = append(names, name)
+		}
+	}
+	for _, name := range plugins {
+		if state, _, _, ok := r.State(name); ok && state == StateOffered {
 			names = append(names, name)
 		}
 	}
@@ -218,6 +228,7 @@ func (r *Registry) State(name string) (state State, code, reason string, ok bool
 	src := r.sources[name]
 	host := r.hostOnly[name]
 	offered := r.offered[name]
+	waiting := !offered && len(r.offerOrder) >= MaxOffered && r.seatMatchesLocked(name)
 	r.regMu.RUnlock()
 	if !exists || src == "" || src == "builtin" || host {
 		return "", "", "", false
@@ -232,6 +243,9 @@ func (r *Registry) State(name string) (state State, code, reason string, ok bool
 	}
 	if offered {
 		return StateOffered, "", "", true
+	}
+	if waiting {
+		return StateInspectOnly, ReasonInspectOnly, "waiting for free offer space", true
 	}
 	return StateInspectOnly, ReasonInspectOnly, "", true
 }
@@ -262,20 +276,22 @@ func (r *Registry) Resolve(ref string) (string, error) {
 	return "", fmt.Errorf("%s is declared by more than one plugin — name one of %s", ref, strings.Join(matches, ", "))
 }
 
-func (r *Registry) SetStandingOffer(seats []StandingSeat, persist func([]StandingSeat)) {
+func (r *Registry) SetStandingOffer(seats []StandingSeat, persist func([]StandingSeat) error) {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
 	r.regMu.Lock()
 	defer r.regMu.Unlock()
 	r.persistOffer = persist
 	r.standing = nil
+	seen := map[string]bool{}
 	for _, s := range seats {
 		s.Name = strings.TrimSpace(s.Name)
-		if _, dup := r.seatIndexLocked(s.Name); s.Name != "" && !dup && len(r.standing) < MaxOffered {
+		if s.Name != "" && !seen[s.Name] {
+			seen[s.Name] = true
 			r.standing = append(r.standing, s)
 		}
 	}
-	for _, s := range r.standing {
-		r.reseatLocked(s.Name)
-	}
+	r.reconcileOfferLocked()
 }
 
 type StandingSeat struct {
@@ -375,20 +391,74 @@ func (r *Registry) Offer(ref string) (string, error) {
 
 			r.standing[i] = seat
 		} else {
-
-			if len(r.standing) >= MaxOffered {
-				for i, s := range r.standing {
-					if !r.offered[s.Name] {
-						r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
-						break
-					}
-				}
-			}
 			r.standing = append(r.standing, seat)
 		}
 		delete(r.told, name)
 		return nil
 	})
+}
+
+func (r *Registry) OfferPrimary(plugin string) ([]string, error) {
+	plugin = strings.TrimSpace(plugin)
+	if plugin == "" {
+		return nil, fmt.Errorf("name the exact plugin id whose primary tools you want to offer")
+	}
+	var names []string
+	err := r.changeStanding(func() error {
+		for name, t := range r.tools {
+			if r.sources[name] != plugin || r.hostOnly[name] || r.sources[name] == "builtin" {
+				continue
+			}
+			if discoveryOf(name, t, plugin).Primary {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		if len(names) == 0 {
+			return fmt.Errorf("plugin %s has no installed primary operations", plugin)
+		}
+		if r.safeSource != nil {
+			if why, safe := r.safeSource(); safe {
+				return fmt.Errorf("plugin %s cannot be offered: suspended in safe mode: %s", plugin, why)
+			}
+		}
+		newActive := 0
+		for _, name := range names {
+			if !r.ToolEnabled(name) {
+				return fmt.Errorf("%s cannot be offered: disabled by your operator", name)
+			}
+			if !r.offered[name] {
+				newActive++
+			}
+			if Fingerprint(r.tools[name]) == "" {
+				return fmt.Errorf("%s has no valid operation fingerprint", name)
+			}
+		}
+		if len(r.offerOrder)+newActive > MaxOffered {
+			return fmt.Errorf("offering %s needs %d active seats; the offer holds %d: release an existing choice first", plugin, newActive, MaxOffered)
+		}
+		if r.offered == nil {
+			r.offered = map[string]bool{}
+		}
+		for _, name := range names {
+			if !r.offered[name] {
+				r.offered[name] = true
+				r.offerOrder = append(r.offerOrder, name)
+			}
+			seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
+			if i, exists := r.seatIndexLocked(name); exists {
+				r.standing[i] = seat
+			} else {
+				r.standing = append(r.standing, seat)
+			}
+			delete(r.told, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func (r *Registry) Release(ref string) (string, error) {
@@ -408,6 +478,55 @@ func (r *Registry) Release(ref string) (string, error) {
 		delete(r.told, name)
 		return nil
 	})
+}
+
+func (r *Registry) ReleasePlugin(plugin string) error {
+	plugin = strings.TrimSpace(plugin)
+	if plugin == "" || plugin == "builtin" {
+		return fmt.Errorf("name an installed plugin id whose tools you want to stop using")
+	}
+	return r.changeStanding(func() error {
+		owned := map[string]bool{}
+		for name := range r.tools {
+			if r.sources[name] == plugin {
+				owned[name] = true
+			}
+		}
+		if len(owned) == 0 {
+			return fmt.Errorf("plugin %s has no registered operations; release its tools before unloading it", plugin)
+		}
+		kept := r.standing[:0]
+		for _, seat := range r.standing {
+			if !owned[seat.Name] {
+				kept = append(kept, seat)
+			}
+		}
+		r.standing = kept
+		for name := range owned {
+			r.unofferLocked(name)
+			delete(r.told, name)
+		}
+		return nil
+	})
+}
+
+func (r *Registry) PluginSelection(plugin string) (selected bool, waiting int) {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	if plugin == "" || plugin == "builtin" {
+		return false, 0
+	}
+	for name := range r.tools {
+		if r.sources[name] != plugin || r.hostOnly[name] {
+			continue
+		}
+		_, standing := r.seatIndexLocked(name)
+		selected = selected || standing || r.offered[name]
+		if standing && !r.offered[name] && len(r.offerOrder) >= MaxOffered && r.seatMatchesLocked(name) {
+			waiting++
+		}
+	}
+	return selected, waiting
 }
 
 type OfferNotice struct {
@@ -454,21 +573,64 @@ func (r *Registry) MarkOfferNoticesTold(names []string) {
 func (r *Registry) changeStanding(change func() error) error {
 	r.persistMu.Lock()
 	defer r.persistMu.Unlock()
-	var persist func([]StandingSeat)
-	var seats []StandingSeat
-	err := func() error {
-		r.regMu.Lock()
-		defer r.regMu.Unlock()
-		if err := change(); err != nil {
-			return err
+	r.regMu.Lock()
+	previous, order, offered, told := r.standing, r.offerOrder, r.offered, r.told
+	r.standing, r.offerOrder = slices.Clone(previous), slices.Clone(order)
+	r.offered, r.told = maps.Clone(offered), maps.Clone(told)
+	err := change()
+	seats, nextTold := r.standing, r.told
+	var clearedNotices []string
+	for name := range told {
+		if !nextTold[name] {
+			clearedNotices = append(clearedNotices, name)
 		}
-		persist, seats = r.persistOffer, append([]StandingSeat(nil), r.standing...)
-		return nil
-	}()
-	if persist != nil {
-		persist(seats)
 	}
-	return err
+	r.standing, r.offerOrder, r.offered, r.told = previous, order, offered, told
+	persist := r.persistOffer
+	r.regMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if persist != nil {
+		if err := persist(slices.Clone(seats)); err != nil {
+			return fmt.Errorf("standing choice was not saved; selection unchanged: %w", err)
+		}
+	}
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.standing = seats
+
+	r.reconcileOfferLocked()
+	beforePrints, afterPrints := map[string]string{}, map[string]string{}
+	for _, seat := range previous {
+		beforePrints[seat.Name] = seat.Print
+	}
+	for _, seat := range seats {
+		afterPrints[seat.Name] = seat.Print
+		if print, exists := beforePrints[seat.Name]; !exists || print != seat.Print {
+			delete(r.told, seat.Name)
+		}
+	}
+	for name := range beforePrints {
+		if _, remains := afterPrints[name]; !remains {
+			delete(r.told, name)
+		}
+	}
+	for _, name := range clearedNotices {
+		delete(r.told, name)
+	}
+	return nil
+}
+
+func (r *Registry) reconcileOfferLocked() {
+	for _, name := range slices.Clone(r.offerOrder) {
+		if r.hostOnly[name] || r.sources[name] == "builtin" || !r.seatMatchesLocked(name) {
+			r.unofferLocked(name)
+		}
+	}
+	for _, seat := range r.standing {
+		r.reseatLocked(seat.Name)
+	}
 }
 
 func (r *Registry) unofferLocked(name string) {
@@ -525,6 +687,9 @@ func (r *Registry) Brief() Brief {
 		b.Families = append(b.Families, *fams[n])
 	}
 	for _, name := range r.Offered() {
+		if state, _, _, ok := r.State(name); !ok || state != StateOffered {
+			continue
+		}
 		op := name
 		if t, ok := r.lookup(name); ok {
 			op = discoveryOf(name, t, "").Operation
@@ -585,7 +750,7 @@ func (r *Registry) Search(query string, limit int) []Hit {
 			}
 		}
 		if score > 0 {
-			out = append(out, scored{score: score, hit: Hit{Name: e.name, Operation: e.disc.Operation, Plugin: e.disc.Plugin, Summary: e.disc.Summary, Effects: e.disc.Effects, State: state}})
+			out = append(out, scored{score: score, hit: Hit{Name: e.name, Operation: e.disc.Operation, Plugin: e.disc.Plugin, Summary: e.disc.Summary, Effects: e.disc.Effects, Primary: e.disc.Primary, State: state}})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -621,7 +786,7 @@ func (r *Registry) Show(ref string) (Card, error) {
 	return Card{
 		Name: name, Operation: d.Operation, Plugin: d.Plugin, Version: d.Version, Tier: d.Tier,
 		Family: d.Family, Summary: d.Summary, Effects: d.Effects, Capabilities: d.Capabilities,
-		MaxResultBytes: d.MaxResultBytes, Examples: d.Examples, State: state, Reason: reason,
+		MaxResultBytes: d.MaxResultBytes, Examples: d.Examples, Primary: d.Primary, State: state, Reason: reason,
 		Receipt: ReceiptRule(d.Effects), Parameters: t.Parameters(),
 	}, nil
 }

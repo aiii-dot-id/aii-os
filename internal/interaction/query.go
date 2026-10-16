@@ -16,16 +16,17 @@ import (
 )
 
 type Filter struct {
-	Kinds       []Kind `json:"kinds,omitempty"`
-	Role        Role   `json:"role,omitempty"`
-	TurnID      string `json:"turn_id,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
-	WorkSession string `json:"work_session_id,omitempty"`
-	ProjectID   string `json:"project_id,omitempty"`
-	RelatedID   string `json:"related_id,omitempty"`
-	From        string `json:"from,omitempty"`
-	Until       string `json:"until,omitempty"`
-	Undated     bool   `json:"undated,omitempty"`
+	Kinds              []Kind `json:"kinds,omitempty"`
+	Role               Role   `json:"role,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
+	WorkSession        string `json:"work_session_id,omitempty"`
+	IncludeDescendants bool   `json:"include_descendants,omitempty"`
+	ProjectID          string `json:"project_id,omitempty"`
+	RelatedID          string `json:"related_id,omitempty"`
+	From               string `json:"from,omitempty"`
+	Until              string `json:"until,omitempty"`
+	Undated            bool   `json:"undated,omitempty"`
 }
 
 type WindowQuery struct {
@@ -164,6 +165,9 @@ func (q *Query) Normalize() error {
 			}
 			*p = v
 		}
+	}
+	if q.Filter.IncludeDescendants && (q.Filter.WorkSession == "" || q.Source != "recorded") {
+		return Invalid("descendants require a recorded work session")
 	}
 	if q.Filter.Undated && (q.Filter.From != "" || q.Filter.Until != "") {
 		return Invalid("undated cannot have a time interval")
@@ -361,6 +365,9 @@ func Matches(r Record, f Filter) bool {
 }
 
 func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) {
+	if q.Filter.IncludeDescendants {
+		return nil, Invalid("descendant ancestry requires the recorded store")
+	}
 	if err := q.Normalize(); err != nil {
 		return nil, err
 	}

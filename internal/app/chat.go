@@ -137,7 +137,8 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	return finalText, nil
 }
 
-func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversation.Result) {
+func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversation.Result) bool {
+	kept := true
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	a.recordTurnCost(ctx, result)
@@ -145,21 +146,23 @@ func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversat
 	if result.Spoken != "" {
 		ref, err := a.recordReply(ctx, result.Spoken, result)
 		if err != nil {
+			kept = false
 			logsink.Warn("turn.error", "interrupted turn not recorded: %v", err)
 		} else {
 			about = ref.ID
 			if _, err := a.engine.RecordRelatedConversationRef(ctx, string(interaction.System),
 				"[the reply above is incomplete — "+result.Interrupted+"]", ref.ID, interaction.Details{ReasonCode: "interrupted"}); err != nil {
+				kept = false
 				logsink.Warn("turn.error", "interruption marker not recorded: %v", err)
 			}
 		}
 	}
-	a.recordUnanswered(ctx, result.Unanswered, result.Interrupted, about)
+	return a.recordUnanswered(ctx, result.Unanswered, result.Interrupted, about) && kept
 }
 
-func (a *App) recordUnanswered(ctx context.Context, words []string, cause, about string) {
+func (a *App) recordUnanswered(ctx context.Context, words []string, cause, about string) bool {
 	if len(words) == 0 {
-		return
+		return true
 	}
 	if about == "" {
 		about = a.unansweredAnchor(ctx)
@@ -171,7 +174,9 @@ func (a *App) recordUnanswered(ctx context.Context, words []string, cause, about
 	if _, err := a.engine.RecordRelatedConversationRef(ctx, string(interaction.System), unansweredNote(words, cause), about,
 		interaction.Details{ReasonCode: store.ReasonSteeringUnanswered}); err != nil {
 		logsink.Warn("turn.error", "the note on %d unanswered mid-turn message(s) was not recorded: %v", len(words), err)
+		return false
 	}
+	return about != ""
 }
 
 func unansweredNote(words []string, cause string) string {

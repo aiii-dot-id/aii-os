@@ -244,6 +244,23 @@ func (c *SessionClient) Control(ctx context.Context, op string, args any) (json.
 	return wait(ctx)
 }
 
+func (c *SessionClient) ControlParams(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+	var request struct {
+		Operation string `json:"operation"`
+	}
+	if err := json.Unmarshal(params, &request); err != nil {
+		return nil, fmt.Errorf("supervisor: decode control params: %w", err)
+	}
+	if request.Operation == "" {
+		return nil, errors.New("supervisor: control operation required")
+	}
+	wait, err := c.enqueueControl(ctx, request.Operation, params)
+	if err != nil {
+		return nil, err
+	}
+	return wait(ctx)
+}
+
 func (c *SessionClient) waitControl(ctx context.Context, op string, ch <-chan hostReply) (json.RawMessage, error) {
 	var reply hostReply
 	ended := false
@@ -272,10 +289,14 @@ func (c *SessionClient) waitControl(ctx context.Context, op string, ch <-chan ho
 }
 
 func (c *SessionClient) ControlEnqueue(ctx context.Context, op string, args any) (func(context.Context) (json.RawMessage, error), error) {
-	argsRaw, err := json.Marshal(args)
+	params, err := json.Marshal(map[string]any{"operation": op, "arguments": args})
 	if err != nil {
 		return nil, fmt.Errorf("supervisor: encode control args: %w", err)
 	}
+	return c.enqueueControl(ctx, op, params)
+}
+
+func (c *SessionClient) enqueueControl(ctx context.Context, op string, params []byte) (func(context.Context) (json.RawMessage, error), error) {
 	id := c.nextID.Add(1)
 	ch := make(chan hostReply, 1)
 	c.pendMu.Lock()
@@ -286,7 +307,7 @@ func (c *SessionClient) ControlEnqueue(ctx context.Context, op string, args any)
 		delete(c.pending, id)
 		c.pendMu.Unlock()
 	}
-	frame := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"invoke.call","params":{"operation":%q,"arguments":%s}}`, id, op, argsRaw))
+	frame := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"invoke.call","params":%s}`, id, params))
 	if err := c.send(ctx, frame); err != nil {
 		release()
 		return nil, err

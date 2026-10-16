@@ -136,7 +136,7 @@ type Registry struct {
 	offerOrder []string
 
 	standing     []StandingSeat
-	persistOffer func([]StandingSeat)
+	persistOffer func([]StandingSeat) error
 	told         map[string]bool
 	persistMu    sync.Mutex
 	webFetch     *WebFetchTool
@@ -384,6 +384,7 @@ func (r *Registry) Deregister(name string) {
 	delete(r.sources, name)
 	delete(r.hostOnly, name)
 	r.unofferLocked(name)
+	r.reconcileOfferLocked()
 }
 
 func (r *Registry) SupersedeOrigin(origin string, set []Tool, hostOnly map[string]bool) error {
@@ -433,9 +434,9 @@ func (r *Registry) SupersedeOriginIf(origin string, set []Tool, hostOnly map[str
 			if r.offered[name] && !r.seatMatchesLocked(name) {
 				r.unofferLocked(name)
 			}
-			r.reseatLocked(name)
 		}
 	}
+	r.reconcileOfferLocked()
 	return nil
 }
 

@@ -49,8 +49,25 @@ func (e *Engine) verbTools(_ context.Context, args map[string]any) (string, erro
 		return renderToolCard(card), nil
 	case "offer":
 		name := strings.TrimSpace(stringArg(args, "name"))
+		if plugin := strings.TrimSpace(stringArg(args, "plugin")); plugin != "" {
+			if name != "" {
+				return "", fmt.Errorf("tools action=offer takes either name or plugin, not both")
+			}
+			selector, ok := e.toolDisc.(ToolPrimaryOffer)
+			if !ok {
+				return "", fmt.Errorf("primary plugin selection is unavailable")
+			}
+			names, err := selector.OfferPrimary(plugin)
+			if err != nil {
+				return "", err
+			}
+			if availability := selectionUnavailable(plane, names); availability != "" {
+				return fmt.Sprintf("Selected primary tools of %s: %s. %s", plugin, strings.Join(names, ", "), availability), nil
+			}
+			return fmt.Sprintf("Offered primary tools of %s: %s. Each is callable by its own tool name from your next turn with its declared arguments. The choice is saved across restarts; tools action=show reports current availability. No capabilities or confirmations changed.", plugin, strings.Join(names, ", ")), nil
+		}
 		if name == "" {
-			return "", fmt.Errorf("tools action=offer needs a name: the operation id, or its tool name")
+			return "", fmt.Errorf("tools action=offer needs name=<operation> or plugin=<exact plugin id>")
 		}
 		if plane == nil {
 			return "", fmt.Errorf("no plugin operations are installed beside you")
@@ -59,7 +76,10 @@ func (e *Engine) verbTools(_ context.Context, args map[string]any) (string, erro
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Offered: %s is callable from your next turn as `%s`, and stays offered — across restarts too — until you release it (tools action=release) or it changes what it declares; the offer holds eight.", name, resolved), nil
+		if availability := selectionUnavailable(plane, []string{resolved}); availability != "" {
+			return fmt.Sprintf("Selected: %s. %s", resolved, availability), nil
+		}
+		return fmt.Sprintf("Offered: %s is callable from your next turn as `%s`. The choice is saved across restarts; tools action=show reports current availability.", name, resolved), nil
 	case "release":
 		name := strings.TrimSpace(stringArg(args, "name"))
 		if name == "" {
@@ -72,7 +92,7 @@ func (e *Engine) verbTools(_ context.Context, args map[string]any) (string, erro
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Released: %s (%s) is inspect-only again.", name, resolved), nil
+		return fmt.Sprintf("Released: %s (%s) was removed from your selection.", name, resolved), nil
 	default:
 		return "", fmt.Errorf("tools: unknown action %q — organs, brief, search, show, offer, release", action)
 	}
@@ -156,7 +176,7 @@ func renderToolBrief(b ToolBrief) string {
 	if len(b.OfferedNames) > 0 {
 		fmt.Fprintf(&sb, "\nOffered now, callable by tool name: %s", strings.Join(b.OfferedNames, "; "))
 	}
-	sb.WriteString("\nNext: tools action=search query=<what you need> · action=show name=<operation> · action=offer name=<operation> (eight seats; release what you no longer need). A plugin's success is what the host's receipt says, never the plugin's own text.")
+	sb.WriteString("\nNext: tools action=search query=<what you need> · action=show name=<operation> · action=offer name=<operation> or plugin=<exact plugin id> for its primary tools (eight seats; release what you no longer need). A plugin's success is what the host's receipt says, never the plugin's own text.")
 	return sb.String()
 }
 
@@ -168,6 +188,9 @@ func renderToolHits(query string, hits []ToolHit) string {
 	fmt.Fprintf(&sb, "Plugin operations matching %q:", query)
 	for _, h := range hits {
 		fmt.Fprintf(&sb, "\n  %s — %s [%s, %s; plugin %s] → tools action=show name=%s", h.Operation, h.Summary, h.Effects, h.State, h.Plugin, h.Operation)
+		if h.Primary {
+			fmt.Fprintf(&sb, " [primary; select plugin: tools action=offer plugin=%s]", h.Plugin)
+		}
 	}
 	return sb.String()
 }
@@ -184,6 +207,9 @@ func renderToolCard(c ToolCard) string {
 		fmt.Fprintf(&sb, "; capabilities %s", strings.Join(c.Capabilities, ", "))
 	}
 	fmt.Fprintf(&sb, "\nsummary: %s", c.Summary)
+	if c.Primary {
+		fmt.Fprintf(&sb, "\nPrimary operation; select this plugin: tools action=offer plugin=%s", c.Plugin)
+	}
 	fmt.Fprintf(&sb, "\nreceipt rule: %s", c.Receipt)
 	if c.MaxResultBytes > 0 {
 		fmt.Fprintf(&sb, "\nresult bound: %d bytes", c.MaxResultBytes)
@@ -205,4 +231,31 @@ func renderToolCard(c ToolCard) string {
 		fmt.Fprintf(&sb, "\nTo call it: tools action=offer name=%s (eight seats; release one you no longer need).", c.Operation)
 	}
 	return sb.String()
+}
+
+func selectionUnavailable(plane ToolPlane, names []string) string {
+	var unavailable []string
+	for _, name := range names {
+		if plane == nil {
+			unavailable = append(unavailable, name+": current availability unavailable")
+			continue
+		}
+		card, err := plane.Show(name)
+		if err != nil {
+			unavailable = append(unavailable, name+": current availability unavailable")
+			continue
+		}
+		if card.State == "offered" {
+			continue
+		}
+		reason := card.Reason
+		if reason == "" {
+			reason = "not currently offered"
+		}
+		unavailable = append(unavailable, name+": "+reason)
+	}
+	if len(unavailable) == 0 {
+		return ""
+	}
+	return "Selection saved; " + strings.Join(unavailable, "; ") + ". Check tools action=show for current availability before use."
 }

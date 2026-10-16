@@ -28,6 +28,13 @@ func toolExecutionID(turnID string, ordinal int) string {
 	return fmt.Sprintf("tex_%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", turnID, ordinal))))
 }
 
+func ToolCallRecordID(turnID string, ordinal int) string {
+	if turnID == "" || ordinal <= 0 {
+		return ""
+	}
+	return "tool_call_" + toolExecutionID(turnID, ordinal)
+}
+
 func metaRecord(s string) string {
 	return fmt.Sprintf("[%d chars, sha256=%x]", len([]rune(s)), sha256.Sum256([]byte(s)))
 }

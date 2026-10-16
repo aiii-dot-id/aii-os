@@ -334,6 +334,17 @@ func (a *App) wirePluginHooks(h *dashboard.WSHandler) {
 			return a.InstallFromCatalog(a.lifetime(), req.ID)
 		case "uninstall":
 			return a.UninstallPlugin(req.ID)
+		case "offer":
+			if a.toolReg == nil {
+				return fmt.Errorf("plugin tools are unavailable")
+			}
+			_, err := a.toolReg.OfferPrimary(req.ID)
+			return err
+		case "release":
+			if a.toolReg == nil {
+				return fmt.Errorf("plugin tools are unavailable")
+			}
+			return a.toolReg.ReleasePlugin(req.ID)
 		case "retry":
 			return a.RetryPlugin(req.ID)
 		case "confirm", "deny":

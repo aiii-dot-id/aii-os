@@ -314,12 +314,29 @@ func (s *Store) EnqueueWorkWithSessionBelowLimit(item *WorkItem, limit int, sess
 	if live >= limit {
 		return live, false, nil
 	}
+	project := s.activeProject
+	if item.Kind == SubagentWorkKind {
+
+		var parentType, parent sql.NullString
+		if err := tx.QueryRow(`SELECT json_type(?, '$.parent_work_session_id'), json_extract(?, '$.parent_work_session_id')`,
+			item.Payload, item.Payload).Scan(&parentType, &parent); err != nil {
+			return live, false, fmt.Errorf("read queued work parent: %w", err)
+		}
+		if parentType.Valid && parentType.String != "text" && parentType.String != "null" {
+			return live, false, fmt.Errorf("queued work parent must be a session ID string")
+		}
+		if parent.Valid && parent.String != "" {
+			if err := tx.QueryRow(`SELECT project_id FROM work_sessions WHERE id = ?`, parent.String).Scan(&project); err != nil {
+				return live, false, fmt.Errorf("read queued work parent %q: %w", parent.String, err)
+			}
+		}
+	}
 	if _, err := s.enqueueWorkLocked(tx, item); err != nil {
 		return live, false, err
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO work_sessions (id, description, status, state, project_id) VALUES (?, ?, 'active', '', ?)`,
-		sessionID, description, s.activeProject,
+		sessionID, description, project,
 	); err != nil {
 		return live, false, err
 	}
