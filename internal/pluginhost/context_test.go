@@ -201,7 +201,11 @@ func TestContextDispatchedTimeoutRecoversWithoutRetryOrStoreMutation(t *testing.
 	if !errors.As(e, &timeout) {
 		t.Fatalf("expected dispatched timeout: %v", e)
 	}
-	pollUntil(t, "normal worker recovery", func() bool { return ap.SupervisedPid() != 0 && ap.SupervisedPid() != first })
+	pollUntil(t, "normal worker recovery and readiness", func() bool {
+		state, _ := ap.sup.State()
+		pid := ap.SupervisedPid()
+		return state == supervisor.StateRunning && pid != 0 && pid != first
+	})
 	r, e := reg.Execute(t.Context(), ordinary, nil)
 	if e != nil || r.Failed() || r.Output != `{"output":"ordinary call recovered"}` {
 		t.Fatal(r, e)
