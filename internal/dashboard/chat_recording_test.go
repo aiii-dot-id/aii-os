@@ -133,6 +133,10 @@ func TestChatRecordingRefusedJobReturnsItsTurnClaim(t *testing.T) {
 	}
 	defer s.Shutdown(context.Background())
 	conn := dialWS(t, addr)
+	// The client handshake can finish before the server registers this
+	// connection. Establish registration before setting the stopping state
+	// so the request tests runJob's refusal path instead of handshake refusal.
+	waitForConns(t, s, 1)
 	s.jobsMu.Lock()
 	s.jobsStopping = true
 	s.jobsMu.Unlock()
