@@ -51,6 +51,7 @@ func TestPluginStorageNativeWallKeepsOnlyTheOwnersCompatibilityPath(t *testing.T
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("argv containment platforms")
 	}
+	skipWhereNativeWallCannotBeEstablished(t)
 	const a, b = "id.example.native", "id_example.native"
 	data := t.TempDir()
 	base := filepath.Join(data, "private")

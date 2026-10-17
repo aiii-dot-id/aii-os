@@ -27,6 +27,23 @@ func skipWhereTheSandboxCannotBeEstablished(t *testing.T) {
 	}
 }
 
+func skipWhereNativeWallCannotBeEstablished(t *testing.T) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bubblewrap is absent: native wall tests require it")
+		}
+		skipWhereTheSandboxCannotBeEstablished(t)
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			t.Skip("sandbox-exec is absent: native wall tests require it")
+		}
+	default:
+		t.Skip("this platform has no argv-based native wall")
+	}
+}
+
 // exeSuffix is what a built test child must be named on this platform:
 // Windows exec finds no executable in a file without an extension.
 var exeSuffix = map[bool]string{true: ".exe"}[runtime.GOOS == "windows"]

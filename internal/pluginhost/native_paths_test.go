@@ -34,6 +34,7 @@ func nativePathsProbe(t *testing.T, privateConfig bool) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("argv filesystem masks belong to Linux and macOS")
 	}
+	skipWhereNativeWallCannotBeEstablished(t)
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
 	model := filepath.Join(data, "models", "selected", "weights")

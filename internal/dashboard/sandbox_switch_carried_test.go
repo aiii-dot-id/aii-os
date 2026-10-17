@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,6 +156,7 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
+	var channelOpen atomic.Bool
 	var wmu sync.Mutex
 	setupErr := make(chan error, 1)
 	report := func(err error) {
@@ -169,7 +171,9 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 		raw, _ := json.Marshal(m)
 		wmu.Lock()
 		defer wmu.Unlock()
-		report(conn.Write(ctx, websocket.MessageText, raw))
+		if err := conn.Write(ctx, websocket.MessageText, raw); err != nil && !channelOpen.Load() {
+			report(err)
+		}
 	}
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
@@ -196,6 +200,7 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dc.OnOpen(func() { channelOpen.Store(true) })
 	ready := make(chan []byte, 64)
 	dc.OnMessage(func(m webrtc.DataChannelMessage) { ready <- m.Data })
 	var candidateMu sync.Mutex

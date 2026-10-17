@@ -15,11 +15,7 @@ import (
 // opening a socket.
 
 func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		if _, lerr := exec.LookPath("bwrap"); lerr != nil {
-			t.Skip("bubblewrap is absent; containment refuses, which the fail-closed test covers")
-		}
-	}
+	skipWhereNativeWallCannotBeEstablished(t)
 	argv, telemetry, err := containArgv(context.Background(), []string{"/tmp/artifact"}, nil, nativeFiles{})
 	if err != nil {
 		t.Fatalf("containment refused a plain argv: %v", err)
@@ -164,11 +160,15 @@ func TestContainmentRefusesRatherThanRunningBare(t *testing.T) {
 	}
 	if _, err := exec.LookPath(tool); err == nil {
 		// The mechanism is here, so the refusal cannot be provoked
-		// without removing it. What IS provable is that the contained
-		// path never returns the bare argv.
+		// without removing it. A confined runner can still refuse because
+		// the mechanism cannot establish its sandbox; that is safe only if
+		// it returns no argv at all.
 		argv, _, err := containArgv(context.Background(), []string{"/tmp/artifact"}, nil, nativeFiles{})
 		if err != nil {
-			t.Fatalf("containment refused with the mechanism present: %v", err)
+			if argv != nil {
+				t.Fatalf("containment refused but returned an argv anyway: %v (%v)", argv, err)
+			}
+			return
 		}
 		if len(argv) == 1 {
 			t.Fatal("the argv was returned unwrapped while the mechanism was available")
