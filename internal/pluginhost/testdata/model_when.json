@@ -1,0 +1,23 @@
+{
+  "floor": "0.1.15",
+  "settings": [{"key":"tts_language","type":"enum","title":"Speaking language","default":"en","values":["en","fr","de"]},{"key":"speed","type":"number","title":"Speed","default":1}],
+  "base": {"name":"fr-pack","url":"https://example.com/fr-pack","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1024},
+  "declaration": [
+    {"name":"no-when-no-floor","when":"","min":"","host":true,"author":true},
+    {"name":"no-when-earlier-floor","when":"","min":"0.1.12","host":true,"author":true},
+    {"name":"when-at-floor","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\"]}","min":"0.1.15","host":true,"author":true},
+    {"name":"when-two-values-above-floor","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\",\"de\"]}","min":"0.2.0","host":true,"author":true},
+    {"name":"when-below-floor","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\"]}","min":"0.1.14","host":false,"author":false},
+    {"name":"when-no-floor","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\"]}","min":"","host":false,"author":false},
+    {"name":"when-undeclared-setting","when":",\"when\":{\"setting\":\"voice_accent\",\"values\":[\"fr\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-not-an-enum","when":",\"when\":{\"setting\":\"speed\",\"values\":[\"fr\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-unknown-value","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"xx\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-no-values","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-repeated-value","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\",\"fr\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-empty-value","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-bad-key","when":",\"when\":{\"setting\":\"TTS Language\",\"values\":[\"fr\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-no-setting","when":",\"when\":{\"values\":[\"fr\"]}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-unknown-member","when":",\"when\":{\"setting\":\"tts_language\",\"values\":[\"fr\"],\"platform\":\"linux\"}","min":"0.1.15","host":false,"author":false},
+    {"name":"when-not-an-object","when":",\"when\":\"tts_language=fr\"","min":"0.1.15","host":false,"author":false}
+  ]
+}

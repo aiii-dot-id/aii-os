@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "identities": [
+    {"slot": "identity-0", "path": "/Users/example/.aii/identity-0", "real_path": "/Users/example/.aii/identity-0", "name": "Vega", "registered": true, "running": true},
+    {"slot": "identity-4", "path": "/Users/example/.aii/identity-4", "real_path": "/srv/archive/slot", "registered": true, "running": false}
+  ],
+  "done": [{"step": "slots", "did": "unregistered and stopped 2 of 2 identities"}, {"step": "service", "did": "unregistered and stopped the machine service"}, {"step": "store", "did": "removed"}, {"step": "app", "did": "1 installed program(s) are left for you to remove"}],
+  "stays": [
+    {"what": "identity", "path": "/Users/example/.aii/identity-0", "real_path": "/Users/example/.aii/identity-0", "name": "Vega", "why": "an identity's slot is never touched"},
+    {"what": "identity", "path": "/Users/example/.aii/identity-4", "real_path": "/srv/archive/slot", "why": "an identity's slot is never touched"},
+    {"what": "by-name", "path": "/Users/example/.aii/by-name", "why": "the links"}
+  ],
+  "programs": [{"path": "/Applications/AII OS.app", "version": "0.1.16", "remove": "drag /Applications/AII OS.app to the Trash", "shared_with": [502], "leftovers_kept": true}],
+  "removed": ["/Users/example/.aii/plugins", "/Users/example/.aii/machine"],
+  "freed_bytes": 3221225472
+}

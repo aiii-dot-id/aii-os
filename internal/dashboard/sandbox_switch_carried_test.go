@@ -1,0 +1,316 @@
+package dashboard
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/pion/webrtc/v4"
+)
+
+const carriedSwitchToken = "carried-switch-token-long-enough-to-be-one"
+
+// heardSwitch is what the host was told, one answer per switch request.
+type heardSwitch struct {
+	mu    sync.Mutex
+	heard []bool
+}
+
+// answer waits for the host's nth answer (1-based) and returns it.
+func (h *heardSwitch) answer(t *testing.T, n int) bool {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.mu.Lock()
+		if len(h.heard) >= n {
+			v := h.heard[n-1]
+			h.mu.Unlock()
+			return v
+		}
+		h.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatalf("the host never heard switch request %d", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// carriedSwitchServer is a dashboard behind a relay name, asking for its
+// token or not. onChannel gives a page time to open a WebRTC channel; else
+// the wait is short and the session stays on the socket.
+func carriedSwitchServer(t *testing.T, required, onChannel bool) (*Server, *heardSwitch, string, *x509.CertPool) {
+	t.Helper()
+	const name = "ui.x.example.test"
+	wait := 300
+	if onChannel {
+		wait = 8000
+	}
+	heard := &heardSwitch{}
+	s := New("127.0.0.1", 0, &WSHandler{
+		Channels: func() ChannelSettings {
+			return ChannelSettings{WaitMS: wait, ReadyAllowanceMS: 100, ICEServersNamed: true, Sessions: 4}
+		},
+		SetSandboxOff: func(_, signedIn bool) error {
+			heard.mu.Lock()
+			heard.heard = append(heard.heard, signedIn)
+			heard.mu.Unlock()
+			return nil
+		},
+		GetSandbox: func() (*SandboxState, error) { return &SandboxState{Root: "/identity"}, nil },
+	})
+	if required {
+		s.SetAccessToken(true, carriedSwitchToken)
+	}
+	if _, err := s.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	cert := selfSigned(t, name)
+	s.SetPublicCertificate(name, func() *tls.Certificate { return cert })
+	s.AllowHost(name)
+	roots := x509.NewCertPool()
+	roots.AddCert(cert.Leaf)
+	return s, heard, name, roots
+}
+
+const switchOff = `{"type":"sandbox_switch","request_id":"r","sandbox_off":true}`
+
+// openCarriedPage opens a page over the relay, with the cookie when one is
+// given, on a channel or on the socket, and returns how it sends a request
+// once the identity is ready on that carrier.
+func openCarriedPage(t *testing.T, s *Server, name string, roots *x509.CertPool, onChannel bool, cookie ...string) func() {
+	t.Helper()
+	conn := carriedSocket(t, s, name, roots, "&transport=1", cookie...)
+	if onChannel {
+		dc := channelPage(t, conn)
+		return func() {
+			if err := dc.Send(append([]byte{pieceLast}, switchOff...)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	for {
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"transport_ready"`) {
+			break
+		}
+	}
+	return func() {
+		if err := conn.Write(ctx, websocket.MessageText, []byte(switchOff)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// heldOn reports how many sessions the server holds on each carrier.
+func heldOn(s *Server) (channel, socket int) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	for c := range s.wsConns {
+		switch c.(type) {
+		case *channelCarrier:
+			channel++
+		case *pumpedSocket:
+			socket++
+		}
+	}
+	return channel, socket
+}
+
+// waitHeldOn waits until the server holds the one session on the carrier
+// the test means.
+func waitHeldOn(t *testing.T, s *Server, onChannel bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ch, so := heldOn(s)
+		if onChannel && ch == 1 || !onChannel && so == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the session is not on the carrier meant (onChannel %v): channel %d, socket %d", onChannel, ch, so)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// channelPage plays the page's side of the channel's setup over the carried
+// socket and returns the data channel once the identity says it is ready on it.
+func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	var wmu sync.Mutex
+	say := func(m setupMessage) {
+		raw, _ := json.Marshal(m)
+		wmu.Lock()
+		defer wmu.Unlock()
+		_ = conn.Write(ctx, websocket.MessageText, raw)
+	}
+	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("socket read: %v", err)
+	}
+	var first setupMessage
+	_ = json.Unmarshal(raw, &first)
+	if first.Type != "transport_setup" {
+		t.Fatalf("first message %q, want transport_setup", first.Type)
+	}
+	var engine webrtc.SettingEngine
+	// A browser gathers no IPv6 link-local address: SDP cannot carry its
+	// interface scope. Pion's defaults still open those sockets, whose
+	// unusable checks can delay even a local pair past the fallback wait.
+	// Keep the page fixture faithful to the browser, without extending that
+	// wait or changing the identity's peer.
+	engine.SetIPFilter(gatheredForChannel)
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(engine)).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	dc, err := pc.CreateDataChannel("dashboard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan []byte, 64)
+	dc.OnMessage(func(m webrtc.DataChannelMessage) { ready <- m.Data })
+	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c == nil {
+			return
+		}
+		init := c.ToJSON()
+		say(setupMessage{Type: "transport_candidate", Candidate: init.Candidate, SDPMid: init.SDPMid, SDPMLineIndex: init.SDPMLineIndex})
+	})
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	say(setupMessage{Type: "transport_offer", SDP: offer.SDP})
+	go func() {
+		var early []webrtc.ICECandidateInit
+		answered := false
+		for {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			var m setupMessage
+			_ = json.Unmarshal(raw, &m)
+			switch m.Type {
+			case "transport_answer":
+				_ = pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: m.SDP})
+				answered = true
+				for _, c := range early {
+					_ = pc.AddICECandidate(c)
+				}
+			case "transport_candidate":
+				c := webrtc.ICECandidateInit{Candidate: m.Candidate, SDPMid: m.SDPMid, SDPMLineIndex: m.SDPMLineIndex}
+				if answered {
+					_ = pc.AddICECandidate(c)
+				} else {
+					early = append(early, c)
+				}
+			case "transport_ready":
+				t.Errorf("the identity chose the socket: %s", raw)
+				return
+			}
+		}
+	}()
+	select {
+	case first := <-ready:
+		if first[0]&pieceLast == 0 || !strings.Contains(string(first[1:]), `"channel"`) {
+			t.Fatalf("first piece on the channel %q", first)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the channel never said ready")
+	}
+	return dc
+}
+
+func TestACarriedPageIsSignedInForTheSwitchOnlyWithTheTokenInForce(t *testing.T) {
+	for _, carrier := range []struct {
+		name      string
+		onChannel bool
+	}{{"a WebRTC channel", true}, {"the fallback socket", false}} {
+		t.Run(carrier.name, func(t *testing.T) {
+			t.Run("with the cookie, then the requirement dropped", func(t *testing.T) {
+				s, heard, name, roots := carriedSwitchServer(t, true, carrier.onChannel)
+				send := openCarriedPage(t, s, name, roots, carrier.onChannel, s.accessHash())
+				waitHeldOn(t, s, carrier.onChannel)
+				send()
+				if !heard.answer(t, 1) {
+					t.Fatal("a page that signed in with the token in force was heard as not signed in")
+				}
+				s.SetAccessToken(false, carriedSwitchToken)
+				send()
+				if heard.answer(t, 2) {
+					t.Fatal("after the token stopped being asked for, the page was heard as signed in")
+				}
+			})
+			t.Run("no token asked for", func(t *testing.T) {
+				s, heard, name, roots := carriedSwitchServer(t, false, carrier.onChannel)
+				send := openCarriedPage(t, s, name, roots, carrier.onChannel)
+				send()
+				if heard.answer(t, 1) {
+					t.Fatal("a page under no token was heard as signed in")
+				}
+			})
+			t.Run("no cookie under a required token", func(t *testing.T) {
+				s, _, name, roots := carriedSwitchServer(t, true, carrier.onChannel)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				client := &http.Client{Transport: &http.Transport{
+					DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						c := tls.Client(carriedSession(t, s), &tls.Config{ServerName: name, RootCAs: roots, MinVersion: tls.VersionTLS12})
+						return c, c.HandshakeContext(ctx)
+					},
+				}}
+				c, _, err := websocket.Dial(ctx, "wss://"+name+"/ws?interaction_version=1&transport=1", &websocket.DialOptions{
+					HTTPClient: client, HTTPHeader: http.Header{"Origin": []string{"https://" + name}}})
+				if err == nil {
+					c.CloseNow()
+					t.Fatal("a carried page with no cookie was admitted under a required token")
+				}
+			})
+		})
+	}
+}
+
+func TestADeviceSignedInByAnAccessCodeIsSignedInForTheSwitch(t *testing.T) {
+	s, heard, name, roots := carriedSwitchServer(t, true, false)
+	st, err := s.issueAccessCode(s.auth.Load(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://"+name+"/auth/token", nil)
+	req.TLS = &tls.ConnectionState{}
+	granted, ok, _ := s.redeemAccessCode(st.Code, req)
+	if !ok {
+		t.Fatal("the code was not redeemed")
+	}
+	if granted.hash != s.accessHash() {
+		t.Fatal("the code granted a cookie other than the token's")
+	}
+	send := openCarriedPage(t, s, name, roots, false, granted.hash)
+	send()
+	if !heard.answer(t, 1) {
+		t.Fatal("a device signed in by an access code was heard as not signed in")
+	}
+}

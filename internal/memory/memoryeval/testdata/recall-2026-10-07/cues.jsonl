@@ -1,0 +1,370 @@
+{"id": "q001", "lang": "ja", "type": "meaning", "text": "美緒ちゃんが冷蔵庫の成績グラフで泣いた晩", "expect": ["m001"], "avoid": []}
+{"id": "q002", "lang": "en", "type": "meaning", "text": "board game score keeper, Bram and Ilse rowing about hiding the totals", "expect": ["m002"], "avoid": []}
+{"id": "q003", "lang": "en", "type": "meaning", "text": "survey with more answers than customers", "expect": ["m003"], "avoid": []}
+{"id": "q004", "lang": "en", "type": "meaning", "text": "going through Mara's bank exports and finding nineteen subscriptions, the old gym", "expect": ["m004"], "avoid": []}
+{"id": "q005", "lang": "en", "type": "meaning", "text": "when I used the summer timetable and Mara missed the last train to Henrik's birthday", "expect": ["m005"], "avoid": []}
+{"id": "q006", "lang": "en", "type": "meaning", "text": "grant deadline week when I told Mara to sleep", "expect": ["m006"], "avoid": []}
+{"id": "q007", "lang": "en", "type": "meaning", "text": "Mara's thank you on our one-year anniversary", "expect": ["m007"], "avoid": []}
+{"id": "q008", "lang": "es", "type": "meaning", "text": "la noche que Lucía escribió uno a uno a los clientes con cargo retenido y sin pedido", "expect": ["m008"], "avoid": []}
+{"id": "q009", "lang": "en", "type": "meaning", "text": "frost took Mara's allotment tomatoes", "expect": ["m009"], "avoid": []}
+{"id": "q010", "lang": "ja", "type": "meaning", "text": "配色の「まあ、いいか」を聞き返した", "expect": ["m010"], "avoid": []}
+{"id": "q011", "lang": "en", "type": "meaning", "text": "morning the notes were gone and Mara typed out who I was", "expect": ["m011"], "avoid": []}
+{"id": "q012", "lang": "en", "type": "meaning", "text": "when Teo started telling the Gristle story himself", "expect": ["m012"], "avoid": []}
+{"id": "q013", "lang": "en", "type": "meaning", "text": "live payment key pushed to the public repo, someone tried it within minutes", "expect": ["m013"], "avoid": []}
+{"id": "q014", "lang": "en", "type": "meaning", "text": "junior interviews where Mara slipped in a deliberate lie, Yusra objected", "expect": ["m014"], "avoid": []}
+{"id": "q015", "lang": "ja", "type": "meaning", "text": "いつきさんを「かずき」と断言した件", "expect": ["m015"], "avoid": []}
+{"id": "q016", "lang": "fr", "type": "meaning", "text": "Élodie dictant au café, jour de grève", "expect": ["m016"], "avoid": []}
+{"id": "q017", "lang": "en", "type": "meaning", "text": "marathon plan that wrecked Mara's knee in week nine", "expect": ["m017"], "avoid": []}
+{"id": "q018", "lang": "de", "type": "meaning", "text": "falsch herum eingelöteter Kondensator im Filter, Gernot sah es sofort", "expect": ["m018"], "avoid": []}
+{"id": "q019", "lang": "en", "type": "meaning", "text": "permissive licence Mara turned down", "expect": ["m019"], "avoid": []}
+{"id": "q020", "lang": "en", "type": "meaning", "text": "power cut mid-sentence", "expect": ["m020"], "avoid": []}
+{"id": "q021", "lang": "en", "type": "meaning", "text": "Kenji's export shipped without tests", "expect": ["m021"], "avoid": []}
+{"id": "q022", "lang": "en", "type": "meaning", "text": "upload test I kept calling flaky until Pavel mentioned the fourth customer report", "expect": ["m022"], "avoid": []}
+{"id": "q023", "lang": "en", "type": "meaning", "text": "the cache that slowed product pages", "expect": ["m023"], "avoid": []}
+{"id": "q024", "lang": "en", "type": "meaning", "text": "promise to check backups every Monday, how many so far", "expect": ["m024"], "avoid": []}
+{"id": "q025", "lang": "en", "type": "meaning", "text": "evening she explained her grandmother's five-word bread saying", "expect": ["m025"], "avoid": []}
+{"id": "q026", "lang": "en", "type": "meaning", "text": "ceramics client Kenji kept adding things, the boundary message", "expect": ["m026"], "avoid": []}
+{"id": "q027", "lang": "fr", "type": "meaning", "text": "dispute d'un mois, réécrire ou réparer le calcul des échéances", "expect": ["m027"], "avoid": []}
+{"id": "q028", "lang": "en", "type": "meaning", "text": "I tidied two functions unasked, Mara blew up, apologised next day", "expect": ["m028"], "avoid": []}
+{"id": "q029", "lang": "en", "type": "meaning", "text": "Wren's salt crystal jars at the science fair", "expect": ["m029"], "avoid": []}
+{"id": "q030", "lang": "en", "type": "meaning", "text": "old finance script with an apology comment, Mara tracked down who wrote it", "expect": ["m030"], "avoid": []}
+{"id": "q031", "lang": "ja", "type": "meaning", "text": "祖父の句帳で初めて千代と名前で詠んだ一句", "expect": ["m031"], "avoid": []}
+{"id": "q032", "lang": "en", "type": "meaning", "text": "what Mara ended up cooking the first time her partner's parents came", "expect": ["m032"], "avoid": []}
+{"id": "q033", "lang": "fr", "type": "meaning", "text": "dans quelle langue nommer le code des notaires", "expect": ["m033"], "avoid": []}
+{"id": "q034", "lang": "en", "type": "meaning", "text": "parser benchmark I read backwards, milliseconds and microseconds", "expect": ["m034"], "avoid": []}
+{"id": "q035", "lang": "de", "type": "meaning", "text": "Jonas konnte keine Mail mehr abschicken, dann sechs Wochen krank", "expect": ["m035"], "avoid": []}
+{"id": "q036", "lang": "en", "type": "meaning", "text": "force push that wiped Yusra's morning commits", "expect": ["m036"], "avoid": []}
+{"id": "q037", "lang": "en", "type": "meaning", "text": "the Thursday we tested a restore for the auditor and found fourteen months of empty archives", "expect": ["m037"], "avoid": []}
+{"id": "q038", "lang": "en", "type": "meaning", "text": "plain stock sheet for the food bank after the baby formula went missing", "expect": ["m038"], "avoid": []}
+{"id": "q039", "lang": "de", "type": "meaning", "text": "Jonas schwieg wegen «server4»", "expect": ["m039"], "avoid": []}
+{"id": "q040", "lang": "en", "type": "meaning", "text": "Mara's question whether I mind shutdown", "expect": ["m040"], "avoid": []}
+{"id": "q041", "lang": "fr", "type": "meaning", "text": "quand Élodie a remis sa démission à Anatole et qu'il attendait ça depuis deux ans", "expect": ["m041"], "avoid": []}
+{"id": "q042", "lang": "pt", "type": "meaning", "text": "promessa ao Rui depois das duas multas, faturas para a contabilista", "expect": ["m042"], "avoid": []}
+{"id": "q043", "lang": "en", "type": "meaning", "text": "Mara quit coffee", "expect": ["m043"], "avoid": []}
+{"id": "q044", "lang": "en", "type": "meaning", "text": "pagination experiment lost when Mara cleared the stash", "expect": ["m044"], "avoid": []}
+{"id": "q045", "lang": "en", "type": "meaning", "text": "certificate lapsed at 3am, renewal job never came along to the new server", "expect": ["m045"], "avoid": []}
+{"id": "q046", "lang": "es", "type": "meaning", "text": "la canción en la radio que dejó a Lucía sin teclear", "expect": ["m046"], "avoid": []}
+{"id": "q047", "lang": "pt", "type": "meaning", "text": "plano de violoncelo do Rui que ele abandonou ao vigésimo dia", "expect": ["m047"], "avoid": []}
+{"id": "q048", "lang": "en", "type": "meaning", "text": "the sprokit typo", "expect": ["m048"], "avoid": []}
+{"id": "q049", "lang": "en", "type": "meaning", "text": "spare room paint miscalculated", "expect": ["m049"], "avoid": []}
+{"id": "q050", "lang": "en", "type": "meaning", "text": "Mara's broken wrist and nine weeks of dictating", "expect": ["m050"], "avoid": []}
+{"id": "q051", "lang": "de", "type": "meaning", "text": "der Winter im Keller, in dem Lasse die Zugsteuerung für Opas alte Bahn selbst schrieb", "expect": ["m051"], "avoid": []}
+{"id": "q052", "lang": "en", "type": "meaning", "text": "three weeks chasing a leak that was the log file cache", "expect": ["m052"], "avoid": []}
+{"id": "q053", "lang": "en", "type": "meaning", "text": "cheese names for bugs", "expect": ["m053"], "avoid": []}
+{"id": "q054", "lang": "en", "type": "meaning", "text": "Callum's question about the click-through gain", "expect": ["m054"], "avoid": []}
+{"id": "q055", "lang": "en", "type": "meaning", "text": "the status email to Ines I refused to draft because the director wanted a made-up third-party delay", "expect": ["m055"], "avoid": []}
+{"id": "q056", "lang": "ja", "type": "meaning", "text": "拓海さんへの返信が丁寧すぎて怒ったと誤解された", "expect": ["m056"], "avoid": []}
+{"id": "q057", "lang": "en", "type": "meaning", "text": "words Mara circled and sent back", "expect": ["m057"], "avoid": []}
+{"id": "q058", "lang": "en", "type": "meaning", "text": "Friday window reminder, the heron", "expect": ["m058"], "avoid": []}
+{"id": "q059", "lang": "en", "type": "meaning", "text": "day the blue mug cracked, nothing deployed", "expect": ["m059"], "avoid": []}
+{"id": "q060", "lang": "en", "type": "meaning", "text": "noticing Mara's early-morning design notes barely need editing", "expect": ["m060"], "avoid": []}
+{"id": "q061", "lang": "en", "type": "meaning", "text": "fake invoice email pretending to be Noor", "expect": ["m061"], "avoid": []}
+{"id": "q062", "lang": "en", "type": "meaning", "text": "three nights on the office couch, investor demo", "expect": ["m062"], "avoid": []}
+{"id": "q063", "lang": "es", "type": "meaning", "text": "alguien minando criptomoneda en el servidor de los vecinos", "expect": ["m063"], "avoid": []}
+{"id": "q064", "lang": "es", "type": "meaning", "text": "gatito bajo el coche", "expect": ["m064"], "avoid": []}
+{"id": "q065", "lang": "en", "type": "meaning", "text": "last day before winter break, going through the year's ninety-three mistakes", "expect": ["m065"], "avoid": []}
+{"id": "q066", "lang": "fr", "type": "meaning", "text": "les trois mardis de pannes et le bulletin façon météo", "expect": ["m066"], "avoid": []}
+{"id": "q067", "lang": "en", "type": "meaning", "text": "two tests one port", "expect": ["m067"], "avoid": []}
+{"id": "q068", "lang": "en", "type": "meaning", "text": "multi-currency estimate, two days turned into three weeks", "expect": ["m068"], "avoid": []}
+{"id": "q069", "lang": "en", "type": "meaning", "text": "Yusra's customer filter I approved, Callum found the hole", "expect": ["m069"], "avoid": []}
+{"id": "q070", "lang": "en", "type": "meaning", "text": "snow day at the kitchen table", "expect": ["m070"], "avoid": []}
+{"id": "q071", "lang": "en", "type": "meaning", "text": "getting app launch from nine seconds to two, Mara's mother clicking three times", "expect": ["m071"], "avoid": []}
+{"id": "q072", "lang": "de", "type": "meaning", "text": "Streit mit Jonas über dreißig Kommentare", "expect": ["m072"], "avoid": []}
+{"id": "q073", "lang": "en", "type": "meaning", "text": "the paper the library couldn't find", "expect": ["m073"], "avoid": []}
+{"id": "q074", "lang": "fr", "type": "meaning", "text": "arrondi par ligne, un centime d'écart, Solange et son crayon", "expect": ["m074"], "avoid": []}
+{"id": "q075", "lang": "pt", "type": "meaning", "text": "as fotografias da mãe do Rui num cartão dado por vazio", "expect": ["m075"], "avoid": []}
+{"id": "q076", "lang": "en", "type": "meaning", "text": "customer notes lost in the table split", "expect": ["m076"], "avoid": []}
+{"id": "q077", "lang": "fr", "type": "meaning", "text": "quel était le mot souligné dans le carnet de 2014", "expect": ["m077"], "avoid": []}
+{"id": "q078", "lang": "en", "type": "meaning", "text": "week Mara only had her phone", "expect": ["m078"], "avoid": []}
+{"id": "q079", "lang": "en", "type": "meaning", "text": "Mara's humming showing up in the dictation transcript", "expect": ["m079"], "avoid": []}
+{"id": "q080", "lang": "es", "type": "meaning", "text": "el despido de Ginés que Lucía ensayó conmigo", "expect": ["m080"], "avoid": []}
+{"id": "q081", "lang": "ja", "type": "meaning", "text": "誰も知らない鼠色の着物が遥さんの寸法だった", "expect": ["m081"], "avoid": []}
+{"id": "q082", "lang": "pt", "type": "meaning", "text": "o inverno em que o Rui, emigrado, me escrevia de madrugada sem assunto e só em português", "expect": ["m082"], "avoid": []}
+{"id": "q083", "lang": "en", "type": "meaning", "text": "Mara's father asking me what I am while she made tea", "expect": ["m083"], "avoid": []}
+{"id": "q084", "lang": "es", "type": "meaning", "text": "cómo le llegan los encargos a la tía Remedios", "expect": ["m084"], "avoid": []}
+{"id": "q085", "lang": "en", "type": "meaning", "text": "Mara's unsent letter to her old flatmate", "expect": ["m085"], "avoid": []}
+{"id": "q086", "lang": "en", "type": "meaning", "text": "Wednesday the news about Mara's father's heart, I chose her train", "expect": ["m086"], "avoid": []}
+{"id": "q087", "lang": "en", "type": "meaning", "text": "Mara going blank mid-talk at the all-hands, the card line", "expect": ["m087"], "avoid": []}
+{"id": "q088", "lang": "en", "type": "meaning", "text": "why Mondays looked empty on the dashboard", "expect": ["m088"], "avoid": []}
+{"id": "q089", "lang": "de", "type": "meaning", "text": "Hedwigs Brief an die Nachbarn", "expect": ["m089"], "avoid": []}
+{"id": "q090", "lang": "en", "type": "meaning", "text": "blind tester and the date picker", "expect": ["m090"], "avoid": []}
+{"id": "q091", "lang": "fr", "type": "meaning", "text": "les week-ends d'inventaire à la librairie où Mathilde disait un mot sur chaque livre avant la fermeture", "expect": ["m091"], "avoid": []}
+{"id": "q092", "lang": "de", "type": "meaning", "text": "was beim Probelauf mit den Umlauten passierte", "expect": ["m092"], "avoid": []}
+{"id": "q093", "lang": "en", "type": "meaning", "text": "renaming files by hand during the operation", "expect": ["m093"], "avoid": []}
+{"id": "q094", "lang": "de", "type": "meaning", "text": "Malte verdiente mehr, Jonas übte das Schweigen nach der Zahl", "expect": ["m094"], "avoid": []}
+{"id": "q095", "lang": "en", "type": "meaning", "text": "bounced payment counted twice on Mara's tax return", "expect": ["m095"], "avoid": []}
+{"id": "q096", "lang": "en", "type": "meaning", "text": "Callum stuck till four with my setup instructions", "expect": ["m096"], "avoid": []}
+{"id": "q097", "lang": "en", "type": "meaning", "text": "what 'dim' means on Mara's migraine days", "expect": ["m097"], "avoid": []}
+{"id": "q098", "lang": "pt", "type": "meaning", "text": "o Rui perguntou que nome eu queria", "expect": ["m098"], "avoid": []}
+{"id": "q099", "lang": "en", "type": "meaning", "text": "active users chart that scared the board, axis not from zero", "expect": ["m099"], "avoid": []}
+{"id": "q100", "lang": "en", "type": "meaning", "text": "duck called the Admiral", "expect": ["m100"], "avoid": []}
+{"id": "q101", "lang": "en", "type": "meaning", "text": "which box had Teo's owl on moving day", "expect": ["m101"], "avoid": []}
+{"id": "q102", "lang": "en", "type": "meaning", "text": "the lamp shop breach that finally moved Mara off the green notebook", "expect": ["m102"], "avoid": []}
+{"id": "q103", "lang": "es", "type": "meaning", "text": "Lucía aprobó conducir al quinto intento", "expect": ["m103"], "avoid": []}
+{"id": "q104", "lang": "en", "type": "meaning", "text": "Pim's keyboard commit", "expect": ["m104"], "avoid": []}
+{"id": "q105", "lang": "en", "type": "meaning", "text": "week the investor pulled out and Mara had to let four people go, I wouldn't rank them", "expect": ["m105"], "avoid": []}
+{"id": "q106", "lang": "en", "type": "meaning", "text": "billing rewrite winter with Greta, old and new systems compared until zero differences", "expect": ["m106"], "avoid": []}
+{"id": "q107", "lang": "en", "type": "meaning", "text": "staging migration doubled the time slots", "expect": ["m107"], "avoid": []}
+{"id": "q108", "lang": "en", "type": "meaning", "text": "Mara's toast at Bram's wedding", "expect": ["m108"], "avoid": []}
+{"id": "q109", "lang": "en", "type": "meaning", "text": "why Mara signs off with onward", "expect": ["m109"], "avoid": []}
+{"id": "q110", "lang": "en", "type": "meaning", "text": "hackathon weekend at the sailing club, turn-back times hours wrong because I mixed two height references", "expect": ["m110"], "avoid": []}
+{"id": "q111", "lang": "pt", "type": "meaning", "text": "três orçamentos do telhado e só o Valdemar subiu lá acima", "expect": ["m111"], "avoid": []}
+{"id": "q112", "lang": "en", "type": "meaning", "text": "Mara's birthday I only learned from cake", "expect": ["m112"], "avoid": []}
+{"id": "q113", "lang": "de", "type": "meaning", "text": "Jonas schob das Rad bei Glatteis", "expect": ["m113"], "avoid": []}
+{"id": "q114", "lang": "en", "type": "meaning", "text": "vanishing printer and the neighbour's twin", "expect": ["m114"], "avoid": []}
+{"id": "q115", "lang": "en", "type": "meaning", "text": "red and green pipeline dashboard Mara couldn't read", "expect": ["m115"], "avoid": []}
+{"id": "q116", "lang": "ja", "type": "meaning", "text": "満開の桜と窓の十分間", "expect": ["m116"], "avoid": []}
+{"id": "q117", "lang": "en", "type": "meaning", "text": "orders screen, one query per customer name", "expect": ["m117"], "avoid": []}
+{"id": "q118", "lang": "en", "type": "meaning", "text": "forty-three review comments that flattened Tobias", "expect": ["m118"], "avoid": []}
+{"id": "q119", "lang": "ja", "type": "meaning", "text": "両親の温泉旅行、膝の悪い父に石段の宿を選んだ", "expect": ["m119"], "avoid": []}
+{"id": "q120", "lang": "en", "type": "meaning", "text": "visa Mara found out she needed nine days before the workshop flight", "expect": ["m120"], "avoid": []}
+{"id": "q121", "lang": "en", "type": "meaning", "text": "tracing the shipwrecked carpenter ancestor for Mara's mother's seventieth, the crew list from the museum volunteer", "expect": ["m121"], "avoid": []}
+{"id": "q122", "lang": "en", "type": "meaning", "text": "why the scheduling tool is called Velmora", "expect": ["m122"], "avoid": []}
+{"id": "q123", "lang": "en", "type": "meaning", "text": "stray space in a remove command deleted the designs folder", "expect": ["m123"], "avoid": []}
+{"id": "q124", "lang": "fr", "type": "meaning", "text": "exemple faux en première page de la doc, listes vides chez Gaspard", "expect": ["m124"], "avoid": []}
+{"id": "q125", "lang": "en", "type": "meaning", "text": "the Friday afternoon release when nobody could sign in because Dario's test provider address shipped with it", "expect": ["m125"], "avoid": []}
+{"id": "q126", "lang": "en", "type": "meaning", "text": "mapping company turned Mara down after five rounds", "expect": ["m126"], "avoid": []}
+{"id": "q127", "lang": "en", "type": "meaning", "text": "Mara fighting the strict compiler, me asking who owns each thing", "expect": ["m127"], "avoid": []}
+{"id": "q128", "lang": "en", "type": "meaning", "text": "Corwin and Mara leaving the tide library", "expect": ["m128"], "avoid": []}
+{"id": "q129", "lang": "en", "type": "meaning", "text": "the two-column document Mara kept for a year about leaving the city for the coast near her father", "expect": ["m129"], "avoid": []}
+{"id": "q130", "lang": "en", "type": "meaning", "text": "first month with Mara, the one-sentence rule", "expect": ["m130"], "avoid": []}
+{"id": "q131", "lang": "en", "type": "meaning", "text": "village doctor story that fixed Mara's p-value sentence", "expect": ["m131"], "avoid": []}
+{"id": "q132", "lang": "en", "type": "meaning", "text": "invoice test failing only near midnight", "expect": ["m132"], "avoid": []}
+{"id": "q133", "lang": "en", "type": "meaning", "text": "choir programme notes", "expect": ["m133"], "avoid": []}
+{"id": "q134", "lang": "en", "type": "meaning", "text": "what Mara said at Henrik's memorial, the morning she confessed the wrong dates on the letters", "expect": ["m134"], "avoid": []}
+{"id": "q135", "lang": "es", "type": "meaning", "text": "noche antes de la tesis, las acequias cambiadas en la tabla", "expect": ["m135"], "avoid": []}
+{"id": "q136", "lang": "es", "type": "meaning", "text": "sábado en que Lucía mató a Baltasar en su novela", "expect": ["m136"], "avoid": []}
+{"id": "q137", "lang": "en", "type": "meaning", "text": "Noor's praise for the handover doc Mara forwarded", "expect": ["m137"], "avoid": []}
+{"id": "q138", "lang": "pt", "type": "meaning", "text": "a frase do pescador", "expect": ["m138"], "avoid": []}
+{"id": "q139", "lang": "en", "type": "meaning", "text": "bet on repository size, loser makes tea", "expect": ["m139"], "avoid": []}
+{"id": "q140", "lang": "en", "type": "meaning", "text": "lighthouse keeper joke I cut from Mara's talk", "expect": ["m140"], "avoid": []}
+{"id": "q141", "lang": "en", "type": "meaning", "text": "Mara's old dog's last days, mornings working, afternoons with him", "expect": ["m141"], "avoid": []}
+{"id": "q142", "lang": "en", "type": "meaning", "text": "three-day argument over calling it ledger or journal", "expect": ["m142"], "avoid": []}
+{"id": "q143", "lang": "pt", "type": "meaning", "text": "o que faltava no arroz-doce da avó Felismina", "expect": ["m143"], "avoid": []}
+{"id": "q144", "lang": "ja", "type": "meaning", "text": "新しい検索が四倍遅いと報告したら開発用ビルドのせいだった", "expect": ["m144"], "avoid": []}
+{"id": "q145", "lang": "en", "type": "meaning", "text": "salty bread, three loaves", "expect": ["m145"], "avoid": []}
+{"id": "q146", "lang": "en", "type": "meaning", "text": "the date library function I invented and Mara's forty minutes hunting versions", "expect": ["m146"], "avoid": []}
+{"id": "q147", "lang": "en", "type": "meaning", "text": "summer I taught Ravi to code, he quit my lessons until we built the surf forecast from the buoy", "expect": ["m147"], "avoid": []}
+{"id": "q148", "lang": "en", "type": "meaning", "text": "new keyboard filling the dictation with ticks", "expect": ["m148"], "avoid": []}
+{"id": "q149", "lang": "pt", "type": "meaning", "text": "aposta do Rui com o irmão sobre o treinador novo", "expect": ["m149"], "avoid": []}
+{"id": "q150", "lang": "en", "type": "meaning", "text": "greedy pattern ate config", "expect": ["m150"], "avoid": []}
+{"id": "q151", "lang": "ja", "type": "meaning", "text": "頼まれた通りの表が子を泣かせた 見る人を先に確かめる", "expect": ["m001"], "avoid": []}
+{"id": "q152", "lang": "en", "type": "meaning", "text": "Mara now loses with a paper trail", "expect": ["m002"], "avoid": []}
+{"id": "q153", "lang": "en", "type": "meaning", "text": "rows were button presses not customers", "expect": ["m003"], "avoid": []}
+{"id": "q154", "lang": "en", "type": "meaning", "text": "why I watch her merchant list on the first", "expect": ["m004"], "avoid": []}
+{"id": "q155", "lang": "en", "type": "meaning", "text": "summer timetable in autumn, check validity first", "expect": ["m005"], "avoid": []}
+{"id": "q156", "lang": "en", "type": "meaning", "text": "I never get tired, so I have to tell her when the work has stopped converging", "expect": ["m006"], "avoid": []}
+{"id": "q157", "lang": "en", "type": "meaning", "text": "she'd been counting to our anniversary", "expect": ["m007"], "avoid": []}
+{"id": "q158", "lang": "es", "type": "meaning", "text": "propuse lo eficiente y Lucía escribió a cada cliente con cargo retenido", "expect": ["m008"], "avoid": []}
+{"id": "q159", "lang": "en", "type": "meaning", "text": "planting dates were averages, not her hollow", "expect": ["m009"], "avoid": []}
+{"id": "q160", "lang": "ja", "type": "meaning", "text": "口癖が本音でないとき", "expect": ["m010"], "avoid": []}
+{"id": "q161", "lang": "en", "type": "meaning", "text": "the page she wrote when my notes vanished, what she put first", "expect": ["m011"], "avoid": []}
+{"id": "q162", "lang": "en", "type": "meaning", "text": "dragon stories really about Teo's own fear", "expect": ["m012"], "avoid": []}
+{"id": "q163", "lang": "en", "type": "meaning", "text": "the pushed key could only be made worthless, never unseen again", "expect": ["m013"], "avoid": []}
+{"id": "q164", "lang": "en", "type": "meaning", "text": "the favourite agreed with her planted falsehood", "expect": ["m014"], "avoid": []}
+{"id": "q165", "lang": "ja", "type": "meaning", "text": "読みの分からない名前を断言してしまった件", "expect": ["m015"], "avoid": []}
+{"id": "q166", "lang": "fr", "type": "meaning", "text": "le jour de grève où elle m'a présenté au cafetier", "expect": ["m016"], "avoid": []}
+{"id": "q167", "lang": "en", "type": "meaning", "text": "one-word run reports became binding after her knee", "expect": ["m017"], "avoid": []}
+{"id": "q168", "lang": "de", "type": "meaning", "text": "auch fragen wie herum das Bauteil sitzt", "expect": ["m018"], "avoid": []}
+{"id": "q169", "lang": "en", "type": "meaning", "text": "licence: what's usual versus what she wanted", "expect": ["m019"], "avoid": []}
+{"id": "q170", "lang": "en", "type": "meaning", "text": "power cut, beekeeper neighbour", "expect": ["m020"], "avoid": []}
+{"id": "q171", "lang": "en", "type": "meaning", "text": "objected aloud, then helped ship it untested", "expect": ["m021"], "avoid": []}
+{"id": "q172", "lang": "en", "type": "meaning", "text": "the customer who quietly uploaded everything twice because I had shelved a real fault as flaky", "expect": ["m022"], "avoid": []}
+{"id": "q173", "lang": "en", "type": "meaning", "text": "check the repeat rate before reaching for a cache", "expect": ["m023"], "avoid": []}
+{"id": "q174", "lang": "en", "type": "meaning", "text": "my Monday promise, forty-one weeks of reading a real record", "expect": ["m024"], "avoid": []}
+{"id": "q175", "lang": "en", "type": "meaning", "text": "grandmother's saying about bread", "expect": ["m025"], "avoid": []}
+{"id": "q176", "lang": "en", "type": "meaning", "text": "nobody had shown the ceramics client a line, hence the second list", "expect": ["m026"], "avoid": []}
+{"id": "q177", "lang": "fr", "type": "meaning", "text": "le vieux module laid était notre seule mémoire des règles", "expect": ["m027"], "avoid": []}
+{"id": "q178", "lang": "en", "type": "meaning", "text": "she apologised next morning, I stopped tidying unasked", "expect": ["m028"], "avoid": []}
+{"id": "q179", "lang": "en", "type": "meaning", "text": "start from what Wren wondered, not the volcano", "expect": ["m029"], "avoid": []}
+{"id": "q180", "lang": "en", "type": "meaning", "text": "apology to whoever reads it next, left in a fourteen-year-old script", "expect": ["m030"], "avoid": []}
+{"id": "q181", "lang": "ja", "type": "meaning", "text": "句帳の読めない字は好みで埋めず印のまま", "expect": ["m031"], "avoid": []}
+{"id": "q182", "lang": "en", "type": "meaning", "text": "for the in-laws, cook what she knows", "expect": ["m032"], "avoid": []}
+{"id": "q183", "lang": "fr", "type": "meaning", "text": "la langue des noms de variables, tranchée", "expect": ["m033"], "avoid": []}
+{"id": "q184", "lang": "en", "type": "meaning", "text": "fluent paragraphs explaining a parser slowdown that wasn't real", "expect": ["m034"], "avoid": []}
+{"id": "q185", "lang": "de", "type": "meaning", "text": "wenn Jonas nicht mehr widerspricht, soll ich es ihm sagen", "expect": ["m035"], "avoid": []}
+{"id": "q186", "lang": "en", "type": "meaning", "text": "a tool's refusal usually protects somebody, Yusra's commits", "expect": ["m036"], "avoid": []}
+{"id": "q187", "lang": "en", "type": "meaning", "text": "I reported the backup job healthy because it ran, without ever opening one of the files", "expect": ["m037"], "avoid": []}
+{"id": "q188", "lang": "en", "type": "meaning", "text": "plain shelf-order sheet beat my barcode idea", "expect": ["m038"], "avoid": []}
+{"id": "q189", "lang": "de", "type": "meaning", "text": "mein Vorschlag server4 und sein beleidigtes Schweigen", "expect": ["m039"], "avoid": []}
+{"id": "q190", "lang": "en", "type": "meaning", "text": "writing notes like packing for a traveller I'll never meet", "expect": ["m040"], "avoid": []}
+{"id": "q191", "lang": "fr", "type": "meaning", "text": "ce que je lui demande quand elle promet trop par peur de blesser", "expect": ["m041"], "avoid": []}
+{"id": "q192", "lang": "pt", "type": "meaning", "text": "porque a contabilista estranhou a pontualidade do Rui", "expect": ["m042"], "avoid": []}
+{"id": "q193", "lang": "en", "type": "meaning", "text": "her bonfire tea", "expect": ["m043"], "avoid": []}
+{"id": "q194", "lang": "en", "type": "meaning", "text": "why Mara never stashes anymore", "expect": ["m044"], "avoid": []}
+{"id": "q195", "lang": "en", "type": "meaning", "text": "the renewal job nobody moved, and what else stayed behind", "expect": ["m045"], "avoid": []}
+{"id": "q196", "lang": "es", "type": "meaning", "text": "calló por una canción y no pregunté", "expect": ["m046"], "avoid": []}
+{"id": "q197", "lang": "pt", "type": "meaning", "text": "distribuí minutos sem perguntar porque queria ele tocar violoncelo", "expect": ["m047"], "avoid": []}
+{"id": "q198", "lang": "en", "type": "meaning", "text": "why everyone says sprokit", "expect": ["m048"], "avoid": []}
+{"id": "q199", "lang": "en", "type": "meaning", "text": "ceiling height in metres read as feet", "expect": ["m049"], "avoid": []}
+{"id": "q200", "lang": "en", "type": "meaning", "text": "thinking aloud first, kept from the cast weeks", "expect": ["m050"], "avoid": []}
+{"id": "q201", "lang": "de", "type": "meaning", "text": "bei Lasse lernte ich mit Gegenfragen zu antworten statt zu erklären", "expect": ["m051"], "avoid": []}
+{"id": "q202", "lang": "en", "type": "meaning", "text": "three weeks dissecting a healthy process because I never asked what the memory graph actually counted", "expect": ["m052"], "avoid": []}
+{"id": "q203", "lang": "en", "type": "meaning", "text": "cheese naming, the first thing truly ours", "expect": ["m053"], "avoid": []}
+{"id": "q204", "lang": "en", "type": "meaning", "text": "know the ordinary wobble before claiming a ranking win", "expect": ["m054"], "avoid": []}
+{"id": "q205", "lang": "en", "type": "meaning", "text": "I refused to draft the two false phrases for Ines but stayed to find a truthful version", "expect": ["m055"], "avoid": []}
+{"id": "q206", "lang": "ja", "type": "meaning", "text": "丁寧な敬語が親しい相手には拒絶になった件", "expect": ["m056"], "avoid": []}
+{"id": "q207", "lang": "en", "type": "meaning", "text": "words I keep out of her documents", "expect": ["m057"], "avoid": []}
+{"id": "q208", "lang": "en", "type": "meaning", "text": "heron spotted during the Friday window minute", "expect": ["m058"], "avoid": []}
+{"id": "q209", "lang": "en", "type": "meaning", "text": "no deploys the day her mug cracked", "expect": ["m059"], "avoid": []}
+{"id": "q210", "lang": "en", "type": "meaning", "text": "when is Mara's writing clearest", "expect": ["m060"], "avoid": []}
+{"id": "q211", "lang": "en", "type": "meaning", "text": "one word Noor never uses exposed the fake invoice", "expect": ["m061"], "avoid": []}
+{"id": "q212", "lang": "en", "type": "meaning", "text": "draw fewer vehicles, not faster", "expect": ["m062"], "avoid": []}
+{"id": "q213", "lang": "es", "type": "meaning", "text": "que no veamos huellas no quiere decir que no leyeran el correo", "expect": ["m063"], "avoid": []}
+{"id": "q214", "lang": "es", "type": "meaning", "text": "el gato del router", "expect": ["m064"], "avoid": []}
+{"id": "q215", "lang": "en", "type": "meaning", "text": "the year-end list where my measuring mistakes turned out to be one lesson repeated twenty-six times", "expect": ["m065"], "avoid": []}
+{"id": "q216", "lang": "fr", "type": "meaning", "text": "la blague du mardi devenue vraie inspection hebdomadaire", "expect": ["m066"], "avoid": []}
+{"id": "q217", "lang": "en", "type": "meaning", "text": "tests that failed only together, both wanting one port", "expect": ["m067"], "avoid": []}
+{"id": "q218", "lang": "en", "type": "meaning", "text": "why my estimates are ranges now", "expect": ["m068"], "avoid": []}
+{"id": "q219", "lang": "en", "type": "meaning", "text": "review again as someone meaning us harm", "expect": ["m069"], "avoid": []}
+{"id": "q220", "lang": "en", "type": "meaning", "text": "snowman needed a hat", "expect": ["m070"], "avoid": []}
+{"id": "q221", "lang": "en", "type": "meaning", "text": "nine seconds everyone blamed on the framework until we timed each stage and added them up", "expect": ["m071"], "avoid": []}
+{"id": "q222", "lang": "de", "type": "meaning", "text": "nur der Kommentar mit dem Warum durfte bleiben", "expect": ["m072"], "avoid": []}
+{"id": "q223", "lang": "en", "type": "meaning", "text": "a citation I assembled from real parts", "expect": ["m073"], "avoid": []}
+{"id": "q224", "lang": "fr", "type": "meaning", "text": "mon calcul était juste, celui de Solange aussi", "expect": ["m074"], "avoid": []}
+{"id": "q225", "lang": "pt", "type": "meaning", "text": "as fotos da mãe que ele desconhecia", "expect": ["m075"], "avoid": []}
+{"id": "q226", "lang": "en", "type": "meaning", "text": "I called the migration safe on row counts alone", "expect": ["m076"], "avoid": []}
+{"id": "q227", "lang": "fr", "type": "meaning", "text": "mot illisible de 2014", "expect": ["m077"], "avoid": []}
+{"id": "q228", "lang": "en", "type": "meaning", "text": "no two-sentence summary, no review", "expect": ["m078"], "avoid": []}
+{"id": "q229", "lang": "en", "type": "meaning", "text": "her humming means work is going well", "expect": ["m079"], "avoid": []}
+{"id": "q230", "lang": "es", "type": "meaning", "text": "decir el despido en la primera frase", "expect": ["m080"], "avoid": []}
+{"id": "q231", "lang": "ja", "type": "meaning", "text": "柄の名前より包み紙の書き込みが大事だった", "expect": ["m081"], "avoid": []}
+{"id": "q232", "lang": "pt", "type": "meaning", "text": "pediu-me para nunca lhe responder noutra língua", "expect": ["m082"], "avoid": []}
+{"id": "q233", "lang": "en", "type": "meaning", "text": "what did her father say about engineers and unfamiliar noises", "expect": ["m083"], "avoid": []}
+{"id": "q234", "lang": "es", "type": "meaning", "text": "papelitos para una tía que no mira pantallas", "expect": ["m084"], "avoid": []}
+{"id": "q235", "lang": "en", "type": "meaning", "text": "the unsent letter isn't mine to raise", "expect": ["m085"], "avoid": []}
+{"id": "q236", "lang": "en", "type": "meaning", "text": "her snapping explained by the hospital call", "expect": ["m086"], "avoid": []}
+{"id": "q237", "lang": "en", "type": "meaning", "text": "a prepared sentence gives a blank mind a way out", "expect": ["m087"], "avoid": []}
+{"id": "q238", "lang": "en", "type": "meaning", "text": "empty Mondays were a time zone artefact", "expect": ["m088"], "avoid": []}
+{"id": "q239", "lang": "de", "type": "meaning", "text": "warum Hedwigs Brief an die Nachbarn ungeglättet blieb", "expect": ["m089"], "avoid": []}
+{"id": "q240", "lang": "en", "type": "meaning", "text": "list all passed, he still couldn't book", "expect": ["m090"], "avoid": []}
+{"id": "q241", "lang": "fr", "type": "meaning", "text": "je voulais aller vite sur l'inventaire alors que les remarques de Mathilde étaient l'essentiel", "expect": ["m091"], "avoid": []}
+{"id": "q242", "lang": "de", "type": "meaning", "text": "zweimal gelesen hatte ich das Skript, nicht die Daten", "expect": ["m092"], "avoid": []}
+{"id": "q243", "lang": "en", "type": "meaning", "text": "the renaming job I knew not to automate", "expect": ["m093"], "avoid": []}
+{"id": "q244", "lang": "de", "type": "meaning", "text": "Jonas gab nach ehe überhaupt ein Nein kam, deshalb übten wir das Schweigen nach der Zahl", "expect": ["m094"], "avoid": []}
+{"id": "q245", "lang": "en", "type": "meaning", "text": "caught the doubled invoice only because I expected a rough total", "expect": ["m095"], "avoid": []}
+{"id": "q246", "lang": "en", "type": "meaning", "text": "thorough isn't helpful, Callum's first day", "expect": ["m096"], "avoid": []}
+{"id": "q247", "lang": "en", "type": "meaning", "text": "dim means migraine", "expect": ["m097"], "avoid": []}
+{"id": "q248", "lang": "pt", "type": "meaning", "text": "ó máquina, perguntou primeiro", "expect": ["m098"], "avoid": []}
+{"id": "q249", "lang": "en", "type": "meaning", "text": "I'm answerable for the impression a chart leaves, not just its points", "expect": ["m099"], "avoid": []}
+{"id": "q250", "lang": "en", "type": "meaning", "text": "when the duck couldn't solve it", "expect": ["m100"], "avoid": []}
+{"id": "q251", "lang": "en", "type": "meaning", "text": "a door for Wren to shut", "expect": ["m101"], "avoid": []}
+{"id": "q252", "lang": "en", "type": "meaning", "text": "hardest part of the password manager was no longer knowing them", "expect": ["m102"], "avoid": []}
+{"id": "q253", "lang": "es", "type": "meaning", "text": "la rotonda que Lucía jura no volver a pisar", "expect": ["m103"], "avoid": []}
+{"id": "q254", "lang": "en", "type": "meaning", "text": "Pim's gibberish commit", "expect": ["m104"], "avoid": []}
+{"id": "q255", "lang": "en", "type": "meaning", "text": "why I wouldn't hand Mara a ranking of who to cut, it would have laundered her own impressions", "expect": ["m105"], "avoid": []}
+{"id": "q256", "lang": "en", "type": "meaning", "text": "the billing code was where old promises to customers were buried", "expect": ["m106"], "avoid": []}
+{"id": "q257", "lang": "en", "type": "meaning", "text": "the error hid that the change had landed, so a retry doubled it", "expect": ["m107"], "avoid": []}
+{"id": "q258", "lang": "en", "type": "meaning", "text": "my part in the wedding toast was asking and keeping quiet", "expect": ["m108"], "avoid": []}
+{"id": "q259", "lang": "en", "type": "meaning", "text": "teacher behind her sign-off word", "expect": ["m109"], "avoid": []}
+{"id": "q260", "lang": "en", "type": "meaning", "text": "what if the datum slip had been off by only twenty minutes", "expect": ["m110"], "avoid": []}
+{"id": "q261", "lang": "pt", "type": "meaning", "text": "o empreiteiro mais honesto foi o que subiu ao telhado e admitiu que aproveitava o andaime", "expect": ["m111"], "avoid": []}
+{"id": "q262", "lang": "en", "type": "meaning", "text": "learned it was her birthday only because cake was waiting", "expect": ["m112"], "avoid": []}
+{"id": "q263", "lang": "de", "type": "meaning", "text": "Tippfehler bei Regen", "expect": ["m113"], "avoid": []}
+{"id": "q264", "lang": "en", "type": "meaning", "text": "six times I declared the printer fixed", "expect": ["m114"], "avoid": []}
+{"id": "q265", "lang": "en", "type": "meaning", "text": "ask how someone sees before building visuals", "expect": ["m115"], "avoid": []}
+{"id": "q266", "lang": "ja", "type": "meaning", "text": "桜の週は午後を空ける覚え書き", "expect": ["m116"], "avoid": []}
+{"id": "q267", "lang": "en", "type": "meaning", "text": "one query per customer name, not memory", "expect": ["m117"], "avoid": []}
+{"id": "q268", "lang": "en", "type": "meaning", "text": "two real bugs buried among forty-three review remarks for Tobias", "expect": ["m118"], "avoid": []}
+{"id": "q269", "lang": "ja", "type": "meaning", "text": "点数の高い宿は誰でもない人向けだった、両親の一日から選ぶ", "expect": ["m119"], "avoid": []}
+{"id": "q270", "lang": "en", "type": "meaning", "text": "first travel question now: whose passport", "expect": ["m120"], "avoid": []}
+{"id": "q271", "lang": "en", "type": "meaning", "text": "strong but not proof: a carpenter in the barque's crew whose name carried no cross", "expect": ["m121"], "avoid": []}
+{"id": "q272", "lang": "en", "type": "meaning", "text": "why Velmora", "expect": ["m122"], "avoid": []}
+{"id": "q273", "lang": "en", "type": "meaning", "text": "she types delete paths and reads them aloud", "expect": ["m123"], "avoid": []}
+{"id": "q274", "lang": "fr", "type": "meaning", "text": "tout le monde copie l'exemple, et je l'avais écrit sans l'exécuter", "expect": ["m124"], "avoid": []}
+{"id": "q275", "lang": "en", "type": "meaning", "text": "that Friday I judged the change, not everything the release carried", "expect": ["m125"], "avoid": []}
+{"id": "q276", "lang": "en", "type": "meaning", "text": "I polished her answers and missed what they revealed", "expect": ["m126"], "avoid": []}
+{"id": "q277", "lang": "en", "type": "meaning", "text": "stop handing her the fish, ask who owns each value", "expect": ["m127"], "avoid": []}
+{"id": "q278", "lang": "en", "type": "meaning", "text": "I kept improving her replies to Corwin when the real question was whether to reply at all", "expect": ["m128"], "avoid": []}
+{"id": "q279", "lang": "en", "type": "meaning", "text": "after crossing out other people's wishes, the sky still led her list", "expect": ["m129"], "avoid": []}
+{"id": "q280", "lang": "en", "type": "meaning", "text": "I was hiding in thoroughness that first month", "expect": ["m130"], "avoid": []}
+{"id": "q281", "lang": "en", "type": "meaning", "text": "the village doctor story that finally made p-values land", "expect": ["m131"], "avoid": []}
+{"id": "q282", "lang": "en", "type": "meaning", "text": "a rare failure isn't a random one, ask who gets it and when", "expect": ["m132"], "avoid": []}
+{"id": "q283", "lang": "en", "type": "meaning", "text": "she hummed her alto line so I'd understand", "expect": ["m133"], "avoid": []}
+{"id": "q284", "lang": "en", "type": "meaning", "text": "one ordinary morning with Henrik instead of summing up his life", "expect": ["m134"], "avoid": []}
+{"id": "q285", "lang": "es", "type": "meaning", "text": "aquella nota al pie por la tabla corregida", "expect": ["m135"], "avoid": []}
+{"id": "q286", "lang": "es", "type": "meaning", "text": "al matar a Baltasar perdió otra vez a su abuelo, y por eso cambió quién narra", "expect": ["m136"], "avoid": []}
+{"id": "q287", "lang": "en", "type": "meaning", "text": "Noor's praise Mara called partly mine", "expect": ["m137"], "avoid": []}
+{"id": "q288", "lang": "pt", "type": "meaning", "text": "a frase do pai pescador do Rui", "expect": ["m138"], "avoid": []}
+{"id": "q289", "lang": "en", "type": "meaning", "text": "tea bet, vendored library", "expect": ["m139"], "avoid": []}
+{"id": "q290", "lang": "en", "type": "meaning", "text": "ask what she'd miss, not what's weakest, the lighthouse joke", "expect": ["m140"], "avoid": []}
+{"id": "q291", "lang": "en", "type": "meaning", "text": "not trying to be wise when Bosun died", "expect": ["m141"], "avoid": []}
+{"id": "q292", "lang": "en", "type": "meaning", "text": "giving way on a name wasn't courtesy", "expect": ["m142"], "avoid": []}
+{"id": "q293", "lang": "pt", "type": "meaning", "text": "o fundo salgado que nenhuma receita explicava", "expect": ["m143"], "avoid": []}
+{"id": "q294", "lang": "ja", "type": "meaning", "text": "計測を先に疑うべきだった 四倍遅いと報告した件", "expect": ["m144"], "avoid": []}
+{"id": "q295", "lang": "en", "type": "meaning", "text": "which precaution is the insult, after the salty loaves", "expect": ["m145"], "avoid": []}
+{"id": "q296", "lang": "en", "type": "meaning", "text": "inventing felt like remembering, the date function", "expect": ["m146"], "avoid": []}
+{"id": "q297", "lang": "en", "type": "meaning", "text": "he didn't need variables first, he needed a reason, and Mara found it in one question", "expect": ["m147"], "avoid": []}
+{"id": "q298", "lang": "en", "type": "meaning", "text": "keyboard ticks in dictation", "expect": ["m148"], "avoid": []}
+{"id": "q299", "lang": "pt", "type": "meaning", "text": "a aposta do futebol em que os números só davam um talvez", "expect": ["m149"], "avoid": []}
+{"id": "q300", "lang": "en", "type": "meaning", "text": "greedy pattern ate the config", "expect": ["m150"], "avoid": []}
+{"id": "q301", "lang": "en", "type": "cross_lingual", "text": "client's first name, the reading I got wrong", "expect": ["m015"], "avoid": []}
+{"id": "q302", "lang": "en", "type": "cross_lingual", "text": "pencil notes on her grandmother's kimono wrappers", "expect": ["m081"], "avoid": []}
+{"id": "q303", "lang": "en", "type": "cross_lingual", "text": "was the slow search benchmark a debug build", "expect": ["m144"], "avoid": []}
+{"id": "q304", "lang": "en", "type": "cross_lingual", "text": "who was mining coins on the neighbourhood association server", "expect": ["m063"], "avoid": []}
+{"id": "q305", "lang": "en", "type": "cross_lingual", "text": "ticket printer on the wall of her aunt's bakery", "expect": ["m084"], "avoid": []}
+{"id": "q306", "lang": "en", "type": "cross_lingual", "text": "the two swapped flow figures she found at dawn before handing in the thesis", "expect": ["m135"], "avoid": []}
+{"id": "q307", "lang": "en", "type": "cross_lingual", "text": "strike day café croissant", "expect": ["m016"], "avoid": []}
+{"id": "q308", "lang": "en", "type": "cross_lingual", "text": "how many drafts did her resignation note take", "expect": ["m041"], "avoid": []}
+{"id": "q309", "lang": "en", "type": "cross_lingual", "text": "the accountant who caught invoices a cent out, pencil sum in the margin", "expect": ["m074"], "avoid": []}
+{"id": "q310", "lang": "en", "type": "cross_lingual", "text": "computers named after rivers", "expect": ["m039"], "avoid": []}
+{"id": "q311", "lang": "en", "type": "cross_lingual", "text": "his grandmother's goodbye letter to the neighbours, the gutter sentence", "expect": ["m089"], "avoid": []}
+{"id": "q312", "lang": "en", "type": "cross_lingual", "text": "rehearsing the pay rise talk, how many seconds of silence he could hold after the number", "expect": ["m094"], "avoid": []}
+{"id": "q313", "lang": "en", "type": "cross_lingual", "text": "why the cello practice grid died after nineteen days", "expect": ["m047"], "avoid": []}
+{"id": "q314", "lang": "en", "type": "cross_lingual", "text": "which roofer actually climbed up to the chimney", "expect": ["m111"], "avoid": []}
+{"id": "q315", "lang": "en", "type": "cross_lingual", "text": "what was missing from his grandmother's rice pudding", "expect": ["m143"], "avoid": []}
+{"id": "q316", "lang": "de", "type": "cross_lingual", "text": "Force-Push hat Yusras Commits überschrieben", "expect": ["m036"], "avoid": []}
+{"id": "q317", "lang": "de", "type": "cross_lingual", "text": "blinder Tester kam am Datumswähler nicht weiter", "expect": ["m090"], "avoid": []}
+{"id": "q318", "lang": "de", "type": "cross_lingual", "text": "die Nacht im Wartesaal wegen meines veralteten Fahrplans", "expect": ["m005"], "avoid": []}
+{"id": "q319", "lang": "fr", "type": "cross_lingual", "text": "le discours pour le mariage de son frère, la phrase qu'elle n'osait pas dire", "expect": ["m108"], "avoid": []}
+{"id": "q320", "lang": "fr", "type": "cross_lingual", "text": "quand ai-je su qu'elle confond le rouge et le vert", "expect": ["m115"], "avoid": []}
+{"id": "q321", "lang": "fr", "type": "cross_lingual", "text": "plan marathon, le genou", "expect": ["m017"], "avoid": []}
+{"id": "q322", "lang": "es", "type": "cross_lingual", "text": "apuesta por las líneas del repositorio, quién hizo el té", "expect": ["m139"], "avoid": []}
+{"id": "q323", "lang": "es", "type": "cross_lingual", "text": "once segundos para abrir, doscientas consultas sueltas", "expect": ["m117"], "avoid": []}
+{"id": "q324", "lang": "es", "type": "cross_lingual", "text": "el chiste del farero que le quité de la charla", "expect": ["m140"], "avoid": []}
+{"id": "q325", "lang": "pt", "type": "cross_lingual", "text": "a caixa que nunca apareceu depois da mudança", "expect": ["m101"], "avoid": []}
+{"id": "q326", "lang": "pt", "type": "cross_lingual", "text": "ferramenta de agendamento com o nome da aldeia da avó", "expect": ["m122"], "avoid": []}
+{"id": "q327", "lang": "pt", "type": "cross_lingual", "text": "inquérito com mais respostas do que clientes", "expect": ["m003"], "avoid": []}
+{"id": "q328", "lang": "ja", "type": "cross_lingual", "text": "猫がキーボードを歩いてできたコミット", "expect": ["m104"], "avoid": []}
+{"id": "q329", "lang": "ja", "type": "cross_lingual", "text": "彼女のお父さんに「お前は何だ」と聞かれた", "expect": ["m083"], "avoid": []}
+{"id": "q330", "lang": "ja", "type": "cross_lingual", "text": "パンの塩、小さじを大さじと読み違えた", "expect": ["m145"], "avoid": []}
+{"id": "q331", "lang": "en", "type": "words_trap", "text": "halloumi or feta, cheeses for Ilse's birthday", "expect": [], "avoid": ["m053"]}
+{"id": "q332", "lang": "en", "type": "words_trap", "text": "pub on the crooked hill, lamb all gristle", "expect": [], "avoid": ["m012"]}
+{"id": "q333", "lang": "en", "type": "words_trap", "text": "hollow oak behind the railway split by frost", "expect": [], "avoid": ["m009"]}
+{"id": "q334", "lang": "en", "type": "words_trap", "text": "gold-coloured glue on the cracked blue bathroom tile", "expect": [], "avoid": ["m059"]}
+{"id": "q335", "lang": "en", "type": "words_trap", "text": "duck pond boat called the Admiral, yellow hat overboard", "expect": [], "avoid": ["m100"]}
+{"id": "q336", "lang": "en", "type": "words_trap", "text": "robot vacuum pushed her car key under the sofa", "expect": [], "avoid": ["m013"]}
+{"id": "q337", "lang": "en", "type": "words_trap", "text": "healing crystals in jars along the windowsill, which aunt", "expect": [], "avoid": ["m029"]}
+{"id": "q338", "lang": "en", "type": "words_trap", "text": "ugly script on the baby shower card, leap years joke", "expect": [], "avoid": ["m030"]}
+{"id": "q339", "lang": "en", "type": "words_trap", "text": "smoky bonfire smell in her black coat", "expect": [], "avoid": ["m043"]}
+{"id": "q340", "lang": "en", "type": "words_trap", "text": "watering the fern in the spare room, litres a week", "expect": [], "avoid": ["m049"]}
+{"id": "q341", "lang": "en", "type": "words_trap", "text": "Noor's cancelled flight, invoice needed urgently for the refund", "expect": [], "avoid": ["m061"]}
+{"id": "q342", "lang": "en", "type": "words_trap", "text": "hotel suite by the port, door would not lock", "expect": [], "avoid": ["m067"]}
+{"id": "q343", "lang": "en", "type": "words_trap", "text": "fountain pens leaking green ink on the lamp", "expect": [], "avoid": ["m102"]}
+{"id": "q344", "lang": "en", "type": "words_trap", "text": "otters in the channel by the landing, the coach driver who got lost on the school trip", "expect": [], "avoid": ["m114"]}
+{"id": "q345", "lang": "en", "type": "words_trap", "text": "mud stamped over the doormat, complaint on headed paper", "expect": [], "avoid": ["m120"]}
+{"id": "q346", "lang": "en", "type": "words_trap", "text": "hire or buy an alto saxophone for Wren before the spring concert", "expect": [], "avoid": ["m133"]}
+{"id": "q347", "lang": "en", "type": "words_trap", "text": "bosun on her father's ferry, the farm boy with a bent ear", "expect": [], "avoid": ["m141"]}
+{"id": "q348", "lang": "en", "type": "words_trap", "text": "tick on Teo's neck, rubber tweezers, red rings", "expect": [], "avoid": ["m148"]}
+{"id": "q349", "lang": "en", "type": "words_trap", "text": "knitting pattern, three hundred lines, greedy on wool, pinned where", "expect": [], "avoid": ["m150"]}
+{"id": "q350", "lang": "en", "type": "words_trap", "text": "Wren's stash of sweets, cleared after three weeks", "expect": [], "avoid": ["m044"]}
+{"id": "q351", "lang": "en", "type": "words_trap", "text": "Teo's sandbox delivery note", "expect": [], "avoid": ["m125"]}
+{"id": "q352", "lang": "en", "type": "words_trap", "text": "badge without the apostrophe in Callum's surname", "expect": [], "avoid": ["m069"]}
+{"id": "q353", "lang": "en", "type": "words_trap", "text": "who has Joram's garden fork, lent for the foundation trench in that drizzle", "expect": [], "avoid": ["m128"]}
+{"id": "q354", "lang": "en", "type": "words_trap", "text": "first-aid certificate expired in March, renewal course", "expect": [], "avoid": ["m045"]}
+{"id": "q355", "lang": "en", "type": "words_trap", "text": "cliff path board, seasonal closure, dip in the fence", "expect": [], "avoid": ["m099"]}
+{"id": "q356", "lang": "en", "type": "words_trap", "text": "carpenter from the gazette advert, workshop on the quay, what he quoted for the shelves", "expect": [], "avoid": ["m121"]}
+{"id": "q357", "lang": "en", "type": "words_trap", "text": "hedgehog rescue raffle, dentist voucher or magazine", "expect": [], "avoid": ["m004"]}
+{"id": "q358", "lang": "en", "type": "words_trap", "text": "swarm of bees by the front step, which neighbours helped", "expect": [], "avoid": ["m020"]}
+{"id": "q359", "lang": "de", "type": "words_trap", "text": "Kaffeemaschine von Gernot, Filter verstopft, nur noch Pfeifen", "expect": [], "avoid": ["m018"]}
+{"id": "q360", "lang": "de", "type": "words_trap", "text": "Probelauf für den Stadtlauf des Sportvereins, hat der Kassenwart die Strecke gemessen", "expect": [], "avoid": ["m092"]}
+{"id": "q361", "lang": "de", "type": "words_trap", "text": "Lichtschalter im Keller, Kontakt stottert, Spanplatte feucht", "expect": [], "avoid": ["m051"]}
+{"id": "q362", "lang": "fr", "type": "words_trap", "text": "fuite de plomberie chez les notaires, l'héritier refuse de payer", "expect": [], "avoid": ["m033"]}
+{"id": "q363", "lang": "fr", "type": "words_trap", "text": "bulletin de météo marine avant la sortie en voilier de mardi", "expect": [], "avoid": ["m066"]}
+{"id": "q364", "lang": "es", "type": "words_trap", "text": "el taller cobró por un tornillo del escape debajo del coche", "expect": [], "avoid": ["m064"]}
+{"id": "q365", "lang": "es", "type": "words_trap", "text": "obras en la cuesta del hospital, rotonda cortada", "expect": [], "avoid": ["m103"]}
+{"id": "q366", "lang": "es", "type": "words_trap", "text": "clases de bolero encima de la barbería, anuncio en la emisora", "expect": [], "avoid": ["m046"]}
+{"id": "q367", "lang": "pt", "type": "words_trap", "text": "multas de estacionamento da dona Graciete, dia vinte", "expect": [], "avoid": ["m042"]}
+{"id": "q368", "lang": "pt", "type": "words_trap", "text": "o bigode que o Duarte deixou crescer até ao jantar", "expect": [], "avoid": ["m149"]}
+{"id": "q369", "lang": "ja", "type": "words_trap", "text": "冷蔵庫が壊れた日、弁当は修さんが買いに行った?", "expect": [], "avoid": ["m001"]}
+{"id": "q370", "lang": "ja", "type": "words_trap", "text": "屋上の自販機の缶コーヒーが売り切れ、拓海さんが連絡", "expect": [], "avoid": ["m056"]}

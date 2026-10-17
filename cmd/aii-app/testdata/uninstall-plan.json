@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "plan": true,
+  "steps": ["stop and unregister identity-0 (Vega); its data stays", "unregister identity-4 (not yet born); its data stays", "stop and unregister the machine service"],
+  "identities": [
+    {"slot": "identity-0", "path": "/Users/example/.aii/identity-0", "real_path": "/Users/example/.aii/identity-0", "name": "Vega", "registered": true, "running": true},
+    {"slot": "identity-4", "path": "/Users/example/.aii/identity-4", "real_path": "/srv/archive/slot", "registered": true, "running": false}
+  ],
+  "done": [],
+  "stays": [],
+  "freed_bytes": 3221225472,
+  "a_member_a_later_build_adds": "ignored"
+}

@@ -1,0 +1,56 @@
+{
+  "suite": "method",
+  "method": "rpc.cancel",
+  "description": "Cooperative cancel of an in-flight invoke.call by its work_done_token; capability-gated; unknown token is an idempotent accepted:false RESULT, not an error",
+  "source": "BBB v2 method contract",
+  "checked_by": "framing round-trip now; cancel semantics land with the Go host RPC layer",
+  "vectors": [
+    {
+      "name": "request",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "cite": "BBB v2 method contract"
+    },
+    {
+      "name": "response_accepted",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"result\":{\"accepted\":true}}",
+      "note": "sets cancel_requested; the invoke.call then completes with the cancelled result shape (method_invoke_call.json response_cancelled_as_result)",
+      "cite": "BBB v2 method contract"
+    },
+    {
+      "name": "response_unknown_token",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"result\":{\"accepted\":false,\"reasonCode\":\"TOKEN_UNKNOWN\"}}",
+      "note": "idempotent failure as a result per ADR-030 Decision 3 (comment rpc.c:3226-3228); camelCase reasonCode at result level",
+      "cite": "BBB v2 method contract"
+    },
+    {
+      "name": "response_capability_not_negotiated",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"error\":{\"code\":-32601,\"message\":\"UNSUPPORTED_CAPABILITY: rpc.cancel\"}}",
+      "note": "gated methods answer -32601 with this message form when the capability was not negotiated at connect",
+      "cite": "BBB v2 method contract"
+    },
+    {
+      "name": "invalid_token_missing",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"5\",\"method\":\"rpc.cancel\",\"params\":{}}",
+      "expect": {
+        "code": -32602,
+        "message": "work_done_token (string) required"
+      },
+      "cite": "BBB v2 method contract"
+    }
+  ]
+}

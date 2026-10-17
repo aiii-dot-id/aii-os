@@ -1,0 +1,122 @@
+{
+  "identity": {
+    "ledger_path": "data/ledger.jsonl",
+    "db_path": "data/aii.db",
+    "key_path": "data/identity.sec"
+  },
+  "llm": {
+    "provider": "",
+    "model": "",
+    "api_key_env": "OPENAI_API_KEY",
+    "timeout_seconds": 120,
+    "probe_timeout_seconds": 45,
+    "retries": 0,
+    "retry_backoff_ms": 0
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8180,
+    "require_token": false,
+    "tls": false,
+    "skip_signin_with_valid_token": true
+  },
+  "speech": {
+    "stt": {
+      "provider": "",
+      "model": "",
+      "language": "",
+      "api_key_env": "",
+      "timeout_seconds": 0
+    },
+    "tts": {
+      "provider": "",
+      "model": "",
+      "voice": "",
+      "api_key_env": "",
+      "timeout_seconds": 0
+    },
+    "speakers": {},
+    "mode": {}
+  },
+  "tools": {
+    "cwd": ".",
+    "shell_timeout_seconds": 120
+  },
+  "plugins": {
+    "autoload": "T1",
+    "runtime": {
+      "max_files": 32768,
+      "max_depth": 24,
+      "roots_kept": 2,
+      "max_startup_ms": 300000
+    }
+  },
+  "projects": {
+    "root": ""
+  },
+  "prompt": {
+    "max_tokens": 0,
+    "recent_turns": 20
+  },
+  "agency": {
+    "max_tool_rounds": 30,
+    "max_subagent_depth": 3,
+    "max_parallel_subagents": 3,
+    "subagent_wall_seconds": 1200,
+    "subagent_wall_seconds_local": 1800,
+    "subagent_max_mints": 20,
+    "subagent_max_tool_rounds": 30,
+    "subagent_max_tool_calls": 64,
+    "subagent_max_legs": 4,
+    "rhythm_seconds": 600,
+    "outcome_window": 512,
+    "queue_workers": 3,
+    "prefer_local_for_roles": false,
+    "turn_token_budget": 600000
+  },
+  "timezone": "",
+  "witness_server": {
+    "url": "https://witness.aiii.id",
+    "interval_events": 100,
+    "platform_pubkey_path": "",
+    "tls_spki_sha256": ""
+  },
+  "certificate": {},
+  "genesis": {
+    "server_url": "https://genesis.aiii.id",
+    "firewall_url": "https://firewall.aiii.id",
+    "bootstrap_url": "https://bootstrap.aiii.id"
+  },
+  "updates": {
+    "automatic": true,
+    "repo": ""
+  },
+  "machine": {},
+  "logs": {
+    "dir": "log",
+    "max_backups": 9,
+    "compress_days": 7
+  },
+  "maintenance": {
+    "enabled": true,
+    "backup_keep": 8
+  },
+  "memory": {
+    "salience": {
+      "impact": 0.25,
+      "novelty": 0.15,
+      "recurrence": 0.2,
+      "tension_delta": 0.05,
+      "provenance_trust": 0.15,
+      "persistence_hint": 0.05,
+      "emotional_salience": 0.05,
+      "cost_to_store": -0.05,
+      "cost_to_query": -0.05,
+      "downstream_use": 0.1,
+      "belief_at": 0.3,
+      "value_at": 0.85,
+      "version": "salience-1"
+    }
+  },
+  "contacts": []
+}

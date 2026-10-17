@@ -1,0 +1,141 @@
+{
+  "suite": "envelope",
+  "description": "JSON-RPC 2.0 envelope as BBB uses it: jsonrpc exactly \"2.0\"; requester-chosen id echoed verbatim; exactly one of result/error; notifications have no id and exist daemon-to-plugin only",
+  "source": "BBB v2 envelope contract",
+  "checked_by": "BBB v2 envelope contract",
+  "vectors": [
+    {
+      "name": "request_string_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"progress.\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "request_numeric_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"observe.subscribe\",\"params\":{\"subscription_id\":\"sub-1\",\"topic\":\"progress.\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "request_daemon_to_plugin_string_id",
+      "kind": "request",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"svc-1\",\"method\":\"plugin.invoke\",\"params\":{\"operation_id\":\"echo.call\",\"interface\":\"tool_bridge@1\",\"method\":\"echo.call\",\"arguments\":{}}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "response_result_echoes_string_id",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"accepted\":true,\"subscription_id\":\"sub-1\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "response_result_echoes_numeric_id",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"accepted\":true,\"subscription_id\":\"sub-1\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "response_error_plain",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32601,\"message\":\"method not found\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "response_error_with_reason_data",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"3\",\"error\":{\"code\":-32000,\"message\":\"Capability scope does not admit the requested operation\",\"data\":{\"reasonCode\":\"OPERATION_SCOPE_MISMATCH\",\"denied_at\":\"capability\"}}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "response_parse_error_id_null",
+      "kind": "response",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"JSON parse error\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "notification_no_id",
+      "kind": "notification",
+      "direction": "daemon_to_plugin",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"observe.event\",\"params\":{\"topic\":\"progress.step\",\"payload\":{\"pct\":50}}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "invalid_wrong_jsonrpc_version",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"1.0\",\"id\":\"1\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "expect": {
+        "code": -32600,
+        "message": "invalid JSON-RPC 2.0 request"
+      },
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "invalid_missing_jsonrpc",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"id\":\"1\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "expect": {
+        "code": -32600,
+        "message": "invalid JSON-RPC 2.0 request"
+      },
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "invalid_method_not_a_string",
+      "kind": "invalid",
+      "direction": "plugin_to_daemon",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":42,\"params\":{}}",
+      "expect": {
+        "code": -32600,
+        "message": "invalid JSON-RPC 2.0 request"
+      },
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "invalid_response_with_both_result_and_error",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{},\"error\":{\"code\":-32603,\"message\":\"x\"}}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "invalid_response_with_neither_result_nor_error",
+      "kind": "invalid",
+      "direction": "daemon_to_plugin",
+      "judgement": "invalid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"id\":\"1\"}",
+      "cite": "BBB v2 envelope contract"
+    },
+    {
+      "name": "request_without_id_is_answered_with_null_id",
+      "kind": "request",
+      "direction": "plugin_to_daemon",
+      "judgement": "valid",
+      "payload_utf8": "{\"jsonrpc\":\"2.0\",\"method\":\"rpc.cancel\",\"params\":{\"work_done_token\":\"wdt-1\"}}",
+      "note": "NOT a notification: the daemon runs the handler and replies with id null (audit finding F-8); plugin-side C dispatch rejects id-less requests without replying (bbb_dispatch.c:421-425)",
+      "cite": "BBB v2 envelope contract"
+    }
+  ]
+}

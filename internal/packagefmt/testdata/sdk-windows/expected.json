@@ -1,0 +1,21 @@
+{
+ "both": {
+  "aiios_max_exclusive_version": "9.0.0",
+  "aiios_min_version": "0.1.0"
+ },
+ "large-max": {
+  "aiios_max_exclusive_version": "999999999999999999999999999999999999.0.0",
+  "aiios_min_version": "1.0.0"
+ },
+ "leading-zeros": {
+  "aiios_max_exclusive_version": "00.02.000",
+  "aiios_min_version": "00.01.006"
+ },
+ "max-only": {
+  "aiios_max_exclusive_version": "9.0.0"
+ },
+ "min-only": {
+  "aiios_min_version": "0.1.0"
+ },
+ "no-window": {}
+}

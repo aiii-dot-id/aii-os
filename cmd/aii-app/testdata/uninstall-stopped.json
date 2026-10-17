@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "identities": [{"slot": "identity-0", "path": "/Users/example/.aii/identity-0", "real_path": "/Users/example/.aii/identity-0", "name": "Vega", "registered": true, "running": true}],
+  "done": [{"step": "slots", "did": "unregistered and stopped 1 of 1 identities"}, {"step": "service", "did": "unregistered and stopped the machine service"}],
+  "stopped": {"step": "store", "reason": "/Users/example/.aii/plugins: an activation runs from v/0123456789abcdef", "remedy": "quit the identity that runs from it, then run aii uninstall again"},
+  "stays": [],
+  "freed_bytes": 0
+}
