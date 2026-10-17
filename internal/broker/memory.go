@@ -37,6 +37,8 @@ const (
 	memoryTargetBytes = 80
 
 	memoryRecallResultBytes = 256 << 10
+
+	contextRecallResultBytes = 32 << 10
 )
 
 func (c Config) maxMemoryTextBytes() int {
@@ -237,6 +239,7 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	var args struct {
 		Query     string `json:"query"`
 		Exact     bool   `json:"exact"`
+		AnyWords  bool   `json:"any_words"`
 		Since     string `json:"since"`
 		Before    string `json:"before"`
 		Limit     int    `json:"limit"`
@@ -251,12 +254,24 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 				status: statusDenied, reason: reasonArgumentInvalid, detail: "arguments must be an object"})
 		}
 	}
+	if args.AnyWords && (args.Exact || args.Recent || args.ID != "") {
+		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: "any_words requires a query without exact, recent or id"})
+	}
 	st := b.host.cfg.Store
 	now := time.Now()
+	contextRead := false
+	if sc := b.scope.Load(); sc != nil {
+		contextRead = sc.ContextRead
+	}
+	resultBudget := memoryRecallResultBytes
+	if contextRead {
+		resultBudget = contextRecallResultBytes
+	}
 	selection, err := b.memorySelection(args.Selection)
 	if err != nil {
 		return b.resultReply(p.Operation, p.PluginOperation, "", outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: err.Error()})
 	}
+	selectionContext := selectionContextOf(selection)
 	selectors := 0
 	if strings.TrimSpace(args.Query) != "" {
 		selectors++
@@ -286,12 +301,21 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 			found = selected
 		}
 		if !found {
+			or, err := json.Marshal(map[string]any{"selection_context": selectionContext})
+			if err != nil {
+				return nil, fmt.Errorf("broker: memory.recall encode: %w", err)
+			}
+			if len(or) > resultBudget {
+				return b.resultReply(p.Operation, p.PluginOperation, args.ID, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory selection metadata exceeds the response budget"})
+			}
 			return b.resultReply(p.Operation, p.PluginOperation, args.ID, outcome{
-				status: statusFailed, reason: reasonMemoryNotFound, transportOK: true})
+				status: statusFailed, reason: reasonMemoryNotFound, transportOK: true, operationResult: or})
 		}
 		ref := store.MemoryRef{Store: "plugin_memories", ID: m.ID}
-		if err := st.RecordMemoryAccess(now, ref); err != nil {
-			return nil, fmt.Errorf("broker: memory.recall: reinforce: %w", err)
+		if !contextRead {
+			if err := st.RecordMemoryAccess(now, ref); err != nil {
+				return nil, fmt.Errorf("broker: memory.recall: reinforce: %w", err)
+			}
 		}
 		accesses := int64(0)
 		if a, ok, _ := st.MemoryAccessOf(ref); ok {
@@ -311,9 +335,13 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 		or, err := json.Marshal(map[string]any{
 			"hits": []any{hit}, "status": memory.StatusFound, "matched": 1, "shown": 1,
 			"policy": memory.DecayNone, "truncated": false,
+			"selection_context": selectionContext,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("broker: memory.recall encode: %w", err)
+		}
+		if contextRead && len(or) > resultBudget {
+			return b.resultReply(p.Operation, p.PluginOperation, m.ID, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory detail exceeds the automatic context response budget; use an ordinary detail read"})
 		}
 		return b.resultReply(p.Operation, p.PluginOperation, m.ID, outcome{
 			status: statusSucceeded, transportOK: true, operationResult: or})
@@ -347,9 +375,9 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 		target = target[:memoryTargetBytes]
 	}
 	res, err := b.host.instruments.Recall(ctx, memory.Query{
-		Text: query, Exact: args.Exact, Since: since, Before: before, Limit: args.Limit,
+		Text: query, Exact: args.Exact, AnyWords: args.AnyWords, Since: since, Before: before, Limit: args.Limit,
 		Stores: []string{"plugin_memories"}, PluginID: b.pluginID, Activation: b.storageScope().Activation,
-		Decay: args.Decay, Reinforce: false, Now: now, Selection: selection, Recent: args.Recent,
+		Decay: args.Decay, Reinforce: false, WordsOnly: contextRead, Now: now, Selection: selection, Recent: args.Recent,
 	})
 	if err != nil {
 		return b.resultReply(p.Operation, p.PluginOperation, target, outcome{
@@ -387,10 +415,11 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	payload := map[string]any{
 		"hits": hits, "status": src.Status, "matched": src.Matched, "shown": src.Shown,
 		"policy": res.Policy, "truncated": res.Truncated, "warnings": res.Warnings,
-		"meaning": map[string]any{"status": res.Meaning.Status, "detail": res.Meaning.Detail, "basis": res.Meaning.Basis, "floor": res.Meaning.Floor},
+		"selection_context": selectionContext,
+		"meaning":           map[string]any{"status": res.Meaning.Status, "detail": res.Meaning.Detail, "basis": res.Meaning.Basis, "floor": res.Meaning.Floor},
 	}
 	or, err := json.Marshal(payload)
-	for err == nil && len(or) > memoryRecallResultBytes && len(hits) > 0 {
+	for err == nil && len(or) > resultBudget && len(hits) > 0 {
 		hits = hits[:len(hits)-1]
 		payload["hits"], payload["shown"], payload["truncated"], payload["status"] = hits, len(hits), true, memory.StatusPartial
 		or, err = json.Marshal(payload)
@@ -398,18 +427,18 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("broker: memory.recall encode: %w", err)
 	}
-	if len(or) > memoryRecallResultBytes {
+	if len(or) > resultBudget {
 		return b.resultReply(p.Operation, p.PluginOperation, target, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory result metadata exceeds the response budget"})
 	}
 
-	if !args.Recent && len(hits) > 0 {
+	if !contextRead && !args.Recent && len(hits) > 0 {
 		if err := b.host.instruments.Reinforce(now, res.Hits[:len(hits)]); err != nil {
 			payload["warnings"] = append(res.Warnings, "reinforcement not recorded: "+err.Error())
 			or, err = json.Marshal(payload)
 			if err != nil {
 				return nil, err
 			}
-			if len(or) > memoryRecallResultBytes {
+			if len(or) > resultBudget {
 				return b.resultReply(p.Operation, p.PluginOperation, target, outcome{status: statusFailed, reason: reasonMemorySourceUnavailable, transportOK: true, detail: "memory result with reinforcement warning exceeds the response budget"})
 			}
 		}

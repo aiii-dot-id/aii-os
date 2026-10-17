@@ -171,14 +171,12 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if err != nil {
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "request estimate", err)
 	}
-	composeFn := h.a.composer.ComposeFoldedWithin
-	if p.Context == "full" {
-		composeFn = h.a.composer.ComposeWithin
-	}
-	prompt, err := composeFn(target.budget, "", reserve)
+	contextSections := h.a.pluginContext(runCtx, p.Goal)
+	prompt, err := h.a.composer.ComposeChildWithContext(target.budget, reserve, p.Context != "full", contextSections)
 	if err != nil {
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "compose", err)
 	}
+	recordPluginContextComposition(runCtx, prompt, contextSections)
 
 	var predictedNow func() (remaining, ordinal int)
 	if legsOn {

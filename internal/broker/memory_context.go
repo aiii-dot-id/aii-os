@@ -17,6 +17,27 @@ type memoryContext struct {
 	SourceIncarnation string `json:"source_incarnation,omitempty"`
 }
 
+type memorySelectionContext struct {
+	Selection     string `json:"selection"`
+	ProjectID     string `json:"project_id,omitempty"`
+	WorkSessionID string `json:"work_session_id,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+func selectionContextOf(s store.PluginMemorySelection) memorySelectionContext {
+	c := memorySelectionContext{Selection: s.Kind}
+	switch s.Kind {
+	case "task", "relevant":
+		c.WorkSessionID, c.ProjectID = s.WorkSession, s.Project
+		if s.Kind == "relevant" && s.WorkSession == "" {
+			c.Reason = "no_session"
+		}
+	case "project":
+		c.ProjectID = s.Project
+	}
+	return c
+}
+
 func contextOfMemory(m store.PluginMemory) memoryContext {
 	return memoryContext{m.Applicability, m.Project, m.WorkSession, m.SourceIncarnation}
 }

@@ -28,7 +28,7 @@ func TestSummaryIsDeterministicAndAnnouncesItself(t *testing.T) {
 	if !strings.Contains(first, "4 of 8 kept") {
 		t.Fatalf("a summary must say how much is missing: %q", first)
 	}
-	// Whole units only: nothing may be severed mid-thought.
+
 	for _, unit := range strings.Split(strings.Split(first, "\n\n[summary")[0], "\n\n") {
 		if !strings.HasSuffix(strings.TrimSpace(unit), ".") {
 			t.Fatalf("unit was cut rather than dropped: %q", unit)
@@ -36,9 +36,6 @@ func TestSummaryIsDeterministicAndAnnouncesItself(t *testing.T) {
 	}
 }
 
-// Ring 2 keeps every belief and sheds only the derivation beneath it:
-// losing a belief loses part of who the identity has become, losing an
-// evidence line loses a lookup that recall can still reach.
 func TestRing2SummaryKeepsEveryBelief(t *testing.T) {
 	content := "## Who You Have Become\n" +
 		"\n- I value honesty [b1]" +
@@ -61,10 +58,6 @@ func TestRing2SummaryKeepsEveryBelief(t *testing.T) {
 	}
 }
 
-// A section with no internal structure has no whole unit to drop.
-// Manufacturing one by cutting mid-sentence would produce the false
-// summary the design exists to prevent, so it is left alone and stage 2
-// omits it — declared — instead.
 func TestUnstructuredContentIsNotFakeSummarized(t *testing.T) {
 	blob := strings.Repeat("detail ", 400)
 	if got := summarize("ring3", blob, budgetRoute); got != blob {
@@ -128,7 +121,7 @@ func TestFoldAndTrimDeclaresEveryOmission(t *testing.T) {
 		elastic("Working Truth", "ring3", 1000),
 	}
 
-	want := []Omission{{"Orientation", "brief"}, {"Working State", "ring4"}, {"Working Truth", "ring3"}}
+	want := []Omission{{Name: "Orientation", Source: "brief"}, {Name: "Working State", Source: "ring4"}, {Name: "Working Truth", Source: "ring3"}}
 	max := (&budgetEnforcer{}).budgetTokens([]Section{identity}, want)
 
 	got, omissions := newBudgetEnforcer(max, nil).FoldAndTrim(sections)
@@ -164,15 +157,13 @@ func TestProtectedMaterialSurvivesImpossibleBudget(t *testing.T) {
 
 func TestFoldLadderOrderIsRuled(t *testing.T) {
 	got := foldOrder()
-	// "turn" is Ring 4's per-turn half, on Ring 4's rung (ComposeTurn).
+
 	want := [5]string{"brief", "turn", "ring4", "ring3", "ring2"}
 	if got != want {
 		t.Fatalf("fold ladder = %v, want %v — the order is ruled, not incidental", got, want)
 	}
 }
 
-// Ring 2 is last: with pressure that one rung above can absorb, Ring 2
-// must not be touched at all.
 func TestRing2YieldsOnlyAfterEverythingAbove(t *testing.T) {
 	sections := []Section{
 		{Name: "Constitution", Content: "identity truth"},
@@ -227,15 +218,12 @@ func TestFoldsAndOmissionsCarryARouteToTheContent(t *testing.T) {
 	if r2 := summarize("ring2", "## Who You Have Become\n\n- b [b1]\n  - e1\n  - e2\n  - e3\n  - e4\n  - e5\n  - e6", budgetRoute); !strings.Contains(r2, "recall (source=ledger)") {
 		t.Fatalf("a folded Ring 2 does not route to the derivation: %q", r2)
 	}
-	receipt := renderOmissions([]Omission{{"What Is Right in Front of You", "ring4"}, {"This Morning", "brief"}}, budgetRoute)
+	receipt := renderOmissions([]Omission{{Name: "What Is Right in Front of You", Source: "ring4"}, {Name: "This Morning", Source: "brief"}}, budgetRoute)
 	if !strings.Contains(receipt, "work status") || !strings.Contains(receipt, "recall (source=experiences) reaches the day") {
 		t.Fatalf("omission receipts do not route to the content: %q", receipt)
 	}
 }
 
-// The composer's "(no resolved evidence)" is a "  - " sub-line and part of
-// its belief's render: a folded Ring 2 keeps it with the belief and never
-// counts it as elided evidence. Only real evidence chains elide and count.
 func TestSummarizeRing2KeepsAbsenceDeclarations(t *testing.T) {
 	content := "What you have consciously adopted as your own\n" +
 		"\n- Autonomy [b-autonomy]" +
@@ -252,8 +240,7 @@ func TestSummarizeRing2KeepsAbsenceDeclarations(t *testing.T) {
 	if !strings.Contains(got, "1 evidence line(s) elided") {
 		t.Fatalf("real evidence chain not elided and counted: %q", got)
 	}
-	// A Ring 2 with no evidence chains has nothing to elide: the fold is
-	// the full render, with no digest wrapper inventing elisions.
+
 	all := "- Autonomy [b-autonomy]\n  - (no resolved evidence)\n- Trust [b-trust]\n  - (no resolved evidence)"
 	if summarize("ring2", all, budgetRoute) != all {
 		t.Fatalf("a Ring 2 with no evidence chains must stand whole under fold")

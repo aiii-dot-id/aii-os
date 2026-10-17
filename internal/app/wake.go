@@ -111,10 +111,13 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	if err != nil {
 		return conversation.Result{}, fmt.Errorf("request estimate: %w", err)
 	}
-	p, err := a.composer.ComposeTurn(workState, facts, a.safeTurnSection(), reserve)
+	contextSections := a.pluginContext(ctx, current.Content)
+	p, err := a.composer.ComposeTurnWithContext(workState, facts, a.safeTurnSection(), reserve, contextSections)
 	if err != nil {
 		return conversation.Result{}, fmt.Errorf("compose: %w", err)
 	}
+
+	recordPluginContextComposition(ctx, p, contextSections)
 
 	a.carriedEvents = a.eventsCarriedBy(p.Turn)
 	result, err := a.conv.RunTurn(ctx, a.gatedSystem(p), history, omitted, p.Turn)

@@ -60,6 +60,10 @@ type Section struct {
 	Folded   bool
 
 	Turn bool
+
+	Whole bool
+
+	Route string
 }
 
 func New(rings *ring.Manager, maxTokens int) *Composer {
@@ -91,26 +95,34 @@ func (c *Composer) SetName(name string) {
 }
 
 func (c *Composer) Compose(workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(c.MaxTokens(), workSessionState, "", "", reserveTokens, false, false)
+	return c.compose(c.MaxTokens(), workSessionState, "", "", reserveTokens, false, false, nil)
 }
 
 func (c *Composer) ComposeTurn(workSessionState, turnFacts, safe string, reserveTokens int) (*Prompt, error) {
-	return c.compose(c.MaxTokens(), workSessionState, turnFacts, safe, reserveTokens, false, true)
+	return c.compose(c.MaxTokens(), workSessionState, turnFacts, safe, reserveTokens, false, true, nil)
 }
 
 func (c *Composer) ComposeWithin(maxTokens int, workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(maxTokens, workSessionState, "", "", reserveTokens, false, false)
+	return c.compose(maxTokens, workSessionState, "", "", reserveTokens, false, false, nil)
 }
 
 func (c *Composer) ComposeFolded(workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(c.MaxTokens(), workSessionState, "", "", reserveTokens, true, false)
+	return c.compose(c.MaxTokens(), workSessionState, "", "", reserveTokens, true, false, nil)
 }
 
 func (c *Composer) ComposeFoldedWithin(maxTokens int, workSessionState string, reserveTokens int) (*Prompt, error) {
-	return c.compose(maxTokens, workSessionState, "", "", reserveTokens, true, false)
+	return c.compose(maxTokens, workSessionState, "", "", reserveTokens, true, false, nil)
 }
 
-func (c *Composer) compose(maxTokens int, workSessionState, turnFacts, safe string, reserveTokens int, foldElastic, ring4InTurn bool) (*Prompt, error) {
+func (c *Composer) ComposeTurnWithContext(work, facts, safe string, reserve int, sections []Section) (*Prompt, error) {
+	return c.compose(c.MaxTokens(), work, facts, safe, reserve, false, true, sections)
+}
+
+func (c *Composer) ComposeChildWithContext(maxTokens, reserve int, folded bool, sections []Section) (*Prompt, error) {
+	return c.compose(maxTokens, "", "", "", reserve, folded, false, sections)
+}
+
+func (c *Composer) compose(maxTokens int, workSessionState, turnFacts, safe string, reserveTokens int, foldElastic, ring4InTurn bool, contextSections []Section) (*Prompt, error) {
 	var sections []Section
 
 	opening := c.buildOpening()
@@ -209,6 +221,12 @@ func (c *Composer) compose(maxTokens int, workSessionState, turnFacts, safe stri
 			Name: "What Is Right in Front of You", Ring: ring.Ring4, Content: fmt.Sprintf("# What Is Right in Front of You\n\nYour busy focus: what you are working on, in detail.\n\n%s", strings.Join(ring4Parts, "\n\n")),
 			Source: "ring4", Elastic: true, Volatile: true, Turn: ring4InTurn,
 		})
+	}
+	for _, section := range contextSections {
+		section.Ring, section.Source = ring.Ring4, "ring4"
+		section.Elastic, section.Volatile, section.Whole = true, true, true
+		section.Turn = ring4InTurn
+		sections = append(sections, section)
 	}
 
 	if turnFacts != "" {

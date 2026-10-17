@@ -60,6 +60,8 @@ type Query struct {
 
 	Exact bool
 
+	AnyWords bool
+
 	WordsOnly bool
 
 	Since  time.Time
@@ -153,6 +155,9 @@ type Facility struct {
 func New(st *store.Store) *Facility { return &Facility{st: st} }
 
 func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
+	if q.AnyWords && (q.Exact || q.Recent) {
+		return Result{}, errors.New("any_words requires a query without exact or recent")
+	}
 	if q.Recent {
 		return f.recentPluginMemories(ctx, q)
 	}
@@ -188,13 +193,16 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 	}
 	words := wordsOf(text)
 	match := wordsQuery(words)
+	if q.AnyWords {
+		match = anyWordsQuery(words)
+	}
 	if q.Exact {
 		match = phraseQuery(words)
 	}
 
 	var qv *queryVector
 	var meaning MeaningStatus
-	if !q.Exact && !q.WordsOnly {
+	if !q.Exact && !q.WordsOnly && !q.AnyWords {
 		qv, meaning = f.embedQuery(ctx, text)
 	}
 
@@ -236,7 +244,7 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 				p.Keys = append(p.Keys, k)
 			}
 			pools = append(pools, p)
-			if !q.Exact {
+			if !q.Exact && !q.AnyWords {
 				fuzzy, err := layerFuzzy(ctx, db, d, q, text, words, pool, true)
 				if err != nil {
 					res.Warnings = append(res.Warnings, fmt.Sprintf("%s: the fuzzy layer failed and only exact words answered — %v", d.Name, err))
@@ -945,6 +953,14 @@ func wordsQuery(words []string) string {
 		quoted[i] = `"` + w + `"`
 	}
 	return strings.Join(quoted, " ")
+}
+
+func anyWordsQuery(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = `"` + strings.ReplaceAll(w, `"`, `""`) + `"`
+	}
+	return strings.Join(quoted, " OR ")
 }
 
 func phraseQuery(words []string) string {

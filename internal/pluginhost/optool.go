@@ -37,6 +37,7 @@ type opDescriptor struct {
 
 	operatorConfirms bool
 	primary          bool
+	context          bool
 }
 
 func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.Discovery {
@@ -80,6 +81,8 @@ type operationTool struct {
 }
 
 func (t *operationTool) Discovery() tools.Discovery { return t.disc }
+
+func (t *operationTool) ContextProvider() bool { return t.desc != nil && t.desc.context }
 
 func (t *operationTool) ReplaySafe() bool {
 	if t.desc == nil || t.disc.OperatorConfirms {
@@ -265,7 +268,7 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 		return tools.Result{}, err
 	}
 	if t.seam != nil && (t.desc != nil || checking) {
-		scope := broker.OperationScope{Operation: t.operation, Validation: checking}
+		scope := broker.OperationScope{Operation: t.operation, Validation: checking, ContextRead: t.ContextProvider()}
 		scope.WorkSession, scope.SessionReason, scope.CallID = acting.ID, acting.Reason, acting.CallID
 		if t.desc != nil {
 			scope.Effects, scope.Capabilities, scope.Declared = t.desc.effects, t.desc.capabilities, t.desc.capsDeclared

@@ -69,6 +69,9 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 	if derr != nil {
 		return nil, derr
 	}
+	if err := validateContextRuntime(descs, m, sel.variant.ExecutionRuntime, currentHost(opts).supervised); err != nil {
+		return nil, err
+	}
 
 	embeddings, eerr := admitEmbeddings(pkgPath, res, held, m)
 	if eerr != nil {
@@ -190,7 +193,7 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 			t := ap.newOperationTool(name, method, description, desc,
 				desc.discovery(m.ID, m.Version, ap.Tier.String(), method))
 
-			hostOp := decl.ID == ChannelInterfaceID || decl.ID == EmbeddingsInterfaceID || hostDriven[method]
+			hostOp := decl.ID == ChannelInterfaceID || decl.ID == EmbeddingsInterfaceID || hostDriven[method] || t.ContextProvider()
 			ap.pending = append(ap.pending, pendingTool{tool: t, hostOp: hostOp})
 		}
 	}

@@ -65,6 +65,10 @@ type workStore interface {
 }
 
 func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, error) {
+
+	if _, present := args["command"]; present {
+		return "", fmt.Errorf("rejected_before_effect (work.arguments): command is a shell argument, but this call was sent to work. No command was executed and no work state was changed. Use shell with command and optional cwd to run a command; use work with its documented action and fields to manage work")
+	}
 	action, _ := args["action"].(string)
 	if action == "" {
 		action = "start"
@@ -438,7 +442,7 @@ func resolveDeliveryEvidence(class, readback, result string, workerSeat bool) (s
 		return "", nil
 	}
 	if !store.IsEvidenceClass(class) {
-		return "", fmt.Errorf("deliver: unknown evidence class %q — one of: not_run, rejected_before_effect, completed_locally, partial_or_mixed, external_effect_unknown, worker_report_only, locally_verified, host_receipted", class)
+		return "", fmt.Errorf("rejected_before_effect (deliver.evidence): nothing was delivered. Put one class value in evidence and explanatory text in evidence_readback; class is for project.evidence. Accepted evidence values: not_run, rejected_before_effect, completed_locally, partial_or_mixed, external_effect_unknown, worker_report_only, locally_verified, host_receipted. Correct the fields and deliver again")
 	}
 	if store.EvidenceVerifiedTier(class) {
 

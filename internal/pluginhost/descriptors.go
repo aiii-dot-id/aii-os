@@ -36,6 +36,7 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 	decls := append(append([]packagefmt.InterfaceDecl{}, m.Interfaces.Core...), m.Interfaces.Optional...)
 	held = walkMembers(pkgPath, res, held, namedSchemas(decls, held)...)
 	set := &descriptorSet{ops: make(map[string]*opDescriptor), files: make(map[string][]byte)}
+	contextOperation := ""
 	for _, decl := range decls {
 		schemaRel := descriptorFile(decl)
 		if _, listed := res.FileDigests[schemaRel]; !listed {
@@ -59,6 +60,7 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 			Keywords []string `json:"keywords"`
 			Examples []string `json:"examples"`
 			Primary  bool     `json:"primary"`
+			Context  bool     `json:"context"`
 
 			OperatorConfirms bool `json:"operator_confirms"`
 		}
@@ -83,7 +85,7 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 			}
 			d := &opDescriptor{effects: op.Effects, maxResult: op.MaxResult,
 				summary: op.Summary, family: op.Family, keywords: op.Keywords, examples: op.Examples,
-				operatorConfirms: op.OperatorConfirms, primary: op.Primary}
+				operatorConfirms: op.OperatorConfirms, primary: op.Primary, context: op.Context}
 			if len(op.Capabilities) > 0 {
 
 				d.capsDeclared = true
@@ -104,6 +106,12 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 					return nil, &SchemaError{Operation: op.ID, File: op.Output, Err: err, Unread: unread}
 				}
 				d.outputRaw, d.output = raw, compiled
+			}
+			if d.context {
+				if contextOperation != "" || d.effects != broker.EffectsReadInternal || d.primary || d.operatorConfirms || !d.capsDeclared || d.input == nil || d.output == nil || d.maxResult < 1 || d.maxResult > ContextMaxBytes {
+					return nil, &SchemaError{Operation: op.ID, File: schemaRel, Err: fmt.Errorf("context requires one read.internal operation with declared input/output/capabilities, a 1..%d byte result bound, and neither primary nor operator_confirms", ContextMaxBytes)}
+				}
+				contextOperation = op.ID
 			}
 			set.ops[op.ID] = d
 		}

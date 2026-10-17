@@ -7,18 +7,12 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
-// captureLog redirects the standard logger — the one logsink tees to
-// disk — for the duration of one test.
 func captureLog(t *testing.T) *logsink.Capture {
 	t.Helper()
 	buf := logsink.CaptureForTest(t)
 	return buf
 }
 
-// A prompt that FITS must emit nothing. Silence is the measurement:
-// every line in the log is a compose that was actually under pressure,
-// so "does folding ever fire?" is answered by the presence of lines
-// rather than by reading a ratio out of noise.
 func TestFoldTelemetryIsSilentWithoutPressure(t *testing.T) {
 	buf := captureLog(t)
 	sections := []Section{
@@ -32,9 +26,6 @@ func TestFoldTelemetryIsSilentWithoutPressure(t *testing.T) {
 	}
 }
 
-// Under real pressure the line must name WHAT yielded, not merely that
-// something did. A bare count would reproduce the defect this arc
-// started from: a receipt that reports loss without naming it.
 func TestFoldTelemetryNamesWhatYielded(t *testing.T) {
 	buf := captureLog(t)
 	sections := []Section{
@@ -66,10 +57,6 @@ func TestFoldTelemetryNamesWhatYielded(t *testing.T) {
 	}
 }
 
-// An omitted section must be named too, and separately from a folded
-// one: folding keeps a digest in view, omission removes the content
-// entirely. Collapsing them would make the two outcomes indistinguishable
-// in the record, which is the thing being measured.
 func TestFoldTelemetryDistinguishesOmissionFromFold(t *testing.T) {
 	buf := captureLog(t)
 	identity := Section{Name: "Constitution", Content: "identity truth"}
@@ -79,7 +66,7 @@ func TestFoldTelemetryDistinguishesOmissionFromFold(t *testing.T) {
 		elastic("Orientation", "brief", 1000),
 		elastic("Working Truth", "ring3", 1000),
 	}
-	want := []Omission{{"Orientation", "brief"}, {"Working State", "ring4"}, {"Working Truth", "ring3"}}
+	want := []Omission{{Name: "Orientation", Source: "brief"}, {Name: "Working State", Source: "ring4"}, {Name: "Working Truth", Source: "ring3"}}
 	newBudgetEnforcer((&budgetEnforcer{}).budgetTokens([]Section{identity}, want), nil).FoldAndTrim(sections)
 
 	line := buf.String()
@@ -96,12 +83,6 @@ func TestFoldTelemetryDistinguishesOmissionFromFold(t *testing.T) {
 	}
 }
 
-// Measurement must not be control. Observing pressure may not change what
-// pressure does — so the same input must fold identically whether or not
-// anyone is reading the log. This is the do-not-copy lesson pinned as a
-// test rather than trusted as an intention: the C usefulness scorer
-// failed precisely because its record had an arithmetic path back into
-// the decision.
 func TestFoldTelemetryDoesNotAlterTheFold(t *testing.T) {
 	build := func() []Section {
 		return []Section{
@@ -119,8 +100,6 @@ func TestFoldTelemetryDoesNotAlterTheFold(t *testing.T) {
 		t.Fatal("test is vacuous: this budget did not produce pressure")
 	}
 
-	// Same input, same budget. CaptureForTest already has the logger,
-	// so this half runs with nothing reaching a console either way.
 	silent, silentOmissions := newBudgetEnforcer(budget, nil).FoldAndTrim(build())
 
 	if len(observed) != len(silent) {

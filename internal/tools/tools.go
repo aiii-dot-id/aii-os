@@ -920,11 +920,18 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 			return Refusal("HOST_OWNER_CHANGED", "host dispatch owner changed"), nil
 		}
 	}
+	contextRead, _ := ctx.Value(contextSelectionKey{}).(bool)
+	if contextRead && !r.contextEligible(name) {
+		return Refusal("CONTEXT_NOT_SELECTED", "plugin context is not currently selected"), nil
+	}
 
 	ctx = context.WithValue(ctx, dispatchCheckKey{}, func() error {
 		current, exists, _, _ := r.lookupWithHostOnly(name)
 		if !exists || current != t {
 			return &DispatchTargetChangedError{}
+		}
+		if contextRead && !r.contextEligible(name) {
+			return &DispatchRefusedError{Code: "CONTEXT_NOT_SELECTED", Detail: "plugin context selection changed"}
 		}
 		if !r.ToolEnabled(name) {
 			return &DispatchRefusedError{Code: ReasonOperatorDisabled, Detail: "tool disabled by operator"}
@@ -944,7 +951,9 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 	}
 
 	if msg := validateRequired(t, name, args); msg != "" {
-		r.malformedCalls.Add(1)
+		if !contextRead {
+			r.malformedCalls.Add(1)
+		}
 		return Refusal(ReasonArgumentsRequired, msg), nil
 	}
 

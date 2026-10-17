@@ -399,3 +399,12 @@ func ComponentNested() []byte {
 		section(secComponentNested, componentHeader()),
 	)
 }
+
+func LoopForLongRequest(threshold int32, frame []byte) []byte {
+	if respFrame+len(frame) > heapBase {
+		panic("wasmgen: canned frame collides with heap")
+	}
+	s := newScaffold(scaffoldOpts{version: 2})
+	s.m.Data(respFrame, frame)
+	return s.finish(cat(i32Const(threshold), localGet(1), opI32LeU, ifVoid(loopVoid(br(0))), storeRet(i32Const(respFrame), i32Const(int32(len(frame))))), 0)
+}

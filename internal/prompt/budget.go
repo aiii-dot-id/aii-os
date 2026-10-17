@@ -207,7 +207,7 @@ func (b *budgetEnforcer) ForceFoldElastic(sections []Section) {
 		}
 		for i := range sections {
 			s := &sections[i]
-			if s.Source != source || !s.Elastic || s.Folded || s.Content == "" {
+			if s.Source != source || !s.Elastic || s.Whole || s.Folded || s.Content == "" {
 				continue
 			}
 			folded := summarize(s.Source, s.Content, subagentRoom)
@@ -220,7 +220,7 @@ func (b *budgetEnforcer) ForceFoldElastic(sections []Section) {
 	}
 }
 
-type Omission struct{ Name, Source string }
+type Omission struct{ Name, Source, Route string }
 
 func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission) {
 	before := b.budgetTokens(sections, nil)
@@ -228,16 +228,30 @@ func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission)
 		return sections, nil
 	}
 
+	var omissions []Omission
 	for _, source := range foldOrder() {
-		if b.budgetTokens(sections, nil) <= b.maxTokens {
+		if b.budgetTokens(sections, omissions) <= b.maxTokens {
 			break
 		}
+		if source != "ring2" {
+			for i := range sections {
+				if b.budgetTokens(sections, omissions) <= b.maxTokens {
+					break
+				}
+				s := &sections[i]
+				if s.Source != source || !s.Elastic || !s.Whole || s.Content == "" {
+					continue
+				}
+				omissions = append(omissions, Omission{Name: s.Name, Source: s.Source, Route: s.Route})
+				s.Content = ""
+			}
+		}
 		for i := range sections {
-			if b.budgetTokens(sections, nil) <= b.maxTokens {
+			if b.budgetTokens(sections, omissions) <= b.maxTokens {
 				break
 			}
 			s := &sections[i]
-			if s.Source != source || !s.Elastic || s.Folded || s.Content == "" {
+			if s.Source != source || !s.Elastic || s.Whole || s.Folded || s.Content == "" {
 				continue
 			}
 			folded := summarize(s.Source, s.Content, b.room)
@@ -249,7 +263,6 @@ func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission)
 		}
 	}
 
-	var omissions []Omission
 	for _, source := range omitOrder() {
 		if b.budgetTokens(sections, omissions) <= b.maxTokens {
 			break
@@ -262,7 +275,7 @@ func (b *budgetEnforcer) FoldAndTrim(sections []Section) ([]Section, []Omission)
 			if s.Source != source || !s.Elastic || s.Content == "" {
 				continue
 			}
-			omissions = append(omissions, Omission{Name: s.Name, Source: s.Source})
+			omissions = append(omissions, Omission{Name: s.Name, Source: s.Source, Route: s.Route})
 			s.Content = ""
 		}
 	}
@@ -350,7 +363,11 @@ func renderOmissions(omissions []Omission, room string) string {
 	var b strings.Builder
 	b.WriteString("# Not Shown (context budget)\n")
 	for _, o := range omissions {
-		fmt.Fprintf(&b, "- %s — %s\n", o.Name, routeFor(o.Source, room))
+		route := o.Route
+		if route == "" {
+			route = routeFor(o.Source, room)
+		}
+		fmt.Fprintf(&b, "- %s — %s\n", o.Name, route)
 	}
 	return b.String()
 }

@@ -27,7 +27,8 @@ const (
 )
 
 type opSpec struct {
-	safe safeAnswer
+	contextRead bool
+	safe        safeAnswer
 
 	read bool
 
@@ -41,18 +42,18 @@ type opSpec struct {
 
 var operations = map[string]opSpec{
 
-	opKVGet:    {safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
-	opKVList:   {safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
+	opKVGet:    {contextRead: true, safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
+	opKVList:   {contextRead: true, safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
 	opKVPut:    {storage: true, reach: reachLocalWrite},
 	opKVDelete: {storage: true, reach: reachLocalWrite},
 
-	opMemoryRecall:   {safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
+	opMemoryRecall:   {contextRead: true, safe: safeAnswered, read: true, storage: true, reach: reachAnyClass},
 	opMemoryRemember: {storage: true, reach: reachLocalWrite},
 
-	opSettingsGet: {safe: safeAnswered, read: true, reach: reachAnyClass, answerFirst: true, checks: true},
+	opSettingsGet: {contextRead: true, safe: safeAnswered, read: true, reach: reachAnyClass, answerFirst: true, checks: true},
 
-	opInteractionQuery: {safe: safeAnswered, read: true, reach: reachAnyClass},
-	opInteractionRead:  {safe: safeAnswered, read: true, reach: reachAnyClass},
+	opInteractionQuery: {contextRead: true, safe: safeAnswered, read: true, reach: reachAnyClass},
+	opInteractionRead:  {contextRead: true, safe: safeAnswered, read: true, reach: reachAnyClass},
 
 	opVoiceObserve: {safe: safeOwnGate, reach: reachLocalWrite},
 
@@ -68,8 +69,8 @@ var operations = map[string]opSpec{
 	opHTTPRead:  {read: true, reach: reachAnyClass},
 	opHTTPClose: {read: true, reach: reachAnyClass},
 
-	opFSList:    {safe: safeOwnGate, read: true, storage: true, reach: reachAnyClass, answerFirst: true},
-	opFSRead:    {safe: safeOwnGate, read: true, storage: true, reach: reachAnyClass, answerFirst: true},
+	opFSList:    {contextRead: true, safe: safeOwnGate, read: true, storage: true, reach: reachAnyClass, answerFirst: true},
+	opFSRead:    {contextRead: true, safe: safeOwnGate, read: true, storage: true, reach: reachAnyClass, answerFirst: true},
 	opFSWrite:   {safe: safeOwnGate, storage: true, reach: reachLocalWrite},
 	opFSDelete:  {safe: safeOwnGate, storage: true, reach: reachLocalWrite},
 	opFSPublish: {safe: safeOwnGate, storage: true, reach: reachLocalWrite},

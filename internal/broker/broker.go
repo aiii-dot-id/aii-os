@@ -655,11 +655,13 @@ func IsReadEffect(effects string) bool {
 }
 
 type OperationScope struct {
-	Operation     string
-	Effects       string
-	Capabilities  []string
-	Declared      bool
-	Validation    bool
+	Operation    string
+	Effects      string
+	Capabilities []string
+	Declared     bool
+	Validation   bool
+
+	ContextRead   bool
 	WorkSession   string
 	SessionReason string
 	CallID        string
@@ -1129,6 +1131,11 @@ func (b *Binding) dispatch(ctx context.Context, method string, params []byte, po
 		return errorReply(rpcForbidden,
 			fmt.Sprintf("operation %s is one of its publisher's checks, which read nothing of the identity's and write nothing; %s is refused during one", sc.Operation, p.Operation),
 			&errorData{ReasonCode: reasonValidationDeny, DeniedAt: deniedAtCapEval})
+	}
+
+	if sc := b.scope.Load(); sc != nil && sc.ContextRead && !operations[p.Operation].contextRead {
+		return errorReply(rpcForbidden, "predecision context permits local inspection only; "+p.Operation+" is refused",
+			&errorData{ReasonCode: "CONTEXT_READ_ONLY", DeniedAt: deniedAtCapEval})
 	}
 
 	if !passesSAFEGate(p.Operation) && b.host.cfg.InSAFE != nil && b.host.cfg.InSAFE() {
