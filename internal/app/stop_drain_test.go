@@ -84,20 +84,23 @@ func TestAStopOfTheIdentityIsNotHeldByADownloadNobodyReads(t *testing.T) {
 	}
 }
 
-// AND WHAT DOES NOT END IS SAID, AFTER EVERYTHING ELSE IS CLOSED. A request
-// that waits on nothing the teardown ends is still running when the stop
-// has closed its connection and the identity's resources. The stop gives
-// it the bound once more, then ends with a failure that names it; the
-// ledger is closed all the same, which is what the bound was once taken
-// away to keep.
-func TestAStopSaysWhatOfTheDashboardsDidNotEndAndClosesTheRecordAllTheSame(t *testing.T) {
+// A caller deadline does not release resources still owned by a callback.
+// The pending stop completes after the callback returns.
+
+func TestAStopRemainsPendingUntilTheDashboardsRequestReturns(t *testing.T) {
 	entered, mayReturn := make(chan struct{}), make(chan struct{})
 	a, addr := stoppable(t, func(context.Context) (io.ReadCloser, int64, error) {
 		close(entered)
 		<-mayReturn
 		return nil, 0, errors.New("the export was never made")
 	})
-	defer close(mayReturn)
+	var released bool
+	defer func() {
+		if !released {
+			close(mayReturn)
+		}
+		stopApp(t, a)
+	}()
 	c, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		t.Fatal(err)
@@ -112,15 +115,25 @@ func TestAStopSaysWhatOfTheDashboardsDidNotEndAndClosesTheRecordAllTheSame(t *te
 		t.Fatal("the request did not reach its handler")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
 	defer cancel()
 	err = a.Shutdown(ctx)
 	var pending *ShutdownPending
-	if err == nil || errors.As(err, &pending) || !strings.Contains(err.Error(), "1 of the dashboard's requests had not returned") {
-		t.Fatalf("the stop must end and name the request that did not: %v", err)
+	if !errors.As(err, &pending) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the stop must remain pending while its request runs: %v", err)
+	}
+	if a.ledger == nil {
+		t.Fatal("pending stop closed the ledger beneath its request")
+	}
+	close(mayReturn)
+	released = true
+	settled, done := context.WithTimeout(context.Background(), 5*time.Second)
+	defer done()
+	if err := a.Shutdown(settled); err != nil {
+		t.Fatal(err)
 	}
 	if a.ledger != nil {
-		t.Fatal("the stop ended with a failure and left the ledger open")
+		t.Fatal("completed stop did not close the ledger")
 	}
 }
 

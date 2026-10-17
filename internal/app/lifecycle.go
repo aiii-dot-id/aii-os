@@ -317,7 +317,6 @@ func (a *App) stop() error {
 
 	shutCtx := context.Background()
 
-	drainCut := false
 	if a.dashboard != nil {
 		drain, cancel := context.WithTimeout(shutCtx, a.stopDrain())
 		err := a.dashboard.Shutdown(drain)
@@ -326,8 +325,12 @@ func (a *App) stop() error {
 		switch {
 		case err == nil:
 		case errors.As(err, &cut):
-			drainCut = true
-			logsink.Warn("boot.end", "the dashboard's requests and jobs had not all ended after %s (dashboard.stop_drain_seconds); their connections are closed and the shutdown goes on", a.stopDrain())
+			logsink.Warn("boot.end", "the dashboard's work had not all ended after %s (dashboard.stop_drain_seconds); its connections are closed, and identity resources remain open until its callbacks return", a.stopDrain())
+			// The caller's context still bounds Shutdown with ShutdownPending.
+			// Join before taking locks a callback may need or closing its store.
+			if err := a.dashboard.Settle(shutCtx); err != nil {
+				return fmt.Errorf("dashboard shutdown: %w", err)
+			}
 		default:
 			return fmt.Errorf("dashboard shutdown: %w", err)
 		}
@@ -338,14 +341,6 @@ func (a *App) stop() error {
 		return fmt.Errorf("resident turn did not quiesce: %w", err)
 	}
 	err := a.closeLiveResources()
-
-	if drainCut {
-		settle, cancel := context.WithTimeout(shutCtx, a.stopDrain())
-		if serr := a.dashboard.Settle(settle); serr != nil {
-			err = errors.Join(err, fmt.Errorf("dashboard shutdown: after its connections and the identity's resources were closed, %w", serr))
-		}
-		cancel()
-	}
 
 	a.releaseIdentityClaim()
 	a.releaseTurn()

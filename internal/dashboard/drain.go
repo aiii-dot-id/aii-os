@@ -21,6 +21,24 @@ func (s *Server) Settle(ctx context.Context) error {
 		s.jobsWG.Wait()
 		close(joined)
 	}()
+	// These readers are started together and can be inside application
+	// callbacks when cancellation arrives. Cancellation alone is not a join.
+	s.mu.RLock()
+	pumpsStarted := s.pumpCancel != nil
+	s.mu.RUnlock()
+	if pumpsStarted {
+		for _, done := range []<-chan struct{}{s.pumpDone, s.interactionDone} {
+			select {
+			case <-done:
+			default:
+				select {
+				case <-done:
+				case <-ctx.Done():
+					return fmt.Errorf("the dashboard's background readers had not all ended: %w", ctx.Err())
+				}
+			}
+		}
+	}
 	requests := s.requests.wait(ctx)
 	jobs := true
 	select {

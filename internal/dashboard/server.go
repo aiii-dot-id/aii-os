@@ -307,16 +307,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.RUnlock()
 	if pumpCancel != nil {
 		pumpCancel()
-		select {
-		case <-s.pumpDone:
-		case <-time.After(2 * time.Second):
-		}
-	}
-	if pumpCancel != nil {
-		select {
-		case <-s.interactionDone:
-		case <-ctx.Done():
-		}
 	}
 
 	if turnCancel != nil {
@@ -344,22 +334,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		shutdownErr = errors.Join(shutdownErr, <-drained)
 	}
-	turnsDone := make(chan struct{})
-	go func() {
-		s.jobsWG.Wait()
-		close(turnsDone)
-	}()
-	joined := false
-	select {
-	case <-turnsDone:
-		joined = true
-	case <-ctx.Done():
-	}
-	if shutdownErr == nil && joined {
+	// HTTP shutdown does not join hijacked WebSocket handlers. Their
+	// callbacks and deferred cleanup still own the application's resources.
+	settleErr := s.Settle(ctx)
+	if shutdownErr == nil && settleErr == nil {
 		return nil
 	}
 	if ctx.Err() == nil {
-		return shutdownErr
+		return errors.Join(shutdownErr, settleErr)
 	}
 
 	for _, srv := range servers {
@@ -472,9 +454,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.wsAdmitHook()
 	}
 
+	// Registration and the shutdown connection snapshot share admission:
+	// a connection is either in that snapshot or refused here.
+	s.jobsMu.Lock()
+	if s.jobsStopping {
+		s.jobsMu.Unlock()
+		conn.CloseNow()
+		return
+	}
 	s.wsMu.Lock()
 	if cutsOff(admitted, s.auth.Load()) {
 		s.wsMu.Unlock()
+		s.jobsMu.Unlock()
 		logsink.Info("dashboard.refusal", "refused: the access policy changed while the session was being admitted")
 		conn.CloseNow()
 		return
@@ -482,6 +473,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	cl := &wsClient{interactionVersion: r.URL.Query().Get("interaction_version"), interactionRequests: make(chan ClientMessage, 1), addr: r.RemoteAddr, agent: r.UserAgent(), secretsOK: privateConnection(r), policy: admitted}
 	s.wsConns[conn] = cl
 	s.wsMu.Unlock()
+	s.jobsMu.Unlock()
 	defer func() {
 
 		s.dropVoiceSession(cl)
