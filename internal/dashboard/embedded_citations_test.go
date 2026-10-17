@@ -21,7 +21,7 @@ var embeddedCitation = regexp.MustCompile(strings.Join([]string{
 	`\bbatch \d+`, `\bexternal review\b`, `\bGO\d{2,3}\b`,
 	`\bV-[A-Za-z]+\d+\b`, `\bhandoff req \d+\b`,
 	`\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`, // a private-range address
-	`\b[A-Z][A-Z0-9_]{3,}\b`, // an all-caps technical marker
+	`\b[A-Z][A-Z0-9_]{3,}\b`,            // an all-caps technical marker
 }, "|"))
 
 // An internal commit hash cited in a comment: 7 or 8 hex characters carrying
