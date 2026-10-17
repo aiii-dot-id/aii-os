@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -155,11 +156,20 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	var wmu sync.Mutex
+	setupErr := make(chan error, 1)
+	report := func(err error) {
+		if err != nil {
+			select {
+			case setupErr <- err:
+			default:
+			}
+		}
+	}
 	say := func(m setupMessage) {
 		raw, _ := json.Marshal(m)
 		wmu.Lock()
 		defer wmu.Unlock()
-		_ = conn.Write(ctx, websocket.MessageText, raw)
+		report(conn.Write(ctx, websocket.MessageText, raw))
 	}
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
@@ -188,12 +198,22 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 	}
 	ready := make(chan []byte, 64)
 	dc.OnMessage(func(m webrtc.DataChannelMessage) { ready <- m.Data })
+	var candidateMu sync.Mutex
+	var localCandidates []setupMessage
+	offered := false
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
 		}
 		init := c.ToJSON()
-		say(setupMessage{Type: "transport_candidate", Candidate: init.Candidate, SDPMid: init.SDPMid, SDPMLineIndex: init.SDPMLineIndex})
+		message := setupMessage{Type: "transport_candidate", Candidate: init.Candidate, SDPMid: init.SDPMid, SDPMLineIndex: init.SDPMLineIndex}
+		candidateMu.Lock()
+		defer candidateMu.Unlock()
+		if !offered {
+			localCandidates = append(localCandidates, message)
+			return
+		}
+		say(message)
 	})
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -202,7 +222,16 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 	if err := pc.SetLocalDescription(offer); err != nil {
 		t.Fatal(err)
 	}
+	// Match the browser: local gathering may finish before SetLocalDescription
+	// returns, but candidates must follow the offer on the signaling socket.
+	candidateMu.Lock()
 	say(setupMessage{Type: "transport_offer", SDP: offer.SDP})
+	offered = true
+	for _, candidate := range localCandidates {
+		say(candidate)
+	}
+	localCandidates = nil
+	candidateMu.Unlock()
 	go func() {
 		var early []webrtc.ICECandidateInit
 		answered := false
@@ -215,29 +244,34 @@ func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
 			_ = json.Unmarshal(raw, &m)
 			switch m.Type {
 			case "transport_answer":
-				_ = pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: m.SDP})
+				if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: m.SDP}); err != nil {
+					report(err)
+					return
+				}
 				answered = true
 				for _, c := range early {
-					_ = pc.AddICECandidate(c)
+					report(pc.AddICECandidate(c))
 				}
 			case "transport_candidate":
 				c := webrtc.ICECandidateInit{Candidate: m.Candidate, SDPMid: m.SDPMid, SDPMLineIndex: m.SDPMLineIndex}
 				if answered {
-					_ = pc.AddICECandidate(c)
+					report(pc.AddICECandidate(c))
 				} else {
 					early = append(early, c)
 				}
 			case "transport_ready":
-				t.Errorf("the identity chose the socket: %s", raw)
+				report(fmt.Errorf("the identity chose the socket: %s", raw))
 				return
 			}
 		}
 	}()
 	select {
 	case first := <-ready:
-		if first[0]&pieceLast == 0 || !strings.Contains(string(first[1:]), `"channel"`) {
+		if len(first) < 2 || first[0]&pieceLast == 0 || !strings.Contains(string(first[1:]), `"channel"`) {
 			t.Fatalf("first piece on the channel %q", first)
 		}
+	case err := <-setupErr:
+		t.Fatal(err)
 	case <-time.After(15 * time.Second):
 		t.Fatal("the channel never said ready")
 	}
