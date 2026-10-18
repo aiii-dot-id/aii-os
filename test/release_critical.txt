@@ -1,0 +1,28 @@
+# Release-critical tests, one row per test and its required native platforms.
+# Columns: package TestName platform... (linux, darwin, windows).
+# A required test that is absent or skipped fails qualification for that platform.
+# Platform omissions reflect the test's applicable operating-system behavior.
+
+internal/updates TestAnUpdateInstallsEveryFileBesideAii linux darwin windows
+internal/updates TestARollbackRestoresWhatStoodBesideAii linux darwin windows
+internal/updates TestARolledBackReleaseIsNotInstalledAgainAndTheNextOneIs linux darwin windows
+internal/updates TestAnInstallUpdatedByAnOlderUpdaterIsCompletedAtTheNextCheck linux darwin windows
+internal/updates TestACompletionThatCannotFinishPutsBackWhatItWrote linux windows
+internal/updates TestAWindowsUpdateInstallsWhatTheInstallerInstalls windows
+internal/updates TestAWindowsRollbackRestoresTheLauncherWhileTheUpdatesRuns windows
+internal/updates TestCanStageBesideProbesTheRealDirectory linux darwin
+internal/updates TestCanStageBesideRefusesAnUnwritableDirectory linux darwin
+internal/machine TestRemovalRefusesWhileTheServiceHoldsItsLock windows
+internal/supervisor TestArtifactTamperBetweenRestartsStopsTyped windows
+internal/pluginhost TestPluginStorageJunctionNeedsNoEnabledPrivileges windows
+cmd/aii TestUnrecognizedPositionalIsLoudAndDoesNotBoot linux darwin windows
+cmd/aii-plugin-worker TestWorkerDescriptorProofPrecedesReadiness linux darwin windows
+internal/app TestSelectionProbeFailureAndDeadline windows
+internal/app TestWordsWaitingBehindAPassKeepTheirSpeakerWhenTheirSessionEnds linux darwin windows
+internal/pluginhost TestDescriptorProofCannotBorrowTheServingBroker linux darwin windows
+
+internal/tools TestFailedStandingWritesPreserveTheChoice linux darwin windows
+internal/tools TestDormantChoicesDoNotSpendActiveOfferCapacity linux darwin windows
+internal/tools TestPluginReleasePreservesOtherAndAbsentChoices linux darwin windows
+internal/tools TestWaitingChoiceTakesFreedActiveSpaceInStandingOrder linux darwin windows
+internal/app TestUnreadableStandingChoicesRefuseChangesWithoutOverwriting linux darwin windows

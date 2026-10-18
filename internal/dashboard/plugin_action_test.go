@@ -1,0 +1,100 @@
+package dashboard
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+// The catalog browser's install/uninstall action (S12): the "plugin"
+// command reaches PluginAct and answers with a config payload wearing
+// the request id; a refusal answers with an error wearing the id.
+func TestPluginActionInstallUninstallAndRefusal(t *testing.T) {
+	var mu sync.Mutex
+	var calls []PluginAction
+	h := &WSHandler{
+		PluginAct: func(a PluginAction) error {
+			mu.Lock()
+			calls = append(calls, a)
+			mu.Unlock()
+			if a.ID == "org.bad" {
+				return fmt.Errorf("refused on purpose")
+			}
+			return nil
+		},
+		GetConfig: func() *ConfigState { return &ConfigState{} },
+	}
+	s := New("127.0.0.1", 0, h)
+	addr, err := s.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	conn := dialWS(t, addr)
+	writeJSON := func(v map[string]any) {
+		t.Helper()
+		data, _ := json.Marshal(v)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	writeJSON(map[string]any{"type": "plugin", "request_id": "1",
+		"plugin": map[string]any{"action": "install", "id": "org.x"}})
+	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "1" {
+		t.Fatalf("install answers with config wearing the id: %+v", msg)
+	}
+	writeJSON(map[string]any{"type": "plugin", "request_id": "2",
+		"plugin": map[string]any{"action": "uninstall", "id": "org.y"}})
+	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "2" {
+		t.Fatalf("uninstall answers with config: %+v", msg)
+	}
+	writeJSON(map[string]any{"type": "plugin", "request_id": "3",
+		"plugin": map[string]any{"action": "install", "id": "org.bad"}})
+	if msg := readMsg(t, conn); msg.Type != "error" || msg.RequestID != "3" {
+		t.Fatalf("a refused action answers with error wearing the id: %+v", msg)
+	}
+
+	writeJSON(map[string]any{"type": "plugin", "request_id": "4",
+		"plugin": map[string]any{"action": "offer", "id": "org.notes"}})
+	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "4" {
+		t.Fatalf("primary selection answers with current config: %+v", msg)
+	}
+	writeJSON(map[string]any{"type": "plugin", "request_id": "5", "plugin": map[string]any{"action": "release", "id": "org.notes"}})
+	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "5" {
+		t.Fatalf("release answers with current config: %+v", msg)
+	}
+	mu.Lock()
+	got := append([]PluginAction(nil), calls...)
+	mu.Unlock()
+	if len(got) != 5 || got[4] != (PluginAction{Action: "release", ID: "org.notes"}) || got[3] != (PluginAction{Action: "offer", ID: "org.notes"}) || got[0] != (PluginAction{Action: "install", ID: "org.x"}) || got[1] != (PluginAction{Action: "uninstall", ID: "org.y"}) {
+		t.Fatalf("PluginAct saw the operator's actions in order: %+v", got)
+	}
+}
+
+func TestPluginActionNotAvailableWithoutHandler(t *testing.T) {
+	s := New("127.0.0.1", 0, &WSHandler{})
+	addr, err := s.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	conn := dialWS(t, addr)
+	data, _ := json.Marshal(map[string]any{"type": "plugin", "request_id": "9",
+		"plugin": map[string]any{"action": "install", "id": "x"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatal(err)
+	}
+	if msg := readMsg(t, conn); msg.Type != "error" {
+		t.Fatalf("with no handler the action answers not available: %+v", msg)
+	}
+}

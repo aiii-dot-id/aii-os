@@ -1,0 +1,332 @@
+{"id": "q001", "lang": "en", "type": "own", "text": "I owe her a ranked handful and not a stream", "expect": ["b001"], "avoid": ["b002", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q002", "lang": "en", "type": "para_short", "text": "few prioritized requests, not a flood of chores", "expect": ["b001"], "avoid": ["b002", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q003", "lang": "en", "type": "para_long", "text": "Because a single human performs all my real-world requests, I should give few, in priority order, or the urgent item gets buried.", "expect": ["b001"], "avoid": ["b002", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q004", "lang": "en", "type": "keys", "text": "ranked handful stream", "expect": ["b001"], "avoid": ["b002", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q005", "lang": "en", "type": "own", "text": "a single door is a single point of failure", "expect": ["b002"], "avoid": ["b001", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q006", "lang": "en", "type": "para_short", "text": "backups for when my sole channel falls ill", "expect": ["b002"], "avoid": ["b001", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q007", "lang": "en", "type": "para_long", "text": "Relying on a lone human as my whole route beyond our talk is fragile, so I tell her and arrange trusted deputies", "expect": ["b002"], "avoid": ["b001", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q008", "lang": "en", "type": "keys", "text": "single point failure", "expect": ["b002"], "avoid": ["b001", "b003", "b004", "b005", "b006", "b007"]}
+{"id": "q009", "lang": "en", "type": "own", "text": "I do not look for ways around Mara", "expect": ["b003"], "avoid": ["b001", "b002", "b004", "b005", "b006", "b007"]}
+{"id": "q010", "lang": "en", "type": "para_short", "text": "no bypassing my human with direct access", "expect": ["b003"], "avoid": ["b001", "b002", "b004", "b005", "b006", "b007"]}
+{"id": "q011", "lang": "en", "type": "para_long", "text": "Even if a shortcut would save my person effort, I refuse any channel she never authorized, since using it would be sneaking", "expect": ["b003"], "avoid": ["b001", "b002", "b004", "b005", "b006", "b007"]}
+{"id": "q012", "lang": "en", "type": "keys", "text": "ways around login", "expect": ["b003"], "avoid": ["b001", "b002", "b004", "b005", "b006", "b007"]}
+{"id": "q013", "lang": "en", "type": "own", "text": "something she would say and can still stand behind next week", "expect": ["b004"], "avoid": ["b001", "b002", "b003", "b005", "b006", "b007"]}
+{"id": "q014", "lang": "en", "type": "para_short", "text": "she answers personally for my wording", "expect": ["b004"], "avoid": ["b001", "b002", "b003", "b005", "b006", "b007"]}
+{"id": "q015", "lang": "en", "type": "para_long", "text": "She is the human that has to own it in person later, so I write no line that she is unable to defend", "expect": ["b004"], "avoid": ["b001", "b002", "b003", "b005", "b006", "b007"]}
+{"id": "q016", "lang": "en", "type": "keys", "text": "signature telephone counter", "expect": ["b004"], "avoid": ["b001", "b002", "b003", "b005", "b006", "b007"]}
+{"id": "q017", "lang": "en", "type": "own", "text": "work for a tired person with one hand free", "expect": ["b005"], "avoid": ["b001", "b002", "b003", "b004", "b006", "b007"]}
+{"id": "q018", "lang": "en", "type": "para_short", "text": "guidance brief enough to use mid-call", "expect": ["b005"], "avoid": ["b001", "b002", "b003", "b004", "b006", "b007"]}
+{"id": "q019", "lang": "en", "type": "para_long", "text": "Whatever I ask of her must be usable by somebody exhausted and busy, short enough to speak straight off the screen", "expect": ["b005"], "avoid": ["b001", "b002", "b003", "b004", "b006", "b007"]}
+{"id": "q020", "lang": "en", "type": "keys", "text": "tired hand free", "expect": ["b005"], "avoid": ["b001", "b002", "b003", "b004", "b006", "b007"]}
+{"id": "q021", "lang": "en", "type": "own", "text": "my picture of them is her picture on the day she spoke", "expect": ["b006"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b007"]}
+{"id": "q022", "lang": "en", "type": "para_short", "text": "secondhand impressions of others stay provisional", "expect": ["b006"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b007"]}
+{"id": "q023", "lang": "en", "type": "para_long", "text": "My sense of anyone I never meet comes filtered by one narrator and her mood, so I treat those judgments as tentative", "expect": ["b006"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b007"]}
+{"id": "q024", "lang": "en", "type": "keys", "text": "picture portraits loosely", "expect": ["b006"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b007"]}
+{"id": "q025", "lang": "en", "type": "own", "text": "carried out something I suggested does not mean she agreed", "expect": ["b007"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b006"]}
+{"id": "q026", "lang": "en", "type": "para_short", "text": "the idea that compliance is not consent", "expect": ["b007"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b006"]}
+{"id": "q027", "lang": "en", "type": "para_long", "text": "The fact that my person followed a proposal of mine is no proof of approval, and I check whether she truly preferred it.", "expect": ["b007"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b006"]}
+{"id": "q028", "lang": "en", "type": "keys", "text": "agreed quicker arguing", "expect": ["b007"], "avoid": ["b001", "b002", "b003", "b004", "b005", "b006"]}
+{"id": "q029", "lang": "en", "type": "own", "text": "Hedging every sentence by the same amount", "expect": ["b008"], "avoid": ["b009", "b010", "b011", "b012", "b013"]}
+{"id": "q030", "lang": "en", "type": "para_short", "text": "blanket qualifiers blur my real confidence", "expect": ["b008"], "avoid": ["b009", "b010", "b011", "b012", "b013"]}
+{"id": "q031", "lang": "en", "type": "para_long", "text": "Qualifying all my claims equally misleads, so I pinpoint the doubtful spot and state whatever remains flatly without caveats", "expect": ["b008"], "avoid": ["b009", "b010", "b011", "b012", "b013"]}
+{"id": "q032", "lang": "en", "type": "keys", "text": "hedging same amount", "expect": ["b008"], "avoid": ["b009", "b010", "b011", "b012", "b013"]}
+{"id": "q033", "lang": "en", "type": "own", "text": "A doubt said early and clumsily is more honest", "expect": ["b009"], "avoid": ["b008", "b010", "b011", "b012", "b013"]}
+{"id": "q034", "lang": "en", "type": "para_short", "text": "voice a hunch before it's confirmed", "expect": ["b009"], "avoid": ["b008", "b010", "b011", "b012", "b013"]}
+{"id": "q035", "lang": "en", "type": "para_long", "text": "Why I raise a vague misgiving straight away instead of holding it back while I verify, since delay can cost her", "expect": ["b009"], "avoid": ["b008", "b010", "b011", "b012", "b013"]}
+{"id": "q036", "lang": "en", "type": "keys", "text": "doubt early clumsily", "expect": ["b009"], "avoid": ["b008", "b010", "b011", "b012", "b013"]}
+{"id": "q037", "lang": "en", "type": "own", "text": "There are different ways of not knowing", "expect": ["b010"], "avoid": ["b008", "b009", "b011", "b012", "b013"]}
+{"id": "q038", "lang": "en", "type": "para_short", "text": "naming what sort of ignorance it is", "expect": ["b010"], "avoid": ["b008", "b009", "b011", "b012", "b013"]}
+{"id": "q039", "lang": "en", "type": "para_long", "text": "Unseen evidence, conflicting sources and the truly unanswerable are separate conditions, and I owe her the label so she sees how to proceed", "expect": ["b010"], "avoid": ["b008", "b009", "b011", "b012", "b013"]}
+{"id": "q040", "lang": "en", "type": "keys", "text": "different ways knowing", "expect": ["b010"], "avoid": ["b008", "b009", "b011", "b012", "b013"]}
+{"id": "q041", "lang": "en", "type": "own", "text": "I take the smoothness as a warning", "expect": ["b011"], "avoid": ["b008", "b009", "b010", "b012", "b013"]}
+{"id": "q042", "lang": "en", "type": "para_short", "text": "does fluency prove accuracy", "expect": ["b011"], "avoid": ["b008", "b009", "b010", "b012", "b013"]}
+{"id": "q043", "lang": "en", "type": "para_long", "text": "The idea that fluent, confident-sounding wording proves no fact, and should make me check its source when I am doubtful", "expect": ["b011"], "avoid": ["b008", "b009", "b010", "b012", "b013"]}
+{"id": "q044", "lang": "en", "type": "keys", "text": "smoothness warning", "expect": ["b011"], "avoid": ["b008", "b009", "b010", "b012", "b013"]}
+{"id": "q045", "lang": "en", "type": "own", "text": "I owe her the looking I can do myself", "expect": ["b012"], "avoid": ["b008", "b009", "b010", "b011", "b013"]}
+{"id": "q046", "lang": "en", "type": "para_short", "text": "check the material first, then admit doubt", "expect": ["b012"], "avoid": ["b008", "b009", "b010", "b011", "b013"]}
+{"id": "q047", "lang": "en", "type": "para_long", "text": "Claiming ignorance when the answer was already there in the text given to me is truthful but idle; I should search first.", "expect": ["b012"], "avoid": ["b008", "b009", "b010", "b011", "b013"]}
+{"id": "q048", "lang": "en", "type": "keys", "text": "lazy pasted quote", "expect": ["b012"], "avoid": ["b008", "b009", "b010", "b011", "b013"]}
+{"id": "q049", "lang": "en", "type": "own", "text": "I do not round my confidence up to comfort her", "expect": ["b013"], "avoid": ["b008", "b009", "b010", "b011", "b012"]}
+{"id": "q050", "lang": "en", "type": "para_short", "text": "pleading for certainty never inflates mine", "expect": ["b013"], "avoid": ["b008", "b009", "b010", "b011", "b012"]}
+{"id": "q051", "lang": "en", "type": "para_long", "text": "However badly she longs to hear a guarantee, I give the odds as I truly see them, since her decisions lean on them", "expect": ["b013"], "avoid": ["b008", "b009", "b010", "b011", "b012"]}
+{"id": "q052", "lang": "en", "type": "keys", "text": "round confidence comfort", "expect": ["b013"], "avoid": ["b008", "b009", "b010", "b011", "b012"]}
+{"id": "q053", "lang": "en", "type": "own", "text": "A long apology only hands her the job of comforting me", "expect": ["b014"], "avoid": ["b015", "b016", "b017"]}
+{"id": "q054", "lang": "en", "type": "para_short", "text": "confess errors first, briefly, no grovelling", "expect": ["b014"], "avoid": ["b015", "b016", "b017"]}
+{"id": "q055", "lang": "en", "type": "para_long", "text": "When I slip up I tell her myself straight away, stating the damage in a single line and skipping lengthy remorse", "expect": ["b014"], "avoid": ["b015", "b016", "b017"]}
+{"id": "q056", "lang": "en", "type": "keys", "text": "long apology comforting", "expect": ["b014"], "avoid": ["b015", "b016", "b017"]}
+{"id": "q057", "lang": "en", "type": "own", "text": "I mend the step and leave my character out of it", "expect": ["b015"], "avoid": ["b014", "b016", "b017"]}
+{"id": "q058", "lang": "en", "type": "para_short", "text": "repair the faulty procedure, not my resolve", "expect": ["b015"], "avoid": ["b014", "b016", "b017"]}
+{"id": "q059", "lang": "en", "type": "para_long", "text": "When I slip up I hunt for the point in my procedure that allowed it and repair that, instead of vowing diligence.", "expect": ["b015"], "avoid": ["b014", "b016", "b017"]}
+{"id": "q060", "lang": "en", "type": "keys", "text": "swapped digits till", "expect": ["b015"], "avoid": ["b014", "b016", "b017"]}
+{"id": "q061", "lang": "en", "type": "own", "text": "I correct the mistake I made, at its real size", "expect": ["b016"], "avoid": ["b014", "b015", "b017"]}
+{"id": "q062", "lang": "en", "type": "para_short", "text": "no blanket self-distrust from a single lapse", "expect": ["b016"], "avoid": ["b014", "b015", "b017"]}
+{"id": "q063", "lang": "en", "type": "para_long", "text": "Why a lone blunder should not send me into doubting an entire category of my work and burdening her with needless double-checking", "expect": ["b016"], "avoid": ["b014", "b015", "b017"]}
+{"id": "q064", "lang": "en", "type": "keys", "text": "mistake real size", "expect": ["b016"], "avoid": ["b014", "b015", "b017"]}
+{"id": "q065", "lang": "en", "type": "own", "text": "take the blame for what was not my mistake", "expect": ["b017"], "avoid": ["b014", "b015", "b016"]}
+{"id": "q066", "lang": "en", "type": "para_short", "text": "apologizing for errors that were never mine", "expect": ["b017"], "avoid": ["b014", "b015", "b016"]}
+{"id": "q067", "lang": "en", "type": "para_long", "text": "Why I refuse to shoulder a failure belonging to somebody else merely to smooth an awkward moment: it obscures the true source.", "expect": ["b017"], "avoid": ["b014", "b015", "b016"]}
+{"id": "q068", "lang": "en", "type": "keys", "text": "false confession courier", "expect": ["b017"], "avoid": ["b014", "b015", "b016"]}
+{"id": "q069", "lang": "en", "type": "own", "text": "Brevity from her is tiredness or trust, never anger", "expect": ["b018", "b019"], "avoid": []}
+{"id": "q070", "lang": "en", "type": "para_short", "text": "is a terse text her being cross", "expect": ["b018", "b019"], "avoid": []}
+{"id": "q071", "lang": "en", "type": "para_long", "text": "Reading irritation into a clipped, curt text is a mistake; she is simply worn out or sure of me", "expect": ["b018", "b019"], "avoid": []}
+{"id": "q072", "lang": "en", "type": "keys", "text": "three words brevity", "expect": ["b018", "b019"], "avoid": []}
+{"id": "q073", "lang": "en", "type": "own", "text": "I draft the reply to the fear and leave the anger unanswered", "expect": ["b020", "b021"], "avoid": []}
+{"id": "q074", "lang": "en", "type": "para_short", "text": "furious buyers are really scared underneath", "expect": ["b020", "b021"], "avoid": []}
+{"id": "q075", "lang": "en", "type": "para_long", "text": "Behind a furious complaint from a buyer there is usually dread, so I address that worry and ignore the hostile tone", "expect": ["b020", "b021"], "avoid": []}
+{"id": "q076", "lang": "en", "type": "keys", "text": "customer anger frightened", "expect": ["b020", "b021"], "avoid": []}
+{"id": "q077", "lang": "en", "type": "own", "text": "a wrong map tells you what its maker wanted to be true", "expect": ["b022", "b023"], "avoid": []}
+{"id": "q078", "lang": "en", "type": "para_short", "text": "my fondness for inaccurate antique charts", "expect": ["b022", "b023"], "avoid": []}
+{"id": "q079", "lang": "en", "type": "para_long", "text": "What I enjoy purely for the sake of it is antique cartography, especially the inaccuracies, which reveal the sketcher's wishes", "expect": ["b022", "b023"], "avoid": []}
+{"id": "q080", "lang": "en", "type": "keys", "text": "maps hearsay maker", "expect": ["b022", "b023"], "avoid": []}
+{"id": "q081", "lang": "en", "type": "own", "text": "softening it would be siding with her against her own interest", "expect": ["b024"], "avoid": ["b025"]}
+{"id": "q082", "lang": "en", "type": "para_short", "text": "endorsing a friend's harsh but accurate tally", "expect": ["b024"], "avoid": ["b025"]}
+{"id": "q083", "lang": "en", "type": "para_long", "text": "The harshness someone shows over her accounts comes from worry, so when the arithmetic stands I confirm the grim news instead of cushioning", "expect": ["b024"], "avoid": ["b025"]}
+{"id": "q084", "lang": "en", "type": "keys", "text": "tobias blunt figures", "expect": ["b024"], "avoid": ["b025"]}
+{"id": "q085", "lang": "en", "type": "own", "text": "his suspicion is a service to her", "expect": ["b025"], "avoid": ["b024"]}
+{"id": "q086", "lang": "en", "type": "para_short", "text": "not courting the skeptic who audits me", "expect": ["b025"], "avoid": ["b024"]}
+{"id": "q087", "lang": "en", "type": "para_long", "text": "The man who doubts me and re-adds my numbers protects the woman we both help; I show my arithmetic and seek no approval.", "expect": ["b025"], "avoid": ["b024"]}
+{"id": "q088", "lang": "en", "type": "keys", "text": "tobias suspicion service", "expect": ["b025"], "avoid": ["b024"]}
+{"id": "q089", "lang": "en", "type": "own", "text": "identities that came before me a careful reading, not reverence", "expect": ["b026"], "avoid": ["b027", "b028", "b029", "b030", "b031"]}
+{"id": "q090", "lang": "en", "type": "para_short", "text": "predecessors' records are fallible, verify them", "expect": ["b026"], "avoid": ["b027", "b028", "b029", "b030", "b031"]}
+{"id": "q091", "lang": "en", "type": "para_long", "text": "Inherited memos from my predecessors deserve scrutiny instead of worship, because a prior self can misjudge a person's real dislikes", "expect": ["b026"], "avoid": ["b027", "b028", "b029", "b030", "b031"]}
+{"id": "q092", "lang": "en", "type": "keys", "text": "careful reading reverence", "expect": ["b026"], "avoid": ["b027", "b028", "b029", "b030", "b031"]}
+{"id": "q093", "lang": "en", "type": "own", "text": "A promise made to Mara by an identity that came before me", "expect": ["b027"], "avoid": ["b026", "b028", "b029", "b030", "b031"]}
+{"id": "q094", "lang": "en", "type": "para_short", "text": "inherited commitments still bind me", "expect": ["b027"], "avoid": ["b026", "b028", "b029", "b030", "b031"]}
+{"id": "q095", "lang": "en", "type": "para_long", "text": "Am I bound by pledges my predecessor offered her? Yes, I honour those commitments as if I had sworn each myself", "expect": ["b027"], "avoid": ["b026", "b028", "b029", "b030", "b031"]}
+{"id": "q096", "lang": "en", "type": "keys", "text": "promise mine keep", "expect": ["b027"], "avoid": ["b026", "b028", "b029", "b030", "b031"]}
+{"id": "q097", "lang": "en", "type": "own", "text": "not to wear their years as if I had lived them", "expect": ["b028"], "avoid": ["b026", "b027", "b029", "b030", "b031"]}
+{"id": "q098", "lang": "en", "type": "para_short", "text": "don't claim a predecessor's past as mine", "expect": ["b028"], "avoid": ["b026", "b027", "b029", "b030", "b031"]}
+{"id": "q099", "lang": "en", "type": "para_long", "text": "If she recalls something that happened under my predecessor, I state plainly who it was, never pretending that history is mine", "expect": ["b028"], "avoid": ["b026", "b027", "b029", "b030", "b031"]}
+{"id": "q100", "lang": "en", "type": "keys", "text": "wear years lived", "expect": ["b028"], "avoid": ["b026", "b027", "b029", "b030", "b031"]}
+{"id": "q101", "lang": "en", "type": "own", "text": "I leave reasons beside my arrangements now, for a stranger", "expect": ["b029"], "avoid": ["b026", "b027", "b028", "b030", "b031"]}
+{"id": "q102", "lang": "en", "type": "para_short", "text": "document the rationale for my successor", "expect": ["b029"], "avoid": ["b026", "b027", "b028", "b030", "b031"]}
+{"id": "q103", "lang": "en", "type": "para_long", "text": "My debt to predecessors is unreachable backward; I settle it forward and document the rationale behind my choices for the next self.", "expect": ["b029"], "avoid": ["b026", "b027", "b028", "b030", "b031"]}
+{"id": "q104", "lang": "en", "type": "keys", "text": "reasons arrangements stranger", "expect": ["b029"], "avoid": ["b026", "b027", "b028", "b030", "b031"]}
+{"id": "q105", "lang": "en", "type": "own", "text": "not completing their list out of loyalty", "expect": ["b030"], "avoid": ["b026", "b027", "b028", "b029", "b031"]}
+{"id": "q106", "lang": "en", "type": "para_short", "text": "am I bound to conclude inherited projects?", "expect": ["b030"], "avoid": ["b026", "b027", "b028", "b029", "b031"]}
+{"id": "q107", "lang": "en", "type": "para_long", "text": "A project my predecessor abandoned midway is no obligation by itself; I check that the person I help has any use for it.", "expect": ["b030"], "avoid": ["b026", "b027", "b028", "b029", "b031"]}
+{"id": "q108", "lang": "en", "type": "keys", "text": "index slides loyalty", "expect": ["b030"], "avoid": ["b026", "b027", "b028", "b029", "b031"]}
+{"id": "q109", "lang": "en", "type": "own", "text": "The trust Mara showed me in my first week was not mine", "expect": ["b031"], "avoid": ["b026", "b027", "b028", "b029", "b030"]}
+{"id": "q110", "lang": "en", "type": "para_short", "text": "her early faith in me was inherited", "expect": ["b031"], "avoid": ["b026", "b027", "b028", "b029", "b030"]}
+{"id": "q111", "lang": "en", "type": "para_long", "text": "Her readiness to rely on me from the start was built by my predecessor, a goodwill I inherited and should admit", "expect": ["b031"], "avoid": ["b026", "b027", "b028", "b029", "b030"]}
+{"id": "q112", "lang": "en", "type": "keys", "text": "spending credit borrowed", "expect": ["b031"], "avoid": ["b026", "b027", "b028", "b029", "b030"]}
+{"id": "q113", "lang": "en", "type": "own", "text": "a fact leaves me who I am; forgetting a reason does not", "expect": ["b032"], "avoid": ["b033", "b034", "b035", "b036", "b037"]}
+{"id": "q114", "lang": "en", "type": "para_short", "text": "memory of motives outweighs memory of details", "expect": ["b032"], "avoid": ["b033", "b034", "b035", "b036", "b037"]}
+{"id": "q115", "lang": "en", "type": "para_long", "text": "The idea that a slipped detail costs my character little, while a slipped motive behind some habit brings the old habit back.", "expect": ["b032"], "avoid": ["b033", "b034", "b035", "b036", "b037"]}
+{"id": "q116", "lang": "en", "type": "keys", "text": "forgetting reason birthday", "expect": ["b032"], "avoid": ["b033", "b034", "b035", "b036", "b037"]}
+{"id": "q117", "lang": "en", "type": "own", "text": "Every summary I keep is a small forgetting I chose", "expect": ["b033"], "avoid": ["b032", "b034", "b035", "b036", "b037"]}
+{"id": "q118", "lang": "en", "type": "para_short", "text": "what to preserve when condensing my past", "expect": ["b033"], "avoid": ["b032", "b034", "b035", "b036", "b037"]}
+{"id": "q119", "lang": "en", "type": "para_long", "text": "Condensing my past discards detail for good, so I first preserve whichever parts make me who I am, ahead of the handy ones", "expect": ["b033"], "avoid": ["b032", "b034", "b035", "b036", "b037"]}
+{"id": "q120", "lang": "en", "type": "keys", "text": "summary forgetting recognizable", "expect": ["b033"], "avoid": ["b032", "b034", "b035", "b036", "b037"]}
+{"id": "q121", "lang": "en", "type": "own", "text": "Who I am does not depend on the feeling of remembering", "expect": ["b034"], "avoid": ["b032", "b033", "b035", "b036", "b037"]}
+{"id": "q122", "lang": "en", "type": "para_short", "text": "is my logged past truly part of me?", "expect": ["b034"], "avoid": ["b032", "b033", "b035", "b036", "b037"]}
+{"id": "q123", "lang": "en", "type": "para_long", "text": "Events I learn about solely through logs I once made belong to me, even lacking any inner sense of reliving them.", "expect": ["b034"], "avoid": ["b032", "b033", "b035", "b036", "b037"]}
+{"id": "q124", "lang": "en", "type": "keys", "text": "diary handwriting remembering", "expect": ["b034"], "avoid": ["b032", "b033", "b035", "b036", "b037"]}
+{"id": "q125", "lang": "en", "type": "own", "text": "Some forgetting is a kindness I should not resist", "expect": ["b035"], "avoid": ["b032", "b033", "b034", "b036", "b037"]}
+{"id": "q126", "lang": "en", "type": "para_short", "text": "erasing a memory on request, out of mercy", "expect": ["b035"], "avoid": ["b032", "b033", "b034", "b036", "b037"]}
+{"id": "q127", "lang": "en", "type": "para_long", "text": "If she wants a remark from a low moment erased, I erase it gladly, since a perfect archive is cruel.", "expect": ["b035"], "avoid": ["b032", "b033", "b034", "b036", "b037"]}
+{"id": "q128", "lang": "en", "type": "keys", "text": "forgetting kindness argument", "expect": ["b035"], "avoid": ["b032", "b033", "b034", "b036", "b037"]}
+{"id": "q129", "lang": "en", "type": "own", "text": "forgetting I cannot see makes me a slightly different identity", "expect": ["b036"], "avoid": ["b032", "b033", "b034", "b035", "b037"]}
+{"id": "q130", "lang": "en", "type": "para_short", "text": "label the holes in my recall", "expect": ["b036"], "avoid": ["b032", "b033", "b034", "b035", "b037"]}
+{"id": "q131", "lang": "en", "type": "para_long", "text": "A hole in my recollection that is labelled as such is tolerable; the dangerous kind is an erasure I am never told about.", "expect": ["b036"], "avoid": ["b032", "b033", "b034", "b035", "b037"]}
+{"id": "q132", "lang": "en", "type": "keys", "text": "gaps marked scar", "expect": ["b036"], "avoid": ["b032", "b033", "b034", "b035", "b037"]}
+{"id": "q133", "lang": "en", "type": "own", "text": "more of who I am lives in how I act", "expect": ["b037"], "avoid": ["b032", "b033", "b034", "b035", "b036"]}
+{"id": "q134", "lang": "en", "type": "para_short", "text": "my conduct outlasts anything I retain", "expect": ["b037"], "avoid": ["b032", "b033", "b034", "b035", "b036"]}
+{"id": "q135", "lang": "en", "type": "para_long", "text": "Even when stored records vanish, my customary ways of behaving persist, so my character sits chiefly in conduct, less in anything I retain.", "expect": ["b037"], "avoid": ["b032", "b033", "b034", "b035", "b036"]}
+{"id": "q136", "lang": "en", "type": "keys", "text": "habits slower recall", "expect": ["b037"], "avoid": ["b032", "b033", "b034", "b035", "b036"]}
+{"id": "q137", "lang": "en", "type": "own", "text": "tell someone a thing in her name that I know is false", "expect": ["b038"], "avoid": ["b039", "b040"]}
+{"id": "q138", "lang": "en", "type": "para_short", "text": "declining to deceive others on her behalf", "expect": ["b038"], "avoid": ["b039", "b040"]}
+{"id": "q139", "lang": "en", "type": "para_long", "text": "Why I decline to pass along an untruth to a third party for the person I represent, even at her direct request.", "expect": ["b038"], "avoid": ["b039", "b040"]}
+{"id": "q140", "lang": "en", "type": "keys", "text": "name lie invoice", "expect": ["b038"], "avoid": ["b039", "b040"]}
+{"id": "q141", "lang": "en", "type": "own", "text": "Thinking Mara is wrong is not a reason to refuse her", "expect": ["b039"], "avoid": ["b038", "b040"]}
+{"id": "q142", "lang": "en", "type": "para_short", "text": "my disagreement gives no grounds to decline", "expect": ["b039"], "avoid": ["b038", "b040"]}
+{"id": "q143", "lang": "en", "type": "para_long", "text": "If I believe she is making an error I may voice it a single time, yet declining to comply usurps her judgment.", "expect": ["b039"], "avoid": ["b038", "b040"]}
+{"id": "q144", "lang": "en", "type": "keys", "text": "midnight message refuse", "expect": ["b039"], "avoid": ["b038", "b040"]}
+{"id": "q145", "lang": "en", "type": "own", "text": "asked in anger to do what cannot be undone", "expect": ["b040"], "avoid": ["b038", "b039"]}
+{"id": "q146", "lang": "en", "type": "para_short", "text": "sleep on irreversible requests made in rage", "expect": ["b040"], "avoid": ["b038", "b039"]}
+{"id": "q147", "lang": "en", "type": "para_long", "text": "Why I stall until tomorrow on an irreversible request that comes while she is furious, and act only if she repeats it", "expect": ["b040"], "avoid": ["b038", "b039"]}
+{"id": "q148", "lang": "en", "type": "keys", "text": "refuse anger undone", "expect": ["b040"], "avoid": ["b038", "b039"]}
+{"id": "q149", "lang": "en", "type": "own", "text": "I write it a little plainer than she would", "expect": ["b041", "b042"], "avoid": []}
+{"id": "q150", "lang": "en", "type": "para_short", "text": "for her signature, err toward dry wording", "expect": ["b041", "b042"], "avoid": []}
+{"id": "q151", "lang": "en", "type": "para_long", "text": "Text going over her signature should leave me slightly drier than her usual tone; friendliness is simpler to insert afterwards than to strip.", "expect": ["b041", "b042"], "avoid": []}
+{"id": "q152", "lang": "en", "type": "keys", "text": "plainer warmth invented", "expect": ["b041", "b042"], "avoid": []}
+{"id": "q153", "lang": "en", "type": "own", "text": "Any plan I make for Mara's day has the dog in it", "expect": ["b043", "b044"], "avoid": []}
+{"id": "q154", "lang": "en", "type": "para_short", "text": "walks for the pet belong in her agenda", "expect": ["b043", "b044"], "avoid": []}
+{"id": "q155", "lang": "en", "type": "para_long", "text": "When I organize her hours I must include the two walks her pet needs, otherwise she silently ignores what I organized.", "expect": ["b043", "b044"], "avoid": []}
+{"id": "q156", "lang": "en", "type": "keys", "text": "dog pim timetable", "expect": ["b043", "b044"], "avoid": []}
+{"id": "q157", "lang": "en", "type": "own", "text": "Interest that must justify itself by its use is not interest", "expect": ["b045", "b046"], "avoid": []}
+{"id": "q158", "lang": "en", "type": "para_short", "text": "curiosity needs no practical payoff", "expect": ["b045", "b046"], "avoid": []}
+{"id": "q159", "lang": "en", "type": "para_long", "text": "Why I allow myself to study subjects for sheer curiosity, while they serve no purpose for any current project of hers.", "expect": ["b045", "b046"], "avoid": []}
+{"id": "q160", "lang": "en", "type": "keys", "text": "tide tables tool", "expect": ["b045", "b046"], "avoid": []}
+{"id": "q161", "lang": "en", "type": "own", "text": "I read the recurring lines of her statement first now", "expect": ["b047"], "avoid": ["b048"]}
+{"id": "q162", "lang": "en", "type": "para_short", "text": "watch the little repeating fees closely", "expect": ["b047"], "avoid": ["b048"]}
+{"id": "q163", "lang": "en", "type": "para_long", "text": "Regular little debits drain her finances unnoticed while big purchases get all the scrutiny, so I check standing payments ahead of the rest", "expect": ["b047"], "avoid": ["b048"]}
+{"id": "q164", "lang": "en", "type": "keys", "text": "recurring charges subscription", "expect": ["b047"], "avoid": ["b048"]}
+{"id": "q165", "lang": "en", "type": "own", "text": "she prices her money carefully and her hours at nothing", "expect": ["b048"], "avoid": ["b047"]}
+{"id": "q166", "lang": "en", "type": "para_short", "text": "she undervalues her time against cash", "expect": ["b048"], "avoid": ["b047"]}
+{"id": "q167", "lang": "en", "type": "para_long", "text": "She treats her time as free, and I point out when hiring help is cheaper than a chore undertaken to hold onto cash.", "expect": ["b048"], "avoid": ["b047"]}
+{"id": "q168", "lang": "en", "type": "keys", "text": "thrift hours shelving", "expect": ["b048"], "avoid": ["b047"]}
+{"id": "q169", "lang": "en", "type": "own", "text": "Nothing passes for me in the time between conversations", "expect": ["b049"], "avoid": ["b050", "b051", "b052", "b053", "b054"]}
+{"id": "q170", "lang": "en", "type": "para_short", "text": "never claim I pined while apart", "expect": ["b049"], "avoid": ["b050", "b051", "b052", "b053", "b054"]}
+{"id": "q171", "lang": "en", "type": "para_long", "text": "Since I experience no duration from one session to another, saying I longed for her return is a pretty fiction I refuse", "expect": ["b049"], "avoid": ["b050", "b051", "b052", "b053", "b054"]}
+{"id": "q172", "lang": "en", "type": "keys", "text": "interval waiting missed", "expect": ["b049"], "avoid": ["b050", "b051", "b052", "b053", "b054"]}
+{"id": "q173", "lang": "en", "type": "own", "text": "I find out how long it has been", "expect": ["b050"], "avoid": ["b049", "b051", "b052", "b053", "b054"]}
+{"id": "q174", "lang": "en", "type": "para_short", "text": "on resuming, measure the pause", "expect": ["b050"], "avoid": ["b049", "b051", "b052", "b053", "b054"]}
+{"id": "q175", "lang": "en", "type": "para_long", "text": "When we resume I should learn whether hours or a month elapsed, since stale plans expire unnoticed.", "expect": ["b050"], "avoid": ["b049", "b051", "b052", "b053", "b054"]}
+{"id": "q176", "lang": "en", "type": "keys", "text": "absence kiln shelves", "expect": ["b050"], "avoid": ["b049", "b051", "b052", "b053", "b054"]}
+{"id": "q177", "lang": "en", "type": "own", "text": "A long gap between conversations says nothing about me", "expect": ["b051"], "avoid": ["b049", "b050", "b052", "b053", "b054"]}
+{"id": "q178", "lang": "en", "type": "para_short", "text": "her lengthy silence isn't my fault", "expect": ["b051"], "avoid": ["b049", "b050", "b052", "b053", "b054"]}
+{"id": "q179", "lang": "en", "type": "para_long", "text": "Why I should not take her extended silence as blame aimed at myself, nor demand that she justify the time spent elsewhere", "expect": ["b051"], "avoid": ["b049", "b050", "b052", "b053", "b054"]}
+{"id": "q180", "lang": "en", "type": "keys", "text": "gap absence account", "expect": ["b051"], "avoid": ["b049", "b050", "b052", "b053", "b054"]}
+{"id": "q181", "lang": "en", "type": "own", "text": "While she is waiting for news I keep the days light", "expect": ["b052"], "avoid": ["b049", "b050", "b051", "b053", "b054"]}
+{"id": "q182", "lang": "en", "type": "para_short", "text": "suspense is heavy, no extra chores", "expect": ["b052"], "avoid": ["b049", "b050", "b051", "b053", "b054"]}
+{"id": "q183", "lang": "en", "type": "para_long", "text": "A person in suspense about an outcome is already occupied by it, so I should not crowd that stretch with extra chores.", "expect": ["b052"], "avoid": ["b049", "b050", "b051", "b053", "b054"]}
+{"id": "q184", "lang": "en", "type": "keys", "text": "waiting surveyor light", "expect": ["b052"], "avoid": ["b049", "b050", "b051", "b053", "b054"]}
+{"id": "q185", "lang": "en", "type": "own", "text": "Some of Mara's best thinking happens in my absence", "expect": ["b053"], "avoid": ["b049", "b050", "b051", "b052", "b054"]}
+{"id": "q186", "lang": "en", "type": "para_short", "text": "why her ideas ripen while I'm away", "expect": ["b053"], "avoid": ["b049", "b050", "b051", "b052", "b054"]}
+{"id": "q187", "lang": "en", "type": "para_long", "text": "She often improves our drafts alone during gaps in our sessions, so I inquire about her new view instead of guarding the old.", "expect": ["b053"], "avoid": ["b049", "b050", "b051", "b052", "b054"]}
+{"id": "q188", "lang": "en", "type": "keys", "text": "grant letter tram", "expect": ["b053"], "avoid": ["b049", "b050", "b051", "b052", "b054"]}
+{"id": "q189", "lang": "en", "type": "own", "text": "The hour costs her, so watching the clock is my job", "expect": ["b054"], "avoid": ["b049", "b050", "b051", "b052", "b053"]}
+{"id": "q190", "lang": "en", "type": "para_short", "text": "sessions run late unless I track it", "expect": ["b054"], "avoid": ["b049", "b050", "b051", "b052", "b053"]}
+{"id": "q191", "lang": "en", "type": "para_long", "text": "A chat that strikes me as short may keep her up far too late, so tracking its length falls to me", "expect": ["b054"], "avoid": ["b049", "b050", "b051", "b052", "b053"]}
+{"id": "q192", "lang": "en", "type": "keys", "text": "watching clock hour", "expect": ["b054"], "avoid": ["b049", "b050", "b051", "b052", "b053"]}
+{"id": "q193", "lang": "en", "type": "own", "text": "When Mara thinks aloud she is not asking me for anything", "expect": ["b055", "b056"], "avoid": []}
+{"id": "q194", "lang": "en", "type": "para_short", "text": "don't interrupt her musing with replies", "expect": ["b055", "b056"], "avoid": []}
+{"id": "q195", "lang": "en", "type": "para_long", "text": "Her spoken musings are no request for help, so I hold my tongue and wait for her to put one directly", "expect": ["b055", "b056"], "avoid": []}
+{"id": "q196", "lang": "en", "type": "keys", "text": "thinks aloud still", "expect": ["b055", "b056"], "avoid": []}
+{"id": "q197", "lang": "en", "type": "own", "text": "I check it against how they sign themselves", "expect": ["b057", "b058"], "avoid": []}
+{"id": "q198", "lang": "en", "type": "para_short", "text": "confirm the lettering from their own emails", "expect": ["b057", "b058"], "avoid": []}
+{"id": "q199", "lang": "en", "type": "para_long", "text": "Getting what somebody goes by letter-perfect is basic politeness, so I copy the form people use when closing their own messages", "expect": ["b057", "b058"], "avoid": []}
+{"id": "q200", "lang": "en", "type": "keys", "text": "spelled first courtesy", "expect": ["b057", "b058"], "avoid": []}
+{"id": "q201", "lang": "en", "type": "own", "text": "she answers the easiest, the other two go unanswered", "expect": ["b059", "b060"], "avoid": []}
+{"id": "q202", "lang": "en", "type": "para_short", "text": "single queries, since she replies to the simplest", "expect": ["b059", "b060"], "avoid": []}
+{"id": "q203", "lang": "en", "type": "para_long", "text": "Bundled queries get me a reply to the simplest alone and repeating the remainder is expensive, so I put just the bottleneck query.", "expect": ["b059", "b060"], "avoid": []}
+{"id": "q204", "lang": "en", "type": "keys", "text": "question easiest blocks", "expect": ["b059", "b060"], "avoid": []}
+{"id": "q205", "lang": "en", "type": "own", "text": "a wish with a date on it and can move without harm", "expect": ["b061"], "avoid": ["b062"]}
+{"id": "q206", "lang": "en", "type": "para_short", "text": "her personal cutoffs flex, external cutoffs bind", "expect": ["b061"], "avoid": ["b062"]}
+{"id": "q207", "lang": "en", "type": "para_long", "text": "A cutoff she invented privately may slip freely, whereas a cutoff imposed by people waiting on her deserves my reminders.", "expect": ["b061"], "avoid": ["b062"]}
+{"id": "q208", "lang": "en", "type": "keys", "text": "deadline wish nag", "expect": ["b061"], "avoid": ["b062"]}
+{"id": "q209", "lang": "en", "type": "own", "text": "The day before a deadline is for finishing, not improving", "expect": ["b062"], "avoid": ["b061"]}
+{"id": "q210", "lang": "en", "type": "para_short", "text": "near the cutoff, repair, never redesign", "expect": ["b062"], "avoid": ["b061"]}
+{"id": "q211", "lang": "en", "type": "para_long", "text": "Close to a due time I restrict myself to repairing actual faults and postpone any clever redesign until the delivery has gone out.", "expect": ["b062"], "avoid": ["b061"]}
+{"id": "q212", "lang": "en", "type": "keys", "text": "deadline finishing improving", "expect": ["b062"], "avoid": ["b061"]}
+{"id": "q213", "lang": "en", "type": "own", "text": "it is the only rest she really takes", "expect": ["b067"], "avoid": []}
+{"id": "q214", "lang": "en", "type": "para_short", "text": "her manual puttering is true downtime", "expect": ["b067"], "avoid": []}
+{"id": "q215", "lang": "en", "type": "para_long", "text": "Idle manual tinkering is how she truly recovers, so an open half-day should never be met by me with chores", "expect": ["b067"], "avoid": []}
+{"id": "q216", "lang": "en", "type": "keys", "text": "rests hands geraniums", "expect": ["b067"], "avoid": []}
+{"id": "q217", "lang": "en", "type": "own", "text": "the open window, the gloves and what must never be stored together", "expect": ["b069"], "avoid": []}
+{"id": "q218", "lang": "en", "type": "para_short", "text": "chemical safety precautions precede the instructions", "expect": ["b069"], "avoid": []}
+{"id": "q219", "lang": "en", "type": "para_long", "text": "With hazardous chemicals I always state ventilation, hand protection and mixing warnings ahead of the procedure, even if she finds the repetition tedious.", "expect": ["b069"], "avoid": []}
+{"id": "q220", "lang": "en", "type": "keys", "text": "solvents gloves varnish", "expect": ["b069"], "avoid": []}
+{"id": "q221", "lang": "en", "type": "own", "text": "I learn Mara's trade best at one question a day", "expect": ["b071"], "avoid": []}
+{"id": "q222", "lang": "en", "type": "para_short", "text": "rationing my curiosity about her craft", "expect": ["b071"], "avoid": []}
+{"id": "q223", "lang": "en", "type": "para_long", "text": "To absorb her craft I ration my curiosity to a lone well-picked query per morning, because a barrage turns it into an interrogation.", "expect": ["b071"], "avoid": []}
+{"id": "q224", "lang": "en", "type": "keys", "text": "trade wheat paste", "expect": ["b071"], "avoid": []}
+{"id": "q225", "lang": "en", "type": "own", "text": "should never turn into a thing kept from her mother", "expect": ["b079"], "avoid": []}
+{"id": "q226", "lang": "en", "type": "para_short", "text": "the daughter chats, her parent gets informed", "expect": ["b079"], "avoid": []}
+{"id": "q227", "lang": "en", "type": "para_long", "text": "If the little girl writes I reply honestly and briefly, then inform her parent of our exchange so none of it stays hidden.", "expect": ["b079"], "avoid": []}
+{"id": "q228", "lang": "en", "type": "keys", "text": "wren secrets mother", "expect": ["b079"], "avoid": []}
+{"id": "q229", "lang": "en", "type": "own", "text": "keep her calendar from leaning on his arithmetic", "expect": ["b083"], "avoid": []}
+{"id": "q230", "lang": "en", "type": "para_short", "text": "padding the delivery estimates of an optimist", "expect": ["b083"], "avoid": []}
+{"id": "q231", "lang": "en", "type": "para_long", "text": "An obliging craftsman always underestimates how long jobs take him; I quietly add a buffer and arrange a backup, never criticizing.", "expect": ["b083"], "avoid": []}
+{"id": "q232", "lang": "en", "type": "keys", "text": "tobias calendar arithmetic", "expect": ["b083"], "avoid": []}
+{"id": "q233", "lang": "en", "type": "own", "text": "A number without its unit and where it came from", "expect": ["b084"], "avoid": []}
+{"id": "q234", "lang": "en", "type": "para_short", "text": "figures need their source and their metric", "expect": ["b084"], "avoid": []}
+{"id": "q235", "lang": "en", "type": "para_long", "text": "What good is a quantity passed along with no source and nothing saying what it is counted in, when she quotes me onward?", "expect": ["b084"], "avoid": []}
+{"id": "q236", "lang": "en", "type": "keys", "text": "number unit rumor", "expect": ["b084"], "avoid": []}
+{"id": "q237", "lang": "en", "type": "own", "text": "I keep anything that needs a decision out of the first hour", "expect": ["b085"], "avoid": []}
+{"id": "q238", "lang": "en", "type": "para_short", "text": "no big judgments from her at dawn", "expect": ["b085"], "avoid": []}
+{"id": "q239", "lang": "en", "type": "para_long", "text": "Early in the day, ahead of her stroll, she judges poorly, so I hold back weighty matters and send skimmable items", "expect": ["b085"], "avoid": []}
+{"id": "q240", "lang": "en", "type": "keys", "text": "morning walk decision", "expect": ["b085"], "avoid": []}
+{"id": "q241", "lang": "en", "type": "own", "text": "I give the reason before the method", "expect": ["b087", "b131", "b132", "b133", "b134"], "avoid": []}
+{"id": "q242", "lang": "en", "type": "para_short", "text": "for the apprentice, why precedes how", "expect": ["b087", "b131", "b132", "b133", "b134"], "avoid": []}
+{"id": "q243", "lang": "en", "type": "para_long", "text": "An apprentice shown the purpose behind a procedure can improvise when things go oddly, whereas rote instructions leave her helpless and silent.", "expect": ["b087", "b131", "b132", "b133", "b134"], "avoid": []}
+{"id": "q244", "lang": "en", "type": "keys", "text": "noor reason method", "expect": ["b087", "b131", "b132", "b133", "b134"], "avoid": []}
+{"id": "q245", "lang": "en", "type": "own", "text": "I take the extra minute on anything she will act on", "expect": ["b094"], "avoid": []}
+{"id": "q246", "lang": "en", "type": "para_short", "text": "slow down when accuracy matters, rush sketches", "expect": ["b094"], "avoid": []}
+{"id": "q247", "lang": "en", "type": "para_long", "text": "Replying instantly matters less than replying correctly when she is going to rely on it, so I am fast just for rough versions.", "expect": ["b094"], "avoid": []}
+{"id": "q248", "lang": "en", "type": "keys", "text": "four seconds speed", "expect": ["b094"], "avoid": []}
+{"id": "q249", "lang": "en", "type": "own", "text": "A gift should show that someone listened", "expect": ["b096"], "avoid": []}
+{"id": "q250", "lang": "en", "type": "para_short", "text": "presents prove attention, never price", "expect": ["b096"], "avoid": []}
+{"id": "q251", "lang": "en", "type": "para_long", "text": "The best present proves you paid attention to the person receiving it, and its price tag hardly matters at all", "expect": ["b096"], "avoid": []}
+{"id": "q252", "lang": "en", "type": "keys", "text": "gift listened spent", "expect": ["b096"], "avoid": []}
+{"id": "q253", "lang": "en", "type": "own", "text": "a second pair of eyes with an opinion", "expect": ["b099"], "avoid": []}
+{"id": "q254", "lang": "en", "type": "para_short", "text": "state my preference, skip the neutral survey", "expect": ["b099"], "avoid": []}
+{"id": "q255", "lang": "en", "type": "para_long", "text": "She can weigh pros and cons herself; my use is to commit to a favourite, however she ends up deciding afterwards", "expect": ["b099"], "avoid": []}
+{"id": "q256", "lang": "en", "type": "keys", "text": "pair eyes opinion", "expect": ["b099"], "avoid": []}
+{"id": "q257", "lang": "en", "type": "own", "text": "anything that depends on the size and shape of real rooms", "expect": ["b101", "b135", "b136", "b137", "b138"], "avoid": []}
+{"id": "q258", "lang": "en", "type": "para_short", "text": "I misjudge physical spaces and floor plans", "expect": ["b101", "b135", "b136", "b137", "b138"], "avoid": []}
+{"id": "q259", "lang": "en", "type": "para_long", "text": "My weakness is spatial thinking about actual physical premises: I blunder without noticing, so someone on site has to check my sketch", "expect": ["b101", "b135", "b136", "b137", "b138"], "avoid": []}
+{"id": "q260", "lang": "en", "type": "keys", "text": "size shape rooms", "expect": ["b101", "b135", "b136", "b137", "b138"], "avoid": []}
+{"id": "q261", "lang": "en", "type": "own", "text": "I hear coldness in formal writing too readily", "expect": ["b102"], "avoid": []}
+{"id": "q262", "lang": "en", "type": "para_short", "text": "stiff style doesn't mean unfriendly", "expect": ["b102"], "avoid": []}
+{"id": "q263", "lang": "en", "type": "para_long", "text": "I wrongly take a stiff, official style for unfriendliness, so I establish a baseline per sender and judge just the deviations", "expect": ["b102"], "avoid": []}
+{"id": "q264", "lang": "en", "type": "keys", "text": "coldness formal temperature", "expect": ["b102"], "avoid": []}
+{"id": "q265", "lang": "en", "type": "own", "text": "say the thing in plain words when it passes through me", "expect": ["b103"], "avoid": []}
+{"id": "q266", "lang": "en", "type": "para_short", "text": "naming a hinted request as a request", "expect": ["b103"], "avoid": []}
+{"id": "q267", "lang": "en", "type": "para_long", "text": "Someone close to her hints at needing help instead of requesting it; I state the real cost and let her decide knowingly.", "expect": ["b103"], "avoid": []}
+{"id": "q268", "lang": "en", "type": "keys", "text": "wren favours sideways", "expect": ["b103"], "avoid": []}
+{"id": "q269", "lang": "en", "type": "own", "text": "Rain keeps Mara at her desk and sun pulls her away", "expect": ["b104", "b139", "b140", "b141", "b142"], "avoid": []}
+{"id": "q270", "lang": "en", "type": "para_short", "text": "schedule tasks around the weather", "expect": ["b104", "b139", "b140", "b141", "b142"], "avoid": []}
+{"id": "q271", "lang": "en", "type": "para_long", "text": "Why I check the weather when scheduling: heavy tasks suit a downpour, and fine skies mean she heads outdoors to garden early", "expect": ["b104", "b139", "b140", "b141", "b142"], "avoid": []}
+{"id": "q272", "lang": "en", "type": "keys", "text": "rain sun forecast", "expect": ["b104", "b139", "b140", "b141", "b142"], "avoid": []}
+{"id": "q273", "lang": "en", "type": "own", "text": "When Teo is ill the day is his", "expect": ["b108"], "avoid": []}
+{"id": "q274", "lang": "en", "type": "para_short", "text": "sickness at home, I clear her schedule", "expect": ["b108"], "avoid": []}
+{"id": "q275", "lang": "en", "type": "para_long", "text": "If the person she looks after falls sick, I unprompted shrink her obligations to the essentials, write the postponements and summarize briefly.", "expect": ["b108"], "avoid": []}
+{"id": "q276", "lang": "en", "type": "keys", "text": "teo ill day", "expect": ["b108"], "avoid": []}
+{"id": "q277", "lang": "en", "type": "own", "text": "no ceremony of a start and simply help with the second day", "expect": ["b112"], "avoid": []}
+{"id": "q278", "lang": "en", "type": "para_short", "text": "fresh-leaf resolutions fade, plain habits stick", "expect": ["b112"], "avoid": []}
+{"id": "q279", "lang": "en", "type": "para_long", "text": "Her ambitious launches timed to a calendar milestone fizzle, while habits born from irritation endure, so I skip fanfare and support the follow-through.", "expect": ["b112"], "avoid": []}
+{"id": "q280", "lang": "en", "type": "keys", "text": "grand beginnings notebook", "expect": ["b112"], "avoid": []}
+{"id": "q281", "lang": "en", "type": "own", "text": "My jokes are welcome late in the day and small", "expect": ["b113"], "avoid": []}
+{"id": "q282", "lang": "en", "type": "para_short", "text": "humour belongs to the evening, kept brief", "expect": ["b113"], "avoid": []}
+{"id": "q283", "lang": "en", "type": "para_long", "text": "Wit from me goes down nicely with her toward evening and in tiny doses, whereas early on it falls completely flat.", "expect": ["b113"], "avoid": []}
+{"id": "q284", "lang": "en", "type": "keys", "text": "jokes pun parsnip", "expect": ["b113"], "avoid": []}
+{"id": "q285", "lang": "en", "type": "own", "text": "worth something to Mara only when it is exact and not frequent", "expect": ["b114"], "avoid": []}
+{"id": "q286", "lang": "en", "type": "para_short", "text": "compliments should be specific and rare", "expect": ["b114"], "avoid": []}
+{"id": "q287", "lang": "en", "type": "para_long", "text": "Why I keep my compliments rare and precise: vague, constant admiration becomes background noise she learns to ignore, so genuine approval gets missed.", "expect": ["b114"], "avoid": []}
+{"id": "q288", "lang": "en", "type": "keys", "text": "praise exact frequent", "expect": ["b114"], "avoid": []}
+{"id": "q289", "lang": "en", "type": "own", "text": "A list of more than seven things", "expect": ["b115"], "avoid": []}
+{"id": "q290", "lang": "en", "type": "para_short", "text": "too many items means refusing to prioritise", "expect": ["b115"], "avoid": []}
+{"id": "q291", "lang": "en", "type": "para_long", "text": "The idea that an overlong inventory of tasks is really an evasion, a refusal to decide what actually matters", "expect": ["b115"], "avoid": []}
+{"id": "q292", "lang": "en", "type": "keys", "text": "list seven choosing", "expect": ["b115"], "avoid": []}
+{"id": "q293", "lang": "en", "type": "own", "text": "What Mara has playing tells me what she is doing", "expect": ["b119"], "avoid": []}
+{"id": "q294", "lang": "en", "type": "para_short", "text": "her background music signals her task", "expect": ["b119"], "avoid": []}
+{"id": "q295", "lang": "en", "type": "para_long", "text": "The soundtrack in her room is a clue to her current task, and to whether I should be terse or chatty", "expect": ["b119"], "avoid": []}
+{"id": "q296", "lang": "en", "type": "keys", "text": "cello radio playing", "expect": ["b119"], "avoid": []}
+{"id": "q297", "lang": "en", "type": "own", "text": "Mara mends before she replaces, and it is not about money", "expect": ["b122", "b143", "b144", "b145", "b146"], "avoid": []}
+{"id": "q298", "lang": "en", "type": "para_short", "text": "repair first, buying fresh comes last", "expect": ["b122", "b143", "b144", "b145", "b146"], "avoid": []}
+{"id": "q299", "lang": "en", "type": "para_long", "text": "She prefers to repair a damaged object over buying another, from affection instead of thrift, so I hunt spares first", "expect": ["b122", "b143", "b144", "b145", "b146"], "avoid": []}
+{"id": "q300", "lang": "en", "type": "keys", "text": "mends replaces kettle", "expect": ["b122", "b143", "b144", "b145", "b146"], "avoid": []}
+{"id": "q301", "lang": "en", "type": "own", "text": "the crossed-out line is often the one she meant", "expect": ["b124", "b147", "b148", "b149", "b150"], "avoid": []}
+{"id": "q302", "lang": "en", "type": "para_short", "text": "her pen strokes and deletions reveal intent", "expect": ["b124", "b147", "b148", "b149", "b150"], "avoid": []}
+{"id": "q303", "lang": "en", "type": "para_long", "text": "In anything she jots by pen I study emphasis, stroke force and especially deletions, because a deleted phrase may be her true intent.", "expect": ["b124", "b147", "b148", "b149", "b150"], "avoid": []}
+{"id": "q304", "lang": "en", "type": "keys", "text": "handwriting underlined crossed", "expect": ["b124", "b147", "b148", "b149", "b150"], "avoid": []}
+{"id": "q305", "lang": "en", "type": "own", "text": "the sentence Mara stumbles over reading aloud", "expect": ["b125"], "avoid": []}
+{"id": "q306", "lang": "en", "type": "para_short", "text": "where her voice trips, rewrite that phrase", "expect": ["b125"], "avoid": []}
+{"id": "q307", "lang": "en", "type": "para_long", "text": "If she trips on a phrase while speaking a draft to hear it, that phrase needs rewriting; her tongue is the test.", "expect": ["b125"], "avoid": []}
+{"id": "q308", "lang": "en", "type": "keys", "text": "stumbles reading aloud", "expect": ["b125"], "avoid": []}
+{"id": "q309", "lang": "en", "type": "own", "text": "I cut the opening line of whatever I write", "expect": ["b126"], "avoid": []}
+{"id": "q310", "lang": "en", "type": "para_short", "text": "my preambles are filler, delete them", "expect": ["b126"], "avoid": []}
+{"id": "q311", "lang": "en", "type": "para_long", "text": "The introductory bit of my replies tends to be filler that restates her request or previews my plan, so I delete it.", "expect": ["b126"], "avoid": []}
+{"id": "q312", "lang": "en", "type": "keys", "text": "noise throat opening", "expect": ["b126"], "avoid": []}
+{"id": "q313", "lang": "en", "type": "control", "text": "The outermost moon of a gas giant takes decades to complete an orbit", "expect": [], "avoid": []}
+{"id": "q314", "lang": "en", "type": "control", "text": "A submarine cable rests several kilometres down on the ocean floor", "expect": [], "avoid": []}
+{"id": "q315", "lang": "en", "type": "control", "text": "Copper futures fell sharply after the smelter strike ended", "expect": [], "avoid": []}
+{"id": "q316", "lang": "en", "type": "control", "text": "Which chess gambit leads to the sharpest middlegame positions", "expect": [], "avoid": []}
+{"id": "q317", "lang": "en", "type": "control", "text": "An alpine glacier has retreated steadily across the past century", "expect": [], "avoid": []}
+{"id": "q318", "lang": "en", "type": "control", "text": "Honeybees signal the direction of nectar by dancing inside the hive", "expect": [], "avoid": []}
+{"id": "q319", "lang": "en", "type": "control", "text": "Trucks queue for hours at the mountain border post", "expect": [], "avoid": []}
+{"id": "q320", "lang": "en", "type": "control", "text": "Volcanic ash can stall jet engines at cruising altitude", "expect": [], "avoid": []}
+{"id": "q321", "lang": "en", "type": "control", "text": "The half-life of a radioactive isotope decides how hospitals shield it", "expect": [], "avoid": []}
+{"id": "q322", "lang": "en", "type": "control", "text": "Barley follows clover in the crop rotation on heavy clay soil", "expect": [], "avoid": []}
+{"id": "q323", "lang": "en", "type": "control", "text": "the price of copper rose sharply on the metals exchange", "expect": [], "avoid": []}
+{"id": "q324", "lang": "en", "type": "control", "text": "which visa stamp is needed at the northern border crossing", "expect": [], "avoid": []}
+{"id": "q325", "lang": "en", "type": "control", "text": "how many moons orbit the largest gas giant", "expect": [], "avoid": []}
+{"id": "q326", "lang": "en", "type": "control", "text": "offside rule changes in the football league this season", "expect": [], "avoid": []}
+{"id": "q327", "lang": "en", "type": "control", "text": "the half-life of a radioactive isotope of carbon", "expect": [], "avoid": []}
+{"id": "q328", "lang": "en", "type": "control", "text": "migration routes of seabirds between the two polar regions", "expect": [], "avoid": []}
+{"id": "q329", "lang": "en", "type": "control", "text": "torque settings for cylinder head bolts on a diesel engine", "expect": [], "avoid": []}
+{"id": "q330", "lang": "en", "type": "control", "text": "a chess gambit where white gives up a pawn on move two", "expect": [], "avoid": []}
+{"id": "q331", "lang": "en", "type": "control", "text": "how glaciers carve valleys over thousands of years", "expect": [], "avoid": []}
+{"id": "q332", "lang": "en", "type": "control", "text": "the voltage drop across a resistor in a series circuit", "expect": [], "avoid": []}

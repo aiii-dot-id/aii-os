@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+
+      - name: Format
+        run: |
+          drift=$(gofmt -l .)
+          if [ -n "$drift" ]; then
+            echo "gofmt drift in:" >&2
+            echo "$drift" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Staticcheck
+        run: ./test/run_staticcheck.sh
+
+      - name: Dead code
+        run: ./test/run_deadcode.sh
+
+      - name: Race scope runner falsification
+        run: ./test/run_race_scope.sh self-test
+
+  race:
+    needs: quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [app, dashboard, identity, store, pluginhost, updates, witness, plugincatalog, memory, rest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+
+      - name: Containment dependency
+        if: matrix.scope == 'pluginhost'
+        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+
+      - name: Race (${{ matrix.scope }})
+        env:
+          AII_TEST_SHARDS: "4"
+          AII_BROWSER_ENGINES: "blink-chrome,gecko-firefox"
+        run: ./test/run_race_scope.sh "${{ matrix.scope }}"

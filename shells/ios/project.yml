@@ -1,0 +1,25 @@
+name: AIIOS
+options:
+  bundleIdPrefix: id.aiii
+settings:
+  DEVELOPMENT_TEAM: ${AIIOS_DEVELOPMENT_TEAM}
+  CODE_SIGN_STYLE: Automatic
+targets:
+  AIIOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [AIIOS]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: AIIOS/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSAppTransportSecurity: { NSAllowsLocalNetworking: true }
+        BGTaskSchedulerPermittedIdentifiers: [id.aiii.shell.timewake, id.aiii.shell.grip]
+        UIBackgroundModes: [fetch, processing]
+    dependencies:
+      - framework: Mobile.xcframework
+        embed: true

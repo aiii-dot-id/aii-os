@@ -1,0 +1,15 @@
+{
+  "corpus": "recall-beliefs-2026-10-08",
+  "frozen": "2026-10-08T15:00Z",
+  "files": {
+    "corpus.jsonl": "bbaa7dd5bc26bcb18e0f77f18ae1d16e39c8dc98b0de8666cc673c9e3c40825f",
+    "cues.jsonl": "c0d089e581d10d658ac50e4e7fea1a53cb05806e3e47119cf11dbc7d9764b636"
+  },
+  "thresholds": {
+    "k": 7,
+    "paraphrase_hit_at_k_min": 0.52,
+    "control_offered_by_meaning_max": 0.05,
+    "candidate_paraphrase_gain_min": 0.08,
+    "candidate_own_and_keys_loss_max": 0.03
+  }
+}

@@ -1,0 +1,287 @@
+package llm
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+type CachePolicy struct {
+	Mode        CacheMode `json:"mode,omitempty"`
+	TTL         string    `json:"ttl,omitempty"`
+	TailTTL     string    `json:"tail_ttl,omitempty"`
+	Key         string    `json:"key,omitempty"`
+	Diagnostics bool      `json:"diagnostics,omitempty"`
+}
+
+type CacheMode string
+
+const (
+	CacheAuto CacheMode = "auto"
+
+	CacheExplicit CacheMode = "explicit"
+
+	CacheOff CacheMode = "off"
+)
+
+type CachePolicyError struct{ Field, Reason string }
+
+func (e *CachePolicyError) Error() string {
+	return fmt.Sprintf("cache policy %s: %s", e.Field, e.Reason)
+}
+
+func ValidateCachePolicy(p CachePolicy, dialect Dialect, explicit bool) error {
+	refuse := func(field, reason string) error { return &CachePolicyError{field, reason} }
+	switch p.Mode {
+	case "", CacheAuto, CacheExplicit, CacheOff:
+	default:
+		return refuse("mode", "want auto, explicit, or off")
+	}
+	if len(p.Key) > 64 {
+		return refuse("key", "maximum 64 bytes")
+	}
+	if dialect == DialectResponses {
+		if p.TTL != "" || p.TailTTL != "" || p.Diagnostics || p.Mode == CacheExplicit || p.Mode == CacheOff {
+			return refuse("policy", "ChatGPT subscription supports routing keys and automatic caching; API retention/breakpoint controls are not declared")
+		}
+		return nil
+	}
+	if dialect == DialectGemini {
+		if p.TTL != "" || p.TailTTL != "" || p.Key != "" || p.Diagnostics || p.Mode == CacheExplicit || p.Mode == CacheOff {
+			return refuse("policy", "the Gemini API caches a repeated prefix by itself; a request carries no cache setting")
+		}
+		return nil
+	}
+	if dialect == DialectAnthropic {
+		for _, ttl := range []string{p.TTL, p.TailTTL} {
+			if ttl != "" && ttl != "5m" && ttl != "1h" {
+				return refuse("ttl", "Anthropic accepts 5m or 1h")
+			}
+		}
+		if p.TailTTL == "1h" && p.TTL != "1h" {
+			return refuse("tail_ttl", "longer TTL must precede shorter TTL")
+		}
+		if p.Key != "" {
+			return refuse("key", "Anthropic derives keys from the prefix")
+		}
+		return nil
+	}
+	if p.TailTTL != "" {
+		return refuse("tail_ttl", "only Anthropic supports mixed TTLs")
+	}
+	if p.Diagnostics {
+		return refuse("diagnostics", "native Anthropic diagnostics only")
+	}
+	if (p.Mode == CacheExplicit || p.Mode == CacheOff) && !explicit {
+		return refuse("mode", "model/endpoint has no declared explicit-cache support")
+	}
+	if explicit {
+		if p.TTL != "" && p.TTL != "30m" {
+			return refuse("ttl", "explicit-cache models accept 30m")
+		}
+	} else {
+		switch p.TTL {
+		case "", "in_memory", "24h":
+		default:
+			return refuse("ttl", "legacy OpenAI caching accepts in_memory or 24h")
+		}
+	}
+	return nil
+}
+
+func (c *Client) cachePolicy() (CachePolicy, error) {
+	return ResolveCachePolicy(c.cache, c.extra, c.dialect, c.explicitCache, c.cacheRetentions)
+}
+
+func ResolveCachePolicy(config *CachePolicy, extra map[string]any, dialect Dialect, explicit bool, retentions []string) (CachePolicy, error) {
+	p := CachePolicy{}
+	if config != nil {
+		p = *config
+	} else if dialect == DialectOpenAI {
+		field := func(key string) (string, error) {
+			v, ok := extra[key]
+			if !ok || v == nil {
+				return "", nil
+			}
+			s, ok := v.(string)
+			if !ok {
+				return "", &CachePolicyError{key, "want a string"}
+			}
+			return s, nil
+		}
+		var err error
+		p.Key, err = field("prompt_cache_key")
+		if err != nil {
+			return p, err
+		}
+		p.TTL, err = field("prompt_cache_retention")
+		if err != nil {
+			return p, err
+		}
+		if v, ok := extra["prompt_cache_options"]; ok && v != nil {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return p, err
+			}
+			var options struct {
+				Mode string `json:"mode"`
+				TTL  string `json:"ttl"`
+			}
+			if err := json.Unmarshal(b, &options); err != nil {
+				return p, &CachePolicyError{"prompt_cache_options", "invalid object"}
+			}
+			p.Mode = CacheMode(options.Mode)
+			if p.Mode == "implicit" {
+				p.Mode = CacheAuto
+			}
+			if options.TTL != "" {
+				p.TTL = options.TTL
+			}
+		}
+	}
+	if err := ValidateCachePolicy(p, dialect, explicit); err != nil {
+		return p, err
+	}
+	if dialect == DialectOpenAI && p.TTL != "" && retentions != nil {
+		allowed := false
+		for _, ttl := range retentions {
+			allowed = allowed || p.TTL == ttl
+		}
+		if !allowed {
+			return p, &CachePolicyError{"ttl", "not supported by this model's declared retention policies"}
+		}
+	}
+	return p, nil
+}
+
+func stablePrefixKey(messages []Message) string {
+	for _, m := range messages {
+		if m.Role == "system" && m.StableLen > 0 && m.StableLen <= len(m.Content) {
+			return fmt.Sprintf("%x", sha256.Sum256([]byte(m.Content[:m.StableLen])))
+		}
+	}
+	return ""
+}
+
+func (c *Client) applyOpenAICache(body *openAIBody, messages []Message) error {
+	p, err := c.cachePolicy()
+	if err != nil {
+		return err
+	}
+	if c.cache == nil && p == (CachePolicy{}) && !c.explicitCache {
+		return nil
+	}
+	req := body.add()
+	if c.cache != nil {
+		delete(req, "prompt_cache_key")
+		delete(req, "prompt_cache_retention")
+		delete(req, "prompt_cache_options")
+	}
+	set := func(k string, v any) { req[k] = v }
+	if p.Key == "" && c.explicitCache {
+		p.Key = stablePrefixKey(messages)
+	}
+	if p.Key != "" {
+		set("prompt_cache_key", p.Key)
+	}
+	if c.explicitCache {
+		delete(req, "prompt_cache_retention")
+		mode := "implicit"
+		if p.Mode == CacheExplicit || p.Mode == CacheOff {
+			mode = "explicit"
+		}
+		set("prompt_cache_options", map[string]string{"mode": mode, "ttl": "30m"})
+		if p.Mode != CacheOff {
+			sent, err := json.Marshal(req["messages"])
+			if err != nil {
+				return err
+			}
+			var wire []map[string]json.RawMessage
+			if err := json.Unmarshal(sent, &wire); err != nil {
+				return err
+			}
+
+			left := 3
+			if mode == "explicit" {
+				left = 4
+			}
+			for i, m := range messages {
+				if left == 0 || m.Role != "system" || m.Content == "" {
+					continue
+				}
+				seam := m.StableLen
+				if seam == 0 {
+					seam = len(m.Content)
+				}
+				if seam < 0 || seam > len(m.Content) {
+					return &CachePolicyError{"stable_len", "outside message"}
+				}
+				parts := []map[string]any{{"type": "text", "text": m.Content[:seam], "prompt_cache_breakpoint": map[string]string{"mode": "explicit"}}}
+				if seam < len(m.Content) {
+					parts = append(parts, map[string]any{"type": "text", "text": m.Content[seam:]})
+				}
+				wire[i]["content"], _ = json.Marshal(parts)
+				left--
+			}
+			set("messages", wire)
+		}
+	} else if p.TTL != "" {
+		set("prompt_cache_retention", p.TTL)
+	}
+	return nil
+}
+
+func addBeta(current, flag string) string {
+	for _, v := range strings.Split(current, ",") {
+		if strings.TrimSpace(v) == flag {
+			return current
+		}
+	}
+	if current == "" {
+		return flag
+	}
+	return current + "," + flag
+}
+
+func CacheModes(dialect Dialect, explicit bool) []string {
+	if dialect == DialectAnthropic || (dialect == DialectOpenAI && explicit) {
+		return []string{string(CacheAuto), string(CacheExplicit), string(CacheOff)}
+	}
+	return []string{string(CacheAuto)}
+}
+func CacheTTLs(dialect Dialect, explicit bool, retentions []string) []string {
+	if dialect == DialectAnthropic {
+		return []string{"5m", "1h"}
+	}
+	if dialect == DialectResponses || dialect == DialectGemini {
+		return nil
+	}
+	if explicit {
+		return []string{"30m"}
+	}
+	return append([]string(nil), retentions...)
+}
+func cacheDiagnosticState(raw json.RawMessage, previous string) string {
+	if len(raw) == 0 {
+		return "not_returned"
+	}
+	if string(raw) == "null" {
+		if previous == "" {
+			return "no_comparison"
+		}
+		return "no_divergence"
+	}
+	var diagnostic struct {
+		Reason *struct {
+			Type string `json:"type"`
+		} `json:"cache_miss_reason"`
+	}
+	if json.Unmarshal(raw, &diagnostic) != nil {
+		return "unavailable"
+	}
+	if diagnostic.Reason == nil {
+		return "pending"
+	}
+	return diagnostic.Reason.Type
+}

@@ -1,0 +1,8 @@
+AIIOS.xcodeproj/
+
+Mobile.xcframework/
+
+build/
+build-device/
+DerivedData/
+xcuserdata/

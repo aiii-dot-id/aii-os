@@ -1,0 +1,79 @@
+{
+  "corpus": "EXAMPLE \u2014 not a frozen corpus",
+  "frozen": "0000-00-00 (example; a real corpus states the date it was frozen)",
+  "vocabulary": [
+    "identity",
+    "operator",
+    "aii os",
+    "ledger",
+    "outbox",
+    "witness",
+    "quiesce",
+    "metabolism",
+    "firstboot",
+    "genesis",
+    "envelope",
+    "broker",
+    "projection",
+    "steering",
+    "participant",
+    "safe mode",
+    "degraded witness",
+    "bubblewrap",
+    "seatbelt",
+    "wireguard"
+  ],
+  "contract": {
+    "max_wer": {
+      "quiet": 0.15,
+      "domain": 0.15,
+      "disfluent": 0.2,
+      "long": 0.2,
+      "noisy": 0.25,
+      "distant": 0.3
+    },
+    "min_term_recall": 0.95,
+    "max_hallucination": 0.0,
+    "max_rtf_p95": 0.3,
+    "max_failure_rate": 0.005,
+    "min_term_occurrences": 3
+  },
+  "clips": [
+    {
+      "file": "quiet/001.wav",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "speech": true,
+      "transcript": "the ledger and the outbox disagree about the last turn",
+      "condition": "quiet",
+      "speaker": "operator"
+    },
+    {
+      "file": "domain/001.wav",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "speech": true,
+      "transcript": "the identity went into safe mode so the witness is degraded and metabolism is paused",
+      "condition": "domain",
+      "speaker": "operator"
+    },
+    {
+      "file": "disfluent/001.wav",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "speech": true,
+      "transcript": "can you check the uh the outbox no sorry the ledger",
+      "condition": "disfluent",
+      "speaker": "operator"
+    },
+    {
+      "file": "nonspeech/silence-10s.wav",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "speech": false,
+      "condition": "nonspeech"
+    },
+    {
+      "file": "nonspeech/typing-15s.wav",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "speech": false,
+      "condition": "nonspeech"
+    }
+  ]
+}

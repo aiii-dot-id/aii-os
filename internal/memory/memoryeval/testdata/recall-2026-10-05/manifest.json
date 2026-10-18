@@ -1,0 +1,14 @@
+{
+  "corpus": "recall-2026-10-05",
+  "frozen": "2026-10-05",
+  "files": {
+    "corpus.jsonl": "9f55f152f2a2c8e01a05ba878ada6af67b320aeb83275dfcf0d318af70a90157",
+    "cues.jsonl": "77a07935bd00fce213b31521234910504aa3cd037e9167d3a2183fd22867d938"
+  },
+  "thresholds": {
+    "k": 7,
+    "meaning_hit_at_k_min": 0.8,
+    "meaning_hit_at_k_over_words_min": 0.25,
+    "trap_avoided_by_meaning_max": 0.05
+  }
+}

@@ -1,0 +1,384 @@
+{
+ "_": "Host-window vectors, shared byte for byte between the host (internal/packagefmt, internal/pluginhost) and the kit (pkg/aiiospkg). The grammar is the canonical manifest schema's aiios_semver_core: three decimal numbers, major.minor.patch, leading zeros permitted, no prerelease and no build metadata; components compare as numbers of any size. Sections: grammar (both sides validate the pair), order (both sides compare), presence (the host READER judges bounds as written — null, empty and mistyped are malformed, never absent; the kit WRITER must never emit such a form), ranking (the host judges its own version against a window; a host version outside the grammar cannot be ranked and refuses a bounded package).",
+ "grammar": [
+  {
+   "name": "no window at all runs anywhere",
+   "min": "",
+   "max": "",
+   "ok": true
+  },
+  {
+   "name": "a minimum alone",
+   "min": "0.1.7",
+   "max": "",
+   "ok": true
+  },
+  {
+   "name": "a maximum alone",
+   "min": "",
+   "max": "0.3.0",
+   "ok": true
+  },
+  {
+   "name": "a window with versions in it",
+   "min": "0.1.7",
+   "max": "0.3.0",
+   "ok": true
+  },
+  {
+   "name": "leading zeros are part of this grammar",
+   "min": "00.01.006",
+   "max": "00.02.000",
+   "ok": true
+  },
+  {
+   "name": "a leading zero in one component",
+   "min": "01.2.3",
+   "max": "",
+   "ok": true
+  },
+  {
+   "name": "a core too large for an integer still ranks",
+   "min": "999999999999999999999999999999999999.0.0",
+   "max": "1.0.0",
+   "ok": false,
+   "refuses_naming": "empty"
+  },
+  {
+   "name": "and ranks the other way round too",
+   "min": "1.0.0",
+   "max": "999999999999999999999999999999999999.0.0",
+   "ok": true
+  },
+  {
+   "name": "a window with no versions in it",
+   "min": "0.3.0",
+   "max": "0.3.0",
+   "ok": false,
+   "refuses_naming": "empty"
+  },
+  {
+   "name": "a window that runs backwards",
+   "min": "0.4.0",
+   "max": "0.2.0",
+   "ok": false,
+   "refuses_naming": "empty"
+  },
+  {
+   "name": "equal once leading zeros are normalized is still empty",
+   "min": "1.2.3",
+   "max": "01.02.003",
+   "ok": false,
+   "refuses_naming": "empty"
+  },
+  {
+   "name": "a prerelease is not this grammar",
+   "min": "1.0.0-beta.1",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "build metadata is not this grammar",
+   "min": "1.0.0+build.5",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a prerelease maximum is named as the maximum",
+   "min": "",
+   "max": "1.0.0-alpha",
+   "ok": false,
+   "refuses_naming": "aiios_max_exclusive_version"
+  },
+  {
+   "name": "a two-part core is not a version",
+   "min": "0.2",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a four-part core is not a version",
+   "min": "1.2.3.4",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "words are not a version",
+   "min": "one.two.three",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a leading v is not this grammar",
+   "min": "v1.2.3",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a trailing hyphen mark",
+   "min": "1.2.3-",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "surrounding space",
+   "min": " 1.2.3",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a sign",
+   "min": "+1.2.3",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "an empty component",
+   "min": "1..3",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a malformed maximum is named as the maximum",
+   "min": "",
+   "max": "1.2.3-alpha..1",
+   "ok": false,
+   "refuses_naming": "aiios_max_exclusive_version"
+  },
+  {
+   "name": "a letter in a component",
+   "min": "1.2.3a",
+   "max": "",
+   "ok": false,
+   "refuses_naming": "aiios_min_version"
+  }
+ ],
+ "order": [
+  {
+   "name": "equal",
+   "a": "0.1.7",
+   "b": "0.1.7",
+   "cmp": 0
+  },
+  {
+   "name": "patch below",
+   "a": "0.1.7",
+   "b": "0.1.8",
+   "cmp": -1
+  },
+  {
+   "name": "minor above",
+   "a": "0.2.0",
+   "b": "0.1.9",
+   "cmp": 1
+  },
+  {
+   "name": "major outranks everything after it",
+   "a": "1.0.0",
+   "b": "0.99.99",
+   "cmp": 1
+  },
+  {
+   "name": "leading zeros normalize",
+   "a": "00.01.006",
+   "b": "0.1.6",
+   "cmp": 0
+  },
+  {
+   "name": "components compare as numbers, not text",
+   "a": "0.1.10",
+   "b": "0.1.9",
+   "cmp": 1
+  },
+  {
+   "name": "a component too large for an integer still ranks above",
+   "a": "999999999999999999999999999999999999.0.0",
+   "b": "1.0.0",
+   "cmp": 1
+  },
+  {
+   "name": "and below from the other side",
+   "a": "1.0.0",
+   "b": "999999999999999999999999999999999999.0.0",
+   "cmp": -1
+  },
+  {
+   "name": "zero however it is written",
+   "a": "0.0.0",
+   "b": "00.00.00",
+   "cmp": 0
+  },
+  {
+   "name": "ten above nine",
+   "a": "10.0.0",
+   "b": "9.0.0",
+   "cmp": 1
+  }
+ ],
+ "presence": [
+  {
+   "name": "both omitted declare no window",
+   "ok": true
+  },
+  {
+   "name": "a minimum written as a version string",
+   "ok": true,
+   "min_raw": "\"0.1.7\""
+  },
+  {
+   "name": "a null minimum is not absence",
+   "ok": false,
+   "min_raw": "null",
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "an empty minimum is not absence",
+   "ok": false,
+   "min_raw": "\"\"",
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a numeric minimum is mistyped",
+   "ok": false,
+   "min_raw": "123",
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "a null maximum is not absence",
+   "ok": false,
+   "max_raw": "null",
+   "refuses_naming": "aiios_max_exclusive_version"
+  },
+  {
+   "name": "an empty maximum is not absence",
+   "ok": false,
+   "max_raw": "\"\"",
+   "refuses_naming": "aiios_max_exclusive_version"
+  },
+  {
+   "name": "a boolean maximum is mistyped",
+   "ok": false,
+   "max_raw": "true",
+   "refuses_naming": "aiios_max_exclusive_version"
+  },
+  {
+   "name": "an object minimum is mistyped",
+   "ok": false,
+   "min_raw": "{\"v\":\"1.0.0\"}",
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "the grammar holds on this path too",
+   "ok": false,
+   "min_raw": "\"1.0.0-beta.1\"",
+   "refuses_naming": "aiios_min_version"
+  },
+  {
+   "name": "leading zeros written as strings",
+   "ok": true,
+   "min_raw": "\"00.01.006\"",
+   "max_raw": "\"00.02.000\""
+  }
+ ],
+ "ranking": [
+  {
+   "name": "no window runs anywhere",
+   "host": "0.0.1",
+   "min": "",
+   "max": "",
+   "admits": true
+  },
+  {
+   "name": "the minimum is inclusive",
+   "host": "0.1.6",
+   "min": "0.1.6",
+   "max": "",
+   "admits": true
+  },
+  {
+   "name": "below the minimum refuses",
+   "host": "0.1.5",
+   "min": "0.1.6",
+   "max": "",
+   "admits": false,
+   "too_old": true
+  },
+  {
+   "name": "the maximum is exclusive",
+   "host": "0.2.0",
+   "min": "",
+   "max": "0.2.0",
+   "admits": false
+  },
+  {
+   "name": "below the maximum runs",
+   "host": "0.1.9",
+   "min": "",
+   "max": "0.2.0",
+   "admits": true
+  },
+  {
+   "name": "inside both runs",
+   "host": "0.1.6",
+   "min": "0.1.0",
+   "max": "0.2.0",
+   "admits": true
+  },
+  {
+   "name": "leading zeros in a bound rank as numbers",
+   "host": "0.1.6",
+   "min": "00.01.006",
+   "max": "",
+   "admits": true
+  },
+  {
+   "name": "a bound too large for an integer is simply above this host",
+   "host": "0.1.7",
+   "min": "999999999999999999999999999999999999.0.0",
+   "max": "",
+   "admits": false,
+   "too_old": true
+  },
+  {
+   "name": "a host that is not an AII OS version cannot be ranked",
+   "host": "not-a-version",
+   "min": "9.9.9",
+   "max": "10.0.0",
+   "admits": false,
+   "unknown": true
+  },
+  {
+   "name": "a prerelease host cannot be ranked against a bound",
+   "host": "0.2.0-beta.1",
+   "min": "0.2.0",
+   "max": "",
+   "admits": false,
+   "unknown": true
+  },
+  {
+   "name": "a leading-v host cannot be ranked",
+   "host": "v0.1.7",
+   "min": "0.1.0",
+   "max": "",
+   "admits": false,
+   "unknown": true
+  },
+  {
+   "name": "no window on a host that cannot rank itself",
+   "host": "not-a-version",
+   "min": "",
+   "max": "",
+   "admits": true
+  }
+ ]
+}

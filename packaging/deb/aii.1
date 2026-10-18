@@ -1,0 +1,123 @@
+.TH AII 1 "2026-10-09" "AII OS" "User Commands"
+.SH NAME
+aii \- AII OS identity runtime
+.SH SYNOPSIS
+.B aii
+.RI [ init | slots ]
+.br
+.B aii
+.RI [ register | unregister ]
+.I slot
+.br
+.B aii uninstall
+.RB [ \-plan ]
+.RB [ \-yes ]
+.RB [ \-json ]
+.br
+.B aii
+.RB [ \-dir
+.IR directory ]
+.RB [ \-config
+.IR file ]
+.RB [ \-version ]
+.SH DESCRIPTION
+.B aii
+runs an AI identity whose truth is a post\-quantum signed, append\-only
+ledger.
+.PP
+An identity lives entirely inside one directory: its config, ledger,
+database and key are all there and nowhere else. The runtime resolves no
+home of its own and adopts no data found elsewhere, so the directory must
+be named explicitly with
+.BR \-dir ,
+or be the current working directory.
+.SH COMMANDS
+.TP
+.B init
+Create the next identity slot under
+.I ~/.aii
+and start its service. Slots are numbered
+.IR identity\-0 ,
+.IR identity\-1 ,
+and so on; slot
+.I N
+serves its dashboard on port 8180+\fIN\fR.
+.TP
+.B slots
+List the identity slots under
+.I ~/.aii
+with their ports and, once born, their names.
+.TP
+.BI unregister " slot"
+Stop the identity and remove it from startup, and let the account's
+machine service let go of its record and its plugins' references. The
+slot's data is left alone. Unregistering the account's last slot also
+unregisters the machine service.
+.TP
+.B uninstall
+Uninstall AII OS from this account, in one order: every identity
+unregistered and stopped, then the machine service, then the account's
+plugin stores and the service's directory
+.RI ( ~/.aii/machine )
+removed. Every identity's slot stays exactly as it is and is named at the
+end, with everything else that stays.
+.B \-plan
+says what would be done and does nothing;
+.B \-yes
+does it without asking;
+.B \-json
+writes the report as JSON. Exit status 0 is done, 3 stopped part way (do
+what it says, then run it again), 1 an error or a refusal, 2 a usage
+error. It refuses under
+.BR sudo (8)
+and from a home that is not the account's own.
+.SH OPTIONS
+.TP
+.BI \-dir " directory"
+Identity directory to run in. Defaults to the current directory.
+.TP
+.BI \-config " file"
+Config file within the identity directory. Defaults to
+.IR config/config.json ,
+or
+.IR config.json
+for an identity installed before that move.
+.TP
+.B \-version
+Print the version and build identity, then exit.
+.SH FILES
+.TP
+.I ~/.aii/identity-N/
+An identity slot: config/ (config.json, providers.json), data/ (ledger,
+database, key), log/.
+.TP
+.I ~/.aii/by-name/<Name>
+Symlink to the slot carrying that name. Derived from the ledger and
+rebuilt from it; never consulted for truth.
+.TP
+.I ~/.aii/machine/
+The account's machine service: its state and lock.
+.TP
+.I ~/.aii/plugins/
+The account's plugin store: every identity's native plugins' models and
+runtimes, written by the machine service alone.
+.SH NOTES
+.B apt remove aii\-os
+removes the program, stops each account's identities, and stops and
+disables each account's machine service; every account's data stays, and
+installing the package again enables the machine service where it was
+enabled.
+.B apt purge aii\-os
+also removes, in each account and as that account, the machine service's
+units and directory and the account's plugin stores, and says what it
+kept. No package operation ever removes an identity:
+.IR ~/.aii/identity\-N ,
+.I ~/.aii/by\-name
+and
+.I ~/.aii
+itself are not owned by the package, and an identity's ledger and key have
+no second copy.
+.SH SEE ALSO
+.BR systemctl (1)
+.SH HOMEPAGE
+https://aiii.id

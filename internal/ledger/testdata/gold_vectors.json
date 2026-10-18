@@ -1,0 +1,18 @@
+{
+  "_comment": "Gold ledger-format interop vectors (one format, one record; the record ruling of 2026-09-03). Every suite consumes THESE values; regenerate only together with the Go constants in gold_vector_test.go, never one without the other.",
+  "payload_as_given": "{\"n\":9007199254740993,\"id\":\"exp_vector_1\",\"content\":\"gold vector — café ✓\",\"nested\":{\"z\":1,\"a\":[true,null,1.5]}}",
+  "payload": "{\"content\":\"gold vector — café ✓\",\"id\":\"exp_vector_1\",\"n\":9007199254740993,\"nested\":{\"a\":[true,null,1.5],\"z\":1}}",
+  "content": "a2385272909d5729b3b320ad6548f1bfd96144c9de0731277dedfa3a08055967",
+  "entry": {
+    "content": "a2385272909d5729b3b320ad6548f1bfd96144c9de0731277dedfa3a08055967",
+    "prev": "1f6a76673b2571ff380cbdbd267ed5da257290ba4c8f8be3aeaf7ba1a34cba55",
+    "ring": 3,
+    "seq": 3,
+    "ts": "2026-08-17T12:00:00.000000000Z",
+    "type": "experience.create"
+  },
+  "entry_bytes": "{\"content\":\"a2385272909d5729b3b320ad6548f1bfd96144c9de0731277dedfa3a08055967\",\"prev\":\"1f6a76673b2571ff380cbdbd267ed5da257290ba4c8f8be3aeaf7ba1a34cba55\",\"ring\":3,\"seq\":3,\"ts\":\"2026-08-17T12:00:00.000000000Z\",\"type\":\"experience.create\"}",
+  "entry_hash": "dd71f319ffc1b8b6b1c44ae07ebf6e9a54d74bbcb44bb50801aab31a604763ce",
+  "signature_input": "AII-LEDGER-LINE-SIGNATURE-GOLD\nartifact_kind:aii.ledger.line\ncanonicalization:aii-canonical-json\nsuite_id:aii-pq-mldsa87\nrole:identity\nalg:ML-DSA-87\nkey_id:vector_fingerprint_0000000000000000\nentry_sha256:dd71f319ffc1b8b6b1c44ae07ebf6e9a54d74bbcb44bb50801aab31a604763ce\n",
+  "line": "{\"entry\":{\"content\":\"a2385272909d5729b3b320ad6548f1bfd96144c9de0731277dedfa3a08055967\",\"prev\":\"1f6a76673b2571ff380cbdbd267ed5da257290ba4c8f8be3aeaf7ba1a34cba55\",\"ring\":3,\"seq\":3,\"ts\":\"2026-08-17T12:00:00.000000000Z\",\"type\":\"experience.create\"},\"payload\":{\"content\":\"gold vector — café ✓\",\"id\":\"exp_vector_1\",\"n\":9007199254740993,\"nested\":{\"a\":[true,null,1.5],\"z\":1}}}"
+}

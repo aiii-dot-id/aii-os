@@ -1,0 +1,28 @@
+{
+  "preference": [
+    {"name":"omitted","raw":"","min":"","ok":true},
+    {"name":"full-first","raw":"[\"full\",\"small\"]","min":"0.1.12","ok":true},
+    {"name":"small-first","raw":"[\"small\",\"full\"]","min":"0.1.12","ok":true},
+    {"name":"later-host","raw":"[\"full\",\"small\"]","min":"10.0.0","ok":true},
+    {"name":"null","raw":"null","min":"0.1.12","ok":false},
+    {"name":"empty","raw":"[]","min":"0.1.12","ok":false},
+    {"name":"string","raw":"\"full\"","min":"0.1.12","ok":false},
+    {"name":"null-id","raw":"[\"full\",null]","min":"0.1.12","ok":false},
+    {"name":"unknown","raw":"[\"full\",\"other\"]","min":"0.1.12","ok":false},
+    {"name":"duplicate","raw":"[\"full\",\"full\"]","min":"0.1.12","ok":false},
+    {"name":"incomplete","raw":"[\"full\"]","min":"0.1.12","ok":false},
+    {"name":"no-host-floor","raw":"[\"full\",\"small\"]","min":"","ok":false},
+    {"name":"old-host-floor","raw":"[\"full\",\"small\"]","min":"0.1.11","ok":false},
+    {"name":"prerelease-floor","raw":"[\"full\",\"small\"]","min":"0.1.12-beta.1","ok":false}
+  ],
+  "accelerators": [
+    {"name":"cpu","required":[],"ok":true},
+    {"name":"cuda","required":["cuda"],"ok":true},
+    {"name":"composed","required":["cuda","vulkan"],"ok":true},
+    {"name":"future-domain","required":["future-npu"],"ok":true},
+    {"name":"empty-token","required":[""],"ok":false},
+    {"name":"duplicate","required":["cuda","cuda"],"ok":false},
+    {"name":"space","required":["cuda gpu"],"ok":false},
+    {"name":"upper-case","required":["CUDA"],"ok":false}
+  ]
+}

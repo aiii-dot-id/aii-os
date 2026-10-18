@@ -1,0 +1,146 @@
+package genesis
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/genesis/genesislive"
+)
+
+func TestLiveChainSmoke(t *testing.T) {
+	if os.Getenv("LIVE_SMOKE") == "" {
+		t.Skip("set LIVE_SMOKE=1")
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+
+	// 1. The pin the whole chain hangs from. pinnedroot.go documents
+	//    this as a curl-diff anyone anywhere can run; running it is
+	//    cheaper than trusting that someone did.
+	resp, err := client.Get("https://genesis.aiii.id/genesis/pubkey")
+	if err != nil {
+		t.Fatalf("fetch live /genesis/pubkey: %v", err)
+	}
+	live, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read live /genesis/pubkey: %v", err)
+	}
+	if !bytes.Equal(bytes.TrimSpace(live), bytes.TrimSpace(pinnedRootJSON)) {
+		t.Fatalf("embedded pinned root no longer matches live /genesis/pubkey.\n"+
+			"Rotation is a release event: a replacement root ships in a new binary, "+
+			"cross-signed by this one. If this fires unexpectedly, treat the live key as "+
+			"suspect until the cross-signature is reviewed.\nlive:   %s\npinned: %s",
+			bytes.TrimSpace(live), bytes.TrimSpace(pinnedRootJSON))
+	}
+
+	c := NewClient("https://genesis.aiii.id", "https://firewall.aiii.id", "https://bootstrap.aiii.id")
+
+	// 2. RING0 — the step that broke, and the step that mints the
+	//    genesis token everything downstream is gated on.
+	r0, err := c.FetchRing0()
+	if err != nil {
+		t.Fatalf("FetchRing0 failed against the live server — the shipped client can no longer "+
+			"verify what genesis.aiii.id serves, so a fresh install cannot be born: %v", err)
+	}
+	if len(r0.Content) == 0 {
+		t.Fatal("RING0 verified but carried no constitution")
+	}
+	if r0.Token == "" {
+		t.Fatal("RING0 verified but minted no X-Genesis-Token — the bootstrap packet is gated on it, " +
+			"and without it birth fails downstream with a misleading 402")
+	}
+	c.SetToken(r0.Token)
+
+	// 3. Ring 5 — the security posture.
+	r5, err := c.FetchRing5()
+	if err != nil {
+		t.Fatalf("FetchRing5 failed: %v", err)
+	}
+	if len(r5.Content) == 0 {
+		t.Fatal("empty ring5 content")
+	}
+
+	if !strings.HasPrefix(r0.Content, "# Ring 0 Constitutional Axioms\n") {
+		t.Fatalf("live RING0 is not the constitution: %.80q", r0.Content)
+	}
+
+	// 3b. The Ring 5 domain-key chain, on the bytes being served now.
+	//     The root does not sign Ring 5 directly: it vouches for a
+	//     domain key, and that key signs the posture. Both links, and
+	//     both ways the chain must REFUSE to shortcut itself.
+	chainBytes, _, err := c.fetchBundle(c.firewallURL, "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("fetch live ring5 pubkey bundle: %v", err)
+	}
+	keyContent, err := verifyBundlePayload(chainBytes, pinnedRoot(), "ring5.pubkey")
+	if err != nil {
+		t.Fatalf("pinned root must verify the live cross-signed domain-key bundle: %v", err)
+	}
+	var domainKey publicKeyEnvelope
+	if err := json.Unmarshal([]byte(keyContent), &domainKey); err != nil {
+		t.Fatal(err)
+	}
+	bundleBytes, _, err := c.fetchBundle(c.firewallURL, "ring5")
+	if err != nil {
+		t.Fatalf("fetch live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, &domainKey, "ring5.bundle"); err != nil {
+		t.Fatalf("the live domain key must verify the live ring5 bundle: %v", err)
+	}
+	if _, err := verifyBundle(bundleBytes, pinnedRoot(), "ring5.bundle"); err == nil {
+		t.Fatal("the root directly verifying a domain-key-signed bundle must FAIL — the chain is not optional")
+	}
+	if _, err := verifyBundlePayload(chainBytes, &domainKey, "ring5.pubkey"); err == nil {
+		t.Fatal("a domain key verifying its own cross-signed envelope must FAIL — only the root vouches for keys")
+	}
+
+	// 4. Bootstrap — token-gated. Reaching it proves the whole chain,
+	//    which is the artifact half of a real birth.
+	bs, err := c.FetchBootstrap()
+	if err != nil {
+		t.Fatalf("FetchBootstrap failed with a valid genesis token: %v", err)
+	}
+	if len(bs.Content) == 0 {
+		t.Fatal("bootstrap packet verified but carried no prompt")
+	}
+
+	// 4b. The bootstrap domain-key chain, on the bytes just fetched: the
+	//     shipped root vouches for the bootstrap domain key, that key
+	//     signs the packet, and the packet carries the prompt step 5
+	//     actually runs. Formerly pinned as two captured files.
+	bsChain, err := genesislive.Get(genesislive.BootstrapURL+"/bootstrap/pubkey.bundle", "")
+	if err != nil {
+		t.Fatalf("fetch live bootstrap domain-key bundle: %v", err)
+	}
+	bsKeyContent, err := verifyBundlePayload(bsChain, pinnedRoot(), "bootstrap.pubkey")
+	if err != nil {
+		t.Fatalf("the shipped root must verify the cross-signed bootstrap domain-key bundle: %v", err)
+	}
+	var bsKey publicKeyEnvelope
+	if err := json.Unmarshal(bsKeyContent, &bsKey); err != nil {
+		t.Fatal(err)
+	}
+	bsPacket, err := genesislive.Get(genesislive.BootstrapURL+"/bootstrap", r0.Token)
+	if err != nil {
+		t.Fatalf("fetch live bootstrap packet: %v", err)
+	}
+	prompt, err := verifyBundle(bsPacket, &bsKey, "bootstrap.packet")
+	if err != nil {
+		t.Fatalf("the bootstrap domain key must verify the packet: %v", err)
+	}
+	if !strings.Contains(prompt, "You are about to meet your User") {
+		t.Fatalf("the extracted bootstrap prompt lacks its expected guidance: %.80q", prompt)
+	}
+	if _, err := verifyBundlePayload(bsChain, &bsKey, "bootstrap.pubkey"); err == nil {
+		t.Fatal("a bootstrap domain key verifying its own cross-signed envelope must FAIL")
+	}
+
+	t.Logf("LIVE CHAIN VERIFIED: pin matches; RING0 %d bytes (token minted); Ring 5 %d bytes; bootstrap %d bytes",
+		len(r0.Content), len(r5.Content), len(bs.Content))
+}

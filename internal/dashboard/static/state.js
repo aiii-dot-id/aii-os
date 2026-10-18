@@ -1,0 +1,43 @@
+export const S = {
+  projectsPrimed: false,
+  view: 'chat', identityExists: false, connected: false,
+  stats: null, cont: null, identity: null, tools: [], config: null, sandbox: null, work: null,
+  recall: null,
+
+  projects: [], activeProject: null, viewedProject: null, dockFilter: '',
+  focusDraft: null,
+  providers: [], brokenProviders: [], skipSignInWithValidToken: true, providersLoaded: false,
+  thinking: false, toolBusyTimer: null, reconnectTimer: null,
+  chipsRedraw: null,
+
+  tokenPrompted: false, wsEverOpened: false,
+  logsList: null, logTail: null, logFile: '',
+  overlays: [],
+  asks: [],
+
+  voiceSpeak: false,
+
+  update: null, noticedUpdate: null, pluginUpdates: 0,
+  steering: [],
+  workspace: null, workspaceFor: '',
+  contractDraft: null, projTab: 'overview', showArchived: false,
+  backups: null,
+  connectRequest: null,
+  publicNamePoll: null,
+  captureSettings: null, captureTail: null,
+
+  go: null, refreshCurrentView: null, renderNavBadges: null, renderUpdateChip: null,
+  onThemeApplied: null, reconcileTurn: null, requireAccessToken: null, rotateAccessToken: null,
+  initThemeSwitch: null, setThemeChoice: null, themeChoice: null,
+  cancelReadingRestore: null, chatAcknowledged: null, chatConnectionLost: null, chatReceipt: null,
+  interactionBookmark: null, interactionFollowing: null, interactionPositioned: null, interactionVisible: null,
+  operatorTurnBegins: null, refreshMessageText: null,
+  interactionChanged: null, interactionError: null, interactionHold: null, interactionLatest: null,
+  interactionLost: null, interactionPage: null, interactionScroll: null, interactionWake: null,
+  saveInteractionPosition: null,
+  gradeAnswered: null, gradesLost: null, gradesRead: null,
+  renderIdentityView: null,
+  openSettings: null, openUpdates: null, renderBackups: null, renderMailRepair: null, renderMessages: null,
+  renderPublicName: null, renderSandbox: null, renderUpdate: null,
+  requestSettingsSection: null, settingsAddress: null, settingsSection: null,
+};
