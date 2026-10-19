@@ -122,6 +122,15 @@ func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 			ContextLength int    `json:"context_length"`
 			MaxModelLen   int    `json:"max_model_len"`
 			ContextWindow int    `json:"context_window"`
+			Architecture  struct {
+				InputModalities []string `json:"input_modalities"`
+			} `json:"architecture"`
+			Capabilities struct {
+				ImageInput struct {
+					Supported *bool `json:"supported"`
+				} `json:"image_input"`
+				Vision *bool `json:"vision"`
+			} `json:"capabilities"`
 		} `json:"data"`
 		Models []struct {
 			Slug          string `json:"slug"`
@@ -159,8 +168,16 @@ func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 
 			ctx = m.ContextWindow
 		}
-		if ctx > 0 || m.MaxTokens > 0 {
-			meta[m.ID] = modelMeta{Context: ctx, MaxOut: m.MaxTokens}
+		images := m.Capabilities.ImageInput.Supported
+		if images == nil {
+			images = m.Capabilities.Vision
+		}
+		if len(m.Architecture.InputModalities) > 0 {
+			acceptsImages := slices.Contains(m.Architecture.InputModalities, "image")
+			images = &acceptsImages
+		}
+		if ctx > 0 || m.MaxTokens > 0 || images != nil {
+			meta[m.ID] = modelMeta{Context: ctx, MaxOut: m.MaxTokens, Images: images}
 		}
 	}
 
@@ -201,6 +218,7 @@ func parseModelList(body []byte) ([]string, map[string]modelMeta, error) {
 type modelMeta struct {
 	Context int
 	MaxOut  int
+	Images  *bool
 }
 
 var httpDiscoveryClient = &http.Client{
@@ -291,7 +309,9 @@ func (a *App) discoverForProvider(ctx context.Context, reg *providerRegistry, na
 			if a.providers.runtime.provStatus == nil {
 				a.providers.runtime.provStatus = make(map[string]providerProbe)
 			}
-			a.providers.runtime.provStatus[p.Name] = providerProbe{state: probeOK, models: models, meta: meta, checkedAt: time.Now(), key: probeKey(p)}
+			a.providers.runtime.provStatus[p.Name] = retainNativeImages(
+				providerProbe{state: probeOK, models: models, meta: meta, checkedAt: time.Now(), key: probeKey(p)},
+				a.providers.runtime.provStatus[p.Name])
 			a.providers.runtime.mu.Unlock()
 			return mergeDistinct(p.Models, models), nil
 		}

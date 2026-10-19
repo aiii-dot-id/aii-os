@@ -45,7 +45,7 @@ func (a *App) substrateCapabilityFor(provider, model string) substrateCapability
 		return substrateCapability{provider: provider, model: model}
 	}
 	c := a.providers.runtime.substrateCap
-	mods, _ := a.modalities.get(c.modalityURL)
+	mods := a.modalities.last(c.modalityURL)
 	c.inputModalities, c.outputModalities = mods.in, mods.out
 	return c
 }

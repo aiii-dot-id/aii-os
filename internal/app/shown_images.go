@@ -61,42 +61,58 @@ func (a *App) imagePolicyFor(provider, model string) imagePolicy {
 	if model == "" {
 		return p
 	}
-	if reg, err := a.loadProviders(); err == nil {
-
-		for _, e := range reg.Providers {
-			if e.Name == provider && !llm.WritesImages(entryDialect(e)) {
-				p.takes, p.unwritten = capNo, true
-				return p
-			}
-		}
-		if row, ok := reg.effective().capabilityFor(model); ok {
-			if row.ImageTokens > 0 {
-				p.tokens = row.ImageTokens
-			}
-			if row.ImageMaxBytes > 0 {
-				p.maxBytes = row.ImageMaxBytes
-			}
-			if row.ImagesMaxBytes > 0 {
-				p.maxTotal = row.ImagesMaxBytes
-			}
-			if row.ImageMaxSide > 0 {
-				p.maxSide = row.ImageMaxSide
-			}
-			if row.ImagesMaxCount > 0 {
-				p.maxCount = row.ImagesMaxCount
-			}
-			if row.Images != nil {
-				p.takes = capNo
-				if *row.Images {
-					p.takes = capYes
-				}
-				return p
-			}
+	reg, err := a.loadProviders()
+	if err != nil {
+		return p
+	}
+	var entry *providerEntry
+	for i := range reg.Providers {
+		if reg.Providers[i].Name == provider {
+			entry = &reg.Providers[i]
+			break
 		}
 	}
-	if said := a.substrateCapabilityFor(provider, model).inputModalities; said != nil {
+	if entry == nil {
+		return p
+	}
+
+	if !llm.WritesImages(entryDialect(*entry)) {
+		p.takes, p.unwritten = capNo, true
+		return p
+	}
+	row, _ := reg.effective().capabilityFor(model)
+	if row.ImageTokens > 0 {
+		p.tokens = row.ImageTokens
+	}
+	if row.ImageMaxBytes > 0 {
+		p.maxBytes = row.ImageMaxBytes
+	}
+	if row.ImagesMaxBytes > 0 {
+		p.maxTotal = row.ImagesMaxBytes
+	}
+	if row.ImageMaxSide > 0 {
+		p.maxSide = row.ImageMaxSide
+	}
+	if row.ImagesMaxCount > 0 {
+		p.maxCount = row.ImagesMaxCount
+	}
+	images := reg.ModelCapabilities[model].Images
+	if images == nil {
+		images = a.discoveredImageSupport(*entry, model)
+	}
+	if images == nil {
+		mods := a.modalities.last(modelModalitiesURL(*entry, model, reg.modelCatalogueURL()))
+		if mods.in != nil {
+			value := slices.Contains(mods.in, "image")
+			images = &value
+		}
+	}
+	if images == nil {
+		images = row.Images
+	}
+	if images != nil {
 		p.takes = capNo
-		if slices.Contains(said, "image") {
+		if *images {
 			p.takes = capYes
 		}
 	}

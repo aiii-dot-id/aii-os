@@ -57,6 +57,24 @@ type providerProbe struct {
 	key       string
 }
 
+func retainNativeImages(fresh, previous providerProbe) providerProbe {
+	if fresh.key != previous.key || fresh.state != probeOK {
+		return fresh
+	}
+	for model, old := range previous.meta {
+		row := fresh.meta[model]
+		if old.Images == nil || row.Images != nil || !modelOffered(fresh.models, fresh.meta, model) {
+			continue
+		}
+		if fresh.meta == nil {
+			fresh.meta = make(map[string]modelMeta)
+		}
+		row.Images = old.Images
+		fresh.meta[model] = row
+	}
+	return fresh
+}
+
 func probeKey(e providerEntry) string {
 
 	e.EffortLevels = nil
@@ -108,9 +126,13 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 		for _, r := range results {
 			st := r.st
 			prev := a.providers.runtime.provStatus[r.name]
+			st = retainNativeImages(st, prev)
 
 			if st.state != probeOK && len(prev.models) > 0 {
-				st.models, st.meta = prev.models, prev.meta
+				st.models = prev.models
+				if st.key == prev.key {
+					st.meta = prev.meta
+				}
 			}
 			if st.state != prev.state || st.reason != prev.reason {
 				logsink.Info("providers.decision", "%s — %s%s (%d model(s) listed)", r.name, st.state, reasonSuffix(st.reason), len(st.models))
@@ -418,6 +440,17 @@ func (a *App) discoveredMeta(provider, model string) (m modelMeta, found bool, l
 	pr := a.providers.runtime.provStatus[provider]
 	m, found = pr.meta[model]
 	return m, found, len(pr.models), modelOffered(pr.models, pr.meta, model)
+}
+
+func (a *App) discoveredImageSupport(entry providerEntry, model string) *bool {
+	a.providers.runtime.mu.RLock()
+	defer a.providers.runtime.mu.RUnlock()
+	pr := a.providers.runtime.provStatus[entry.Name]
+	if pr.key != probeKey(entry) || pr.meta[model].Images == nil {
+		return nil
+	}
+	value := *pr.meta[model].Images
+	return &value
 }
 
 func markPreselect(out []dashboard.ProviderInfo) {

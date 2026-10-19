@@ -807,7 +807,8 @@
   ],
   "model_capabilities": {
     "claude-opus-5-5": {
-      "thinking": "adaptive"
+      "thinking": "adaptive",
+      "images": true
     },
     "claude-sonnet-5-5": {
       "thinking": "adaptive"
@@ -817,6 +818,7 @@
     },
     "claude-opus-5": {
       "thinking": "adaptive",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -827,6 +829,7 @@
     },
     "claude-sonnet-5": {
       "thinking": "adaptive",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -837,6 +840,7 @@
     },
     "claude-fable-5": {
       "thinking": "adaptive",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -911,10 +915,12 @@
     },
     "claude-haiku-4-5": {
       "thinking": "enabled",
+      "images": true,
       "effort": [],
       "max_output_tokens": 64000
     },
     "gpt-5.6-sol": {
+      "images": true,
       "effort": [
         "none",
         "minimal",
@@ -931,6 +937,7 @@
       ]
     },
     "gpt-5.6-terra": {
+      "images": true,
       "effort": [
         "none",
         "minimal",
@@ -947,6 +954,7 @@
       ]
     },
     "gpt-5.6-luna": {
+      "images": true,
       "effort": [
         "none",
         "minimal",
@@ -964,6 +972,7 @@
     },
     "anthropic/claude-opus-5": {
       "thinking": "adaptive",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -973,6 +982,7 @@
       ]
     },
     "openai/gpt-5.6-sol": {
+      "images": true,
       "effort": [
         "none",
         "minimal",
@@ -990,6 +1000,7 @@
     },
     "gemini-3.1-pro-preview": {
       "thinking": "level",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -998,6 +1009,7 @@
     },
     "gemini-3.8-flash": {
       "thinking": "level",
+      "images": true,
       "effort": [
         "low",
         "medium",
@@ -1014,6 +1026,7 @@
     },
     "gemini-3.6-flash": {
       "thinking": "level",
+      "images": true,
       "effort": [
         "minimal",
         "low",
@@ -1023,6 +1036,7 @@
     },
     "gemini-3.5-flash-lite": {
       "thinking": "level",
+      "images": true,
       "effort": [
         "minimal",
         "low",
@@ -1047,6 +1061,63 @@
         "medium",
         "high"
       ]
+    },
+    "gpt-5.4": {
+      "images": true
+    },
+    "gpt-5.4-mini": {
+      "images": true
+    },
+    "gpt-5.4-pro": {
+      "images": true
+    },
+    "gpt-5.5": {
+      "images": true
+    },
+    "glm-5.2": {
+      "images": false
+    },
+    "glm-5.3": {
+      "images": false
+    },
+    "z-ai/glm-5.3": {
+      "images": false
+    },
+    "deepseek-v4-flash": {
+      "images": false
+    },
+    "deepseek-v4-pro": {
+      "images": false
+    },
+    "deepseek/deepseek-v4-pro": {
+      "images": false
+    },
+    "openai/gpt-oss-120b": {
+      "images": false
+    },
+    "openai/gpt-oss-20b": {
+      "images": false
+    },
+    "google/gemini-3.8-flash": {
+      "images": true
+    },
+    "kimi-k3": {
+      "images": true
+    },
+    "moonshotai/kimi-k3": {
+      "images": true
+    },
+    "qwen3.8-max": {
+      "images": true
+    },
+    "qwen/qwen3.8-max": {
+      "images": true
+    },
+    "qwen/qwen3.6-27b": {
+      "images": true
+    },
+    "x-ai/grok-4.6": {
+      "images": true
     }
   },
   "dialect_effort_floor": {

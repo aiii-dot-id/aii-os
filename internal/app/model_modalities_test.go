@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm"
@@ -305,6 +307,31 @@ func TestTheMemoDoesNotGrowWithoutBound(t *testing.T) {
 	}
 }
 
+func TestAPartialCatalogueAnswerDoesNotRetractAnUnansweredCapability(t *testing.T) {
+	var memo modalityMemo
+	memo.put("one-source/model", modelModalities{in: []string{"text", "image"}, out: []string{"text"}})
+	memo.put("one-source/model", modelModalities{out: []string{"audio"}})
+	got := memo.last("one-source/model")
+	if !slices.Contains(got.in, "image") || !slices.Equal(got.out, []string{"audio"}) {
+		t.Fatalf("partial update lost a known input or kept the superseded output: %+v", got)
+	}
+	memo.put("another-source/model", modelModalities{out: []string{"text"}})
+	if memo.last("another-source/model").in != nil {
+		t.Fatal("an unrelated source inherited the input evidence")
+	}
+}
+
+func TestAFullMemoDoesNotDiscardOtherModelsWhenOneAnswerChanges(t *testing.T) {
+	var memo modalityMemo
+	for i := 0; i < modalityMemoMax; i++ {
+		memo.put(fmt.Sprint(i), modelModalities{in: []string{"text", "image"}})
+	}
+	memo.put("0", modelModalities{in: []string{"text"}})
+	if len(memo.by) != modalityMemoMax || !slices.Contains(memo.last("1").in, "image") {
+		t.Fatal("updating an answer at capacity erased another model's image support")
+	}
+}
+
 func TestModelCatalogueConfigurationReachesTheProbeAndSurvivesEdits(t *testing.T) {
 	firstURL, firstAsked := modalityServing(t, 200, opusEndpoints)
 	secondURL, secondAsked := modalityServing(t, 200, strings.ReplaceAll(opusEndpoints, `"text","image","file"`, `"audio"`))
@@ -504,4 +531,156 @@ func TestOptionalCatalogueStopsOnShutdownOrProbeFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelectedModelCapabilitiesUseNativeDataBeforeTheCatalogue(t *testing.T) {
+	for _, tc := range []struct {
+		name, data    string
+		wantCatalogue int
+		want          *bool
+	}{
+		{"positive", `{"data":[{"id":"m","architecture":{"input_modalities":["text","image"]}}]}`, 0, boolp(true)},
+		{"negative", `{"data":[{"id":"m","capabilities":{"vision":false}}]}`, 0, boolp(false)},
+		{"partial", `{"data":[{"id":"m","context_length":32768}]}`, 1, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, asked := modalityServing(t, http.StatusOK, opusEndpoints)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, tc.data) }))
+			t.Cleanup(srv.Close)
+			a := probeApp(t)
+			e := providerEntry{Name: "native", URL: srv.URL, APIType: "openai", CatalogueAuthor: "fixture"}
+			a.refreshSelectedModalities(t.Context(), e, "m", &providerRegistry{Providers: []providerEntry{e}, ModelCatalogueURL: &base}, modalityGuard, (*App).discoverMetaForEntry)
+			if len(*asked) != tc.wantCatalogue {
+				t.Fatalf("catalogue requests=%d, want %d", len(*asked), tc.wantCatalogue)
+			}
+			got := a.discoveredImageSupport(e, "m")
+			if (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Fatalf("native support=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSelectionRefreshesOldNativeCapabilitiesAndPreservesThemOnFailure(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			io.WriteString(w, `{"data":[{"id":"m","capabilities":{"vision":false}}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	a := probeApp(t)
+	e := providerEntry{Name: "native", URL: srv.URL, APIType: "openai", Local: true}
+	a.providers.runtime.provStatus = map[string]providerProbe{e.Name: {
+		key: probeKey(e), state: probeOK, checkedAt: time.Now().Add(-2 * providerStatusTTL),
+		meta: map[string]modelMeta{"m": {Images: boolp(true)}},
+	}}
+	reg := &providerRegistry{Providers: []providerEntry{e}}
+	a.refreshSelectedModalities(t.Context(), e, "m", reg, modalityGuard, (*App).discoverMetaForEntry)
+	if got := a.discoveredImageSupport(e, "m"); got == nil || *got {
+		t.Fatal("selection retained an expired positive over the provider's new negative")
+	}
+	a.providers.runtime.mu.Lock()
+	st := a.providers.runtime.provStatus[e.Name]
+	st.checkedAt = time.Now().Add(-2 * providerStatusTTL)
+	a.providers.runtime.provStatus[e.Name] = st
+	a.providers.runtime.mu.Unlock()
+	a.refreshSelectedModalities(t.Context(), e, "m", reg, modalityGuard, (*App).discoverMetaForEntry)
+	if got := a.discoveredImageSupport(e, "m"); got == nil || *got {
+		t.Fatal("a failed refresh erased or inverted a successful native answer")
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("native requests=%d, want 2", requests.Load())
+	}
+}
+
+func TestPartialNativeListsKeepOnlyUnansweredSameEndpointCapabilities(t *testing.T) {
+	for _, support := range []bool{false, true} {
+		previous := providerProbe{key: "endpoint-a", meta: map[string]modelMeta{"m": {Images: boolp(support)}, "removed": {Images: boolp(true)}}}
+		fresh := providerProbe{key: "endpoint-a", state: probeOK, models: []string{"m"}, meta: map[string]modelMeta{"m": {Context: 12345}}}
+		got := retainNativeImages(fresh, previous)
+		if got.meta["m"].Images == nil || *got.meta["m"].Images != support || got.meta["m"].Context != 12345 {
+			t.Fatalf("partial native list erased support=%v or fresh context: %+v", support, got.meta["m"])
+		}
+		if _, exists := got.meta["removed"]; exists {
+			t.Fatal("a removed model was resurrected by retained metadata")
+		}
+		other := retainNativeImages(providerProbe{key: "endpoint-b", state: probeOK, models: []string{"m"}}, previous)
+		if other.meta["m"].Images != nil {
+			t.Fatal("another endpoint inherited the capability")
+		}
+		replaced := retainNativeImages(providerProbe{key: "endpoint-a", state: probeOK, models: []string{"m"}, meta: map[string]modelMeta{"m": {Images: boolp(!support)}}}, previous)
+		if *replaced.meta["m"].Images == support {
+			t.Fatal("explicit native replacement was ignored")
+		}
+	}
+}
+
+func TestAFailedEventRefreshDoesNotEraseTheLastCatalogueAnswer(t *testing.T) {
+	base, asked := modalityServing(t, http.StatusServiceUnavailable, `{}`)
+	a := probeApp(t)
+	e := providerEntry{Name: "public", CatalogueAuthor: "fixture"}
+	key := modelModalitiesURL(e, "m", base)
+	a.modalities.put(key, modelModalities{in: []string{"text", "image"}})
+	a.modalities.age(modalityMemoTTL + time.Hour)
+	a.refreshSelectedModalities(t.Context(), e, "m", &providerRegistry{ModelCatalogueURL: &base}, modalityGuard, (*App).discoverMetaForEntry)
+	if got := a.modalities.last(key); !slices.Contains(got.in, "image") {
+		t.Fatalf("last good answer was erased: %v", got.in)
+	}
+	if len(*asked) != 1 {
+		t.Fatalf("refresh requests=%d, want 1", len(*asked))
+	}
+}
+
+func TestALocalModelSelectionNeverAsksThePublicCatalogue(t *testing.T) {
+	base, asked := modalityServing(t, http.StatusOK, opusEndpoints)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"data":[{"id":"private/alias"}]}`) }))
+	t.Cleanup(srv.Close)
+	a := probeApp(t)
+	e := providerEntry{Name: "local", Local: true, URL: srv.URL, APIType: "openai"}
+	a.refreshSelectedModalities(t.Context(), e, "private/alias", &providerRegistry{Providers: []providerEntry{e}, ModelCatalogueURL: &base}, modalityGuard, (*App).discoverMetaForEntry)
+	if len(*asked) != 0 {
+		t.Fatalf("a local model name was disclosed: %v", *asked)
+	}
+	if got := a.discoveredImageSupport(e, "private/alias"); got != nil {
+		t.Fatalf("missing metadata invented an answer: %v", *got)
+	}
+}
+
+func TestShutdownCancelsAndJoinsSelectedCapabilityDiscovery(t *testing.T) {
+	old := selectedModelDiscovery
+	t.Cleanup(func() { selectedModelDiscovery = old })
+	synctest.Test(t, func(t *testing.T) {
+		entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		selectedModelDiscovery = func(_ *App, ctx context.Context, _ providerEntry, _ string) ([]string, map[string]modelMeta, error) {
+			close(entered)
+			<-ctx.Done()
+			close(cancelled)
+			<-release
+			return nil, nil, ctx.Err()
+		}
+		dir := t.TempDir()
+		e := providerEntry{Name: "local", Local: true, APIType: "openai", URL: "http://127.0.0.1:1/v1"}
+		writeTestProviders(t, dir, e)
+		a := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
+		a.startSelectedModalities(e, "private-model")
+		<-entered
+		done := make(chan struct{})
+		go func() { _ = a.Shutdown(context.Background()); close(done) }()
+		<-cancelled
+		synctest.Wait()
+		early := false
+		select {
+		case <-done:
+			early = true
+		default:
+		}
+		close(release)
+		<-done
+		if early {
+			t.Fatal("shutdown returned before its capability-discovery goroutine finished")
+		}
+	})
 }

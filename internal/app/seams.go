@@ -55,6 +55,8 @@ var startNameStep = func() {}
 
 var modalityGuard = firewall.FetchGuard
 
+var selectedModelDiscovery = (*App).discoverMetaForEntry
+
 var vulkanProbe = shippedVulkanProbe
 
 var speakerDecisionBound = 16 * time.Second

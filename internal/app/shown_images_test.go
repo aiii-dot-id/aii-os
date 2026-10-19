@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
@@ -36,10 +37,25 @@ var shownPNG = func() []byte {
 // model "takes images", with no row of the operator's: the prior.
 func catalogueSaysImages(t *testing.T, app *App) {
 	t.Helper()
-	app.modalities.put("fixture-model", modelModalities{in: []string{"text", "image"}, out: []string{"text"}})
 	provider, model := app.currentProvider().Name, app.llmSwap.Current().ModelName()
+	reg, err := loadProvidersFile(app.providersPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry providerEntry
+	for i := range reg.Providers {
+		if reg.Providers[i].Name == provider {
+			reg.Providers[i].CatalogueAuthor = "fixture"
+			entry = reg.Providers[i]
+		}
+	}
+	if _, err := saveProvidersFile(app.providersPath(), reg); err != nil {
+		t.Fatal(err)
+	}
+	key := modelModalitiesURL(entry, model, reg.modelCatalogueURL())
+	app.modalities.put(key, modelModalities{in: []string{"text", "image"}, out: []string{"text"}})
 	app.providers.runtime.mu.Lock()
-	app.providers.runtime.substrateCap = substrateCapability{provider: provider, model: model, toolCalls: capYes, modalityURL: "fixture-model"}
+	app.providers.runtime.substrateCap = substrateCapability{provider: provider, model: model, toolCalls: capYes, modalityURL: key}
 	app.providers.runtime.mu.Unlock()
 }
 
@@ -78,6 +94,172 @@ func setModelRow(t *testing.T, app *App, model string, row modelCapability) {
 }
 
 func boolp(v bool) *bool { return &v }
+
+func TestNativeImageCapabilitiesReachAnImageRead(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		declared, native *bool
+		want             bool
+	}{
+		{"native positive", nil, boolp(true), true},
+		{"native negative beats catalogue", nil, boolp(false), false},
+		{"operator negative beats native", boolp(false), boolp(true), false},
+		{"operator positive beats native", boolp(true), boolp(false), true},
+		{"partial native uses catalogue", nil, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var row *modelCapability
+			if tc.declared != nil {
+				row = &modelCapability{Images: tc.declared}
+			}
+			a, _, _ := imageApp(t, row)
+			catalogueSaysImages(t, a)
+			reg, err := a.loadProviders()
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := reg.Providers[0]
+			a.providers.runtime.mu.Lock()
+			a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {
+				key: probeKey(entry), state: probeOK, meta: map[string]modelMeta{"fake": {Images: tc.native}},
+			}}
+			a.providers.runtime.mu.Unlock()
+			result := tools.Result{Output: "proof", Image: &tools.ResultImage{Path: "uploads/proof.png"}}
+			_, picture := a.readPicture(withTurnImages(t.Context(), "", ""), result)
+			if (picture != nil) != tc.want {
+				t.Fatalf("image sent=%v, want %v", picture != nil, tc.want)
+			}
+			_, picture = a.readPicture(withTurnImages(t.Context(), entry.Name, "fake"), result)
+			if (picture != nil) != tc.want {
+				t.Fatalf("worker image sent=%v, want %v", picture != nil, tc.want)
+			}
+		})
+	}
+}
+
+func TestCatalogueImageSupportDoesNotDisappearWithTime(t *testing.T) {
+	base, asked := modalityServing(t, http.StatusOK, opusEndpoints)
+	a, _, _ := imageApp(t, nil)
+	reg, err := a.loadProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.ModelCatalogueURL = &base
+	reg.Providers[0].CatalogueAuthor = "fixture"
+	if _, err := saveProvidersFile(a.providersPath(), reg); err != nil {
+		t.Fatal(err)
+	}
+	a.modalities.put(modelModalitiesURL(reg.Providers[0], "fake", base), modelModalities{in: []string{"text", "image"}})
+	a.modalities.age(modalityMemoTTL + time.Hour)
+	for i := 0; i < 5; i++ {
+		if got := a.runningImagePolicy().takes; got != capYes {
+			t.Fatalf("the clock removed image support: %s", got)
+		}
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("policy reads made %d catalogue requests", len(*asked))
+	}
+}
+
+func TestARoutedWorkerReadsItsOwnNativeImageEvidence(t *testing.T) {
+	a, _, _ := imageApp(t, nil)
+	reg, err := a.loadProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := providerEntry{Name: "vision-worker", Local: true, APIType: "openai", URL: "http://127.0.0.1:1/v1"}
+	reg.Providers = append(reg.Providers, worker)
+	if _, err := saveProvidersFile(a.providersPath(), reg); err != nil {
+		t.Fatal(err)
+	}
+	a.providers.runtime.mu.Lock()
+	a.providers.runtime.provStatus[worker.Name] = providerProbe{key: probeKey(worker), meta: map[string]modelMeta{"worker-model": {Images: boolp(true)}}}
+	a.providers.runtime.mu.Unlock()
+	if got := a.runningImagePolicy().takes; got != capUnknown {
+		t.Fatalf("identity's unknown model borrowed worker evidence: %s", got)
+	}
+	_, picture := a.readPicture(withTurnImages(t.Context(), worker.Name, "worker-model"), tools.Result{Image: &tools.ResultImage{Path: "uploads/proof.png"}})
+	if picture == nil {
+		t.Fatal("worker was denied its own native image capability by the identity's unknown one")
+	}
+}
+
+func TestNativeImageEvidenceDoesNotFollowAnEndpointEdit(t *testing.T) {
+	a, _, _ := imageApp(t, nil)
+	reg, err := a.loadProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reg.Providers[0]
+	a.providers.runtime.mu.Lock()
+	a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {
+		key: probeKey(entry), state: probeOK, models: []string{"fake"},
+		meta: map[string]modelMeta{"fake": {Images: boolp(true)}}, checkedAt: time.Now(),
+	}}
+	a.providers.runtime.mu.Unlock()
+	fails := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	t.Cleanup(fails.Close)
+	reg.Providers[0].URL = fails.URL
+	if _, err := saveProvidersFile(a.providersPath(), reg); err != nil {
+		t.Fatal(err)
+	}
+	a.probeProviders(reg)
+	if got := a.imagePolicyFor(entry.Name, "fake").takes; got != capUnknown {
+		t.Fatalf("a replacement endpoint inherited image support: %s", got)
+	}
+	_, _, listed, _ := a.discoveredMeta(entry.Name, "fake")
+	if listed != 1 {
+		t.Fatal("the historical model list was lost")
+	}
+}
+
+func TestAShippedImageDefaultDoesNotBecomeAnOperatorOverride(t *testing.T) {
+	reg := providerRegistry{}
+	if err := json.Unmarshal(scaffoldProviders(), &reg); err != nil {
+		t.Fatal(err)
+	}
+	if reg.ModelCapabilities["claude-opus-5"].Images != nil {
+		t.Fatal("scaffolding froze a shipped image default as an operator declaration")
+	}
+	if row, ok := newEffectiveCaps(&reg).capabilityFor("claude-opus-5"); !ok || row.Images == nil || !*row.Images {
+		t.Fatal("omitting a copied image declaration removed the inherited default")
+	}
+	if embeddedRegistry().ModelCapabilities["claude-opus-5"].Images == nil {
+		t.Fatal("scaffolding mutated the shared embedded registry")
+	}
+}
+
+func TestTheShippedImageBaselineReachesAnImageReadBelowDiscoveredFacts(t *testing.T) {
+	const model = "claude-opus-5"
+	for _, source := range []string{"baseline", "catalogue", "native"} {
+		t.Run(source, func(t *testing.T) {
+			a, _, _ := imageApp(t, nil)
+			reg, err := a.loadProviders()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reg.Providers[0].Local = false
+			reg.Providers[0].CatalogueAuthor = "anthropic"
+			if _, err := saveProvidersFile(a.providersPath(), reg); err != nil {
+				t.Fatal(err)
+			}
+			entry := reg.Providers[0]
+			switch source {
+			case "catalogue":
+				a.modalities.put(modelModalitiesURL(entry, model, reg.modelCatalogueURL()), modelModalities{in: []string{"text"}})
+			case "native":
+				a.providers.runtime.mu.Lock()
+				a.providers.runtime.provStatus[entry.Name] = providerProbe{key: probeKey(entry), meta: map[string]modelMeta{model: {Images: boolp(false)}}}
+				a.providers.runtime.mu.Unlock()
+			}
+			want := source == "baseline"
+			_, picture := a.readPicture(withTurnImages(t.Context(), entry.Name, model), tools.Result{Image: &tools.ResultImage{Path: "uploads/proof.png"}})
+			if (picture != nil) != want {
+				t.Fatalf("%s evidence with a shipped positive baseline: image sent=%v, want %v", source, picture != nil, want)
+			}
+		})
+	}
+}
 
 // AN ATTACHED IMAGE IS SHOWN TO A MODEL THAT TAKES IMAGES, IN THE TURN IT
 // ARRIVES. The request that answers the message carries the picture
@@ -505,7 +687,7 @@ func TestASubagentsPictureIsHeldToItsOwnModel(t *testing.T) {
 	if text, picture := app.readPicture(withTurnImages(t.Context(), "", ""), result); picture == nil || !strings.Contains(text, pictureSent) {
 		t.Fatalf("the identity's own turn: %q, picture=%v", text, picture != nil)
 	}
-	routed := withTurnImages(t.Context(), "local", "text-worker")
+	routed := withTurnImages(t.Context(), app.currentProvider().Name, "text-worker")
 	if text, picture := app.readPicture(routed, result); picture != nil || !strings.Contains(text, "it is not shown to you: nobody has said this model takes images") {
 		t.Fatalf("a worker on a model nobody has spoken for: %q, picture=%v", text, picture != nil)
 	}

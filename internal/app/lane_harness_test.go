@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	// Capability lookups are offline by default in tests. Tests that need
 	// an answer configure their fixture URL and admit it through this guard.
 	modalityGuard = func(context.Context, string) error { return firewall.ErrEgressBlocked }
+	selectedModelDiscovery = func(*App, context.Context, providerEntry, string) ([]string, map[string]modelMeta, error) {
+		return nil, nil, errors.New("native capability discovery is offline in test boot fixtures")
+	}
 
 	root, owner := os.Getenv(machineRootEnv), false
 	if root == "" {

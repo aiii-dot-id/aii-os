@@ -2,11 +2,79 @@ package app
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
+
+func TestCandidateKeepsNativeMetadataOnlyForTheAcceptedEntry(t *testing.T) {
+	entry := providerEntry{Name: "fixture-provider", URL: "https://provider.example/v1", APIKey: "synthetic-key"}
+	images := true
+	probe := providerProbe{
+		state: probeOK, models: []string{"fixture-model"},
+		meta:      map[string]modelMeta{"fixture-model": {Context: 65536, MaxOut: 8192, Images: &images}},
+		checkedAt: time.Unix(1000, 0), key: probeKey(entry),
+	}
+	a := &App{}
+	a.providers.runtime.provStatus = map[string]providerProbe{
+		entry.Name: probe,
+		"other":    probe,
+	}
+	a.retainProviderStatusFor(entry)
+	if got, ok := a.providers.runtime.provStatus[entry.Name]; !ok || !reflect.DeepEqual(got, probe) {
+		t.Fatalf("accepted candidate lost its native metadata: %+v", got)
+	}
+	entry.URL = "https://different.example/v1"
+	a.retainProviderStatusFor(entry)
+	if got, ok := a.providers.runtime.provStatus[entry.Name]; ok {
+		t.Fatalf("different endpoint retained the previous provider's evidence: %+v", got)
+	}
+	if got, ok := a.providers.runtime.provStatus["other"]; !ok || !reflect.DeepEqual(got, probe) {
+		t.Fatalf("candidate invalidation discarded another provider's evidence: %+v", got)
+	}
+}
+
+func TestAProviderEditKeepsItsAcceptedNativeImageEvidence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	entry := providerEntry{
+		Name: "fixture", APIType: "openai", URL: "http://127.0.0.1:1/v1", Local: true,
+		DefaultModel: "fixture-model", Default: true, ContextLength: 65536, MaxOutputTokens: 8192,
+	}
+	writeTestProviders(t, dir, entry)
+	cfg := defaultConfig()
+	cfg.SourcePath = filepath.Join(dir, "config.json")
+	cfg.LLM = LLMConfig{Provider: entry.Name, Model: entry.DefaultModel, TimeoutSeconds: 5, Retries: -1}
+	stream := false
+	cfg.LLM.Stream = &stream
+	a := New(cfg)
+	t.Cleanup(func() { stopApp(t, a) })
+	a.llmSwap = newSwappableLLM(llm.New(&llm.ClientConfig{Endpoint: entry.URL, Model: entry.DefaultModel}))
+	entry.URL = server.URL
+	a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {
+		state: probeOK, key: probeKey(entry), checkedAt: time.Now(), models: []string{entry.DefaultModel},
+		meta: map[string]modelMeta{entry.DefaultModel: {Images: boolp(true)}},
+	}}
+	if err := a.changeProviders(entry.Name, func(reg *providerRegistry) error {
+		reg.Providers[0].URL = entry.URL
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.imagePolicyFor(entry.Name, entry.DefaultModel).takes; got != capYes {
+		t.Fatalf("provider edit discarded its accepted native image evidence: %s", got)
+	}
+}
 
 // THE RUNNING PROVIDER NEVER WAITS ON A SIGN-IN OR ON A CREDENTIAL'S FIRST
 // OPEN. The providers' state keeps three locks because their places in the

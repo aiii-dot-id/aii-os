@@ -1317,10 +1317,13 @@ func (a *App) probeSubstrate(client substrateProbeClient, cc llm.ClientConfig, e
 		}
 	}()
 	guard := modalityGuard
-	go func() {
+	discover := selectedModelDiscovery
+	if !a.runBackground(func() {
 		defer mcancel()
-		a.fetchModelModalities(mctx, modalityURL, guard)
-	}()
+		a.refreshSelectedModalities(mctx, entry, cc.Model, reg, guard, discover)
+	}) {
+		mcancel()
+	}
 
 	resp, err := client.Chat(vctx, []llm.Message{{
 		Role: "user", Content: "Reply with the single word OK.",

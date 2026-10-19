@@ -186,6 +186,96 @@ func TestParseModelListShapesAndWindows(t *testing.T) {
 	}
 }
 
+func TestParseModelListNativeImageCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		row   string
+		known bool
+		want  bool
+	}{
+		{"openrouter image", `"architecture":{"input_modalities":["text","image"]}`, true, true},
+		{"openrouter text", `"architecture":{"input_modalities":["text"]}`, true, false},
+		{"openrouter output only", `"architecture":{"output_modalities":["image"]}`, false, false},
+		{"openrouter empty", `"architecture":{"input_modalities":[]}`, false, false},
+		{"openrouter null", `"architecture":{"input_modalities":null}`, false, false},
+		{"anthropic image", `"capabilities":{"image_input":{"supported":true}}`, true, true},
+		{"anthropic text", `"capabilities":{"image_input":{"supported":false}}`, true, false},
+		{"anthropic incomplete", `"capabilities":{"image_input":{}}`, false, false},
+		{"anthropic null", `"capabilities":{"image_input":{"supported":null}}`, false, false},
+		{"mistral image", `"capabilities":{"vision":true}`, true, true},
+		{"mistral text", `"capabilities":{"vision":false}`, true, false},
+		{"mistral incomplete", `"capabilities":{"completion_chat":true}`, false, false},
+		{"mistral null", `"capabilities":{"vision":null}`, false, false},
+		{"no capability", `"context_length":1234,"max_tokens":100`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			models, meta, err := parseModelList([]byte(`{"data":[{"id":"vision-model",` + tc.row + `}]}`))
+			if err != nil || !reflect.DeepEqual(models, []string{"vision-model"}) {
+				t.Fatalf("published model: %v %v", models, err)
+			}
+			got := meta["vision-model"]
+			if (got.Images != nil) != tc.known || (got.Images != nil && *got.Images != tc.want) {
+				t.Fatalf("image support = %v, want known=%v images=%v", got.Images, tc.known, tc.want)
+			}
+			if tc.known {
+				if _, ok := meta["vision-model"]; !ok || got.Context != 0 || got.MaxOut != 0 {
+					t.Fatalf("capability without a window was lost or invented limits: %+v", meta)
+				}
+			} else if tc.name == "no capability" && (got.Context != 1234 || got.MaxOut != 100) {
+				t.Fatalf("unknown capability discarded existing limits: %+v", got)
+			}
+		})
+	}
+	_, meta, err := parseModelList([]byte(`{"models":[{"name":"models/vision-model","supportedGenerationMethods":["generateContent"],"inputTokenLimit":1000}]}`))
+	if err != nil || meta["vision-model"].Images != nil {
+		t.Fatalf("a name or supported method was mistaken for image support: %+v %v", meta, err)
+	}
+}
+
+func TestNativeImageCapabilitiesFollowCanonicalNames(t *testing.T) {
+	for _, field := range []string{"canonical_id", "canonical_slug"} {
+		for _, supportsImages := range []bool{false, true} {
+			body, err := json.Marshal(map[string]any{"data": []map[string]any{{
+				"id": "alias", field: "canonical", "context_length": 2000, "max_tokens": 200,
+				"capabilities": map[string]any{"vision": supportsImages},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			models, meta, err := parseModelList(body)
+			if err != nil || !reflect.DeepEqual(models, []string{"alias"}) {
+				t.Fatalf("%s: provider ids changed: %v %v", field, models, err)
+			}
+			for _, name := range []string{"alias", "canonical"} {
+				got := meta[name]
+				if got.Images == nil || *got.Images != supportsImages || got.Context != 2000 || got.MaxOut != 200 {
+					t.Fatalf("%s: metadata not carried under %q: %+v", field, name, got)
+				}
+			}
+		}
+	}
+	for _, tc := range []struct {
+		body  string
+		known bool
+	}{
+		{`{"data":[{"id":"role","canonical_id":"X","capabilities":{"vision":true}},{"id":"X","capabilities":{"vision":false}}]}`, true},
+		{`{"data":[{"id":"X","capabilities":{"vision":false}},{"id":"role","canonical_id":"X","capabilities":{"vision":true}}]}`, true},
+		{`{"data":[{"id":"role","canonical_id":"X","capabilities":{"vision":true}},{"id":"X"}]}`, false},
+		{`{"data":[{"id":"X"},{"id":"role","canonical_id":"X","capabilities":{"vision":true}}]}`, false},
+	} {
+		_, meta, err := parseModelList([]byte(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := meta["role"].Images; got == nil || !*got {
+			t.Fatalf("alias lost its own image support: %+v", meta)
+		}
+		if got := meta["X"].Images; (got != nil) != tc.known || (got != nil && *got) {
+			t.Fatalf("alias overrode its canonical model's own row: %+v", meta)
+		}
+	}
+}
+
 func TestALiveListSurvivesAFailedReprobe(t *testing.T) {
 	dir := t.TempDir()
 	entry := providerEntry{Name: "provider", APIType: "openai", URL: "http://127.0.0.1:1/v1", APIKey: "k", Models: []string{"configured"}}

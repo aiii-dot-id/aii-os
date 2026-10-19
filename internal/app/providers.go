@@ -963,7 +963,7 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 	}()
 	a.releaseTurn()
 	if published {
-		a.clearProviderStatus(name)
+		a.retainProviderStatusFor(*nextEntry)
 	}
 	if commitErr != nil {
 		return commitErr

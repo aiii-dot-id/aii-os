@@ -781,6 +781,7 @@ func (a *App) startLive() (retErr error) {
 	a.startPluginSweep(bgCtx)
 	a.runBackground(func() { a.catalog.Run(bgCtx, a.catalogChanged) })
 	a.runBackground(func() { a.runOutbox(bgCtx) })
+	a.startSelectedModalities(llmEntry, cc.Model)
 
 	a.goLive(cfg)
 

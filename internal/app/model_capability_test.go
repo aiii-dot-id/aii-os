@@ -105,6 +105,78 @@ func TestTheShippedCapabilityTableMatchesTheDocumentedFacts(t *testing.T) {
 	}
 }
 
+func TestTheShippedImageCapabilitiesMatchTheVerifiedSeedModels(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "providers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg providerRegistry
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatal(err)
+	}
+	verified := map[string]bool{
+		"claude-opus-5-5":          true,
+		"claude-opus-5":            true,
+		"claude-sonnet-5":          true,
+		"claude-haiku-4-5":         true,
+		"claude-fable-5":           true,
+		"anthropic/claude-opus-5":  true,
+		"gpt-5.6-sol":              true,
+		"gpt-5.6-terra":            true,
+		"gpt-5.6-luna":             true,
+		"gpt-5.5":                  true,
+		"gpt-5.4":                  true,
+		"gpt-5.4-mini":             true,
+		"gpt-5.4-pro":              true,
+		"openai/gpt-5.6-sol":       true,
+		"gemini-3.8-flash":         true,
+		"gemini-3.6-flash":         true,
+		"gemini-3.5-flash-lite":    true,
+		"gemini-3.1-pro-preview":   true,
+		"google/gemini-3.8-flash":  true,
+		"kimi-k3":                  true,
+		"moonshotai/kimi-k3":       true,
+		"qwen3.8-max":              true,
+		"qwen/qwen3.8-max":         true,
+		"qwen/qwen3.6-27b":         true,
+		"x-ai/grok-4.6":            true,
+		"glm-5.3":                  false,
+		"glm-5.2":                  false,
+		"z-ai/glm-5.3":             false,
+		"deepseek-v4-pro":          false,
+		"deepseek-v4-flash":        false,
+		"deepseek/deepseek-v4-pro": false,
+		"openai/gpt-oss-120b":      false,
+		"openai/gpt-oss-20b":       false,
+	}
+	seen := make(map[string]bool)
+	for _, entry := range reg.Providers {
+		for _, model := range entry.Models {
+			want, checked := verified[model]
+			if !checked {
+				continue // newly discovered models need evidence, not a guess
+			}
+			seen[model] = true
+			got := reg.ModelCapabilities[model].Images
+			if got == nil {
+				t.Errorf("%s has a verified image capability but the shipped row leaves it unknown", model)
+			} else if *got != want {
+				t.Errorf("%s images = %t, want verified %t", model, *got, want)
+			}
+		}
+	}
+	for model := range verified {
+		if !seen[model] {
+			t.Errorf("image evidence for %s no longer corresponds to a seeded model; review its baseline", model)
+		}
+	}
+	for _, model := range []string{"gpt-5.4-codex", "gpt-5.4-codex-spark"} {
+		if got := reg.ModelCapabilities[model].Images; got != nil {
+			t.Errorf("%s returned no catalogue answer; images must stay unknown, got %t", model, *got)
+		}
+	}
+}
+
 // The vendor fill must never be written back into the operator's file.
 // A value that looks explicitly set can never be replaced by a shipped
 // correction — the failure provider_facts_test.go documents for

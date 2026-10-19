@@ -60,6 +60,14 @@ func (a *App) clearProviderStatus(name string) {
 	a.providers.runtime.mu.Unlock()
 }
 
+func (a *App) retainProviderStatusFor(entry providerEntry) {
+	a.providers.runtime.mu.Lock()
+	defer a.providers.runtime.mu.Unlock()
+	if a.providers.runtime.provStatus[entry.Name].key != probeKey(entry) {
+		delete(a.providers.runtime.provStatus, entry.Name)
+	}
+}
+
 func (a *App) resolveLLM() (llm.ClientConfig, providerEntry, error) {
 	cfg := a.configSnapshot()
 	reg, err := a.loadProviders()

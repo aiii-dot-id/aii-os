@@ -70,14 +70,87 @@ func (m *modalityMemo) get(slug string) (modelModalities, bool) {
 	return e.mods, true
 }
 
+func (m *modalityMemo) last(slug string) modelModalities {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.by[slug].mods
+}
+
+func (a *App) refreshSelectedModalities(ctx context.Context, entry providerEntry, model string, reg *providerRegistry, guard func(context.Context, string) error, discover func(*App, context.Context, providerEntry, string) ([]string, map[string]modelMeta, error)) {
+	if a.dashboard != nil {
+
+		defer a.dashboard.BroadcastConfig()
+	}
+
+	if reg != nil {
+		for _, e := range reg.Providers {
+			if e.Name == entry.Name {
+				entry = e
+				break
+			}
+		}
+	}
+	a.providers.runtime.mu.RLock()
+	prior, listed := a.providers.runtime.provStatus[entry.Name]
+	listed = listed && prior.state == probeOK && prior.key == probeKey(entry) && time.Since(prior.checkedAt) < providerStatusTTL
+	a.providers.runtime.mu.RUnlock()
+	if !listed && validProviderURL(entry.URL) {
+		models, meta, err := discover(a, ctx, entry, entry.APIKey)
+		if err == nil && ctx.Err() == nil {
+			a.providers.runtime.mu.Lock()
+			if a.providers.runtime.provStatus == nil {
+				a.providers.runtime.provStatus = make(map[string]providerProbe)
+			}
+			a.providers.runtime.provStatus[entry.Name] = retainNativeImages(providerProbe{
+				state: probeOK, models: models, meta: meta, key: probeKey(entry), checkedAt: time.Now(),
+			}, a.providers.runtime.provStatus[entry.Name])
+			a.providers.runtime.mu.Unlock()
+		}
+	}
+	if a.discoveredImageSupport(entry, model) != nil {
+		return
+	}
+	a.fetchModelModalities(ctx, modelModalitiesURL(entry, model, reg.modelCatalogueURL()), guard)
+}
+
+func (a *App) startSelectedModalities(entry providerEntry, model string) {
+	reg, err := a.loadProviders()
+	if err != nil {
+		return
+	}
+	guard := modalityGuard
+	discover := selectedModelDiscovery
+	a.runBackground(func() {
+		ctx, cancel := context.WithTimeout(a.lifetime(), modalityTimeout)
+		defer cancel()
+		a.refreshSelectedModalities(ctx, entry, model, reg, guard, discover)
+	})
+}
+
 func (m *modalityMemo) put(slug string, mods modelModalities) {
 	if !mods.known() {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.by == nil || len(m.by) >= modalityMemoMax {
+	if m.by == nil {
 		m.by = make(map[string]modalityMemoEntry, 8)
+	}
+	if _, exists := m.by[slug]; !exists && len(m.by) >= modalityMemoMax {
+		var oldest string
+		for key, entry := range m.by {
+			if oldest == "" || entry.at.Before(m.by[oldest].at) {
+				oldest = key
+			}
+		}
+		delete(m.by, oldest)
+	}
+
+	if mods.in == nil {
+		mods.in = m.by[slug].mods.in
+	}
+	if mods.out == nil {
+		mods.out = m.by[slug].mods.out
 	}
 	m.by[slug] = modalityMemoEntry{mods: mods, at: time.Now()}
 }

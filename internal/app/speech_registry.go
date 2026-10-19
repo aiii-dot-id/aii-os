@@ -160,6 +160,12 @@ func speechInfo(e providerEntry) *dashboard.ProviderSpeech {
 func scaffoldProviders() []byte {
 	reg := *embeddedRegistry()
 	reg.OAuth = nil
+
+	reg.ModelCapabilities = cloneCapabilities(reg.ModelCapabilities)
+	for model, row := range reg.ModelCapabilities {
+		row.Images = nil
+		reg.ModelCapabilities[model] = row
+	}
 	reg.Providers = slices.Clone(reg.Providers)
 	for i := range reg.Providers {
 		reg.Providers[i].Speech = nil
