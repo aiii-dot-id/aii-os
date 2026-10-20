@@ -11,6 +11,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
@@ -176,7 +177,16 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		}
 		result, err := a.engine.ExecuteAction(ctx, "verb", name, args)
 		if err != nil {
-			return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true}
+			obs := conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true}
+			var size *identity.WorkStatusSizeError
+			if errors.As(err, &size) {
+				obs.Refused, obs.ReasonCode = true, "status.size"
+				if utf8.RuneCountInString(obs.Text) > a.engine.ToolResultLimit() {
+
+					obs.HostNote = obs.Text
+				}
+			}
+			return obs
 		}
 		if name == "work" && a.store != nil {
 			_, steps, independent := workDeclaration(args)

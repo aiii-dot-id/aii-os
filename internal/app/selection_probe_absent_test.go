@@ -45,15 +45,15 @@ func TestTheMeasurementNamesAMissingVulkanProbeOnLinux(t *testing.T) {
 		t.Fatal("the host's own figures did not stand")
 	}
 
-	// A probe that is there and fails is every other cause: nothing is said
-	// that the collector does not know.
+	// A probe that is there and fails has a generic failure, never the
+	// missing-file diagnosis or invented device figures.
 	t.Setenv("AII_TEST_SELECTION_PROBE", "failure")
 	a, err = measureSelectionFacts(t.Context(), "linux", unhurriedQuery, measuredHost, at(exe, args...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := a.Devices["vulkan"]; ok {
-		t.Fatalf("a probe that is installed and failed was given a reason: %+v", got)
+	if got := a.Devices["vulkan"]; got != (pluginfacility.DeviceAvailability{Why: "the Vulkan probe could not run to completion"}) {
+		t.Fatalf("a probe that is installed and failed has the wrong reason: %+v", got)
 	}
 
 	// A file that is there and cannot be started (no execute bit) is not a
@@ -66,8 +66,8 @@ func TestTheMeasurementNamesAMissingVulkanProbeOnLinux(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := a.Devices["vulkan"]; ok {
-		t.Fatalf("a probe file that is there was called not installed: %+v", got)
+	if got := a.Devices["vulkan"]; got != (pluginfacility.DeviceAvailability{Why: "the Vulkan probe could not run to completion"}) {
+		t.Fatalf("a probe file that is there has the wrong reason: %+v", got)
 	}
 
 	// Windows re-runs aii and has no second file: the sentence is Linux's.
@@ -75,8 +75,8 @@ func TestTheMeasurementNamesAMissingVulkanProbeOnLinux(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := a.Devices["vulkan"]; ok {
-		t.Fatalf("the Linux helper was named on Windows: %+v", got)
+	if got := a.Devices["vulkan"]; got != (pluginfacility.DeviceAvailability{Why: "the Vulkan probe could not run to completion"}) {
+		t.Fatalf("the Linux helper was named on Windows or its failure was lost: %+v", got)
 	}
 
 	// And a probe that answers is read as before, with no reason on it.

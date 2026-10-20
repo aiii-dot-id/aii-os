@@ -43,7 +43,7 @@ func sectionRoute(source string) string {
 	case "ring3":
 		return "recall (source=experiences) reaches what was surfaced and recorded, recall (source=ledger) reaches your beliefs"
 	case "ring4":
-		return "work status lists your live sessions"
+		return "work status reads your authored working state and workers; size refusals name prompt.max_tool_result_chars"
 	case "turn":
 		return "work status lists your running and delivered sub-agents, recall (source=alarms) the alarms that fired"
 	case "brief":

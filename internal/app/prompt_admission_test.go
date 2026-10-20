@@ -9,9 +9,44 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/prompt"
+	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
+
+// The advertised recovery must be executable, not merely another digest.
+// Real composer pressure removes the tail; the normal App tool dispatcher
+// then reads the same authored core state whole from its existing owner.
+func TestOmittedCoreWorkHasAnExecutableWholeReadback(t *testing.T) {
+	a, _ := workReadbackApp(t)
+	if err := a.store.StartWorkSession(t.Context(), "ws_folded", "recover folded work"); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Repeat("One exact condition must survive this return.\n", 300) + "FOLDED_WORK_TAIL_界"
+	if err := a.store.UpdateWorkPlan(t.Context(), "ws_folded", nil, nil, &plan, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := a.buildWorkState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm := ring.NewManager()
+	if err := rm.SealSafePosture("test constitution"); err != nil {
+		t.Fatal(err)
+	}
+	composed, err := prompt.New(rm, 900).ComposeTurn(state, "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(composed.Turn, "FOLDED_WORK_TAIL_界") || !strings.Contains(composed.Turn, "work status reads your authored working state") {
+		t.Fatalf("fixture did not omit work with the actual recovery route: %q", composed.Turn)
+	}
+	got, failed := workCall(t, a, `{"action":"status"}`)
+	if failed || !strings.Contains(got, state) || !strings.Contains(got, plan) {
+		t.Fatalf("advertised read did not recover the same whole core work: failed=%v, %q", failed, got)
+	}
+}
 
 func TestAPromptComposedToItsBudgetIsAdmitted(t *testing.T) {
 	// A large elastic Ring 4, shaped like a real one: short lines.

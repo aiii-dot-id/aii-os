@@ -333,6 +333,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.adoptEngine(identity.NewEngine(st, door, a.rings, toolDiscovererAdapter{toolReg}, identity.Ports{
 		Projects:           projectsAdapter{a},
 		Voice:              voiceModeAdapter{a},
+		WorkState:          a.readWorkState,
 		Continuity:         a.continuity.Port(),
 		Timers:             identity.NewStoreTimers(st),
 		Embedder:           sourceEmbedder{a},

@@ -49,20 +49,26 @@ func (a *App) imagePolicy(ctx context.Context) imagePolicy {
 }
 
 func (a *App) runningImagePolicy() imagePolicy {
-	if a.llmSwap == nil || a.llmSwap.Current() == nil {
+	entry, client := a.activeRuntime()
+	if client == nil {
 		return a.imagePolicyFor("", "")
 	}
-	return a.imagePolicyFor(a.currentProvider().Name, a.llmSwap.Current().ModelName())
+	return a.imagePolicyFor(entry.Name, client.ModelName())
 }
 
 func (a *App) imagePolicyFor(provider, model string) imagePolicy {
+	var reg *providerRegistry
+	if model != "" {
+
+		reg, _ = a.loadProviders()
+	}
+	return a.imagePolicyForRegistry(reg, provider, model)
+}
+
+func (a *App) imagePolicyForRegistry(reg *providerRegistry, provider, model string) imagePolicy {
 	p := imagePolicy{tokens: defaultImageTokens, maxBytes: defaultImageMaxBytes, maxTotal: defaultImagesMaxBytes,
 		maxSide: defaultImageMaxSide, maxCount: defaultImagesMaxCount}
-	if model == "" {
-		return p
-	}
-	reg, err := a.loadProviders()
-	if err != nil {
+	if model == "" || reg == nil {
 		return p
 	}
 	var entry *providerEntry

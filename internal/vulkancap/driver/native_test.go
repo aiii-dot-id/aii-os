@@ -3,6 +3,7 @@
 package driver
 
 import (
+	"errors"
 	"testing"
 	"unsafe"
 )
@@ -18,6 +19,15 @@ func TestDiscreteDeviceDoesNotConfuseIntegratedOrSoftwareMemory(t *testing.T) {
 		got, err := discreteDevice(tc.kinds)
 		if got != tc.want || (err != nil) != (tc.want < 0) {
 			t.Fatalf("%v: %d %v", tc.kinds, got, err)
+		}
+		if tc.want < 0 {
+			want := errNoDiscreteDevice
+			if len(tc.kinds) == 2 && tc.kinds[0] == 2 && tc.kinds[1] == 2 {
+				want = errAmbiguousDevices
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("%v: error %v does not preserve %v", tc.kinds, err, want)
+			}
 		}
 	}
 }

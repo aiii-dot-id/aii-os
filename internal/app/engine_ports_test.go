@@ -84,6 +84,7 @@ func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 		"timers":               "*identity.storeTimers",
 		"interactionObserver":  "set",
 		"heardHistory":         "nil",
+		"workState":            "set",
 		"reachable":            "nil",
 		"askProposer":          "nil",
 		"workWake":             "nil",
@@ -118,6 +119,7 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		"timers":               "app.appTimers",
 		"interactionObserver":  "set",
 		"heardHistory":         "set",
+		"workState":            "set",
 		"reachable":            "set",
 		"askProposer":          "set",
 		"workWake":             "set",
@@ -125,4 +127,28 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		"routeIsLocal":         "set",
 		"alarmFirings":         "set",
 	})
+}
+
+func TestLiveWorkStatusRecoversTheRecordedCoreState(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, ledgerPath, dbPath := birthFixture(t, dir, "WorkReadback")
+	a := New(safebootConfig(t, dir, "WorkReadback", keyPath, ledgerPath, dbPath))
+	if err := startLiveForTest(a); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stopApp(t, a) })
+	if _, safe := a.SafeMode(); safe {
+		t.Fatal("readback probe unexpectedly booted SAFE")
+	}
+	if err := a.store.StartWorkSession(t.Context(), "ws_live_readback", "read current work"); err != nil {
+		t.Fatal(err)
+	}
+	const tail = "LIVE_CORE_READBACK_TAIL_界"
+	if err := a.store.UpdateWorkState(t.Context(), "ws_live_readback", tail); err != nil {
+		t.Fatal(err)
+	}
+	text, failed := workCall(t, a, `{"action":"status"}`)
+	if failed || !strings.Contains(text, tail) {
+		t.Fatalf("live status did not recover the recorded core state: failed=%v, %q", failed, text)
+	}
 }

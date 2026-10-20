@@ -95,8 +95,16 @@ func (a *App) refreshSelectedModalities(ctx context.Context, entry providerEntry
 	listed = listed && prior.state == probeOK && prior.key == probeKey(entry) && time.Since(prior.checkedAt) < providerStatusTTL
 	a.providers.runtime.mu.RUnlock()
 	if !listed && validProviderURL(entry.URL) {
-		models, meta, err := discover(a, ctx, entry, entry.APIKey)
-		if err == nil && ctx.Err() == nil {
+
+		bound := modalityTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			bound = min(bound, time.Until(deadline)/2)
+		}
+		nativeCtx, cancel := context.WithTimeout(ctx, bound)
+		models, meta, err := discover(a, nativeCtx, entry, entry.APIKey)
+		answered := err == nil && nativeCtx.Err() == nil
+		cancel()
+		if answered {
 			a.providers.runtime.mu.Lock()
 			if a.providers.runtime.provStatus == nil {
 				a.providers.runtime.provStatus = make(map[string]providerProbe)
@@ -121,7 +129,7 @@ func (a *App) startSelectedModalities(entry providerEntry, model string) {
 	guard := modalityGuard
 	discover := selectedModelDiscovery
 	a.runBackground(func() {
-		ctx, cancel := context.WithTimeout(a.lifetime(), modalityTimeout)
+		ctx, cancel := context.WithTimeout(a.lifetime(), 2*modalityTimeout)
 		defer cancel()
 		a.refreshSelectedModalities(ctx, entry, model, reg, guard, discover)
 	})

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,21 @@ func TestSelectionProbeProcess(t *testing.T) {
 		os.Exit(0)
 	case "failure":
 		os.Exit(3)
+	case "diagnostic":
+		status, err := strconv.Atoi(os.Getenv("AII_TEST_SELECTION_PROBE_STATUS"))
+		if err != nil {
+			os.Exit(4)
+		}
+		fmt.Fprintln(os.Stderr, os.Getenv("AII_TEST_SELECTION_PROBE_PRIVATE"))
+		// Even valid figures must not be read when the process failed.
+		fmt.Print(`{"total":8192,"available":4096}`)
+		os.Exit(status)
+	case "garbled":
+		fmt.Print(`{"total":8192,"available":9000}`)
+		os.Exit(0)
+	case "roomy":
+		fmt.Print(`{"total":8589934592,"available":4294967296}`)
+		os.Exit(0)
 	case "overflow":
 		fmt.Print(strings.Repeat("x", 65537))
 		os.Exit(0)
@@ -84,6 +100,9 @@ func TestSelectionProbeFailureAndDeadline(t *testing.T) {
 				}
 			} else if err == nil {
 				t.Fatal("failed probe reported success")
+			}
+			if mode == "hang" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("query deadline lost its typed cause: %v", err)
 			}
 			if mode == "hang" && time.Since(start) > 6*time.Second {
 				t.Fatal("probe lifetime was not bounded")
@@ -164,7 +183,7 @@ func TestAHardwareQueryTakesTheOperatorsTime(t *testing.T) {
 			takes time.Duration
 			want  pluginfacility.DeviceAvailability
 		}{
-			{200, time.Second, pluginfacility.DeviceAvailability{}},
+			{200, time.Second, pluginfacility.DeviceAvailability{Why: "the Vulkan probe did not answer within 200 ms (plugins.runtime.hardware_query_ms)"}},
 			{30000, 5500 * time.Millisecond, pluginfacility.DeviceAvailability{Known: true, Total: 8192, Available: 4096}},
 		} {
 			if _, err := a.applyConfigChange(map[string]any{key: tc.ms}); err != nil {

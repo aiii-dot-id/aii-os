@@ -155,6 +155,8 @@ type Config struct {
 
 	ImagesRefused func(ctx context.Context, refusal error, answered bool)
 
+	BeforeFirstCall func() error
+
 	ThinkingKept func() bool
 
 	MaxToolCalls int
@@ -438,6 +440,11 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			break
 		}
 
+		if i == 0 && t.cfg.BeforeFirstCall != nil {
+			if err := t.cfg.BeforeFirstCall(); err != nil {
+				return t.fail(fmt.Errorf("before first provider call: %w", err))
+			}
+		}
 		resp, err := t.ask(func() llm.ChatOptions {
 			return llm.ChatOptions{Tools: t.toolDefs, ExactTools: t.scoped, ThinkingBudget: t.cfg.ThinkingBudget, PreviousResponseID: t.previousResponseID}
 		})

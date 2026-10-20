@@ -427,6 +427,7 @@ function onMessage(e) {
       acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id);
       acceptBackupPreferences(msg.request_id);
       renderChatSubstrate(); renderComposer(); if (S.view === 'settings') renderSettings(); if (S.view === 'plugins') renderPlugins();
+      S.chipsRedraw?.();
       if (S.view === 'memory') query('identity');
       break;
     case 'logs':

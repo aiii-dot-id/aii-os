@@ -26,3 +26,30 @@ internal/tools TestDormantChoicesDoNotSpendActiveOfferCapacity linux darwin wind
 internal/tools TestPluginReleasePreservesOtherAndAbsentChoices linux darwin windows
 internal/tools TestWaitingChoiceTakesFreedActiveSpaceInStandingOrder linux darwin windows
 internal/app TestUnreadableStandingChoicesRefuseChangesWithoutOverwriting linux darwin windows
+
+# An authored child contract is delivered whole or refused before the leg starts;
+# actual first-request fitting (including withheld-tool text) owns that boundary.
+internal/app TestChildContinuationSendsItsOwnWholeContractUnderPressure linux darwin windows
+internal/app TestChildContractThatCannotFitIsRefusedBeforeTheLegStarts linux darwin windows
+internal/conversation TestBeforeFirstCallUsesTheFinalWithheldToolRequestBoundary linux darwin windows
+internal/store TestResumeCardPreservesCriteriaOnlyAndDecisionOnlyWork linux darwin windows
+
+# Core authored work has an executable readback, bound to the caller and whole
+# under the actual boot result limit. Notes metadata creates no filesystem state.
+internal/app TestOmittedCoreWorkHasAnExecutableWholeReadback linux darwin windows
+internal/app TestLiveWorkStatusRecoversTheRecordedCoreState linux darwin windows
+internal/app TestCoreWorkStatusReadsTheWholeAuthoredContractWithoutChangingIt linux darwin windows
+internal/app TestCoreWorkStatusChildReadsOnlyItsBoundContractAndNotesTarget linux darwin windows
+internal/app TestChildWorkReadUsesTheEffectiveBootResultLimit linux darwin windows
+internal/app TestSessionNotesTargetIsBoundedPortableAndPureForHistoricalIDs linux darwin windows
+internal/identity TestWorkStatusFitsItsWholeFormattedResponseOrRefuses linux darwin windows
+internal/identity TestWorkStatusRefusesInvalidUTF8BeforeSizingWithoutWriting linux darwin windows
+
+# Probe diagnostics remain safe unknown facts, never substitute capacity; schema
+# descriptions distinguish authored working state from actual delivery.
+internal/app TestVulkanProbeFailuresUseOnlyClosedReasons linux darwin windows
+internal/app TestVulkanProbeMeasurementEndAndLookupFailureStayPrivate linux darwin windows
+internal/app TestVulkanReasonPreservesCPUFallbackAndLowMemoryRefusal linux darwin windows
+internal/vulkancap/driver TestProbeFailureStatuses linux darwin windows
+internal/vulkancap/driver TestProbeSuccessAndWriteFailure linux darwin windows
+internal/identity TestAuthoredDoneStateIsNotDelivery linux darwin windows

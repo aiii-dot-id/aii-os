@@ -332,6 +332,36 @@ func TestConfigStatePreservesDefaultPointerAndReportsResolution(t *testing.T) {
 	}
 }
 
+func TestConfigStateImagePolicyBelongsToItsResolvedProviderAndModel(t *testing.T) {
+	dir := t.TempDir()
+	running := providerEntry{Name: "running", APIType: "openai", URL: "http://127.0.0.1:1/v1", DefaultModel: "running-model", Local: true}
+	desired := providerEntry{Name: "desired", APIType: "openai", URL: "http://127.0.0.1:2/v1", DefaultModel: "desired-model", Local: true}
+	writeTestProviders(t, dir, running, desired)
+	a := resolverApp(dir, LLMConfig{Provider: desired.Name, Model: desired.DefaultModel})
+	setModelRow(t, a, running.DefaultModel, modelCapability{Images: boolp(false)})
+	setModelRow(t, a, desired.DefaultModel, modelCapability{Images: boolp(true), ImageMaxBytes: 1234})
+	client := llm.New(&llm.ClientConfig{Provider: running.APIType, Endpoint: running.URL, Model: running.DefaultModel})
+	a.llmSwap = newSwappableLLM(client)
+	a.adoptRuntime(running, client)
+
+	// Desired configuration may precede activation. The Settings frame still
+	// describes its resolved pointer, not the active turn, so its image facts
+	// must come from that same provider/model rather than a second runtime read.
+	st := a.configState()
+	if st.LLM.Error != "" || st.LLM.ResolvedProvider != desired.Name || st.LLM.ResolvedModel != desired.DefaultModel {
+		t.Fatalf("the frame must retain its desired/resolved Settings semantics: %+v", st.LLM)
+	}
+	if st.LLM.ImagesShown != "yes" || st.LLM.ImageMaxBytes != 1234 {
+		t.Fatalf("the frame labelled desired must carry desired's image policy and bounds: %+v", st.LLM)
+	}
+	if got := a.runningImagePolicy().takes; got != capNo {
+		t.Fatalf("reporting desired configuration must not replace the running turn's policy, got %s", got)
+	}
+	if entry, active := a.activeRuntime(); entry.Name != running.Name || active != client || a.llmSwap.Current() != client {
+		t.Fatal("configuration reporting changed the active runtime or conversation client")
+	}
+}
+
 // THE SETTINGS PAGE SAYS WHERE THE PROMPT CEILING CAME FROM. An entry that
 // declares no window and whose provider discovered none runs on a fallback,
 // and the operator has to be able to see that on the page rather than in a

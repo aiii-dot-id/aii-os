@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -241,15 +242,280 @@ func TestChildDeclarationFeedsItsLegMeterOnly(t *testing.T) {
 
 // The preface quotes the session and says what to do without a next move.
 func TestContinuationPrefaceQuotesTheSession(t *testing.T) {
-	ws := &store.WorkSession{Focus: "beans", NextMove: "count jar 3", Plan: "- jars 1..5", State: "two counted"}
+	ws := &store.WorkSession{Focus: "beans", NextMove: "count jar 3", Plan: "- jars 1..5", State: "two counted", ExpectedEvidence: "five jars counted", Falsifier: "a jar is missing", DecisionNeeded: "which jar is in scope"}
 	p := continuationPreface(2, 4, ws)
-	for _, want := range []string{"leg 2 of 4", "SAME work session", "Next move: count jar 3", "- jars 1..5", "State: two counted", "Continue from the next move", "steps="} {
+	for _, want := range []string{"leg 2 of 4", "SAME work session", "Next action: count jar 3", "- jars 1..5", "Established: two counted", "Expected evidence: five jars counted", "Falsifier: a jar is missing", "Decision needed: which jar is in scope", "Continue from the next move", "steps="} {
 		if !strings.Contains(p, want) {
 			t.Errorf("preface missing %q", want)
 		}
 	}
 	if q := continuationPreface(3, 4, &store.WorkSession{}); !strings.Contains(q, "No next move was recorded") {
 		t.Error("a session without a next move must be told to record one first")
+	}
+}
+
+func TestChildSessionRecordUsesTheSharedResumeMapping(t *testing.T) {
+	ws := &store.WorkSession{ExpectedEvidence: "criteria without focus\nCRITERION_TAIL_界", Falsifier: "FALSIFIER_TAIL", DecisionNeeded: "DECISION_TAIL"}
+	got := sessionRecord(ws)
+	if got != "\n"+resumeCardFor(ws) {
+		t.Fatalf("child diverged from the existing resume mapping: %q", got)
+	}
+	for _, want := range []string{ws.ExpectedEvidence, ws.Falsifier, ws.DecisionNeeded} {
+		if strings.Count(got, want) != 1 {
+			t.Fatalf("criteria-only contract missing, clipped or duplicated: %q", got)
+		}
+	}
+	if sessionRecord(nil) != "" || sessionRecord(&store.WorkSession{}) != "" {
+		t.Fatal("missing or unauthored session fabricated a contract")
+	}
+}
+
+func TestChildContinuationSendsItsOwnWholeContractUnderPressure(t *testing.T) {
+	for _, mode := range []string{"folded", "full"} {
+		t.Run(mode, func(t *testing.T) {
+			var calls atomic.Int32
+			bodies := make(chan []byte, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				select {
+				case bodies <- body:
+				default:
+					t.Error("unexpected second provider request")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"model":"fake-child","choices":[{"message":{"role":"assistant","content":"served: own contract received"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105}}`)
+			}))
+			t.Cleanup(srv.Close)
+			const budget = 32000
+			a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 8, SubagentMaxLegs: 3, SubagentWallSeconds: 10}, budget)
+			t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
+			// Pressure is inherited elastic material, not the child's contract.
+			rm := ring.NewManager()
+			_ = rm.SealSafePosture("test constitution")
+			rm.Set(ring.Ring5, &ring.RingContent{Level: ring.Ring5, Content: "test floor"})
+			inherited := strings.Repeat("Inherited findings unrelated to this child.\n\n", 20000) + "INHERITED_TAIL_MUST_YIELD"
+			rm.SetSection(ring.Ring3, "working_truth", inherited)
+			a.composer = prompt.New(rm, budget)
+			a.promptGate = prompt.NewGate(appRingSource{rm: rm}, budget)
+			const resident = "ws_resident_contract"
+			if err := st.StartWorkSession(t.Context(), resident, "resident work"); err != nil {
+				t.Fatal(err)
+			}
+			parentOnly := "RESIDENT_CONTRACT_MUST_NOT_REACH_CHILD"
+			if err := st.UpdateWorkPlan(t.Context(), resident, &parentOnly, &parentOnly, &parentOnly, &parentOnly, &parentOnly, &parentOnly); err != nil {
+				t.Fatal(err)
+			}
+			const child = "ws_own_contract"
+			queueChild(t, st, child)
+			if err := st.StartWorkSession(t.Context(), child, store.SubagentDescription("inspect own contract")); err != nil {
+				t.Fatal(err)
+			}
+			focus, next, plan := "CHILD_FOCUS", "CHILD_NEXT", "CHILD_PLAN"
+			expected := strings.Repeat("Only reuse after the current compiler check.\n", 180) + "CRITERION_TAIL_界"
+			falsifier := strings.Repeat("A changed condition invalidates this procedure.\n", 120) + "FALSIFIER_TAIL"
+			decision := "DECISION_NEEDED_BEFORE_ACTING"
+			if err := st.UpdateWorkPlan(t.Context(), child, &focus, &next, &plan, &expected, &falsifier, &decision); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.StartWorkSessionLeg(child, 1); err != nil {
+				t.Fatal(err)
+			}
+			p := identity.SubagentRequest{SessionID: child, ParentSessionID: resident, Goal: "inspect the recorded work contract", Depth: 1, Context: mode, Leg: 2, WallSeconds: 10}
+			payload, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := (&subagentHandler{a: a}).RunWork(t.Context(), &store.WorkItem{Kind: identity.SubagentWorkKind, Payload: string(payload), MaxRetries: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("wanted exactly one actual outgoing request, got %d", calls.Load())
+			}
+			var body []byte
+			select {
+			case body = <-bodies:
+			default:
+				t.Fatal("no actual provider request body")
+			}
+			var sent struct {
+				Messages []llm.Message        `json:"messages"`
+				Tools    []llm.ToolDefinition `json:"tools"`
+			}
+			if err := json.Unmarshal(body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			var system, current string
+			for _, message := range sent.Messages {
+				if strings.Contains(message.Content, parentOnly) {
+					t.Fatal("resident's active session was substituted for the child")
+				}
+				if message.Role == "system" {
+					system += message.Content
+				}
+				if message.Role == "user" {
+					current = message.Content
+				}
+			}
+			for _, want := range []string{focus, next, plan, expected, falsifier, decision} {
+				if strings.Count(current, want) != 1 {
+					t.Fatalf("actual current message lost, clipped or duplicated the child field ending %q", compactText(want, 80))
+				}
+			}
+			if strings.Count(current, sessionNotesTarget(child)) != 1 || strings.Contains(current, sessionNotesTarget(resident)) {
+				t.Fatal("child continuation did not carry exactly its own optional notes target")
+			}
+			if strings.Contains(system, "INHERITED_TAIL_MUST_YIELD") || len(system) >= len(inherited) {
+				t.Fatal("fixture did not pressure the inherited context")
+			}
+			used, err := llm.EstimateInputTokens(sent.Messages, sent.Tools)
+			if err != nil || used > budget {
+				t.Fatalf("actual request estimate exceeded its budget: %d > %d (%v)", used, budget, err)
+			}
+			if ws, err := st.ActiveWorkSession(); err != nil || ws == nil || ws.ID != resident || ws.ExpectedEvidence != parentOnly {
+				t.Fatalf("child continuation changed the resident work contract: %+v %v", ws, err)
+			}
+		})
+	}
+}
+
+// A reload can publish a pending restart-only setting in config, but it must
+// not give a new child a different result window from the shared engine that
+// fits its reads. Inspect the real request after the child's work tool call.
+func TestChildWorkReadUsesTheEffectiveBootResultLimit(t *testing.T) {
+	for _, bounds := range [][2]int{{8000, 1200}, {1200, 8000}, {1, 8000}} {
+		t.Run(fmt.Sprintf("boot%d_pending%d", bounds[0], bounds[1]), func(t *testing.T) {
+			var calls atomic.Int32
+			bodies := make(chan []byte, 2)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				select {
+				case bodies <- body:
+				default:
+					t.Error("unexpected extra provider request")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if calls.Add(1) == 1 {
+					_, _ = io.WriteString(w, `{"model":"fake-child","choices":[{"message":{"role":"assistant","tool_calls":[{"id":"status","type":"function","function":{"name":"work","arguments":"{\"action\":\"status\"}"}}]},"finish_reason":"tool_calls"}]}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"model":"fake-child","choices":[{"message":{"role":"assistant","content":"served: read checked"},"finish_reason":"stop"}]}`)
+			}))
+			t.Cleanup(srv.Close)
+			a, st, _ := legFixture(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 3, SubagentMaxToolCalls: 8, SubagentMaxLegs: 1, SubagentWallSeconds: 10})
+			t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
+			a.engine = identity.NewEngine(st, nil, ring.NewManager(), toolDiscovererAdapter{a.toolReg}, identity.Ports{WorkState: a.readWorkState, ToolResultChars: bounds[0]})
+			// Exactly the pending-config state produced by reload: the engine
+			// and resident keep their immutable boot bound until restart.
+			a.cfgMu.Lock()
+			a.cfg.Prompt.MaxToolResultChars = bounds[1]
+			a.cfgMu.Unlock()
+			const parent, child = "ws_parent_limit", "ws_child_limit"
+			if err := st.StartWorkSession(t.Context(), parent, "resident"); err != nil {
+				t.Fatal(err)
+			}
+			parentOnly := "PARENT_WORK_MUST_NOT_LEAK"
+			if err := st.UpdateWorkState(t.Context(), parent, parentOnly); err != nil {
+				t.Fatal(err)
+			}
+			queueChild(t, st, child)
+			if err := st.StartWorkSession(t.Context(), child, store.SubagentDescription("own read")); err != nil {
+				t.Fatal(err)
+			}
+			contract := strings.Repeat("界whole criterion\n", 150) + "CHILD_CRITERION_TAIL"
+			if err := st.UpdateWorkPlan(t.Context(), child, nil, nil, nil, &contract, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(identity.SubagentRequest{SessionID: child, ParentSessionID: parent, Goal: "read your own working state with work status", Depth: 1, Context: "folded", WallSeconds: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := (&subagentHandler{a: a}).RunWork(t.Context(), &store.WorkItem{Kind: identity.SubagentWorkKind, Payload: string(payload), MaxRetries: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("expected status round trip, got %d actual requests", calls.Load())
+			}
+			<-bodies
+			var sent struct {
+				Messages []llm.Message `json:"messages"`
+			}
+			if err := json.Unmarshal(<-bodies, &sent); err != nil {
+				t.Fatal(err)
+			}
+			var result string
+			for _, msg := range sent.Messages {
+				if strings.Contains(msg.Content, parentOnly) || strings.Contains(msg.Content, sessionNotesTarget(parent)) {
+					t.Fatal("child read substituted parent state or notes")
+				}
+				if msg.Role == "tool" {
+					result += msg.Content
+				}
+			}
+			if bounds[0] == 8000 {
+				if !strings.Contains(result, contract) || !strings.Contains(result, sessionNotesTarget(child)) || strings.Contains(result, "truncated") {
+					t.Fatalf("pending smaller cap clipped a successful child read: %q", result)
+				}
+			} else if !strings.Contains(result, "status.size") || !strings.Contains(result, "prompt.max_tool_result_chars") || strings.Contains(result, "CHILD_CRITERION_TAIL") {
+				t.Fatalf("pending larger cap bypassed the effective bound or clipped a success: %q", result)
+			}
+			if bounds[0] < 8000 {
+				var recorded, outcome string
+				if err := st.DB().QueryRow(`SELECT content,outcome FROM conversations WHERE kind='tool_result' AND json_extract(details,'$.tool')='work' ORDER BY turn_seq DESC LIMIT 1`).Scan(&recorded, &outcome); err != nil {
+					t.Fatal(err)
+				}
+				if outcome != "refused" || !strings.Contains(recorded, "status.size") || !strings.Contains(recorded, "prompt.max_tool_result_chars") {
+					t.Fatalf("size refusal lost durable outcome or actionable evidence: %q, %q", outcome, recorded)
+				}
+			}
+		})
+	}
+}
+
+func TestChildContractThatCannotFitIsRefusedBeforeTheLegStarts(t *testing.T) {
+	srv, calls := deliveringChild(t)
+	a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 8, SubagentMaxLegs: 3, SubagentWallSeconds: 10}, 32000)
+	t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
+	const id = "ws_unfit_contract"
+	queueChild(t, st, id)
+	if err := st.StartWorkSession(t.Context(), id, store.SubagentDescription("resume the unfit contract")); err != nil {
+		t.Fatal(err)
+	}
+	expected := strings.Repeat("The entire acceptance condition is required.\n", 8000) + "UNCLIPPABLE_CRITERION_TAIL"
+	if err := st.UpdateWorkPlan(t.Context(), id, nil, nil, nil, &expected, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartWorkSessionLeg(id, 1); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(identity.SubagentRequest{SessionID: id, Goal: "resume own criteria", Depth: 1, Context: "folded", Leg: 2, WallSeconds: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (&subagentHandler{a: a}).RunWork(t.Context(), &store.WorkItem{Kind: identity.SubagentWorkKind, Payload: string(payload), MaxRetries: 1})
+	var limit *llm.ContextLimitError
+	if !errors.As(err, &limit) || limit.Required <= limit.Limit {
+		t.Fatalf("unfit criteria must cause the existing typed pre-start refusal: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("unfit contract reached the actual provider")
+	}
+	if leg, err := st.WorkSessionStartedLeg(id); err != nil || leg != 1 {
+		t.Fatalf("refused continuation was marked started: %d %v", leg, err)
+	}
+	ws, err := st.WorkSessionByID(id)
+	if err != nil || ws == nil || ws.ExpectedEvidence != expected || ws.Evidence != store.EvidencePartialOrMixed || !strings.HasPrefix(ws.Result, "partial: UNFINISHED — leg 2 of 3 could not start") {
+		t.Fatalf("pre-start refusal clipped criteria or misstated earlier effects: %+v %v", ws, err)
 	}
 }
 
@@ -463,10 +729,19 @@ func TestALegsStartIsRecordedBeforeItsFirstModelCall(t *testing.T) {
 func TestALegThatHadBegunIsDeliveredAsEffectUnknownAndNotRunAgain(t *testing.T) {
 	srv, n := deliveringChild(t)
 	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	const parent = "ws_resident_recovery"
+	if err := st.StartWorkSession(t.Context(), parent, "resident recovery work"); err != nil {
+		t.Fatal(err)
+	}
+	parentOnly := "RESIDENT_RECOVERY_MUST_NOT_REPLACE_CHILD"
+	if err := st.UpdateWorkPlan(t.Context(), parent, &parentOnly, nil, nil, &parentOnly, &parentOnly, &parentOnly); err != nil {
+		t.Fatal(err)
+	}
 	const id = "ws_killed"
 	killedLeg(t, st, id, "count the beans before the power fails", true)
 	focus, next := "the beans", "count jar 3"
-	if err := st.UpdateWorkPlan(t.Context(), id, &focus, &next, nil, nil, nil, nil); err != nil {
+	expected, falsifier, decision := "count all five jars\nRECOVERY_CRITERION_TAIL_界", "RECOVERY_FALSIFIER_TAIL", "RECOVERY_DECISION_TAIL"
+	if err := st.UpdateWorkPlan(t.Context(), id, &focus, &next, nil, &expected, &falsifier, &decision); err != nil {
 		t.Fatal(err)
 	}
 	recoverAfterAHardKill(t, a, st, id)
@@ -477,10 +752,13 @@ func TestALegThatHadBegunIsDeliveredAsEffectUnknownAndNotRunAgain(t *testing.T) 
 	if ws.Evidence != store.EvidenceExternalUnknown || !strings.HasPrefix(ws.Result, "unserved: ") {
 		t.Fatalf("an interrupted leg is delivered unserved, its effects unknown: [%s] %q", ws.Evidence, ws.Result)
 	}
-	for _, want := range []string{"interrupted by a runtime restart", "leg 1 of 4", "Focus: the beans", "Next move: count jar 3"} {
+	for _, want := range []string{"interrupted by a runtime restart", "leg 1 of 4", "Focus: the beans", "Next action: count jar 3", expected, falsifier, decision} {
 		if !strings.Contains(ws.Result, want) {
 			t.Errorf("the delivery must carry %q: %q", want, ws.Result)
 		}
+	}
+	if strings.Contains(ws.Result, parentOnly) {
+		t.Fatal("recovery substituted the resident contract for the child")
 	}
 	var failed int
 	if err := st.DB().QueryRow(`SELECT failed FROM subagent_metrics WHERE session_id = ?`, id).Scan(&failed); err != nil || failed != 1 {

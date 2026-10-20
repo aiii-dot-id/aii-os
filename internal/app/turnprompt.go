@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -34,10 +35,50 @@ func resumeCardFor(ws *store.WorkSession) string {
 	})
 }
 
+func sessionNotesTarget(id string) string {
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf("work/%x/notes.md", sha256.Sum256([]byte(id)))
+}
+
+func sessionNotesLine(id string) string {
+	if target := sessionNotesTarget(id); target != "" {
+		return "Session notes target: " + target + " (relative to your tool home; optional scratch, created only if you write it with the existing file tools)."
+	}
+	return ""
+}
+
+func (a *App) readWorkState(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if marker := ctx.Value(identity.SubagentWorkSession{}); marker != nil {
+		id, ok := marker.(string)
+		if !ok || id == "" {
+			return "", fmt.Errorf("rejected_before_effect (status.session): child work session is unavailable; no resident state was substituted")
+		}
+		ws, err := a.store.WorkSessionByID(id)
+		if err != nil {
+			return "", fmt.Errorf("work status child session: %w", err)
+		}
+		if ws == nil || !ws.Child {
+			return "", fmt.Errorf("rejected_before_effect (status.session): bound child work session is unavailable; no resident state was substituted")
+		}
+		parts := []string{"### Your child work session: " + ws.ID}
+		if card := resumeCardFor(ws); card != "" {
+			parts = append(parts, card)
+		}
+		parts = append(parts, sessionNotesLine(ws.ID))
+		return strings.Join(parts, "\n\n"), nil
+	}
+	return a.buildWorkState()
+}
+
 func (a *App) buildWorkState() (string, error) {
 	var parts []string
 
-	if p, _ := a.activeOpenProject(); p != nil {
+	if p, why := a.activeOpenProject(); p != nil {
 		line := fmt.Sprintf("### Current project: %s", p.Name)
 		if p.Description != "" {
 			line += " — " + p.Description
@@ -74,6 +115,8 @@ func (a *App) buildWorkState() (string, error) {
 		}
 		line += fmt.Sprintf("\nProject directory: %s", p.Dir)
 		parts = append(parts, line)
+	} else if why != "" {
+		parts = append(parts, "### Project focus\n(unavailable — "+why+"; this read did not change the stored focus.)")
 	}
 	ws, err := a.store.ActiveWorkSession()
 	if err != nil {
@@ -83,9 +126,11 @@ func (a *App) buildWorkState() (string, error) {
 	}
 
 	if ws != nil {
+		parts = append(parts, "### Current work session: "+ws.ID)
 		if card := resumeCardFor(ws); card != "" {
 			parts = append(parts, card)
 		}
+		parts = append(parts, sessionNotesLine(ws.ID))
 	}
 
 	standing, authoredMs, serr := a.store.StandingStateAuthored()

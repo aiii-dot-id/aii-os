@@ -56,11 +56,29 @@ func TestResumeCardAbsentFieldsStayQuiet(t *testing.T) {
 }
 
 func TestResumeCardNoSubstantiveWorkRendersNothing(t *testing.T) {
-	if got := RenderResumeCard(ResumeFields{ExpectedEvidence: "x", Falsifier: "y"}); got != "" {
-		t.Fatalf("expected empty card for evidence-only, got:\n%s", got)
-	}
 	if got := RenderResumeCard(ResumeFields{}); got != "" {
 		t.Fatalf("expected empty card for empty fields, got:\n%s", got)
+	}
+	if got := RenderResumeCard(ResumeFields{Evidence: EvidenceExternalUnknown}); got != "" {
+		t.Fatalf("a receipt class alone must not fabricate work:\n%s", got)
+	}
+}
+
+func TestResumeCardPreservesCriteriaOnlyAndDecisionOnlyWork(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields ResumeFields
+		want   string
+	}{
+		{"expected evidence only", ResumeFields{ExpectedEvidence: "the final byte must be 界"}, "Expected evidence: the final byte must be 界"},
+		{"falsifier only", ResumeFields{Falsifier: "the final byte is missing"}, "Falsifier: the final byte is missing"},
+		{"decision only", ResumeFields{DecisionNeeded: "operator must choose the target"}, "Decision needed: operator must choose the target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RenderResumeCard(tc.fields); !strings.Contains(got, tc.want) {
+				t.Fatalf("authored contract disappeared without focus/state/plan/next action: %q", got)
+			}
+		})
 	}
 }
 

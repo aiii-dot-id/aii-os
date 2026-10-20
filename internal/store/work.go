@@ -625,7 +625,7 @@ type ResumeFields struct {
 }
 
 func RenderResumeCard(f ResumeFields) string {
-	if f.Focus == "" && f.Established == "" && f.NextAction == "" && f.ResumePoint == "" {
+	if f.Focus == "" && f.Established == "" && f.NextAction == "" && f.ResumePoint == "" && f.ExpectedEvidence == "" && f.Falsifier == "" && f.DecisionNeeded == "" {
 		return ""
 	}
 	orUnknown := func(v string) string {

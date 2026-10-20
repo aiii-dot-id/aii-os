@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
@@ -134,6 +135,7 @@ type Engine struct {
 	timers       TimerSetter
 	reachable    func(name string) bool
 	askProposer  func(session, text string, choices []string, connector string) error
+	workState    func(context.Context) (string, error)
 	workWake     func()
 	yieldGate    func() (need bool, why string)
 	routeIsLocal func(role string) bool
@@ -163,6 +165,8 @@ type Ports struct {
 
 	AskProposer func(session, text string, choices []string, connector string) error
 
+	WorkState func(context.Context) (string, error)
+
 	WorkWake func()
 
 	YieldGate func() (need bool, why string)
@@ -184,6 +188,7 @@ func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscovere
 		timers:       p.Timers,
 		reachable:    p.Reachable,
 		askProposer:  p.AskProposer,
+		workState:    p.WorkState,
 		workWake:     p.WorkWake,
 		yieldGate:    p.YieldGate,
 		routeIsLocal: p.RouteIsLocal,
@@ -194,6 +199,13 @@ func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscovere
 	e.instruments.SetEmbedder(p.Embedder)
 	e.instruments.SetConversationWindow(p.ConversationWindow)
 	return e
+}
+
+func (e *Engine) ToolResultLimit() int {
+	if e.toolResultChars > 0 {
+		return e.toolResultChars
+	}
+	return conversation.DefaultMaxToolResultChars
 }
 
 func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, args map[string]any) (string, error) {

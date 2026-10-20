@@ -69,7 +69,7 @@ func (a *App) configState() *dashboard.ConfigState {
 
 		llmSt.EffortPlan = llm.PlanEffort(dialect, entry.ReasoningEffort, effortLevelsFor(reg.effective(), entry, cc.Model)).Summary()
 		llmSt.EffortModel = cc.Model
-		switch pictures := a.runningImagePolicy(); pictures.takes {
+		switch pictures := a.imagePolicyForRegistry(reg, entry.Name, cc.Model); pictures.takes {
 		case capYes:
 			llmSt.ImagesShown = "yes"
 			llmSt.ImageMaxBytes, llmSt.ImagesMaxBytes = pictures.maxBytes, pictures.maxTotal
@@ -1309,7 +1309,8 @@ func (a *App) probeSubstrate(client substrateProbeClient, cc llm.ClientConfig, e
 	}()
 
 	modalityURL := modelModalitiesURL(entry, cc.Model, reg.modelCatalogueURL())
-	mctx, mcancel := context.WithTimeout(a.bgCtx, min(bound, modalityTimeout))
+
+	mctx, mcancel := context.WithTimeout(a.bgCtx, 2*min(bound, modalityTimeout))
 	accepted := false
 	defer func() {
 		if !accepted {

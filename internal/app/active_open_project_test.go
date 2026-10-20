@@ -65,6 +65,24 @@ func TestTheWorkingStateNeverNamesAClosedProject(t *testing.T) {
 	}
 }
 
+func TestWorkReadbackDisclosesAnUnreadableSelectedProjectWithoutChangingFocus(t *testing.T) {
+	a, _ := focusFixture(t)
+	const missing = "synthetic-missing-project"
+	if err := a.store.SetActiveProject(missing); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.SetStandingState("READABLE_STANDING_MUST_REMAIN"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := a.readWorkState(t.Context())
+	if err != nil || !strings.Contains(state, "Project focus\n(unavailable") || !strings.Contains(state, missing) || !strings.Contains(state, "READABLE_STANDING_MUST_REMAIN") {
+		t.Fatalf("selected-project failure disappeared from otherwise readable work: %q, %v", state, err)
+	}
+	if a.store.ActiveProjectID() != missing {
+		t.Fatal("work readback changed the project focus")
+	}
+}
+
 // The same question, asked at boot. This dropped only a DANGLING id, so
 // a closed project survived the restart as the identity's focus.
 func TestBootDropsAFocusThatIsClosedNotOnlyOneThatIsGone(t *testing.T) {

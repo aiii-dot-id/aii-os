@@ -48,6 +48,13 @@ func TestHistoricalSafeConversationSurvivesUnavailableViewsWithoutWriting(t *tes
 	if err != nil || !strings.Contains(state, "retained working state") {
 		t.Errorf("recorded work state was lost: %q %v", state, err)
 	}
+	status, failed := workCall(t, a, `{"action":"status"}`)
+	if failed || !strings.Contains(status, "retained working state") || !strings.Contains(status, sessionNotesTarget("main")) || !strings.Contains(status, "unavailable") {
+		t.Errorf("historical SAFE work read lost recorded state or hid unavailable worker views: %q (failed=%v)", status, failed)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Tools.CWD, sessionNotesTarget("main"))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("SAFE status created an optional note file: %v", err)
+	}
 	facts, err := a.buildTurnFacts(t.Context(), true)
 	if err != nil || !strings.Contains(facts, "delivered work") || !strings.Contains(facts, "unavailable") {
 		t.Errorf("unavailable historical sections were not disclosed: %q %v", facts, err)

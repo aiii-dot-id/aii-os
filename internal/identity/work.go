@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 	"uuid"
 
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -190,29 +191,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if id, _ := args["id"].(string); strings.TrimSpace(id) != "" {
 			return e.workResult(strings.TrimSpace(id))
 		}
-		live, err := e.store.LiveSubagentSessions()
-		if err != nil {
-			return "", fmt.Errorf("work status: %w", err)
-		}
-		delivered, err := e.store.UnharvestedDeliveries(10)
-		if err != nil {
-			return "", fmt.Errorf("work status: %w", err)
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Sub-agents: %d running, %d delivered awaiting your next compose.\n", len(live), len(delivered))
-		for _, w := range live {
-			fmt.Fprintf(&b, "- running %s: %s\n", w.ID, store.SubagentGoal(w.Description))
-		}
-		for _, w := range delivered {
-			fmt.Fprintf(&b, "- delivered %s: %s\n", w.ID, store.SubagentGoal(w.Description))
-		}
-		if len(delivered) > 0 {
-			b.WriteString("`work action=status id=…` reads one's delivered result whole.\n")
-		}
-		if len(live) > 0 && len(delivered) == 0 {
-			b.WriteString("If only waiting remains, end the turn — a delivery wakes you. Never sleep or poll: your held turn is what blocks the wake.")
-		}
-		return strings.TrimRight(b.String(), "\n"), nil
+		return e.workStatus(ctx)
 
 	case "start":
 		if child, ok := ctx.Value(SubagentWorkSession{}).(string); ok && child != "" {
@@ -380,6 +359,71 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 	default:
 		return "", fmt.Errorf("unknown work action: %s", action)
 	}
+}
+
+func (e *Engine) workStatus(ctx context.Context) (string, error) {
+	state := "Authored work-state readback unavailable: this host has no work-state renderer."
+	if e.workState != nil {
+		var err error
+		state, err = e.workState(ctx)
+		if err != nil {
+			return "", fmt.Errorf("work status: read authored work state: %w", err)
+		}
+		if strings.TrimSpace(state) == "" {
+			state = "No authored work state is recorded. Use work action=update standing=… to record what outlives a session, or work action=start description=… to begin work."
+		}
+	}
+	unavailable := func(cause error) (string, error) {
+		if !e.inSafeMode() {
+			return "", fmt.Errorf("work status: %w", cause)
+		}
+
+		return e.boundWorkStatus(state + "\n\nSub-agent rendezvous unavailable in SAFE: " + cause.Error() + ". Retained worker state could not be read; do not infer zero running or delivered workers.")
+	}
+	live, err := e.store.LiveSubagentSessions()
+	if err != nil {
+		return unavailable(err)
+	}
+	delivered, err := e.store.UnharvestedDeliveries(10)
+	if err != nil {
+		return unavailable(err)
+	}
+	var b strings.Builder
+	b.WriteString(state)
+	b.WriteString("\n\n")
+	fmt.Fprintf(&b, "Sub-agents: %d running, %d delivered awaiting your next compose.\n", len(live), len(delivered))
+	for _, w := range live {
+		fmt.Fprintf(&b, "- running %s: %s\n", w.ID, store.SubagentGoal(w.Description))
+	}
+	for _, w := range delivered {
+		fmt.Fprintf(&b, "- delivered %s: %s\n", w.ID, store.SubagentGoal(w.Description))
+	}
+	if len(delivered) > 0 {
+		b.WriteString("`work action=status id=…` reads one's delivered result whole.\n")
+	}
+	if len(live) > 0 && len(delivered) == 0 {
+		b.WriteString("If only waiting remains, end the turn — a delivery wakes you. Never sleep or poll: your held turn is what blocks the wake.")
+	}
+	return e.boundWorkStatus(strings.TrimRight(b.String(), "\n"))
+}
+
+type WorkStatusSizeError struct {
+	Required, Limit int
+}
+
+func (e *WorkStatusSizeError) Error() string {
+	return fmt.Sprintf("rejected_before_effect (status.size): no effect — the whole work status needs %d characters; prompt.max_tool_result_chars allows %d. Nothing was clipped. Ask your operator to raise prompt.max_tool_result_chars to at least %d and restart before reading again", e.Required, e.Limit, e.Required)
+}
+
+func (e *Engine) boundWorkStatus(out string) (string, error) {
+	if !utf8.ValidString(out) {
+		return "", fmt.Errorf("rejected_before_effect (status.encoding): no effect — the whole work status contains text that is not valid UTF-8 and cannot be returned verbatim. Nothing was changed; ask your operator to inspect the retained work text before retrying")
+	}
+	bound := e.ToolResultLimit()
+	if size := utf8.RuneCountInString(out); size > bound {
+		return "", &WorkStatusSizeError{Required: size, Limit: bound}
+	}
+	return out, nil
 }
 
 const workResultPart = recallReasoningPart

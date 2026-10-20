@@ -65,6 +65,9 @@ func catalogueSaysImages(t *testing.T, app *App) {
 func imageApp(t *testing.T, row *modelCapability) (*App, *contScript, string) {
 	t.Helper()
 	app, obs := promptCacheApp(t)
+	// The cache harness installs its scripted client after boot. Publish that
+	// client with its provider, as activation does, before testing its images.
+	app.adoptRuntime(app.currentProvider(), app.llmSwap.Current())
 	home := app.configSnapshot().Tools.CWD
 	if err := os.MkdirAll(filepath.Join(home, "uploads"), 0o700); err != nil {
 		t.Fatal(err)
@@ -94,6 +97,31 @@ func setModelRow(t *testing.T, app *App, model string, row modelCapability) {
 }
 
 func boolp(v bool) *bool { return &v }
+
+func TestRunningImagePolicyUsesTheAdoptedProviderAndClientTogether(t *testing.T) {
+	dir := t.TempDir()
+	first := providerEntry{Name: "first", APIType: "openai", URL: "http://127.0.0.1:1/v1", DefaultModel: "first-model", Local: true}
+	second := providerEntry{Name: "second", APIType: "openai", URL: "http://127.0.0.1:2/v1", DefaultModel: "second-model", Local: true}
+	writeTestProviders(t, dir, first, second)
+	a := resolverApp(dir, LLMConfig{Provider: first.Name, Model: first.DefaultModel})
+	setModelRow(t, a, first.DefaultModel, modelCapability{Images: boolp(false)})
+	setModelRow(t, a, second.DefaultModel, modelCapability{Images: boolp(true)})
+	firstClient := llm.New(&llm.ClientConfig{Provider: first.APIType, Endpoint: first.URL, Model: first.DefaultModel})
+	secondClient := llm.New(&llm.ClientConfig{Provider: second.APIType, Endpoint: second.URL, Model: second.DefaultModel})
+	a.llmSwap = newSwappableLLM(firstClient)
+	a.adoptRuntime(first, firstClient)
+
+	// Stop at the real activation boundary: the new pair is published before
+	// the conversation loop's swap. Its old client must not supply the model
+	// for the new provider's image policy.
+	a.adoptRuntime(second, secondClient)
+	if a.llmSwap.Current() != firstClient {
+		t.Fatal("rig: the conversation loop must still hold the first client")
+	}
+	if got := a.runningImagePolicy().takes; got != capYes {
+		t.Fatalf("the adopted second provider/model takes images, got %s while the loop swap is still first", got)
+	}
+}
 
 func TestNativeImageCapabilitiesReachAnImageRead(t *testing.T) {
 	for _, tc := range []struct {
@@ -533,15 +561,15 @@ func TestAPictureDeliveredIntoARunningTurnIsToldNotShown(t *testing.T) {
 // refusingModel is a model whose provider refuses any request that
 // carries a picture and answers any other; after is the tool call its
 // first answer makes, or "" for none.
-func refusingModel(t *testing.T, app *App, after string) *contScript {
+func refusingModel(t *testing.T, app *App, after string, status int, message string) *contScript {
 	t.Helper()
 	obs := &contScript{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		n := obs.add(string(body))
 		if strings.Contains(string(body), "image_url") {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, `{"error":{"message":"this model does not support image input"}}`)
+			w.WriteHeader(status)
+			_, _ = fmt.Fprintf(w, `{"error":{"message":%q}}`, message)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -561,7 +589,9 @@ func refusingModel(t *testing.T, app *App, after string) *contScript {
 // tells the identity; one notice in the turn tells the operator, with the
 // provider's own status and words. Nothing is kept past the turn: whoever
 // said the model takes images, the next turn sends a picture again, and a
-// refusal of a request is not read as a statement about pictures.
+// refusal of a request is not read as a statement about pictures. Generic
+// request errors do not establish a model's media capabilities or write
+// discoveries into the operator's providers file.
 func TestAProviderThatRefusesAnImageIsAskedAgainWithoutIt(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -571,42 +601,64 @@ func TestAProviderThatRefusesAnImageIsAskedAgainWithoutIt(t *testing.T) {
 		{"the operator's row said yes", &modelCapability{Effort: []string{}, Images: boolp(true)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			app, _, _ := imageApp(t, c.row)
-			obs := refusingModel(t, app, "")
-			if c.row == nil {
-				catalogueSaysImages(t, app)
-			}
-			attachedTurn(t, app, "what is this?", []string{"uploads/proof.png"})
-			reqs := obs.snapshot()
-			n := len(reqs)
-			if n != 2 || !strings.Contains(reqs[0], "image_url") || strings.Contains(reqs[1], "image_url") {
-				t.Fatalf("%d requests; want the picture sent once and the turn asked again without it", n)
-			}
-			if !strings.Contains(reqs[1], "your operator attached a file: uploads/proof.png") ||
-				!strings.Contains(reqs[1], "the model's provider refused the request that carried the picture(s) sent here (HTTP 400), so it was sent again without them and you were not shown them") {
-				t.Fatal("the second request lost the file's line, or does not say the picture was refused")
-			}
-			var note string
-			if err := app.store.DB().QueryRow(`SELECT content FROM conversations WHERE role='system' AND kind='notice' AND json_extract(details,'$.reason_code')=?`, reasonPicturesRefused).Scan(&note); err != nil {
-				t.Fatalf("the refusal is not on the record: %v", err)
-			}
-			if !strings.Contains(note, "HTTP 400") || !strings.Contains(note, "this model does not support image input") || !strings.Contains(note, "images: false") {
-				t.Fatalf("the notice does not carry the provider's status and words and the way on: %q", note)
-			}
-			// The record says what happened: the picture was not shown,
-			// and the identity reads that line on the turns after.
-			if got := pictureNotices(t, app, store.ReasonShown, "what is this?"); len(got) != 0 {
-				t.Fatalf("a picture the provider refused is on the record as shown: %q", got)
-			}
-			if got := pictureNotices(t, app, store.ReasonNotShown, "what is this?"); len(got) != 1 || !strings.HasPrefix(got[0], "uploads/proof.png, the model's provider refused the request that carried it") {
-				t.Fatalf("the record beside the message: %q", got)
-			}
-			if p := app.imagePolicy(t.Context()); p.takes != capYes {
-				t.Fatalf("a refusal of one request changed what the model is said to take: %v", p.takes)
-			}
-			attachedTurn(t, app, "and this one?", []string{"uploads/proof.png"})
-			if after := obs.snapshot()[n:]; !strings.Contains(after[0], "image_url") {
-				t.Fatal("the next turn sent no picture: a refusal was kept past its turn")
+			for _, refusal := range []struct {
+				status  int
+				message string
+			}{
+				{http.StatusBadRequest, "the request's message ordering is invalid"},
+				{http.StatusRequestEntityTooLarge, "the request body is too large"},
+				{http.StatusUnsupportedMediaType, "the request has an unsupported content type"},
+				{http.StatusUnprocessableEntity, "a required request field is missing"},
+			} {
+				t.Run(fmt.Sprintf("HTTP %d", refusal.status), func(t *testing.T) {
+					app, _, _ := imageApp(t, c.row)
+					obs := refusingModel(t, app, "", refusal.status, refusal.message)
+					if c.row == nil {
+						catalogueSaysImages(t, app)
+					}
+					before, err := os.ReadFile(app.providersPath())
+					if err != nil {
+						t.Fatal(err)
+					}
+					attachedTurn(t, app, "what is this?", []string{"uploads/proof.png"})
+					reqs := obs.snapshot()
+					n := len(reqs)
+					if n != 2 || !strings.Contains(reqs[0], "image_url") || strings.Contains(reqs[1], "image_url") {
+						t.Fatalf("%d requests; want the picture sent once and the turn asked again without it", n)
+					}
+					if !strings.Contains(reqs[1], "your operator attached a file: uploads/proof.png") ||
+						!strings.Contains(reqs[1], fmt.Sprintf("the model's provider refused the request that carried the picture(s) sent here (HTTP %d), so it was sent again without them and you were not shown them", refusal.status)) {
+						t.Fatal("the second request lost the file's line, or does not say the picture was refused")
+					}
+					var note string
+					if err := app.store.DB().QueryRow(`SELECT content FROM conversations WHERE role='system' AND kind='notice' AND json_extract(details,'$.reason_code')=?`, reasonPicturesRefused).Scan(&note); err != nil {
+						t.Fatalf("the refusal is not on the record: %v", err)
+					}
+					if !strings.Contains(note, fmt.Sprintf("HTTP %d", refusal.status)) || !strings.Contains(note, refusal.message) || !strings.Contains(note, "images: false") {
+						t.Fatalf("the notice does not carry the provider's status and words and the way on: %q", note)
+					}
+					// The record says what happened: the picture was not shown,
+					// and the identity reads that line on the turns after.
+					if got := pictureNotices(t, app, store.ReasonShown, "what is this?"); len(got) != 0 {
+						t.Fatalf("a picture the provider refused is on the record as shown: %q", got)
+					}
+					if got := pictureNotices(t, app, store.ReasonNotShown, "what is this?"); len(got) != 1 || !strings.HasPrefix(got[0], "uploads/proof.png, the model's provider refused the request that carried it") {
+						t.Fatalf("the record beside the message: %q", got)
+					}
+					if p := app.imagePolicy(t.Context()); p.takes != capYes {
+						t.Fatalf("a refusal of one request changed what the model is said to take: %v", p.takes)
+					}
+					attachedTurn(t, app, "and this one?", []string{"uploads/proof.png"})
+					if after := obs.snapshot()[n:]; len(after) != 2 || !strings.Contains(after[0], "image_url") || strings.Contains(after[1], "image_url") {
+						t.Fatal("the next turn did not offer the picture and retry without it: a refusal was kept past its turn")
+					}
+					if p := app.imagePolicy(t.Context()); p.takes != capYes {
+						t.Fatalf("a later request refusal changed what the model is said to take: %v", p.takes)
+					}
+					if after, err := os.ReadFile(app.providersPath()); err != nil || !bytes.Equal(after, before) {
+						t.Fatalf("request refusals changed the operator's providers file: %v", err)
+					}
+				})
 			}
 		})
 	}
@@ -619,7 +671,7 @@ func TestAProviderThatRefusesAnImageIsAskedAgainWithoutIt(t *testing.T) {
 // provider refused one, and is not sent.
 func TestAProviderThatRefusesAPictureAfterAReadDoesNotEndTheTurn(t *testing.T) {
 	app, _, dataURL := imageApp(t, &modelCapability{Effort: []string{}, Images: boolp(true)})
-	obs := refusingModel(t, app, toolCall("c1", "read", `{"file_path":"uploads/proof.png"}`))
+	obs := refusingModel(t, app, toolCall("c1", "read", `{"file_path":"uploads/proof.png"}`), http.StatusBadRequest, "this model does not support image input")
 	operatorTurn(t, app, "look at the proof you made")
 	reqs := obs.snapshot()
 	if len(reqs) != 3 {

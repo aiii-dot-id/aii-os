@@ -32,14 +32,18 @@ func requestContext(t *testing.T, opts RequestOptions) context.Context {
 // withheld, when set, makes it a provider that will not take those tools'
 // definitions (the loop's toolWithholder).
 type requestClient struct {
-	answers  []llm.Response
-	errs     map[int]error // by call, counted from zero
-	withheld map[string]bool
-	options  []llm.ChatOptions
-	messages [][]llm.Message
+	answers    []llm.Response
+	errs       map[int]error // by call, counted from zero
+	withheld   map[string]bool
+	options    []llm.ChatOptions
+	messages   [][]llm.Message
+	beforeChat func()
 }
 
 func (c *requestClient) Chat(_ context.Context, messages []llm.Message, opts llm.ChatOptions) (*llm.Response, error) {
+	if c.beforeChat != nil {
+		c.beforeChat()
+	}
 	c.options = append(c.options, opts)
 	c.messages = append(c.messages, append([]llm.Message(nil), messages...))
 	n := len(c.options) - 1
@@ -79,6 +83,142 @@ func requestLoop(c *requestClient, tools *fakeTools, names ...string) *Loop {
 		defs = append(defs, requestDef(n))
 	}
 	return New(c, tools, &fakeDefs{defs: defs}, nil, nil, Config{ContextBudgetTokens: 4000, MaxIterations: 5})
+}
+
+func TestBeforeFirstCallNilPreservesAnOrdinaryTurn(t *testing.T) {
+	c := &requestClient{answers: []llm.Response{textResp("done")}}
+	tools := &fakeTools{}
+	result, err := requestLoop(c, tools).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "look"}})
+	if err != nil || result.FinalText != "done" || len(c.options) != 1 || len(tools.calls) != 0 {
+		t.Fatalf("nil callback changed an ordinary turn: %+v %v calls=%d tools=%v", result, err, len(c.options), tools.calls)
+	}
+}
+
+func TestBeforeFirstCallRunsOncePerTurnNotPerRetryRoundOrClosing(t *testing.T) {
+	c := &requestClient{
+		errs:    map[int]error{0: &llm.ToolSchemaRefusedError{Tool: "grep", Err: errors.New("400")}},
+		answers: []llm.Response{{}, resp("", toolCall("one", "read", `{}`)), resp("", toolCall("two", "read", `{}`)), textResp("bounded"), textResp("next turn")},
+	}
+	tools := &fakeTools{results: map[string]string{"read": "read result"}}
+	count := 0
+	var loop *Loop
+	loop = New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read"), requestDef("grep")}}, nil, nil, Config{
+		ContextBudgetTokens: 4000, MaxIterations: 2,
+		BeforeFirstCall: func() error {
+			count++
+			// A callback may call an ordinary loop setter: the config lock
+			// must not be held across its durable owner operation.
+			loop.SetContextBudgetFallback(false)
+			return nil
+		},
+	})
+	c.beforeChat = func() {
+		t.Helper()
+		want := 1
+		if len(c.options) >= 4 {
+			want = 2
+		}
+		if count != want {
+			t.Fatalf("provider call saw callback count %d, want %d", count, want)
+		}
+	}
+	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "look"}})
+	if err != nil || count != 1 || len(c.options) != 4 || len(tools.calls) != 2 || !result.ExhaustedBudget || !c.options[3].DisableTools {
+		t.Fatalf("callback repeated or a scripted boundary was not exercised: %+v %v callback=%d calls=%d tools=%v", result, err, count, len(c.options), tools.calls)
+	}
+	result, err = loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "continue"}})
+	if err != nil || result.FinalText != "next turn" || count != 2 || len(c.options) != 5 {
+		t.Fatalf("the same loop's next turn did not get its own callback: %+v %v callback=%d calls=%d", result, err, count, len(c.options))
+	}
+}
+
+func TestBeforeFirstCallFailurePreservesItsCauseAndStartsNothing(t *testing.T) {
+	c := &requestClient{answers: []llm.Response{resp("", toolCall("one", "read", `{}`))}}
+	tools := &fakeTools{}
+	cause := errors.New("durable start refused")
+	count := 0
+	loop := New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read")}}, nil, nil, Config{
+		ContextBudgetTokens: 4000,
+		BeforeFirstCall:     func() error { count++; return cause },
+	})
+	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "look"}})
+	if !errors.Is(err, cause) || count != 1 || len(c.options) != 0 || len(tools.calls) != 0 || result.Usage.Calls != 0 {
+		t.Fatalf("start refusal lost its cause or dispatched work: %+v %v callback=%d calls=%d tools=%v", result, err, count, len(c.options), tools.calls)
+	}
+}
+
+func TestBeforeFirstCallUsesTheFinalWithheldToolRequestBoundary(t *testing.T) {
+	defs := make([]llm.ToolDefinition, 0, 64)
+	withheld := make(map[string]bool)
+	for i := 0; i < 64; i++ {
+		name := fmt.Sprintf("tool_%02d", i)
+		defs = append(defs, requestDef(name))
+		withheld[name] = true
+	}
+	const tail = "CRITERION_TAIL_界"
+	history := []llm.Message{{Role: "user", Content: "Preserve this complete work contract.\n" + tail}}
+	probe := New(&requestClient{withheld: withheld}, &fakeTools{}, &fakeDefs{defs: defs}, nil, nil, Config{ContextBudgetTokens: 100000})
+	turn, err := probe.newTurn(t.Context(), llm.Message{Content: "system"}, history, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	required, err := llm.EstimateInputTokens(turn.messages, turn.toolDefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old app-side estimate priced the offered schemas before the
+	// provider's withheld-tool notices were rendered. Make the difference
+	// observable instead of assuming that an earlier estimate was enough.
+	before := append([]llm.Message(nil), turn.messages...)
+	for _, def := range defs {
+		notice := "\n" + toolNotOffered(def.Function.Name)
+		if strings.Count(before[len(before)-1].Content, notice) != 1 {
+			t.Fatalf("final request did not contain exactly one withheld notice for %s", def.Function.Name)
+		}
+		before[len(before)-1].Content = strings.Replace(before[len(before)-1].Content, notice, "", 1)
+	}
+	prior, err := llm.EstimateInputTokens(before, defs)
+	if err != nil || prior >= required {
+		t.Fatalf("fixture did not cross the earlier estimate: prior=%d final=%d err=%v", prior, required, err)
+	}
+	for _, tc := range []struct {
+		name   string
+		budget int
+		starts int
+	}{{"one token short", required - 1, 0}, {"exact fit", required, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &requestClient{withheld: withheld, answers: []llm.Response{textResp("done")}}
+			tools := &fakeTools{}
+			count := 0
+			loop := New(c, tools, &fakeDefs{defs: defs}, nil, nil, Config{
+				ContextBudgetTokens: tc.budget,
+				BeforeFirstCall:     func() error { count++; return nil },
+			})
+			c.beforeChat = func() {
+				if count != 1 {
+					t.Fatal("first provider dispatch preceded its start callback")
+				}
+			}
+			_, err := loop.Run(t.Context(), "system", history)
+			if tc.starts == 0 {
+				var limit *llm.ContextLimitError
+				if !errors.As(err, &limit) || limit.Required != required || limit.Limit != tc.budget {
+					t.Fatalf("final-body refusal did not preserve its exact typed boundary: %v (want %d > %d)", err, required, tc.budget)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				used, err := llm.EstimateInputTokens(c.messages[0], c.options[0].Tools)
+				if err != nil || used != tc.budget || len(c.options[0].Tools) != 0 || !strings.Contains(joined(c.messages[0]), tail) {
+					t.Fatalf("actual admitted request changed its final boundary or lost the criterion tail: used=%d want=%d err=%v", used, tc.budget, err)
+				}
+			}
+			if count != tc.starts || len(c.options) != tc.starts || len(tools.calls) != 0 {
+				t.Fatalf("admission dispatched the wrong work: callback=%d calls=%d tools=%v", count, len(c.options), tools.calls)
+			}
+		})
+	}
 }
 
 // Options name a limit or are refused; an allowlist's names are checked; a

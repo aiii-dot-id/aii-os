@@ -156,6 +156,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	h.a.emitToolEvent("subagent", "spawn", fmt.Sprintf("depth %d: %s", p.Depth, p.Goal))
 
 	goalText := buildSubagentGoal(p.Depth, p.Goal, cfg.Agency.SubagentMaxToolRounds, cfg.Agency.SubagentMaxToolCalls, maxLegs, wallSeconds)
+	goalText += "\n\n" + sessionNotesLine(p.SessionID)
 	if leg > 1 {
 		ws, werr := h.a.store.WorkSessionByID(p.SessionID)
 		if werr != nil {
@@ -177,6 +178,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "compose", err)
 	}
 	recordPluginContextComposition(runCtx, prompt, contextSections)
+	system := h.a.gatedSystem(prompt)
 
 	var predictedNow func() (remaining, ordinal int)
 	if legsOn {
@@ -185,6 +187,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		predictedNow = meter.get
 	}
 
+	runStarted := false
 	subLoop := conversation.New(target.client, appToolExecutor{h.a}, appToolDefiner{h.a},
 		appTranscript{st: h.a.store, actor: p.SessionID, safe: h.a.safeTools}, appEmitter{a: h.a, actor: p.SessionID}, conversation.Config{
 
@@ -192,10 +195,11 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 
 			MaxToolCalls: cfg.Agency.SubagentMaxToolCalls,
 
-			TurnTokenBudget:       cfg.Agency.TurnTokenBudget,
-			ToolSchemaRefusals:    cfg.Agency.ToolSchemaRefusals,
-			Checkpoint:            cfg.Agency.checkpoint(),
-			MaxToolResultChars:    cfg.Prompt.MaxToolResultChars,
+			TurnTokenBudget:    cfg.Agency.TurnTokenBudget,
+			ToolSchemaRefusals: cfg.Agency.ToolSchemaRefusals,
+			Checkpoint:         cfg.Agency.checkpoint(),
+
+			MaxToolResultChars:    h.a.engine.ToolResultLimit(),
 			ContextBudgetTokens:   target.budget,
 			ContextBudgetFallback: target.budgetGuess,
 			ThinkingBudget:        thinking,
@@ -204,6 +208,14 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			ReplaySafe: replaySafeHook(h.a.toolReg),
 
 			ImagesRefused: h.a.imagesRefused,
+
+			BeforeFirstCall: func() error {
+				if err := h.a.store.StartWorkSessionLeg(p.SessionID, leg); err != nil {
+					return err
+				}
+				runStarted = true
+				return nil
+			},
 		})
 
 	if target.provider != "" {
@@ -215,12 +227,11 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if h.a.dashboard != nil {
 		h.a.dashboard.BroadcastWork()
 	}
-
-	if merr := h.a.store.StartWorkSessionLeg(p.SessionID, leg); merr != nil {
-		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "start record", merr)
-	}
 	runStart := time.Now()
-	result, err := subLoop.RunSystem(runCtx, h.a.gatedSystem(prompt), []llm.Message{goalMsg}, 0)
+	result, err := subLoop.RunSystem(runCtx, system, []llm.Message{goalMsg}, 0)
+	if err != nil && !runStarted {
+		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "first call", err)
+	}
 	runWall := time.Since(runStart)
 	accCalls := p.AccCalls + result.ToolCallsUsed
 	accTokens := p.AccTokens + result.Usage.TotalTokens
@@ -473,20 +484,10 @@ func sessionRecord(ws *store.WorkSession) string {
 	if ws == nil {
 		return ""
 	}
-	var b strings.Builder
-	if ws.Focus != "" {
-		b.WriteString("\nFocus: " + ws.Focus)
+	if card := resumeCardFor(ws); card != "" {
+		return "\n" + card
 	}
-	if ws.NextMove != "" {
-		b.WriteString("\nNext move: " + ws.NextMove)
-	}
-	if ws.Plan != "" {
-		b.WriteString("\nPlan:\n" + ws.Plan)
-	}
-	if ws.State != "" {
-		b.WriteString("\nState: " + ws.State)
-	}
-	return b.String()
+	return ""
 }
 
 func buildSubagentGoal(depth int, goal string, rounds, calls, legs, wallSeconds int) string {

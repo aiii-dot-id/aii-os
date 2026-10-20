@@ -638,6 +638,7 @@ func (a *App) startLive() (retErr error) {
 		Projects:     projectsAdapter{a},
 		Voice:        voiceModeAdapter{a},
 		HeardHistory: a.recallHeard,
+		WorkState:    a.readWorkState,
 		Continuity:   a.continuity.Port(),
 		Timers:       appTimers{time: a.timeFac, read: identity.NewStoreTimers(st)},
 		Embedder:     sourceEmbedder{a},

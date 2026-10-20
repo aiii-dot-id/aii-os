@@ -561,6 +561,104 @@ func TestSelectedModelCapabilitiesUseNativeDataBeforeTheCatalogue(t *testing.T) 
 	}
 }
 
+// A live chat endpoint need not implement a responsive model list. Native
+// discovery timing out must leave a real opportunity for the optional
+// catalogue, rather than handing it an already cancelled context.
+func TestNativeDiscoveryTimeoutLeavesTimeForTheSelectedCatalogue(t *testing.T) {
+	base, asked := modalityServing(t, http.StatusOK, opusEndpoints)
+	entered, stopped := make(chan struct{}), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+		close(stopped)
+	}))
+	t.Cleanup(srv.Close)
+	a := probeApp(t)
+	e := providerEntry{Name: "native", URL: srv.URL, APIType: "openai", CatalogueAuthor: "fixture"}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	a.refreshSelectedModalities(ctx, e, "m", &providerRegistry{Providers: []providerEntry{e}, ModelCatalogueURL: &base}, modalityGuard, (*App).discoverMetaForEntry)
+	select {
+	case <-entered:
+	default:
+		t.Fatal("the native model list was not asked first")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("the timed-out native request was not cancelled")
+	}
+	if len(*asked) != 1 {
+		t.Fatalf("catalogue requests=%d after native timeout, want 1", len(*asked))
+	}
+	if got := a.modalities.last(modelModalitiesURL(e, "m", base)); !slices.Contains(got.in, "image") {
+		t.Fatalf("native timeout prevented the catalogue answer: %v", got.in)
+	}
+	if a.discoveredImageSupport(e, "m") != nil {
+		t.Fatal("a native timeout was recorded as a capability answer")
+	}
+}
+
+// Test the startup wrapper's actual budget without spending wall-clock
+// seconds. Cancelling the native leg must not cancel the catalogue leg;
+// shutdown still owns and joins the whole optional background operation.
+func TestStartupAndSelectionReserveTheCatalogueLegAfterNativeTimeout(t *testing.T) {
+	oldDiscovery, oldGuard := selectedModelDiscovery, modalityGuard
+	t.Cleanup(func() { selectedModelDiscovery, modalityGuard = oldDiscovery, oldGuard })
+	for _, selection := range []bool{false, true} {
+		t.Run(fmt.Sprintf("selection=%v", selection), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				var nativeBound time.Duration
+				selectedModelDiscovery = func(_ *App, ctx context.Context, _ providerEntry, _ string) ([]string, map[string]modelMeta, error) {
+					deadline, ok := ctx.Deadline()
+					if !ok {
+						t.Error("native discovery has no deadline")
+						return nil, nil, fmt.Errorf("missing native deadline")
+					}
+					nativeBound = time.Until(deadline)
+					<-ctx.Done()
+					return nil, nil, ctx.Err()
+				}
+				catalogue := make(chan error, 1)
+				modalityGuard = func(ctx context.Context, _ string) error {
+					catalogue <- ctx.Err()
+					return fmt.Errorf("synthetic catalogue stop")
+				}
+				dir := t.TempDir()
+				e := providerEntry{Name: "fixture", APIType: "openai", URL: "https://provider.example/v1", CatalogueAuthor: "fixture"}
+				writeTestProviders(t, dir, e)
+				a := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
+				wantBound := modalityTimeout
+				if selection {
+					wantBound = time.Second
+					client := substrateProbeCall(func(context.Context, []llm.Message, llm.ChatOptions) (*llm.Response, error) {
+						return &llm.Response{Choices: []llm.Choice{{Message: llm.Message{Content: "OK"}}}}, nil
+					})
+					_, err := a.probeSubstrate(client, llm.ClientConfig{APIKey: "fixture", Model: "model"}, e, &providerRegistry{Providers: []providerEntry{e}}, 1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if time.Since(started) != 0 {
+						t.Fatal("optional metadata delayed provider acceptance")
+					}
+				} else {
+					a.startSelectedModalities(e, "model")
+				}
+				if err := <-catalogue; err != nil {
+					t.Errorf("catalogue inherited the native timeout: %v", err)
+				}
+				if nativeBound != wantBound || time.Since(started) != wantBound {
+					t.Errorf("native timeout=%s, elapsed=%s, want %s each", nativeBound, time.Since(started), wantBound)
+				}
+				if err := a.Shutdown(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
 func TestSelectionRefreshesOldNativeCapabilitiesAndPreservesThemOnFailure(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

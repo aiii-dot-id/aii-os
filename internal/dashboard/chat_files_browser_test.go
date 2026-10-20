@@ -139,3 +139,58 @@ run(async assert=>{
 });</script>`
 	runPageInEngines(t, page, chatModuleRig(t))
 }
+
+// A waiting picture follows configuration delivered over the socket: a late
+// capability answer, a model change, and changed bounds all update its chip
+// before Send, without another upload or an operator touching the chip.
+func TestAWaitingPicturesChipFollowsSocketCapabilityChanges(t *testing.T) {
+	page := `<!doctype html>
+<div id="thread"><div id="thread-inner"></div></div>
+<div id="composer-wrap"><div id="attach-chips" hidden></div><textarea id="msg-input"></textarea><button id="attach-btn">+</button><input type="file" id="attach-input" multiple hidden><button id="send-btn">Send</button></div><button id="jump-latest" hidden>Latest</button>
+<script type="module">
+import {S} from '/state.js';import {connect} from '/ws.js';import {takeFiles} from '/views/attach.js';import {run} from '/__harness.js';
+run(async assert=>{
+ const sockets=[];
+ window.WebSocket=class {
+  constructor(){this.readyState=0;this.frames=[];sockets.push(this);}
+  send(bytes){this.frames.push(JSON.parse(bytes));}
+  recv(frame){this.onmessage({data:JSON.stringify(frame)});}
+ };
+ S.view='chat';S.stats={name:'Fixture'};S.identityExists=true;
+ connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
+ const config=llm=>socket.recv({type:'config',config:{llm}});
+ config({resolved_model:'unknown'});
+ const realFetch=window.fetch;let uploads=0;
+ window.fetch=async(url,init)=>{
+  if(String(url).startsWith('/upload?')){uploads++;return new Response(JSON.stringify({path:'uploads/proof.png',name:'proof.png',bytes:9,image:true}),{status:200,headers:{'Content-Type':'application/json'}});}
+  return realFetch(url,init);
+ };
+ const chip=()=>document.querySelector('#attach-chips .attach-chip');
+ takeFiles([new File(['\x89PNG....'],'proof.png',{type:'image/png'})]);
+ for(let i=0;i<400&&(!chip()||!chip().textContent.includes('9 bytes'));i++)await new Promise(r=>requestAnimationFrame(r));
+ assert(chip()&&chip().textContent.includes('to the folder only'),'the uploaded picture did not start with unknown support');
+ config({resolved_model:'unknown',images_shown:'yes'});
+ assert(chip().textContent.includes('the model will be shown it'),'a late capability answer did not update the waiting chip: '+chip().textContent);
+ config({resolved_model:'text-only',images_shown:'no'});
+ assert(chip().textContent.includes('to the folder only')&&!chip().textContent.includes('the model will be shown it'),'a model that takes no images left the waiting chip promising one: '+chip().textContent);
+ config({resolved_model:'bounded',images_shown:'yes',image_max_bytes:8});
+ assert(chip().textContent.includes('larger than one picture this model is shown (8 bytes)'),'a smaller bound did not update the waiting chip: '+chip().textContent);
+ config({resolved_model:'bounded',images_shown:'yes',image_max_bytes:16});
+ assert(chip().textContent.includes('the model will be shown it'),'a larger bound did not update the waiting chip: '+chip().textContent);
+ const drop=chip().querySelector('.attach-drop');drop.focus();
+ assert(document.activeElement===drop,'rig: the Remove button did not take focus');
+ socket.recv({type:'status',stats:{name:'Fixture'}});
+ assert(chip().querySelector('.attach-drop')===drop&&document.activeElement===drop,'an unrelated status push rebuilt the waiting chip or lost Remove focus');
+ assert(uploads===1&&document.querySelectorAll('#attach-chips .attach-chip').length===1,'capability updates changed the attachment or uploaded it again');
+});</script>`
+	ws, err := staticFS.ReadFile("static/ws.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := chatModuleRig(t)
+	modules := wsPageModules(ws, chat["/state.js"])
+	for _, path := range []string{"/views/chat.js", "/views/attach.js", "/util.js", "/presence.js"} {
+		modules[path] = chat[path]
+	}
+	runPageInEngines(t, page, modules)
+}

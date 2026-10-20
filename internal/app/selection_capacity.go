@@ -52,14 +52,21 @@ func measureSelectionFacts(ctx context.Context, platform string, query time.Dura
 		}
 	case "linux", "windows":
 		if probe, args, err := vulkan(); err == nil {
-			if raw, err := selectionQuery(ctx, query, probe, args...); err == nil {
-				if d, ok := parseVulkanCapacity(raw); ok {
-					a.Devices["vulkan"] = d
+			var d pluginfacility.DeviceAvailability
+			switch raw, err := selectionQuery(ctx, query, probe, args...); {
+			case err == nil:
+				if d, _ = parseVulkanCapacity(raw); !d.Known {
+					d.Why = vulkanProbeUnreadable
 				}
-			} else if platform == "linux" && vulkanProbeAbsent(probe) {
+			case platform == "linux" && vulkanProbeAbsent(probe):
 
-				a.Devices["vulkan"] = pluginfacility.DeviceAvailability{Why: vulkanProbeNotInstalled}
+				d.Why = vulkanProbeNotInstalled
+			default:
+				d.Why = vulkanProbeFailed(ctx, query, err)
 			}
+			a.Devices["vulkan"] = d
+		} else {
+			a.Devices["vulkan"] = pluginfacility.DeviceAvailability{Why: "the Vulkan probe could not be located"}
 		}
 		path := "/usr/bin/nvidia-smi"
 		if platform == "windows" {
@@ -81,6 +88,24 @@ func measureSelectionFacts(ctx context.Context, platform string, query time.Dura
 }
 
 const vulkanProbeNotInstalled = "the Vulkan probe (" + vulkancap.Helper + ") is not installed beside aii"
+
+const vulkanProbeUnreadable = "the Vulkan probe answered, but its answer was not a valid device capacity"
+
+func vulkanProbeFailed(ctx context.Context, query time.Duration, err error) string {
+	if ctx.Err() != nil {
+		return "the Vulkan probe did not finish before the selection measurement ended"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("the Vulkan probe did not answer within %d ms (plugins.runtime.hardware_query_ms)", query.Milliseconds())
+	}
+	var exited *exec.ExitError
+	if errors.As(err, &exited) {
+		if why := vulkancap.FailureReason(exited.ExitCode()); why != "" {
+			return why
+		}
+	}
+	return "the Vulkan probe could not run to completion"
+}
 
 func vulkanProbeAbsent(path string) bool {
 	_, err := os.Lstat(path)
@@ -128,10 +153,13 @@ func selectionQuery(ctx context.Context, bound time.Duration, path string, args 
 	if !hostcap.Can(hostcap.Subprocess).Available {
 		return nil, errors.New("hardware query unavailable on this topology")
 	}
-	ctx, cancel := context.WithTimeout(ctx, bound)
+	qctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	var out limitedSelectionOutput
-	if err := selectionCommand(ctx, &out, path, args...).Run(); err != nil {
+	if err := selectionCommand(qctx, &out, path, args...).Run(); err != nil {
+		if qctx.Err() != nil {
+			return nil, qctx.Err()
+		}
 		return nil, err
 	}
 	return out.Bytes(), nil

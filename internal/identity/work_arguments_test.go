@@ -129,7 +129,31 @@ func TestWorkSchemaSeparatesCommandExecution(t *testing.T) {
 		if !strings.Contains(verb.Description, "Command execution belongs to shell") {
 			t.Fatal("work description must distinguish command execution")
 		}
+		state := props["state"].(map[string]any)["description"].(string)
+		result := props["result"].(map[string]any)["description"].(string)
+		if !strings.Contains(state, "Does not close the session; use deliver to finish") || !strings.Contains(result, "closes the active session") {
+			t.Fatalf("authored prose is not a lifecycle transition; schema must distinguish update from deliver: state=%q result=%q", state, result)
+		}
 		return
 	}
 	t.Fatal("work schema missing")
+}
+
+func TestAuthoredDoneStateIsNotDelivery(t *testing.T) {
+	e, st, _, _, _ := setupEngine(t)
+	id := startAndActiveID(t, e, st, "authored state versus delivery")
+	if _, err := e.verbWork(t.Context(), map[string]any{"action": "update", "state": "done; session closed"}); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := st.WorkSessionByID(id)
+	if err != nil || ws == nil || ws.Status != "active" || ws.State != "done; session closed" {
+		t.Fatalf("update must preserve authored text without interpreting it as a transition: %+v %v", ws, err)
+	}
+	if _, err := e.verbWork(t.Context(), map[string]any{"action": "deliver", "result": "served: verified locally"}); err != nil {
+		t.Fatal(err)
+	}
+	ws, err = st.WorkSessionByID(id)
+	if err != nil || ws == nil || ws.Status != "delivered" {
+		t.Fatalf("the explicit delivery must close the session: %+v %v", ws, err)
+	}
 }

@@ -94,6 +94,10 @@ func TestLsShowsTypeTimeSizeAndName(t *testing.T) {
 }
 
 func TestLsRecursesWithAPatternAndADepth(t *testing.T) {
+	depth := (&LsTool{}).Parameters()["properties"].(map[string]any)["depth"].(map[string]any)
+	if words, _ := depth["description"].(string); !strings.Contains(words, "requires recursive=true") || !strings.Contains(words, "With recursive=true, zero means no depth bound") {
+		t.Fatalf("the advertised depth must name its existing dependency and zero behavior: %v", depth)
+	}
 	r, home := readHome(t, nil)
 	lsTree(t, home, []string{"a/b/c/deep.go", "a/b/notes.md", "a/x.go", "top.go", ".git/config", "node_modules/m.js"})
 

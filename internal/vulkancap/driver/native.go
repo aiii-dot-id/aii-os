@@ -62,7 +62,7 @@ type memoryBudget struct {
 func measure() (Capacity, error) {
 	lookup, closeLoader, err := openLoader()
 	if err != nil {
-		return Capacity{}, err
+		return Capacity{}, fmt.Errorf("%w: %w", errLoaderUnavailable, err)
 	}
 	defer closeLoader()
 
@@ -134,7 +134,7 @@ func measure() (Capacity, error) {
 		}
 	}
 	if !budgetSupported {
-		return Capacity{}, errors.New("Vulkan driver does not expose a memory budget")
+		return Capacity{}, errMemoryBudgetUnavailable
 	}
 	queues(chosen, &n, nil)
 	if n == 0 || n > 256 {
@@ -170,12 +170,12 @@ func discreteDevice(kinds []uint32) (int, error) {
 			continue
 		}
 		if chosen >= 0 {
-			return -1, errors.New("Vulkan multi-discrete-GPU placement is unknown")
+			return -1, errAmbiguousDevices
 		}
 		chosen = i
 	}
 	if chosen < 0 {
-		return -1, errors.New("Vulkan discrete GPU unavailable")
+		return -1, errNoDiscreteDevice
 	}
 	return chosen, nil
 }

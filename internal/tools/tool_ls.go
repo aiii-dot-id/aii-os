@@ -30,7 +30,7 @@ func (t *LsTool) Parameters() map[string]any {
 			"path":      map[string]any{"type": "string", "description": "Directory or file (default: your home)"},
 			"recursive": map[string]any{"type": "boolean"},
 			"pattern":   map[string]any{"type": "string", "description": "Glob on names: *.go"},
-			"depth":     map[string]any{"type": "integer"},
+			"depth":     map[string]any{"type": "integer", "description": "Maximum listed levels; positive depth requires recursive=true. With recursive=true, zero means no depth bound."},
 			"sort":      map[string]any{"type": "string", "enum": []string{"name", "mtime"}, "description": "mtime: newest first"},
 			"limit":     map[string]any{"type": "integer"},
 			"offset":    map[string]any{"type": "integer"},

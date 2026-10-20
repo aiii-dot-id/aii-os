@@ -83,16 +83,20 @@ var publicEditions = []struct{ file, stamp string }{
 	{"SKILLS-v0.1.15.md", "0bc45f44415e"},
 	{"SKILLS-ffe0bfe.md", "ffe0bfe4344f"},
 	{"SKILLS-v0.1.16.md", "2365aa69af18"},
+	{"SKILLS-v0.1.21.md", "ce2622bdfa3a"},
 	{"METHOD-v0.1.12.md", ""},
 	{"overlay_README-v0.1.12.md", ""},
 	{"overlay_README-v0.1.14.md", ""},
 	{"overlay_README-v0.1.15.md", ""},
+	{"overlay_README-v0.1.21.md", ""},
 }
 
 // AN IDENTITY HOLDING ANY PUBLIC EDITION UPGRADES AT ITS NEXT START, and
 // the upgrade that waited beside it in .new is retired. Each edition is
 // deployed as its build deployed it, with an older upgrade waiting beside
 // it, as the live identities held them.
+// A genuine edit of the same released bytes stays theirs across starts,
+// with the current template beside it rather than replacing their work.
 func TestAnIdentityHoldingAnyPublicEditionUpgradesAtItsStart(t *testing.T) {
 	dir := filepath.Join("testdata", "public-editions")
 	entries, err := os.ReadDir(dir)
@@ -131,6 +135,20 @@ func TestAnIdentityHoldingAnyPublicEditionUpgradesAtItsStart(t *testing.T) {
 				t.Fatalf("an identity holding the public edition %s (key %s) still holds it after a start: the platform's own version was taken for the identity's edit", edition.file, docSeedKey(kind.normalize, deployed))
 			}
 			absent(t, path+sidecarSuffix)
+
+			edited := append(append([]byte(nil), deployed...), "\nA note the identity wrote.\n"...)
+			editedApp, _ := editionHome(t)
+			editedPath := kind.path(editedApp)
+			writeDoc(t, editedPath, edited)
+			for range 2 {
+				kind.seed(editedApp)
+				if got := mustRead(t, editedPath); !bytes.Equal(got, edited) {
+					t.Fatalf("an identity's edit of the public edition %s was replaced at a start", edition.file)
+				}
+				if got := mustRead(t, editedPath+sidecarSuffix); !bytes.Equal(got, kind.current()) {
+					t.Fatalf("the current template does not wait beside an identity's edit of %s", edition.file)
+				}
+			}
 		})
 	}
 }
