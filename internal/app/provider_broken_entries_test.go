@@ -84,10 +84,10 @@ func TestOneBrokenProviderLeavesTheRestInUse(t *testing.T) {
 	if b.position != 1 || b.name != "B" || !strings.Contains(b.reason, `unknown field "api_kye"`) || b.repair != nil {
 		t.Fatalf("the broken entry is not named, placed and explained: %+v", b)
 	}
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "C", Model: "m"}, reg); err != nil {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "C", Model: "m"}}, reg); err != nil {
 		t.Fatalf("a good entry beside a broken one does not resolve: %v", err)
 	}
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "B"}, reg); err == nil ||
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "B"}}, reg); err == nil ||
 		!strings.Contains(err.Error(), `"B" is a broken entry in providers.json`) || !strings.Contains(err.Error(), "Settings → Providers") {
 		t.Fatalf("pointing at the broken entry does not say so, with the way out: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestABrokenDefaultEntrySaysSoWhenNothingNamesTheProvider(t *testing.T) {
 	  {"name":"C","url":"https://c.test","models":["m"]}
 	]}`)
 	reg := loadedOrFatal(t, a)
-	_, _, err := a.resolveLLMConfig(LLMConfig{}, reg)
+	_, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{}}, reg)
 	if err == nil || !strings.Contains(err.Error(), `default-flagged entry "A" in providers.json is broken`) {
 		t.Fatalf("an empty pointer at a broken default does not say so: %v", err)
 	}

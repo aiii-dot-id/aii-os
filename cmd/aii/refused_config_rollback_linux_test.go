@@ -306,3 +306,30 @@ func TestARefusedStartWithNoUpdateChangesNothing(t *testing.T) {
 		}
 	}
 }
+
+// THE ROLLBACK PUTS PROVIDERS.JSON BACK WITH THE PROGRAM. The update's first
+// boot left providers.json as the previous version ran with it beside the
+// file, and the newer version then wrote a field the previous one refuses.
+// The second refused start hands over to the previous program with that
+// file back in place, and the newer one set aside beside it.
+func TestARefusedStartsRollbackPutsTheProvidersFileBack(t *testing.T) {
+	r := newRefusedStartRig(t, refusedConfig, true)
+	providers := filepath.Join(filepath.Dir(r.config), "providers.json")
+	const previous = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}]}`
+	const newer = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}],"model_capabilities":{"m":{"context_length":64000}}}`
+	r.write(providers+".before-update", []byte(previous), 0o600)
+	r.write(providers, []byte(newer), 0o600)
+
+	out, exit := r.start()
+	mustRefuse(t, out, exit)
+	out, exit = r.start()
+	if exit != 0 || !strings.Contains(out, restoredLine) {
+		t.Fatalf("rig: the second refused start did not hand over: exit=%d\n%s", exit, out)
+	}
+	if got, err := os.ReadFile(providers); err != nil || string(got) != previous {
+		t.Fatalf("THE PREVIOUS PROGRAM WAS HANDED A PROVIDERS FILE IT REFUSES: %q (%v)\n%s", got, err, out)
+	}
+	if got, err := os.ReadFile(providers + ".rolled-back"); err != nil || string(got) != newer {
+		t.Fatalf("the newer version's providers.json was not set aside: %q (%v)", got, err)
+	}
+}

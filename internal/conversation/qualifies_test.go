@@ -16,7 +16,7 @@ const qualifierNote = "[the reply above is incomplete — stopped by the operato
 // not a stored turn.
 func TestAnInterruptionNoteNeverOpensTheHistory(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	history := []llm.Message{
 		{Role: "assistant", Content: "the unfinished reply"},
 		{Role: "user", Content: qualifierNote, Qualifies: true},

@@ -32,7 +32,6 @@ func staticNames(reg *tools.Registry) []ownedNames {
 		{"an offered verb (identity.Verbs)", verbs},
 		{"an absorbed operation (identity absorbedVerbs)", identity.AbsorbedNames()},
 		{"a registry builtin (tools registerDefaults)", reg.Builtins()},
-		{"a category door (tools categories)", tools.CategoryNames()},
 	}
 }
 

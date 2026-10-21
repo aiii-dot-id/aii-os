@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -115,6 +116,8 @@ func (a *App) pluginOptions() *pluginhost.Options {
 
 type pluginState struct {
 	pluginMu sync.RWMutex
+
+	storedRemoved atomic.Pointer[string]
 
 	plugins      []*pluginhost.ActivePlugin
 	retiring     []*pluginhost.ActivePlugin

@@ -474,6 +474,14 @@ func (a *App) loadProviders() (*providerRegistry, error) {
 }
 
 func loadProvidersFile(path string) (*providerRegistry, error) {
+	data, err := readProvidersBytes(path)
+	if err != nil {
+		return nil, err
+	}
+	return decodeProviders(path, data)
+}
+
+func readProvidersBytes(path string) ([]byte, error) {
 	data, err := atomicfile.ReadFile(path)
 	if os.IsNotExist(err) {
 		if _, werr := writeFileAtomic(path, scaffoldProviders()); werr != nil {
@@ -485,6 +493,10 @@ func loadProvidersFile(path string) (*providerRegistry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	return data, nil
+}
+
+func decodeProviders(path string, data []byte) (*providerRegistry, error) {
 
 	var file struct {
 		providerRegistry
@@ -919,11 +931,11 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 	a.cfgMu.Unlock()
 
 	a.askWindowIfUndeclaredIn(candidate, cfg.LLM)
-	newCC, resolvedEntry, err := a.resolveLLMConfig(cfg.LLM, candidate)
+	newCC, resolvedEntry, err := a.resolveLLMConfig(cfg, candidate)
 	if err != nil {
 		return fmt.Errorf("provider change refused: %w; current substrate kept", err)
 	}
-	candidateBudget, _ := promptBudgetFor(resolvedEntry, cfg.Prompt.MaxTokens)
+	candidateBudget, _ := promptBudgetFor(resolvedEntry, promptCeilingFor(cfg, resolvedEntry, newCC.Model))
 	client := a.newLLMClient(newCC, candidateBudget)
 	measured, err := a.probeSubstrate(client, newCC, resolvedEntry, candidate, cfg.LLM.ProbeTimeoutSeconds)
 	if err != nil {
@@ -953,7 +965,7 @@ func (a *App) changeProviders(name string, mutate func(*providerRegistry) error)
 			return fmt.Errorf("persist providers: %w", persistErr)
 		}
 		if published {
-			a.activateLLMRuntime(client, resolvedEntry, cfg.Prompt.MaxTokens)
+			a.activateLLMRuntime(client, resolvedEntry, cfg)
 			a.setSubstrateCapability(measured)
 		}
 		if persistErr != nil {

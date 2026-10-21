@@ -9,6 +9,21 @@ import (
 
 var ErrPluginMemoryQuota = errors.New("plugin memory quota exceeded")
 
+type PluginMemoryQuotaError struct {
+	Held, Ceiling, Current int
+
+	ReplacedKept int
+
+	Temporary int
+}
+
+func (e *PluginMemoryQuotaError) Error() string {
+	return fmt.Sprintf("%v: %d memories held at the %d-memory ceiling, %d current and %d replaced",
+		ErrPluginMemoryQuota, e.Held, e.Ceiling, e.Current, e.Held-e.Current)
+}
+
+func (e *PluginMemoryQuotaError) Unwrap() error { return ErrPluginMemoryQuota }
+
 var ErrPluginMemoryNotFound = errors.New("plugin memory not found")
 
 type PluginMemory struct {
@@ -103,15 +118,22 @@ func (s *Store) pluginMemoryAdd(scope PluginScope, m PluginMemory, maxMemories i
 			overrides = root
 		}
 	}
-	var current int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM plugin_memories b WHERE `+where, args...).Scan(&current); err != nil {
+	heldWhere, heldArgs := PluginMemoryPredicate(scope, false)
+	var held int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM plugin_memories b WHERE `+heldWhere, heldArgs...).Scan(&held); err != nil {
 		return "", err
 	}
-	if supersedes != "" {
-		current--
-	}
-	if maxMemories > 0 && current+1 > maxMemories {
-		return "", fmt.Errorf("%w: %d memories at the %d-memory ceiling", ErrPluginMemoryQuota, current+1, maxMemories)
+	if maxMemories > 0 && held+1 > maxMemories {
+		var current int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM plugin_memories b WHERE `+where, args...).Scan(&current); err != nil {
+			return "", err
+		}
+		refusal := &PluginMemoryQuotaError{Held: held, Ceiling: maxMemories, Current: current}
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(b.temp = 1), 0), COALESCE(SUM(b.temp = 0 AND b.superseded_by IS NOT NULL), 0)
+			FROM plugin_memories b WHERE `+heldWhere, heldArgs...).Scan(&refusal.Temporary, &refusal.ReplacedKept); err != nil {
+			return "", err
+		}
+		return "", refusal
 	}
 	if _, err := tx.Exec(`INSERT INTO plugin_memories (id, plugin_id, activation, overrides, text, project, attribution, superseded_by, temp, created_at, updated_at, applicability, work_session, source_incarnation, evidence)
 		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
@@ -194,4 +216,146 @@ func clearPluginMemoryWhere(h dbi, where string, args []any) error {
 	}
 	_, err := h.Exec(`DELETE FROM plugin_memories WHERE `+where, args...)
 	return err
+}
+
+type PluginStored struct {
+	PluginID string
+	Memories int
+	Replaced int
+	Keys     int
+}
+
+const pluginStoredSQL = `SELECT plugin_id, SUM(memories), SUM(replaced), SUM(keys) FROM (
+	SELECT plugin_id, COUNT(*) AS memories, COUNT(superseded_by) AS replaced, 0 AS keys
+	  FROM plugin_memories GROUP BY plugin_id
+	UNION ALL
+	SELECT plugin_id, 0, 0, COUNT(*) FROM plugin_kv WHERE hidden IS NULL GROUP BY plugin_id)`
+
+func (s *Store) PluginsStored() ([]PluginStored, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(pluginStoredSQL + ` GROUP BY plugin_id ORDER BY plugin_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PluginStored
+	for rows.Next() {
+		var p PluginStored
+		if err := rows.Scan(&p.PluginID, &p.Memories, &p.Replaced, &p.Keys); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RemovePluginStored(pluginID string) (PluginStored, error) {
+	if pluginID == "" {
+		return PluginStored{}, errors.New("remove a plugin's stored data: a plugin id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.w().Begin()
+	if err != nil {
+		return PluginStored{}, err
+	}
+	defer tx.Rollback()
+	removed := PluginStored{PluginID: pluginID}
+	err = tx.QueryRow(pluginStoredSQL+` WHERE plugin_id = ? GROUP BY plugin_id`, pluginID).
+		Scan(&removed.PluginID, &removed.Memories, &removed.Replaced, &removed.Keys)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return PluginStored{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM memory_vectors WHERE store = 'plugin_memories'
+		AND id IN (SELECT id FROM plugin_memories WHERE plugin_id = ?)`, pluginID); err != nil {
+		return PluginStored{}, err
+	}
+	if err := clearPluginMemoryWhere(tx, `plugin_id = ?`, []any{pluginID}); err != nil {
+		return PluginStored{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM plugin_kv WHERE plugin_id = ?`, pluginID); err != nil {
+		return PluginStored{}, err
+	}
+	return removed, tx.Commit()
+}
+
+const (
+	PluginStoredPageRows  = 20
+	PluginStoredPageBytes = 256 << 10
+)
+
+type PluginStoredKey struct {
+	Key            string
+	Value          string
+	Temp           bool
+	DeletionMarker bool
+	UpdatedAt      time.Time
+}
+
+func (s *Store) PluginStoredMemories(pluginID string, before int64) (page []PluginMemory, total int, next int64, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM plugin_memories WHERE plugin_id = ?`, pluginID).Scan(&total); err != nil {
+		return nil, 0, 0, err
+	}
+	rows, err := s.db.Query(`SELECT rowid, id, text, project, attribution, COALESCE(superseded_by, ''), temp, created_at, updated_at
+		FROM plugin_memories WHERE plugin_id = ? AND (? = 0 OR rowid < ?) ORDER BY rowid DESC LIMIT ?`,
+		pluginID, before, before, PluginStoredPageRows+1)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	size, last := 0, int64(0)
+	for rows.Next() {
+		m := PluginMemory{PluginID: pluginID}
+		var rowid int64
+		var temp int
+		var created, updated string
+		if err := rows.Scan(&rowid, &m.ID, &m.Text, &m.Project, &m.Attribution, &m.SupersededBy, &temp, &created, &updated); err != nil {
+			return nil, 0, 0, err
+		}
+		if len(page) == PluginStoredPageRows || (len(page) > 0 && size+len(m.Text) > PluginStoredPageBytes) {
+			next = last
+			break
+		}
+		m.Temp = temp == 1
+		m.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		m.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+		page, size, last = append(page, m), size+len(m.Text), rowid
+	}
+	return page, total, next, rows.Err()
+}
+
+func (s *Store) PluginStoredKeys(pluginID string, before int64) (page []PluginStoredKey, total int, next int64, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM plugin_kv WHERE plugin_id = ?`, pluginID).Scan(&total); err != nil {
+		return nil, 0, 0, err
+	}
+	rows, err := s.db.Query(`SELECT rowid, key, value, temp, hidden IS NOT NULL, updated_at
+		FROM plugin_kv WHERE plugin_id = ? AND (? = 0 OR rowid < ?) ORDER BY rowid DESC LIMIT ?`,
+		pluginID, before, before, PluginStoredPageRows+1)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	size, last := 0, int64(0)
+	for rows.Next() {
+		var k PluginStoredKey
+		var rowid int64
+		var temp, marker int
+		var updated string
+		if err := rows.Scan(&rowid, &k.Key, &k.Value, &temp, &marker, &updated); err != nil {
+			return nil, 0, 0, err
+		}
+		if len(page) == PluginStoredPageRows || (len(page) > 0 && size+len(k.Key)+len(k.Value) > PluginStoredPageBytes) {
+			next = last
+			break
+		}
+		k.Temp, k.DeletionMarker = temp == 1, marker == 1
+		k.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+		page, size, last = append(page, k), size+len(k.Key)+len(k.Value), rowid
+	}
+	return page, total, next, rows.Err()
 }

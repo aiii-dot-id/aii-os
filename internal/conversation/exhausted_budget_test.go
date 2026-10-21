@@ -2,8 +2,10 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -35,7 +37,7 @@ func TestARunThatRanOutOfRoundsSaysSoTyped(t *testing.T) {
 		textResp("here is what I managed"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"grep": "found"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 3})
+		testBounds(Config{MaxIterations: limits.Of(3)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -61,19 +63,23 @@ func TestARunThatRanOutOfRoundsSaysSoTyped(t *testing.T) {
 
 // The round ceiling and the token fence move with the operator's config
 // (SetTurnBounds, on every reload): the next whole turn runs under the new
-// pair, and zero takes the default, as at construction.
+// pair. A bound not named is refused, naming it, and nothing is applied:
+// the loop holds no default of its own.
 func TestSetTurnBoundsAppliesToTheNextWholeTurn(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{
 		callResp("grep"), textResp("one round was all"),
 		callResp("grep"), callResp("grep"), textResp("two rounds were all"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"grep": "found"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 1, TurnTokenBudget: 1000})
+		testBounds(Config{MaxIterations: limits.Of(1), TurnTokenBudget: limits.Of(1000)}))
 	first, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop.SetTurnBounds(2, 0, Checkpoint{})
+	next := testBounds(Config{MaxIterations: limits.Of(2)})
+	if err := loop.SetTurnBounds(Bounds{Rounds: next.MaxIterations, TurnTokens: next.TurnTokenBudget, Calls: next.MaxToolCalls, Checkpoint: next.Checkpoint, ToolResultChars: next.MaxToolResultChars}); err != nil {
+		t.Fatal(err)
+	}
 	second, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go again"}})
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +87,12 @@ func TestSetTurnBoundsAppliesToTheNextWholeTurn(t *testing.T) {
 	if first.RoundsUsed != 1 || !first.ExhaustedBudget || second.RoundsUsed != 2 || !second.ExhaustedBudget {
 		t.Fatalf("rounds %d then %d; want the ceiling of each turn, 1 then 2", first.RoundsUsed, second.RoundsUsed)
 	}
-	if got := loop.cfg.TurnTokenBudget; got != 600_000 {
-		t.Fatalf("a zero fence is the default, as at construction: %d", got)
+	var unset UnsetBound
+	if err := loop.SetTurnBounds(Bounds{Rounds: limits.Of(3)}); !errors.As(err, &unset) || unset != "TurnTokens" {
+		t.Fatalf("bounds with no token fence were not refused naming it: %v", err)
+	}
+	if got := loop.cfg.MaxIterations; got != limits.Of(2) {
+		t.Fatalf("a refused change was applied in part: the rounds are %s", got)
 	}
 }
 
@@ -107,7 +117,7 @@ func TestAYieldIsNotAnExhaustedRun(t *testing.T) {
 		callResp("work"),
 		textResp("yielded, here is the status"),
 	}}
-	loop := New(client, yieldingTools{}, oneDefs{}, nil, nil, Config{MaxIterations: 10})
+	loop := New(client, yieldingTools{}, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(10)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +132,7 @@ func TestAYieldIsNotAnExhaustedRun(t *testing.T) {
 // flag always has.
 func TestACompletedRunDoesNotClaimExhaustion(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("done in one")}}
-	loop := New(client, &fakeTools{}, oneDefs{}, nil, nil, Config{MaxIterations: 10})
+	loop := New(client, &fakeTools{}, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(10)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

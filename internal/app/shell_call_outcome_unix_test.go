@@ -37,7 +37,7 @@ func TestAShellCallCutShortIsRecordedAsTheRuleSays(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			loop := conversation.New(&argsScript{tool: "shell", args: string(args)}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+			loop := conversation.New(&argsScript{tool: "shell", args: string(args)}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 			ctx, done := a.beginCancellableTurn(context.Background())
 			defer done()
 			ended := make(chan error, 1)

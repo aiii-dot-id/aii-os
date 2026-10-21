@@ -14,6 +14,8 @@ type Found struct {
 type Discovery struct {
 	Found     []Found
 	Ambiguous []string
+
+	Err error
 }
 
 type Skip struct {
@@ -60,20 +62,22 @@ func (f *Facility) VerifiedPackages(ctx context.Context) ([]Evidence, error) {
 
 func (f *Facility) Rescan(pol Policy) {
 	if f.cfg.Discover == nil {
-		f.mu.Lock()
-		set := make([]Observed, 0, len(f.instances))
-		for _, inst := range f.instances {
-			if inst.Desired.Active || inst.Package != "" {
-				set = append(set, Observed{ID: inst.ID, Package: inst.Package, Hash: inst.PackageHash, ManifestHash: inst.ManifestHash, Family: inst.Family})
-			}
-		}
-		f.mu.Unlock()
-		f.Observe(set, pol)
+		f.observeAgain(pol)
 		return
 	}
 	disc := f.cfg.Discover()
 	f.scanMu.Lock()
 	defer f.scanMu.Unlock()
+
+	if disc.Err != nil {
+		if said := disc.Err.Error(); said != f.loggedUnlisted {
+			f.loggedUnlisted = said
+			f.cfg.Log("the plugins directory could not be listed (%v) — nothing is taken as removed; what was installed stands until it can be read", disc.Err)
+		}
+		f.observeAgain(pol)
+		return
+	}
+	f.loggedUnlisted = ""
 	if f.verified == nil {
 		f.verified = map[string]verifyMemo{}
 	}
@@ -140,6 +144,18 @@ func (f *Facility) Rescan(pol Policy) {
 	sort.Slice(set, func(i, j int) bool { return set[i].ID < set[j].ID })
 
 	f.observe(set, pol, &skips)
+}
+
+func (f *Facility) observeAgain(pol Policy) {
+	f.mu.Lock()
+	set := make([]Observed, 0, len(f.instances))
+	for _, inst := range f.instances {
+		if inst.Desired.Active || inst.Package != "" {
+			set = append(set, Observed{ID: inst.ID, Dir: inst.Dir, Package: inst.Package, Hash: inst.PackageHash, ManifestHash: inst.ManifestHash, Family: inst.Family})
+		}
+	}
+	f.mu.Unlock()
+	f.Observe(set, pol)
 }
 
 func (f *Facility) Skips() []Skip {

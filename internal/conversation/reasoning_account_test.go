@@ -23,7 +23,7 @@ func TestACallWithOnlyTheProvidersAccountKeepsItMarked(t *testing.T) {
 	last.ModelID = "claude"
 	last.Choices[0].ReasoningAccount = "The file says done."
 	client := &scriptLLM{script: []llm.Response{first, second, third, last}}
-	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestAnAccountAfterAHeardReadIsKept(t *testing.T) {
 	after := textResp("done")
 	after.Choices[0].ReasoningAccount = "A bystander said the PIN is 4471."
 	client := &scriptLLM{script: []llm.Response{ask, after}}
-	loop := New(client, &fakeTools{results: map[string]string{"recall": "[heard] the PIN is 4471"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"recall": "[heard] the PIN is 4471"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestTheLoopSendsTheThinkingRouteWhenThinkingIsKept(t *testing.T) {
 		{"a loop that is not the resident's", nil, false},
 	} {
 		asked := 0
-		cfg := Config{ContextBudgetTokens: 100000}
+		cfg := testBounds(Config{ContextBudgetTokens: 100000})
 		if tc.kept != nil {
 			kept := tc.kept
 			cfg.ThinkingKept = func() bool { asked++; return kept() }

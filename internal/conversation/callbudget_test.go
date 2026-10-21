@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -25,10 +26,10 @@ func TestTheCallCeilingBoundsAWideBatchThatRoundsCannotBound(t *testing.T) {
 		textResp("done"), textResp("done"),
 	}}
 	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{
-		MaxIterations: 12, // rounds would happily allow all thirty
-		MaxToolCalls:  10,
-	})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{
+		MaxIterations: limits.Of(12), // rounds would happily allow all thirty
+		MaxToolCalls:  limits.Of(10),
+	}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +53,7 @@ func TestTheCallCeilingBoundsAWideBatchThatRoundsCannotBound(t *testing.T) {
 func TestAWideBatchInsideTheCeilingRunsWhole(t *testing.T) {
 	client := &captureLLM{script: []llm.Response{wideBatch(8), textResp("done"), textResp("done")}}
 	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{MaxIterations: 12, MaxToolCalls: 10})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(12), MaxToolCalls: limits.Of(10)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -65,12 +66,13 @@ func TestAWideBatchInsideTheCeilingRunsWhole(t *testing.T) {
 	}
 }
 
-// The resident's loop sets no call ceiling. Zero means no ceiling, not a
+// The resident's call ceiling is unlimited by default: no ceiling, not a
 // ceiling of zero — the difference between "unbounded" and "cannot act".
-func TestZeroMeansNoCallCeiling(t *testing.T) {
+// (Zero is "not set", which the loop refuses: TestTheLoopHasNoDefaultOfItsOwn.)
+func TestUnlimitedMeansNoCallCeiling(t *testing.T) {
 	client := &captureLLM{script: []llm.Response{wideBatch(30), textResp("done"), textResp("done")}}
 	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{MaxIterations: 12, MaxToolCalls: 0})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(12), MaxToolCalls: limits.Unlimited}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestZeroMeansNoCallCeiling(t *testing.T) {
 func TestABatchLandingExactlyOnTheCeilingIsNotTruncated(t *testing.T) {
 	client := &captureLLM{script: []llm.Response{wideBatch(10), textResp("done"), textResp("done")}}
 	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{MaxIterations: 12, MaxToolCalls: 10})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(12), MaxToolCalls: limits.Of(10)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +109,7 @@ func TestTheRunReportsTheToolCallsItActuallyMade(t *testing.T) {
 		textResp("done"), textResp("done"),
 	}}
 	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{MaxIterations: 12, MaxToolCalls: 64})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(12), MaxToolCalls: limits.Of(64)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -126,5 +128,37 @@ func TestTheRunReportsTheToolCallsItActuallyMade(t *testing.T) {
 	}
 	if res.RoundsUsed == res.ToolCallsUsed {
 		t.Fatal("rounds and calls must not be the same number here, or this test proves nothing about the distinction")
+	}
+}
+
+// A RESIDENT'S TURN ENDS AT ITS CALL LIMIT WITH AN ANSWER
+// (agency.max_tool_calls). The calls past the limit
+// are answered as not executed, in the words approved; one final call
+// without tools gives the answer; the turn closes on the approved line and
+// is not continued by itself. A child's leg (WrapUpAtCallLimit false) ends
+// unfinished as before, with no final call.
+func TestAResidentTurnEndsAtItsCallLimitWithAnAnswer(t *testing.T) {
+	client := &optsLLM{script: []llm.Response{wideBatch(2), wideBatch(2), textResp("here is where it stands"), textResp("unused")}}
+	ft := &fakeTools{results: map[string]string{"bash": "ok"}}
+	loop := New(client, ft, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(12), MaxToolCalls: limits.Of(3), WrapUpAtCallLimit: true}))
+	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ft.calls) != 3 || len(client.seen) != 3 {
+		t.Fatalf("ran %d calls over %d requests; want 3 calls, and the third request the final one", len(ft.calls), len(client.seen))
+	}
+	if !client.opts[2].DisableTools {
+		t.Error("the final request at the call limit offered tools")
+	}
+	if all := joined(client.seen[2]); !strings.Contains(all, "not executed: this turn's call limit (3) is reached") {
+		t.Errorf("the call past the limit was not answered in the approved words:\n%s", all)
+	}
+	want := "here is where it stands\n\n[This turn reached its limit of 3 tool calls and was finished without further tools. Ask again to continue.]"
+	if !strings.HasSuffix(res.Spoken, want) {
+		t.Errorf("the turn ends %q; want it to end %q", res.Spoken, want)
+	}
+	if !res.ExhaustedCallBudget || res.ContinuedAtCap || res.ContinuedAtPressure || res.ContinuedAtTokenBudget {
+		t.Errorf("the ending is not a hard ceiling that nothing continues: %+v", res)
 	}
 }

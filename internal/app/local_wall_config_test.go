@@ -24,7 +24,7 @@ func TestLocalSpawnWallDefaultsAndValidates(t *testing.T) {
 	if err := os.WriteFile(p, []byte(`{"agency":{"subagent_wall_seconds_local":-1}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadConfig(p); err == nil || !strings.Contains(err.Error(), "subagent_wall_seconds_local must be positive") {
+	if _, err := LoadConfig(p); err == nil || !strings.Contains(err.Error(), "agency.subagent_wall_seconds_local: -1 is out of bounds") {
 		t.Fatalf("a negative local wall was accepted: %v", err)
 	}
 }

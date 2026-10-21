@@ -44,7 +44,7 @@ func TestAHeardReadNamedWithAFoldedDuplicateKeyKeepsItsBoundary(t *testing.T) {
 	withHeardHistory(a)
 	a.retainHeard("heard-session", 1, "withheld banking sentence", dashboard.VoiceEvent{}, "withheld", "pending", nil)
 	model := &heardReadScript{args: `{"source":"heard","SOURCE":"memory","query":"banking"}`}
-	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "what was said?"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestWhatTheIdentityReadOutlastsAnIgnoreAndIsInTheGrantedHistory(t *testing.
 	ve := dashboard.VoiceEvent{TrackID: "track-a", StartSample: &start, EndSample: &end}
 	a.retainHeard("room", 2, "withheld banking sentence", ve, "withheld", "pending", nil)
 	model := &heardReadScript{args: `{"source":"heard","query":"banking"}`}
-	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "what was said?"}}); err != nil {
 		t.Fatal(err)
 	}

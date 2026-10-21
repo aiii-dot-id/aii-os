@@ -12,7 +12,7 @@ func TestAZeroContextBudgetIsTheDefault(t *testing.T) {
 	if llm.DefaultContextBudgetTokens != 32000 {
 		t.Fatalf("the default prompt budget is %d, want 32000", llm.DefaultContextBudgetTokens)
 	}
-	loop := New(&scriptLLM{}, &fakeTools{}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(&scriptLLM{}, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	if got := loop.cfg.ContextBudgetTokens; got != llm.DefaultContextBudgetTokens {
 		t.Fatalf("constructed with a zero budget: %d, want %d", got, llm.DefaultContextBudgetTokens)
 	}

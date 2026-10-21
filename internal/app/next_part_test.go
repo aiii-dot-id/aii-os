@@ -40,7 +40,7 @@ func lineAfter(t *testing.T, app *App, said string) string {
 // continuation leg's requests, from its first (n == 3), with leg.
 func fencedThenLeg(t *testing.T, app *App, leg func(n int, w http.ResponseWriter)) {
 	t.Helper()
-	app.conv.SetTurnBounds(app.configSnapshot().Agency.MaxToolRounds, 500, conversation.Checkpoint{})
+	fenceTurnAt(t, app, 500)
 	fixtureModel(t, app, func(n int, w http.ResponseWriter) {
 		switch {
 		case n == 1:

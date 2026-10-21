@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/conversation"
 )
 
-func (e *Engine) verbTools(_ context.Context, args map[string]any) (string, error) {
+func (e *Engine) verbTools(ctx context.Context, args map[string]any) (string, error) {
 	depth := 2
 	if d, ok := args["depth"].(int); ok {
 		depth = d
@@ -46,55 +48,11 @@ func (e *Engine) verbTools(_ context.Context, args map[string]any) (string, erro
 		if err != nil {
 			return "", err
 		}
-		return renderToolCard(card), nil
-	case "offer":
-		name := strings.TrimSpace(stringArg(args, "name"))
-		if plugin := strings.TrimSpace(stringArg(args, "plugin")); plugin != "" {
-			if name != "" {
-				return "", fmt.Errorf("tools action=offer takes either name or plugin, not both")
-			}
-			selector, ok := e.toolDisc.(ToolPrimaryOffer)
-			if !ok {
-				return "", fmt.Errorf("primary plugin selection is unavailable")
-			}
-			names, err := selector.OfferPrimary(plugin)
-			if err != nil {
-				return "", err
-			}
-			if availability := selectionUnavailable(plane, names); availability != "" {
-				return fmt.Sprintf("Selected primary tools of %s: %s. %s", plugin, strings.Join(names, ", "), availability), nil
-			}
-			return fmt.Sprintf("Offered primary tools of %s: %s. Each is callable by its own tool name from your next turn with its declared arguments. The choice is saved across restarts; tools action=show reports current availability. No capabilities or confirmations changed.", plugin, strings.Join(names, ", ")), nil
-		}
-		if name == "" {
-			return "", fmt.Errorf("tools action=offer needs name=<operation> or plugin=<exact plugin id>")
-		}
-		if plane == nil {
-			return "", fmt.Errorf("no plugin operations are installed beside you")
-		}
-		resolved, err := plane.Offer(name)
-		if err != nil {
-			return "", err
-		}
-		if availability := selectionUnavailable(plane, []string{resolved}); availability != "" {
-			return fmt.Sprintf("Selected: %s. %s", resolved, availability), nil
-		}
-		return fmt.Sprintf("Offered: %s is callable from your next turn as `%s`. The choice is saved across restarts; tools action=show reports current availability.", name, resolved), nil
-	case "release":
-		name := strings.TrimSpace(stringArg(args, "name"))
-		if name == "" {
-			return "", fmt.Errorf("tools action=release needs a name")
-		}
-		if plane == nil {
-			return "", fmt.Errorf("no plugin operations are installed beside you")
-		}
-		resolved, err := plane.Release(name)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Released: %s (%s) was removed from your selection.", name, resolved), nil
+		return ToolCardText(card, listed(ctx, card)), nil
+	case "call":
+		return "", fmt.Errorf("tools action=call runs a plugin operation, and no plugin host is beside you to run it")
 	default:
-		return "", fmt.Errorf("tools: unknown action %q — organs, brief, search, show, offer, release", action)
+		return "", fmt.Errorf("tools: unknown action %q — organs, brief, search, show, call", action)
 	}
 
 	var lines []string
@@ -163,7 +121,7 @@ func stringArg(args map[string]any, key string) string {
 
 func renderToolBrief(b ToolBrief) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Plugin operations beside you: %d across %d families (%d offered, %d unavailable).", b.Total, len(b.Families)+b.MoreFamilies, b.Offered, b.Unavailable)
+	fmt.Fprintf(&sb, "Plugin operations beside you: %d across %d families (%d unavailable).", b.Total, len(b.Families)+b.MoreFamilies, b.Unavailable)
 	for _, f := range b.Families {
 		fmt.Fprintf(&sb, "\n  %s — %d: %s", f.Name, f.Count, strings.Join(f.Names, ", "))
 		if f.More > 0 {
@@ -173,10 +131,7 @@ func renderToolBrief(b ToolBrief) string {
 	if b.MoreFamilies > 0 {
 		fmt.Fprintf(&sb, "\n  … and %d more families; search to narrow", b.MoreFamilies)
 	}
-	if len(b.OfferedNames) > 0 {
-		fmt.Fprintf(&sb, "\nOffered now, callable by tool name: %s", strings.Join(b.OfferedNames, "; "))
-	}
-	sb.WriteString("\nNext: tools action=search query=<what you need> · action=show name=<operation> · action=offer name=<operation> or plugin=<exact plugin id> for its primary tools (eight seats; release what you no longer need). A plugin's success is what the host's receipt says, never the plugin's own text.")
+	sb.WriteString("\nEach family names its primary operations first; they are in your tool list. Next: tools action=search query=<what you need> · action=show name=<operation> · action=call name=<operation> args={…} for one that is not. A plugin's success is what the host's receipt says, never the plugin's own text.")
 	return sb.String()
 }
 
@@ -187,29 +142,35 @@ func renderToolHits(query string, hits []ToolHit) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Plugin operations matching %q:", query)
 	for _, h := range hits {
-		fmt.Fprintf(&sb, "\n  %s — %s [%s, %s; plugin %s] → tools action=show name=%s", h.Operation, h.Summary, h.Effects, h.State, h.Plugin, h.Operation)
+		fmt.Fprintf(&sb, "\n  %s — %s [%s; plugin %s] → tools action=show name=%s", h.Operation, h.Summary, h.Effects, h.Plugin, h.Operation)
 		if h.Primary {
-			fmt.Fprintf(&sb, " [primary; select plugin: tools action=offer plugin=%s]", h.Plugin)
+			sb.WriteString(" [primary]")
 		}
 	}
 	return sb.String()
 }
 
-func renderToolCard(c ToolCard) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s — callable as `%s` (%s", c.Operation, c.Name, c.State)
-	if c.Reason != "" {
-		fmt.Fprintf(&sb, ": %s", c.Reason)
+func listed(ctx context.Context, c ToolCard) bool {
+	if shown, inTurn := conversation.ShownThisTurn(ctx, c.Name); inTurn {
+		return shown
 	}
-	sb.WriteString(")")
+	return c.Primary && c.Reason == ""
+}
+
+func ToolCardText(c ToolCard, listed bool) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s — tool name `%s`", c.Operation, c.Name)
+	switch {
+	case c.Reason != "":
+		fmt.Fprintf(&sb, " (unavailable: %s)", c.Reason)
+	case c.Primary:
+		sb.WriteString(" (primary)")
+	}
 	fmt.Fprintf(&sb, "\nplugin %s %s (%s); family %s; effects %s", c.Plugin, c.Version, c.Tier, c.Family, c.Effects)
 	if len(c.Capabilities) > 0 {
 		fmt.Fprintf(&sb, "; capabilities %s", strings.Join(c.Capabilities, ", "))
 	}
 	fmt.Fprintf(&sb, "\nsummary: %s", c.Summary)
-	if c.Primary {
-		fmt.Fprintf(&sb, "\nPrimary operation; select this plugin: tools action=offer plugin=%s", c.Plugin)
-	}
 	fmt.Fprintf(&sb, "\nreceipt rule: %s", c.Receipt)
 	if c.MaxResultBytes > 0 {
 		fmt.Fprintf(&sb, "\nresult bound: %d bytes", c.MaxResultBytes)
@@ -222,40 +183,13 @@ func renderToolCard(c ToolCard) string {
 			fmt.Fprintf(&sb, "\narguments (JSON Schema): %s", raw)
 		}
 	}
-	switch c.State {
-	case "offered":
-		sb.WriteString("\nIt is in your offer: call it by its tool name.")
-	case "hidden":
-		sb.WriteString("\nIt cannot be offered while hidden.")
+	switch {
+	case c.Reason != "":
+		sb.WriteString("\nIt cannot be called while it is unavailable.")
+	case listed:
+		sb.WriteString("\nIt is in your tool list: call it by its tool name.")
 	default:
-		fmt.Fprintf(&sb, "\nTo call it: tools action=offer name=%s (eight seats; release one you no longer need).", c.Operation)
+		fmt.Fprintf(&sb, "\nTo call it: tools action=call name=%s args={…}, the arguments as above.", c.Name)
 	}
 	return sb.String()
-}
-
-func selectionUnavailable(plane ToolPlane, names []string) string {
-	var unavailable []string
-	for _, name := range names {
-		if plane == nil {
-			unavailable = append(unavailable, name+": current availability unavailable")
-			continue
-		}
-		card, err := plane.Show(name)
-		if err != nil {
-			unavailable = append(unavailable, name+": current availability unavailable")
-			continue
-		}
-		if card.State == "offered" {
-			continue
-		}
-		reason := card.Reason
-		if reason == "" {
-			reason = "not currently offered"
-		}
-		unavailable = append(unavailable, name+": "+reason)
-	}
-	if len(unavailable) == 0 {
-		return ""
-	}
-	return "Selection saved; " + strings.Join(unavailable, "; ") + ". Check tools action=show for current availability before use."
 }

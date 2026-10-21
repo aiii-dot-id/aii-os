@@ -134,7 +134,10 @@ CREATE TABLE IF NOT EXISTS work_sessions (
     evidence_readback TEXT NOT NULL DEFAULT '',
     harvested_ms INTEGER,
     delivered_at INTEGER,
-    started_leg INTEGER NOT NULL DEFAULT 0
+    started_leg INTEGER NOT NULL DEFAULT 0,
+    family TEXT NOT NULL DEFAULT '',
+    started_at INTEGER,
+    tool_calls INTEGER
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS work_sessions_created_seq_idx ON work_sessions (created_seq);
@@ -500,6 +503,8 @@ CREATE TABLE IF NOT EXISTS plugin_memories (
 
 CREATE INDEX IF NOT EXISTS idx_plugin_memories_plugin ON plugin_memories(plugin_id, superseded_by);
 CREATE INDEX IF NOT EXISTS idx_plugin_memories_activation ON plugin_memories(plugin_id, activation, overrides, superseded_by);
+CREATE INDEX IF NOT EXISTS idx_plugin_memories_superseded_by ON plugin_memories(superseded_by);
+CREATE INDEX IF NOT EXISTS idx_plugin_memories_overrides ON plugin_memories(overrides);
 
 CREATE TRIGGER IF NOT EXISTS plugin_memories_expire_link AFTER DELETE ON plugin_memories
 WHEN old.temp = 1 BEGIN

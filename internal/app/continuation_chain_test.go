@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -195,7 +195,7 @@ func TestATokenFencedTurnContinuesInAFreshTurn(t *testing.T) {
 	app, _ := dispatchApp(t)
 	defer stopApp(t, app)
 	// A fence the first call's spend crosses; the rounds stay as booted.
-	app.conv.SetTurnBounds(app.configSnapshot().Agency.MaxToolRounds, 500, conversation.Checkpoint{})
+	fenceTurnAt(t, app, 500)
 
 	obs := &contScript{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -275,7 +275,7 @@ func TestWordsLeftByACappedTurnAreReadBeforeItsContinuation(t *testing.T) {
 	app, _ := dispatchApp(t)
 	defer stopApp(t, app)
 	// A fence the first call's spend crosses; the rounds stay as booted.
-	app.conv.SetTurnBounds(app.configSnapshot().Agency.MaxToolRounds, 500, conversation.Checkpoint{})
+	fenceTurnAt(t, app, 500)
 
 	const words = "stop, that is the wrong repository"
 	const leg = "budget checkpoint — continuation 1"
@@ -558,7 +558,7 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 		}, "capped here"
 	}
 	fenced := func(t *testing.T, app *App, _ string) (script func(n int) string, final string) {
-		app.conv.SetTurnBounds(app.configSnapshot().Agency.MaxToolRounds, 500, conversation.Checkpoint{})
+		fenceTurnAt(t, app, 500)
 		return func(n int) string {
 			if n == 1 {
 				return chatReply("", "tool_calls", []string{
@@ -577,7 +577,7 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 	}
 	chainSpent := func(app *App) {
 		app.turn.mu.Lock()
-		app.turn.contChain = defaultMaxTurnContinuations
+		app.turn.contChain = limits.DefaultContinuations
 		app.turn.mu.Unlock()
 	}
 	for _, c := range []struct {
@@ -664,7 +664,7 @@ func TestALegThatDoesNotRunIsToldToTheOperator(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			app, _ := dispatchApp(t)
 			defer stopApp(t, app)
-			app.conv.SetTurnBounds(app.configSnapshot().Agency.MaxToolRounds, 500, conversation.Checkpoint{})
+			fenceTurnAt(t, app, 500)
 
 			fixtureModel(t, app, func(n int, w http.ResponseWriter) {
 				switch {

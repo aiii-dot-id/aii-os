@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 // TestWorkUpdatePlanSurface pins CS-4's verb surface: work.update
@@ -145,7 +146,7 @@ func TestTheWorkVerbStatesWhatTheAsksUsedTo(t *testing.T) {
 func TestTheDefaultStepsSentenceIsUnchanged(t *testing.T) {
 	const before = "(update, optional) how many tool calls you expect the rest of this turn to take. It is your budget: the turn checkpoints at twice this many calls (with none declared, at 32), gives you four more rounds to say where it stands, and the work continues in a fresh turn while its session is active. A later declaration revises it. Stated BEFORE the work, compared against what it took, and reported back to you in your rhythm line"
 	for name, verbs := range map[string][]Verb{"the registry": Verbs(), "a turn at the defaults": VerbsAt(conversation.Checkpoint{}),
-		"a turn handed the defaults": VerbsAt(conversation.Checkpoint{Calls: 32, GraceRounds: 4})} {
+		"a turn handed the defaults": VerbsAt(conversation.Checkpoint{Calls: limits.Of(32), GraceRounds: 4})} {
 		if got := stepsOf(t, verbs); got != before {
 			t.Errorf("%s: the default steps sentence changed:\n got %s\nwant %s", name, got, before)
 		}
@@ -171,14 +172,14 @@ func stepsOf(t *testing.T, verbs []Verb) string {
 // otherwise the registry's, and the registry is not written to.
 func TestVerbsAtStatesTheTurnsCheckpoint(t *testing.T) {
 	registry := stepsOf(t, Verbs())
-	at := VerbsAt(conversation.Checkpoint{Calls: 500, GraceRounds: 1})
+	at := VerbsAt(conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 1})
 	got := stepsOf(t, at)
 	for _, want := range []string{"twice this many calls", "(with none declared, at 500)", "gives you one more round to say", "fresh turn"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the steps sentence at a floor of 500 and a grace of 1 lacks %q: %s", want, got)
 		}
 	}
-	if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Calls: 64, GraceRounds: 12})); !strings.Contains(s, "(with none declared, at 64), gives you 12 more rounds to say") {
+	if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12})); !strings.Contains(s, "(with none declared, at 64), gives you 12 more rounds to say") {
 		t.Errorf("a count past ten is written in figures: %s", s)
 	}
 	// The slack on a declared estimate, as the sentence has always said

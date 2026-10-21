@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -26,7 +27,7 @@ func standingApp(t *testing.T) *App {
 	a := New(&Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2)},
 	})
 	a.store = st
 	a.toolReg = reg

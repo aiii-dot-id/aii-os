@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -63,22 +64,31 @@ type WorkSession struct {
 	Evidence         string
 	EvidenceReadback string
 
+	Family         string
+	StartedAt      int64
+	ToolCalls      int
+	ToolCallsKnown bool
+
 	Child bool
 }
 
 const workSessionFields = `id, description, status, state, lease_owner, lease_until, created_seq, updated_seq, result,
-project_id, focus, next_move, plan, expected_evidence, falsifier, decision_needed, evidence, evidence_readback`
+project_id, focus, next_move, plan, expected_evidence, falsifier, decision_needed, evidence, evidence_readback,
+family, started_at, tool_calls`
 
 func scanWorkSession(row rowScanner, ws *WorkSession, extra ...any) error {
 	var state, leaseOwner, leaseUntil, result sql.NullString
-	var createdSeq, updatedSeq sql.NullInt64
+	var createdSeq, updatedSeq, startedAt, toolCalls sql.NullInt64
 	dest := append([]any{&ws.ID, &ws.Description, &ws.Status, &state, &leaseOwner, &leaseUntil, &createdSeq, &updatedSeq, &result,
-		&ws.Project, &ws.Focus, &ws.NextMove, &ws.Plan, &ws.ExpectedEvidence, &ws.Falsifier, &ws.DecisionNeeded, &ws.Evidence, &ws.EvidenceReadback}, extra...)
+		&ws.Project, &ws.Focus, &ws.NextMove, &ws.Plan, &ws.ExpectedEvidence, &ws.Falsifier, &ws.DecisionNeeded, &ws.Evidence, &ws.EvidenceReadback,
+		&ws.Family, &startedAt, &toolCalls}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return err
 	}
 	ws.State, ws.LeaseOwner, ws.LeaseUntil, ws.Result = state.String, leaseOwner.String, leaseUntil.String, result.String
 	ws.CreatedSeq, ws.UpdatedSeq = uint64(createdSeq.Int64), uint64(updatedSeq.Int64)
+	ws.StartedAt, ws.ToolCalls = startedAt.Int64, int(toolCalls.Int64)
+	ws.ToolCallsKnown = toolCalls.Valid
 	return nil
 }
 
@@ -255,8 +265,8 @@ func (s *Store) StartWorkSession(ctx context.Context, id, description string) er
 	}
 	defer tx.Rollback()
 	_, err = tx.Exec(
-		`INSERT INTO work_sessions (id, description, status, state, project_id) VALUES (?, ?, 'active', '', ?)`,
-		id, description, s.activeProject)
+		`INSERT INTO work_sessions (id, description, status, state, project_id, started_at) VALUES (?, ?, 'active', '', ?, ?)`,
+		id, description, s.activeProject, time.Now().UTC().UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -317,6 +327,26 @@ func (s *Store) StartWorkSessionLeg(id string, leg int) error {
 	}
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
 		return fmt.Errorf("start leg %d of work session %s: no such session", leg, id)
+	}
+	return nil
+}
+
+var familySlug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
+func FamilySlug(s string) bool { return familySlug.MatchString(s) }
+
+func (s *Store) SetWorkSessionFamily(ctx context.Context, id, family string) error {
+	if !familySlug.MatchString(family) {
+		return fmt.Errorf("family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", family)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.w().ExecContext(ctx, `UPDATE work_sessions SET family = ? WHERE id = ? AND status = 'active'`, family, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return fmt.Errorf("family of work session %s: no active session", id)
 	}
 	return nil
 }
@@ -401,9 +431,10 @@ func (s *Store) DeliverWorkSession(ctx context.Context, id, result, evidence, re
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE work_sessions SET status='delivered', result=?, evidence=?, evidence_readback=?, delivered_at=?, harvested_ms=NULL
+	res, err := tx.Exec(`UPDATE work_sessions SET status='delivered', result=?, evidence=?, evidence_readback=?, delivered_at=?, harvested_ms=NULL,
+		tool_calls=(SELECT COUNT(*) FROM conversations WHERE kind='tool_call' AND json_extract(details,'$.work_session_id')=?)
 		WHERE id=? AND (status != 'delivered' OR result LIKE ? || '%')`,
-		result, evidence, readback, time.Now().UTC().UnixMilli(), id, preStartMarker)
+		result, evidence, readback, time.Now().UTC().UnixMilli(), id, id, preStartMarker)
 	if err != nil {
 		return err
 	}

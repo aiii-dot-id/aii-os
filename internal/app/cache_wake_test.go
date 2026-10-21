@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -49,7 +50,7 @@ func TestCacheWakeFailureStillMetersCachedUsage(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	rm := ring.NewManager()
 	_ = rm.SealSafePosture("test constitution")
-	cfg := &Config{Prompt: PromptConfig{MaxTokens: 32000}, Agency: AgencyConfig{MaxToolRounds: 3}}
+	cfg := &Config{Prompt: PromptConfig{MaxTokens: 32000}, Agency: AgencyConfig{MaxToolRounds: limits.Of(3)}}
 	a := New(cfg)
 	t.Cleanup(a.bgCancel)
 	a.store = st
@@ -58,7 +59,7 @@ func TestCacheWakeFailureStillMetersCachedUsage(t *testing.T) {
 	a.promptGate = prompt.NewGate(appRingSource{rm: rm}, 32000)
 	a.engine = identity.NewEngine(st, nil, rm, toolDiscovererAdapter{a.toolReg}, identity.Ports{})
 	c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Retries: -1, TimeoutSeconds: 2})
-	a.conv = conversation.New(c, pass4Executor{}, pass4Defs{}, nil, nil, conversation.Config{MaxIterations: 3, ContextBudgetTokens: 32000})
+	a.conv = conversation.New(c, pass4Executor{}, pass4Defs{}, nil, nil, testLoop(conversation.Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 32000}))
 	a.turn.lastTurn = "previous-turn gauge"
 	if err := a.acquireTurn(t.Context()); err != nil {
 		t.Fatal(err)

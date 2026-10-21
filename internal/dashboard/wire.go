@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -27,6 +28,8 @@ type ToolState struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
+
+	Plugin string `json:"plugin,omitempty"`
 }
 
 type BeliefItem struct {
@@ -123,6 +126,9 @@ type LLMConfigState struct {
 	ResolvedProvider string `json:"resolved_provider"`
 	ResolvedModel    string `json:"resolved_model"`
 	TimeoutSeconds   int    `json:"timeout_seconds"`
+
+	RefusedRetryMaxSeconds int `json:"refused_retry_max_seconds"`
+	RefusedRetryMaxDefault int `json:"refused_retry_max_default"`
 
 	ProbeTimeoutSeconds int    `json:"probe_timeout_seconds"`
 	Endpoint            string `json:"endpoint"`
@@ -318,6 +324,55 @@ type PluginsState struct {
 	Providers    []ProviderView    `json:"providers,omitempty"`
 
 	Machine *MachineView `json:"machine,omitempty"`
+
+	Stored             []PluginStoredView `json:"stored,omitempty"`
+	StoredError        string             `json:"stored_error,omitempty"`
+	StoredRemoved      string             `json:"stored_removed,omitempty"`
+	StoredReplacedDays int                `json:"stored_replaced_days,omitempty"`
+}
+
+type PluginStoredView struct {
+	ID        string `json:"id"`
+	Installed bool   `json:"installed,omitempty"`
+
+	Pending  string `json:"pending,omitempty"`
+	Memories int    `json:"memories,omitempty"`
+	Replaced int    `json:"replaced,omitempty"`
+	Keys     int    `json:"keys,omitempty"`
+}
+
+type PluginStoredRequest struct {
+	Plugin string `json:"plugin"`
+	Kind   string `json:"kind"`
+	Before int64  `json:"before,omitempty"`
+}
+
+type PluginStoredPage struct {
+	Plugin   string               `json:"plugin"`
+	Kind     string               `json:"kind"`
+	Before   int64                `json:"before,omitempty"`
+	Memories []PluginStoredMemory `json:"memories,omitempty"`
+	Keys     []PluginStoredKey    `json:"keys,omitempty"`
+	Total    int                  `json:"total"`
+	Next     int64                `json:"next,omitempty"`
+	Error    string               `json:"error,omitempty"`
+}
+
+type PluginStoredMemory struct {
+	ID         string `json:"id"`
+	Text       string `json:"text"`
+	StoredAt   string `json:"stored_at"`
+	ReplacedBy string `json:"replaced_by,omitempty"`
+	ReplacedAt string `json:"replaced_at,omitempty"`
+	Temporary  bool   `json:"temporary,omitempty"`
+}
+
+type PluginStoredKey struct {
+	Key            string `json:"key"`
+	Value          string `json:"value"`
+	StoredAt       string `json:"stored_at"`
+	Temporary      bool   `json:"temporary,omitempty"`
+	DeletionMarker bool   `json:"deletion_marker,omitempty"`
 }
 
 type MachineView struct {
@@ -523,19 +578,16 @@ type PluginView struct {
 	Publisher   string `json:"publisher,omitempty"`
 	PublisherID string `json:"publisher_id,omitempty"`
 
-	Title          string              `json:"title,omitempty"`
-	Description    string              `json:"description,omitempty"`
-	Family         string              `json:"family,omitempty"`
-	Interfaces     []string            `json:"interfaces,omitempty"`
-	Capabilities   []string            `json:"capabilities,omitempty"`
-	Runtime        string              `json:"runtime,omitempty"`
-	PackageHash    string              `json:"package_hash,omitempty"`
-	Tools          []string            `json:"tools,omitempty"`
-	PrimaryTools   []string            `json:"primary_tools,omitempty"`
-	ToolsSelected  bool                `json:"tools_selected,omitempty"`
-	ToolsWaiting   int                 `json:"tools_waiting,omitempty"`
-	PrimaryOffered bool                `json:"primary_offered,omitempty"`
-	Settings       []PluginSettingView `json:"settings,omitempty"`
+	Title        string              `json:"title,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Family       string              `json:"family,omitempty"`
+	Interfaces   []string            `json:"interfaces,omitempty"`
+	Capabilities []string            `json:"capabilities,omitempty"`
+	Runtime      string              `json:"runtime,omitempty"`
+	PackageHash  string              `json:"package_hash,omitempty"`
+	Tools        []string            `json:"tools,omitempty"`
+	PrimaryTools []string            `json:"primary_tools,omitempty"`
+	Settings     []PluginSettingView `json:"settings,omitempty"`
 
 	Applies string `json:"applies,omitempty"`
 
@@ -555,6 +607,14 @@ type PluginView struct {
 	Models []ModelView `json:"models,omitempty"`
 
 	Probes *PluginProbesView `json:"probes,omitempty"`
+
+	Operations []PluginOperationView `json:"operations,omitempty"`
+}
+
+type PluginOperationView struct {
+	Tool      string `json:"tool"`
+	Operation string `json:"operation,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type PluginProbesView struct {
@@ -840,15 +900,15 @@ type UpdatesConfigState struct {
 type AgencyConfigState struct {
 	PreferLocalForRoles bool `json:"prefer_local_for_roles"`
 
-	RhythmSeconds   int `json:"rhythm_seconds,omitempty"`
-	OutcomeWindow   int `json:"outcome_window,omitempty"`
-	TurnTokenBudget int `json:"turn_token_budget,omitempty"`
+	RhythmSeconds   int            `json:"rhythm_seconds,omitempty"`
+	OutcomeWindow   int            `json:"outcome_window,omitempty"`
+	TurnTokenBudget limits.Ceiling `json:"turn_token_budget,omitzero"`
 
 	ToolSchemaRefusals int `json:"tool_schema_refusals,omitempty"`
 
-	TurnCheckpointCalls       int `json:"turn_checkpoint_calls,omitempty"`
-	TurnCheckpointGraceRounds int `json:"turn_checkpoint_grace_rounds,omitempty"`
-	MaxTurnContinuations      int `json:"max_turn_continuations,omitempty"`
+	TurnCheckpointCalls       limits.Ceiling `json:"turn_checkpoint_calls,omitzero"`
+	TurnCheckpointGraceRounds int            `json:"turn_checkpoint_grace_rounds,omitempty"`
+	MaxTurnContinuations      limits.Ceiling `json:"max_turn_continuations,omitzero"`
 
 	TurnCheckpointSlack int `json:"turn_checkpoint_slack,omitempty"`
 
@@ -875,6 +935,12 @@ type CognitionConfigState struct {
 	InputBudget       int                       `json:"input_budget,omitempty"`
 	InputBudgetSource string                    `json:"input_budget_source,omitempty"`
 	Conditions        []CognitionConditionState `json:"conditions"`
+
+	OverridesDigest string `json:"overrides_digest"`
+
+	OverridesBlock json.RawMessage `json:"overrides_block,omitempty"`
+
+	OverridesUnused []string `json:"overrides_unused,omitempty"`
 }
 
 type CognitionSettingState struct {
@@ -885,6 +951,31 @@ type CognitionSettingState struct {
 	Unit          string `json:"unit"`
 	ZeroIsDefault bool   `json:"zero_is_default"`
 	Held          string `json:"held,omitempty"`
+
+	Card             string `json:"card,omitempty"`
+	PerModel         string `json:"per_model,omitempty"`
+	Unlimited        bool   `json:"unlimited,omitempty"`
+	DefaultUnlimited bool   `json:"default_unlimited,omitempty"`
+
+	Value limits.Ceiling `json:"value,omitzero"`
+
+	Effective LimitEffective `json:"effective"`
+
+	Overrides []LimitOverride `json:"overrides,omitempty"`
+}
+
+type LimitEffective struct {
+	Value    limits.Ceiling `json:"value"`
+	Level    string         `json:"level"`
+	Provider string         `json:"provider,omitempty"`
+	Model    string         `json:"model,omitempty"`
+}
+
+type LimitOverride struct {
+	Provider string         `json:"provider"`
+	Model    string         `json:"model,omitempty"`
+	Value    limits.Ceiling `json:"value"`
+	Held     string         `json:"held,omitempty"`
 }
 
 type CognitionConditionState struct {
@@ -898,6 +989,12 @@ type LogsConfigState struct {
 	Dir          string `json:"dir"`
 	MaxBackups   int    `json:"max_backups"`
 	CompressDays int    `json:"compress_days"`
+
+	MaxBytes        int64 `json:"max_bytes"`
+	MaxBytesDefault int64 `json:"max_bytes_default"`
+
+	MaxTotalBytes        int64 `json:"max_total_bytes"`
+	MaxTotalBytesDefault int64 `json:"max_total_bytes_default"`
 }
 
 type UpdateState struct {
@@ -1217,6 +1314,8 @@ type ClientMessage struct {
 	Voice            *VoiceRequest      `json:"voice,omitempty"`
 	Backups          *ContinuityRequest `json:"backups,omitempty"`
 	RestoreNew       *RestoreNewRequest `json:"restore_new,omitempty"`
+
+	Stored *PluginStoredRequest `json:"stored,omitempty"`
 }
 
 type GenesisRequest struct {
@@ -1311,6 +1410,8 @@ type ServerMessage struct {
 	VoiceEvent   *VoiceEvent        `json:"voice_event,omitempty"`
 	VoiceReply   *VoiceReplyRef     `json:"voice_reply,omitempty"`
 	VoiceHush    *VoiceHush         `json:"voice_hush,omitempty"`
+
+	PluginStored *PluginStoredPage `json:"plugin_stored,omitempty"`
 }
 
 type LogFileState struct {

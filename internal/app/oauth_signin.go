@@ -321,6 +321,8 @@ func (a *App) endSignIn(key string, p *pendingSignIn, err error) {
 			a.profileChanged()
 		} else {
 			a.clearProviderStatus(strings.TrimPrefix(key, "provider:"))
+
+			a.reloads.soon()
 		}
 
 		if a.signedInCredential(p.dest) {

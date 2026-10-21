@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
@@ -43,9 +44,9 @@ func TestReviewFoldMustNotLicenseMutationReplay(t *testing.T) {
 			call.Function.Name, call.Function.Arguments = tc.name, tc.args
 			c := &reviewFoldClient{call: call}
 			reg := tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
-			loop := conversation.New(c, reviewFoldTools{}, reviewFoldTools{}, nil, nil, conversation.Config{
-				MaxIterations: 4, ContextBudgetTokens: 1400, ReplaySafe: replaySafeHook(reg),
-			})
+			loop := conversation.New(c, reviewFoldTools{}, reviewFoldTools{}, nil, nil, testLoop(conversation.Config{
+				MaxIterations: limits.Of(4), ContextBudgetTokens: 1400, ReplaySafe: replaySafeHook(reg),
+			}))
 			if _, err := loop.Run(context.Background(), "review", []llm.Message{{Role: "user", Content: "continue"}}); err != nil {
 				t.Fatal(err)
 			}

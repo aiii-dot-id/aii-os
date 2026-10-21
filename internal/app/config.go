@@ -13,6 +13,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/memory/salience"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
@@ -48,6 +49,8 @@ type LLMConfig struct {
 	Stream              *bool `json:"stream,omitempty"`
 	Retries             int   `json:"retries"`
 	RetryBackoffMS      int   `json:"retry_backoff_ms"`
+
+	RefusedRetryMaxSeconds int `json:"refused_retry_max_seconds,omitempty"`
 }
 
 type SpeechConfig struct {
@@ -62,7 +65,7 @@ type SpeechConfig struct {
 
 	OpenWaitSeconds int `json:"open_wait_seconds,omitempty"`
 
-	HeardHistory HeardHistoryConfig `json:"heard_history,omitempty"`
+	HeardHistory HeardHistoryConfig `json:"heard_history,omitzero"`
 }
 
 type HeardHistoryConfig struct {
@@ -426,19 +429,21 @@ type CognitionConfig struct {
 }
 
 type AgencyConfig struct {
-	MaxToolRounds        int `json:"max_tool_rounds"`
-	MaxSubagentDepth     int `json:"max_subagent_depth"`
-	MaxParallelSubagents int `json:"max_parallel_subagents"`
-	SubagentWallSeconds  int `json:"subagent_wall_seconds"`
+	MaxToolRounds limits.Ceiling `json:"max_tool_rounds"`
+
+	MaxToolCalls         limits.Ceiling `json:"max_tool_calls,omitzero"`
+	MaxSubagentDepth     int            `json:"max_subagent_depth"`
+	MaxParallelSubagents int            `json:"max_parallel_subagents"`
+	SubagentWallSeconds  int            `json:"subagent_wall_seconds"`
 
 	SubagentWallSecondsLocal int `json:"subagent_wall_seconds_local"`
 	SubagentMaxMints         int `json:"subagent_max_mints"`
 
-	SubagentMaxToolRounds int `json:"subagent_max_tool_rounds"`
+	SubagentMaxToolRounds limits.Ceiling `json:"subagent_max_tool_rounds"`
 
-	SubagentMaxToolCalls int `json:"subagent_max_tool_calls"`
+	SubagentMaxToolCalls limits.Ceiling `json:"subagent_max_tool_calls"`
 
-	SubagentMaxLegs int `json:"subagent_max_legs"`
+	SubagentMaxLegs limits.Ceiling `json:"subagent_max_legs"`
 
 	SubagentContinuation *bool `json:"subagent_continuation,omitempty"`
 
@@ -459,13 +464,13 @@ type AgencyConfig struct {
 
 	PreferLocalForRoles bool `json:"prefer_local_for_roles"`
 
-	TurnTokenBudget int `json:"turn_token_budget"`
+	TurnTokenBudget limits.Ceiling `json:"turn_token_budget"`
 
 	ToolSchemaRefusals int `json:"tool_schema_refusals,omitempty"`
 
-	TurnCheckpointCalls       int `json:"turn_checkpoint_calls,omitempty"`
-	TurnCheckpointGraceRounds int `json:"turn_checkpoint_grace_rounds,omitempty"`
-	MaxTurnContinuations      int `json:"max_turn_continuations,omitempty"`
+	TurnCheckpointCalls       limits.Ceiling `json:"turn_checkpoint_calls,omitzero"`
+	TurnCheckpointGraceRounds int            `json:"turn_checkpoint_grace_rounds,omitempty"`
+	MaxTurnContinuations      limits.Ceiling `json:"max_turn_continuations,omitzero"`
 
 	TurnCheckpointSlack int `json:"turn_checkpoint_slack,omitempty"`
 
@@ -475,7 +480,8 @@ type AgencyConfig struct {
 }
 
 func (ag AgencyConfig) checkpoint() conversation.Checkpoint {
-	return conversation.Checkpoint{Calls: ag.TurnCheckpointCalls, GraceRounds: ag.TurnCheckpointGraceRounds, Slack: ag.TurnCheckpointSlack}
+	c := Config{Agency: ag}
+	return conversation.Checkpoint{Calls: checkpointCallsSetting.value(c), GraceRounds: graceRoundsSetting.n(c), Slack: slackSetting.n(c)}
 }
 
 const maxToolSchemaRefusals = 32
@@ -547,6 +553,10 @@ type LogsConfig struct {
 
 	MaxDays int `json:"max_days,omitempty"`
 
+	MaxBytes int64 `json:"max_bytes,omitempty"`
+
+	MaxTotalBytes int64 `json:"max_total_bytes,omitempty"`
+
 	Detail map[string]string `json:"detail,omitempty"`
 
 	Taps map[string]TapSetting `json:"taps,omitempty"`
@@ -584,15 +594,17 @@ type Contact struct {
 }
 
 type Config struct {
-	Identity    IdentityConfig               `json:"identity"`
-	LLM         LLMConfig                    `json:"llm"`
-	Dashboard   DashboardConfig              `json:"dashboard"`
-	Speech      SpeechConfig                 `json:"speech"`
-	Tools       ToolsConfig                  `json:"tools"`
-	Plugins     PluginsConfig                `json:"plugins"`
-	Projects    ProjectsConfig               `json:"projects"`
-	Prompt      PromptConfig                 `json:"prompt"`
-	Agency      AgencyConfig                 `json:"agency"`
+	Identity  IdentityConfig  `json:"identity"`
+	LLM       LLMConfig       `json:"llm"`
+	Dashboard DashboardConfig `json:"dashboard"`
+	Speech    SpeechConfig    `json:"speech"`
+	Tools     ToolsConfig     `json:"tools"`
+	Plugins   PluginsConfig   `json:"plugins"`
+	Projects  ProjectsConfig  `json:"projects"`
+	Prompt    PromptConfig    `json:"prompt"`
+	Agency    AgencyConfig    `json:"agency"`
+
+	Overrides   Overrides                    `json:"overrides,omitempty"`
 	Cognition   CognitionConfig              `json:"cognition,omitzero"`
 	Timezone    string                       `json:"timezone"`
 	Witness     WitnessConfig                `json:"witness_server"`
@@ -638,6 +650,14 @@ type PluginRuntimeConfig struct {
 	MaxConcurrentStarts        int   `json:"max_concurrent_starts,omitempty"`
 
 	HardwareQueryMs int `json:"hardware_query_ms,omitempty"`
+
+	MaxMemories int `json:"max_memories,omitempty"`
+
+	ReplacedMemoryDays int `json:"replaced_memory_days,omitempty"`
+
+	MaxInflightReceipts int `json:"max_inflight_receipts,omitempty"`
+
+	MaxInputSchemaBytes int `json:"max_input_schema_bytes,omitempty"`
 }
 
 var r104ByteDefaults = struct{ installed, file, compressed int64 }{1 << 30, 512 << 20, 512 << 20}
@@ -723,7 +743,7 @@ func applyDefaults(cfg *Config) {
 		cfg.LLM.ProbeTimeoutSeconds = 45
 	}
 	if cfg.LLM.TimeoutSeconds == 0 {
-		cfg.LLM.TimeoutSeconds = 120
+		cfg.LLM.TimeoutSeconds = limits.DefaultTimeoutSeconds
 	}
 	if cfg.Prompt.RecentTurns == 0 {
 		cfg.Prompt.RecentTurns = 20
@@ -731,23 +751,23 @@ func applyDefaults(cfg *Config) {
 	if cfg.Tools.ShellTimeoutSeconds == 0 {
 		cfg.Tools.ShellTimeoutSeconds = 120
 	}
-	if cfg.Agency.MaxToolRounds == 0 {
+	if cfg.Agency.MaxToolRounds.IsZero() {
 
-		cfg.Agency.MaxToolRounds = 30
+		cfg.Agency.MaxToolRounds = limits.Of(limits.DefaultRounds)
 	}
-	if cfg.Agency.TurnTokenBudget == 0 {
-		cfg.Agency.TurnTokenBudget = defaultTurnTokenBudget
+	if cfg.Agency.TurnTokenBudget.IsZero() {
+		cfg.Agency.TurnTokenBudget = limits.Of(limits.DefaultTurnTokens)
 	}
-	if cfg.Agency.SubagentMaxToolRounds == 0 {
+	if cfg.Agency.SubagentMaxToolRounds.IsZero() {
 
-		cfg.Agency.SubagentMaxToolRounds = 30
+		cfg.Agency.SubagentMaxToolRounds = limits.Of(limits.DefaultSubRounds)
 	}
 
-	if cfg.Agency.SubagentMaxToolCalls == 0 {
-		cfg.Agency.SubagentMaxToolCalls = 64
+	if cfg.Agency.SubagentMaxToolCalls.IsZero() {
+		cfg.Agency.SubagentMaxToolCalls = limits.Of(limits.DefaultSubCalls)
 	}
-	if cfg.Agency.SubagentMaxLegs == 0 {
-		cfg.Agency.SubagentMaxLegs = 4
+	if cfg.Agency.SubagentMaxLegs.IsZero() {
+		cfg.Agency.SubagentMaxLegs = limits.Of(limits.DefaultSubLegs)
 	}
 
 	if cfg.Agency.MaxSubagentDepth == 0 {
@@ -765,10 +785,10 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Agency.SubagentWallSeconds == 0 {
 
-		cfg.Agency.SubagentWallSeconds = 1200
+		cfg.Agency.SubagentWallSeconds = limits.DefaultSubWallSeconds
 	}
 	if cfg.Agency.SubagentWallSecondsLocal == 0 {
-		cfg.Agency.SubagentWallSecondsLocal = 1800
+		cfg.Agency.SubagentWallSecondsLocal = limits.DefaultSubWallLocal
 	}
 	if cfg.Agency.SubagentMaxMints == 0 {
 		cfg.Agency.SubagentMaxMints = 20
@@ -808,8 +828,8 @@ func applyRuled(cfg *Config) (said []string) {
 		}
 	}
 
-	if cfg.Agency.SubagentMaxToolRounds > cfg.Agency.MaxToolRounds {
-		said = append(said, fmt.Sprintf("agency.subagent_max_tool_rounds %d is above agency.max_tool_rounds %d: a child is held to %d rounds",
+	if cfg.Agency.SubagentMaxToolRounds.Above(cfg.Agency.MaxToolRounds) {
+		said = append(said, fmt.Sprintf("agency.subagent_max_tool_rounds %s is above agency.max_tool_rounds %s: a child is held to %s rounds",
 			cfg.Agency.SubagentMaxToolRounds, cfg.Agency.MaxToolRounds, cfg.Agency.MaxToolRounds))
 		cfg.Agency.SubagentMaxToolRounds = cfg.Agency.MaxToolRounds
 	}

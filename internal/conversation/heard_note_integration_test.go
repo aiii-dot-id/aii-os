@@ -41,7 +41,7 @@ func TestAHeardReadKeepsItsScopeAndLimitNoteTogether(t *testing.T) {
 		}}
 		tools := &notedHeardTools{fakeTools: &fakeTools{results: map[string]string{"recall": string(raw)}}, note: note}
 		transcript := &fakeTranscript{limit: 4000}
-		loop := New(client, tools, &fakeDefs{}, transcript, nil, Config{MaxToolResultChars: window})
+		loop := New(client, tools, &fakeDefs{}, transcript, nil, testBounds(Config{MaxToolResultChars: window}))
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "read"}}); err != nil {
 			t.Fatal(err)
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -64,7 +65,7 @@ func TestDegenerateEmissionNudgedThenEnded(t *testing.T) {
 		textResp("never reached"),
 	}}
 	tools := &countTools{fakeTools: fakeTools{results: map[string]string{"bash": "ok"}}}
-	loop := New(client, tools, oneDefs{}, nil, nil, Config{MaxIterations: 10})
+	loop := New(client, tools, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(10)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +87,7 @@ func TestDegenerateEmissionNudgedThenEnded(t *testing.T) {
 
 func TestDegenerateFinalAnswerIsMarked(t *testing.T) {
 	client := &optsLLM{script: []llm.Response{textResp(collapseText())}}
-	loop := New(client, &fakeTools{results: map[string]string{}}, oneDefs{}, nil, nil, Config{MaxIterations: 5})
+	loop := New(client, &fakeTools{results: map[string]string{}}, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(5)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

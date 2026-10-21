@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -63,7 +64,7 @@ func TestLoadConfigDistinguishesAbsentAndExplicitZero(t *testing.T) {
 	if cfg.Agency.MaxSubagentDepth != 0 {
 		t.Fatalf("explicit zero depth became %d; zero must disable spawning", cfg.Agency.MaxSubagentDepth)
 	}
-	if cfg.Agency.MaxToolRounds != 30 || cfg.Agency.MaxParallelSubagents != 3 {
+	if cfg.Agency.MaxToolRounds != limits.Of(30) || cfg.Agency.MaxParallelSubagents != 3 {
 		t.Fatalf("absent agency fields lost defaults: %+v", cfg.Agency)
 	}
 	if cfg.LLM.APIKeyEnv != "" {

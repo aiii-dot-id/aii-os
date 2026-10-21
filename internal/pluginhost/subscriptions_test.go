@@ -75,7 +75,7 @@ func TestSubscribedOperationsAreHostOps(t *testing.T) {
 	if _, ok := reg.Get(sink); !ok {
 		t.Fatal("the host can still execute it")
 	}
-	if _, _, _, ok := reg.State(ToolNameFor(id, "log.read")); !ok {
+	if _, _, ok := reg.Unavailable(ToolNameFor(id, "log.read")); !ok {
 		t.Fatal("the plugin's other operation stays discoverable")
 	}
 	bad := map[string][]byte{}

@@ -15,9 +15,6 @@ func TestModelFacingPluginToolResultIsLabeledAndStillReadable(t *testing.T) {
 	if err := a.toolReg.RegisterDynamic(&fakeOp{name: name, out: `{"page":"useful foreign text"}`}, pluginID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.toolReg.Offer(name); err != nil {
-		t.Fatal(err)
-	}
 	var call llm.ToolCall
 	call.Function.Name = name
 	call.Function.Arguments = `{}`

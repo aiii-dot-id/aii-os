@@ -87,9 +87,10 @@ func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 		"workState":            "set",
 		"reachable":            "nil",
 		"askProposer":          "nil",
+		"workStarted":          "nil", // SAFE starts no work
 		"workWake":             "nil",
 		"yieldGate":            "nil",
-		"routeIsLocal":         "nil",
+		"routeLimits":          "nil",
 		"alarmFirings":         "set",
 	})
 }
@@ -122,9 +123,10 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		"workState":            "set",
 		"reachable":            "set",
 		"askProposer":          "set",
+		"workStarted":          "set",
 		"workWake":             "set",
 		"yieldGate":            "set",
-		"routeIsLocal":         "set",
+		"routeLimits":          "set",
 		"alarmFirings":         "set",
 	})
 }

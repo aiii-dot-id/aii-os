@@ -37,7 +37,11 @@ func TestANavigatedProjectSVGCannotPhoneHome(t *testing.T) {
 
 			claimEvil, claimHits := evilOrigin(t)
 			silence := max(3*time.Second, 3*toBeacon)
-			window := 3*toPage + silence
+			// The claim's browser is given at least ten seconds to have the
+			// page: three times the control's time alone left a loaded host
+			// short. A longer window only lengthens the silence the claim
+			// must show.
+			window := max(3*toPage, 10*time.Second) + silence
 			var claimHad atomic.Int64
 			began = time.Now()
 			runServerInOneEngine(t, found.engine, found.path, svgServer(t, hostileSVG(claimEvil.URL), map[string]string{

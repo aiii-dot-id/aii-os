@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
@@ -40,6 +41,20 @@ var cognitionBounds = map[string][2]int{
 	"agency.continuation_wall_seconds":        {1, 86_400},
 	"agency.alarm_wall_seconds":               {1, 86_400},
 	"agency.harvest_wall_seconds":             {1, 86_400},
+	// The limits that joined the table with the per-model budgets
+	// (the table's largest for a count of the kind).
+	"agency.max_tool_rounds":             {1, 1_000_000},
+	"agency.max_tool_calls":              {1, 1_000_000_000},
+	"agency.subagent_max_tool_rounds":    {1, 1_000_000},
+	"agency.subagent_max_tool_calls":     {1, 1_000_000_000},
+	"agency.subagent_max_legs":           {1, 1_000_000},
+	"agency.subagent_wall_seconds":       {1, 604_800},
+	"agency.subagent_wall_seconds_local": {1, 604_800},
+	"prompt.max_tool_result_chars":       {1, 100_000_000},
+	"prompt.max_tokens":                  {1, 1_000_000_000},
+	"llm.timeout_seconds":                {1, 86_400},
+	"llm.retries":                        {-1, 100},
+	"llm.retry_backoff_ms":               {1, 600_000},
 }
 
 func TestTheRhythmsBoundsAreTheOnesTheRulingStates(t *testing.T) {
@@ -81,9 +96,44 @@ func fileWith(t *testing.T, key string, v any) string {
 	return path
 }
 
+// fileWithAlso is fileWith stating one more key of the same section.
+func fileWithAlso(t *testing.T, key string, v any, also string, w any) string {
+	t.Helper()
+	parts, more := strings.SplitN(key, ".", 2), strings.SplitN(also, ".", 2)
+	raw, err := json.Marshal(map[string]map[string]any{"prompt": {"recent_turns": 20}, parts[0]: {parts[1]: v, more[1]: w}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// limitDefaults are the defaults of the rows that joined the table with the
+// per-model budgets, written out as cognitionDefaults are for the card's.
+var limitDefaults = map[string]int{
+	"agency.max_tool_rounds":             30,
+	"agency.max_tool_calls":              0, // no limit: unlimitedDefault
+	"agency.subagent_max_tool_rounds":    30,
+	"agency.subagent_max_tool_calls":     64,
+	"agency.subagent_max_legs":           4,
+	"agency.subagent_wall_seconds":       1200,
+	"agency.subagent_wall_seconds_local": 1800,
+	"prompt.max_tool_result_chars":       32000,
+	"prompt.max_tokens":                  0,
+	"llm.timeout_seconds":                120,
+	"llm.retries":                        1,
+	"llm.retry_backoff_ms":               2000,
+}
+
 func TestAValueOutsideItsBoundsLoadsHeldToThemAndSaidAndTheDoorStillRefusesIt(t *testing.T) {
 	for _, s := range cognitionSettings {
 		lo, hi, dflt := cognitionBounds[s.key][0], cognitionBounds[s.key][1], cognitionDefaults[s.key]
+		if d, ok := limitDefaults[s.key]; ok {
+			dflt = d
+		}
 		spacing := s.key == spacingSetting.key
 		// what the file states, and what is then in force
 		cases := map[int]int{hi + 1: hi}
@@ -107,6 +157,12 @@ func TestAValueOutsideItsBoundsLoadsHeldToThemAndSaidAndTheDoorStillRefusesIt(t 
 		}
 		for stated, force := range cases {
 			path := fileWith(t, s.key, stated)
+			if s.key == subRoundsSetting.key {
+				// A child's rounds are clamped to the resident's before they
+				// are held: lifted here, so the child's own bound is what
+				// holds it.
+				path = fileWithAlso(t, s.key, stated, "agency.max_tool_rounds", limits.Word)
+			}
 			before, _ := os.ReadFile(path)
 			logs := logsink.CaptureForTest(t)
 			cfg, err := ReadConfig(path)
@@ -121,7 +177,7 @@ func TestAValueOutsideItsBoundsLoadsHeldToThemAndSaidAndTheDoorStillRefusesIt(t 
 				t.Errorf("%s = %d: what the loader holds is not what the door would take: %v", s.key, stated, err)
 			}
 			said := cfg.cognitionHeld[s.key]
-			for _, want := range []string{s.key + " " + fmt.Sprint(stated) + " is ", fmt.Sprint(force), "is in force", "the file is left as it is", "config.json", "Settings → Identity → Cognition"} {
+			for _, want := range []string{s.key + " " + fmt.Sprint(stated) + " is ", fmt.Sprint(force), "is in force", "the file is left as it is", "config.json", s.place()} {
 				if !strings.Contains(said, want) {
 					t.Errorf("%s = %d: the loader's sentence does not say %q: %q", s.key, stated, want, said)
 				}
@@ -162,7 +218,7 @@ func TestAValueOutsideItsBoundsLoadsHeldToThemAndSaidAndTheDoorStillRefusesIt(t 
 	// the wrong JSON type; a key this build does not know.
 	for _, s := range cognitionSettings {
 		for _, stated := range []int{0, -1} {
-			if stated == 0 && s.zero || stated < 0 && s.key == "agency.turn_token_budget" {
+			if stated == 0 && s.zero || stated < 0 && (s.signed || stated >= s.min) { // below zero loads as the default where it always did, and -1 is a retries value
 				continue
 			}
 			var refusal *CognitionRefusal

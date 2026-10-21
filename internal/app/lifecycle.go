@@ -17,6 +17,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 func (a *App) lifetime() context.Context {
@@ -275,10 +276,25 @@ func (a *App) Shutdown(ctx context.Context) error {
 const stopDrainDefault = 5 * time.Second
 
 func (a *App) stopDrain() time.Duration {
-	if n := a.configSnapshot().Dashboard.StopDrainSeconds; n > 0 {
-		return time.Duration(n) * time.Second
+	a.cfgMu.RLock()
+	defer a.cfgMu.RUnlock()
+	if a.cfg != nil && a.cfg.Dashboard.StopDrainSeconds > 0 {
+		return time.Duration(a.cfg.Dashboard.StopDrainSeconds) * time.Second
 	}
 	return stopDrainDefault
+}
+
+func (a *App) endLeftJobs(reg *tools.Registry, category string) {
+	if reg == nil {
+		return
+	}
+	ended, err := reg.EndLeftJobs(a.stopDrain())
+	if ended > 0 {
+		logsink.Info(category, "ended what the shell had left running: %d job(s)", ended)
+	}
+	if err != nil {
+		logsink.Warn(category, "a job the shell left running could not be ended and runs on: %v", err)
+	}
 }
 
 func (a *App) WaitForRestart() bool {
@@ -315,6 +331,7 @@ func (a *App) stop() error {
 	a.stopRunningTurn()
 	a.bgWG.Wait()
 
+	a.endLeftJobs(a.toolReg, "boot.end")
 	shutCtx := context.Background()
 
 	if a.dashboard != nil {

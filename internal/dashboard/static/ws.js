@@ -19,7 +19,7 @@ import { acceptMailRepair, rejectMailRepair } from './views/mail-repair.js';
 import { acceptMessages, rejectMessages } from './views/messages.js';
 import { acceptExpertConfig, rejectExpertConfig, expertStatus, expertConnectionLost } from './views/expert.js';
 import { applyRestoreNew } from './firstboot-restore.js';
-import { renderPlugins, rejectPluginAction } from './views/plugins.js';
+import { renderPlugins, rejectPluginAction, applyPluginStored } from './views/plugins.js';
 import { applySettingChoices } from './views/plugin-setting.js';
 import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptDashboardToken, acceptAccessCode, rejectAccessCode, settingsConnectionLost } from './views/settings.js';
 import { renderProviderOptions, discoveryAnswered, discoveryFailed, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
@@ -422,6 +422,7 @@ function onMessage(e) {
     case 'overlays': S.overlays = msg.overlays || []; renderPanel(); break;
     case 'overlay_changed': onOverlayChanged(msg.token, msg.paths); break;
     case 'setting_choices': applySettingChoices(msg.setting_choices); if (S.view === 'plugins') renderPlugins(); if (S.view === 'settings') renderSettings(); break;
+    case 'plugin_stored': applyPluginStored(msg.plugin_stored); if (S.view === 'plugins') renderPlugins(); break;
     case 'config':
       S.config = msg.config || null;
       acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id);

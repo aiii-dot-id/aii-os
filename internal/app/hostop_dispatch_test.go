@@ -57,7 +57,7 @@ func TestModelCannotInvokeHostChannelOrWebhookOperations(t *testing.T) {
 	if res, err := a.toolReg.Execute(t.Context(), hook, map[string]any{"body": "verified"}); err != nil || res.Error != "" || !strings.Contains(res.Output, "accepted") {
 		t.Fatalf("host webhook operation failed: %+v %v", res, err)
 	}
-	if _, _, _, ok := a.toolReg.State(hook); ok {
-		t.Fatal("host operation became an ordinary offered operation")
+	if _, _, ok := a.toolReg.Unavailable(hook); ok {
+		t.Fatal("host operation became an ordinary plugin operation")
 	}
 }

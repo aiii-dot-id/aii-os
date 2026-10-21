@@ -89,7 +89,7 @@ func TestABufferedReplyIsNamedByManualAndObservedSpeechStops(t *testing.T) {
 			defer a.bgCancel()
 			f := &fakeEngineSession{}
 			h := &voiceHandle{id: "v", v: f}
-			h.setInflight("production-ended", 0)
+			h.setInflight("production-ended", 0, nil)
 			a.voiceSessions.Store(h.id, h)
 			if speech {
 				a.voiceObserved(decodeVoiceFrame(pluginhost.Event{Type: "speech_start", SessionID: h.id}))
@@ -111,7 +111,7 @@ func TestTheObservedSpeechFenceIsOwnedAndCancelledByTheApp(t *testing.T) {
 	a := New(&Config{})
 	f := &heldReplyFence{fakeEngineSession: &fakeEngineSession{}, entered: make(chan string, 1), resume: make(chan struct{})}
 	h := &voiceHandle{id: "v", v: f}
-	h.setInflight("buffered", 0)
+	h.setInflight("buffered", 0, nil)
 	a.voiceSessions.Store(h.id, h)
 	defer a.bgCancel()
 	a.voiceObserved(decodeVoiceFrame(pluginhost.Event{Type: "speech_start", SessionID: h.id}))

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -75,7 +76,7 @@ func TestDiscardedEmissionsRemainCountedAndRecorded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &emissionRecorder{}
 			ex := &fakeTools{results: map[string]string{"bash": "ok"}}
-			res, err := New(&scriptLLM{script: tc.script}, ex, &fakeDefs{}, r, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+			res, err := New(&scriptLLM{script: tc.script}, ex, &fakeDefs{}, r, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +97,7 @@ func TestDiscardedEmissionsRemainCountedAndRecorded(t *testing.T) {
 func TestChildCallBudgetCountsSurplusWithoutExecutingIt(t *testing.T) {
 	r := &emissionRecorder{}
 	ex := &fakeTools{results: map[string]string{"bash": "ok"}}
-	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(5), wideBatch(5)}}, ex, &fakeDefs{}, r, nil, Config{MaxToolCalls: 8}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(5), wideBatch(5)}}, ex, &fakeDefs{}, r, nil, testBounds(Config{MaxToolCalls: limits.Of(8)})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestFailedClosingEmissionRecordPreservesCountAndModel(t *testing.T) {
 	closing := resp("", toolCall("same", "bash", `{}`))
 	closing.ModelID = "closing-model"
 	ex := &fakeTools{results: map[string]string{"bash": "ok"}}
-	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(1), closing}}, ex, &fakeDefs{}, r, nil, Config{MaxIterations: 1}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(1), closing}}, ex, &fakeDefs{}, r, nil, testBounds(Config{MaxIterations: limits.Of(1)})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != "record tool result: result unavailable" || res.ModelID != "closing-model" || res.ToolCallsEmitted != 2 || res.ToolCallCoverageComplete || len(ex.calls) != 1 {
 		t.Fatalf("result %+v, err %v, ran %v", res, err, ex.calls)
 	}
@@ -147,7 +148,7 @@ func TestEmissionPersistenceFailureKeepsTotalAndDeclaresIncompleteCoverage(t *te
 				}
 				ex := &serialTools{safe: map[string]bool{"read": parallel}}
 				calls := []llm.ToolCall{toolCall("x", "read", `{}`), toolCall("x", "read", `{}`), toolCall("x", "read", `{}`)}
-				res, err := New(&scriptLLM{script: []llm.Response{resp("", calls...)}}, ex, &fakeDefs{}, r, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+				res, err := New(&scriptLLM{script: []llm.Response{resp("", calls...)}}, ex, &fakeDefs{}, r, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 				if err == nil || res.ToolCallsEmitted != 3 || res.ToolCallCoverageComplete {
 					t.Fatalf("result %+v, err %v", res, err)
 				}
@@ -176,7 +177,7 @@ func TestEmissionPersistenceFailureKeepsTotalAndDeclaresIncompleteCoverage(t *te
 				r.startFail = 1
 			}
 			ex := &fakeTools{}
-			res, err := New(&scriptLLM{script: []llm.Response{resp(collapseText(), toolCall("x", "read", `{}`), toolCall("x", "read", `{}`))}}, ex, &fakeDefs{}, r, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+			res, err := New(&scriptLLM{script: []llm.Response{resp(collapseText(), toolCall("x", "read", `{}`), toolCall("x", "read", `{}`))}}, ex, &fakeDefs{}, r, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err == nil || res.ToolCallsEmitted != 2 || res.ToolCallsUsed != 0 || res.ToolCallCoverageComplete || len(ex.calls) != 0 {
 				t.Fatalf("result %+v, err %v, executed %v", res, err, ex.calls)
 			}
@@ -188,7 +189,7 @@ func TestParallelEmissionOrdinalsSurviveEarlierDiscard(t *testing.T) {
 	r := &emissionRecorder{}
 	ex := newBarrierTools(2, map[string]bool{"read_a": true, "read_b": true})
 	client := &scriptLLM{script: []llm.Response{resp(collapseText(), toolCall("same", "read_a", `{}`)), resp("", toolCall("same", "read_a", `{}`), toolCall("same", "read_b", `{}`)), textResp("done")}}
-	res, err := New(client, ex, &fakeDefs{}, r, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, ex, &fakeDefs{}, r, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil || !res.ToolCallCoverageComplete || res.ToolCallsEmitted != 3 || res.ToolCallsUsed != 2 || ex.arrived != 2 {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -222,7 +223,7 @@ func (*changingSession) TranscriptResultExcerptLimit() int                      
 func TestEmissionNumberingPreservesSequentialStartAttribution(t *testing.T) {
 	s := &changingSession{active: "old"}
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("x", "new", `{}`), toolCall("x", "other", `{}`)), textResp("done")}}
-	res, err := New(client, s, &fakeDefs{}, s, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, s, &fakeDefs{}, s, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil || !res.ToolCallCoverageComplete || !reflect.DeepEqual(s.starts, []string{"old", "new"}) || !reflect.DeepEqual(s.ordinals, []int{1, 2}) {
 		t.Fatalf("starts %v ordinals %v result %+v err %v", s.starts, s.ordinals, res, err)
 	}
@@ -245,7 +246,7 @@ func TestUnobservedProviderItemsNeverClaimCompleteCoverage(t *testing.T) {
 		{"failed exchange", nil}, {"choiceless", []llm.Response{{}}}, {"output limit", []llm.Response{limited}}, {"context limit", []llm.Response{contextCut}}, {"unobserved retry", []llm.Response{retried}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, _ := New(&scriptLLM{script: tc.script}, &fakeTools{}, &fakeDefs{}, &emissionRecorder{}, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+			res, _ := New(&scriptLLM{script: tc.script}, &fakeTools{}, &fakeDefs{}, &emissionRecorder{}, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if res.ToolCallCoverageComplete || res.ToolCallsEmitted != 0 {
 				t.Fatalf("result %+v", res)
 			}
@@ -255,7 +256,7 @@ func TestUnobservedProviderItemsNeverClaimCompleteCoverage(t *testing.T) {
 
 func TestMissingExecutorRecordsEveryRefusedEmission(t *testing.T) {
 	r := &emissionRecorder{}
-	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(2)}}, nil, &fakeDefs{}, r, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(2)}}, nil, &fakeDefs{}, r, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || res.ToolCallsEmitted != 2 || res.ToolCallsUsed != 2 || !res.ToolCallCoverageComplete {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -270,7 +271,7 @@ func (r *transientEmissionRecorder) RecordToolDoneDurable(turn string, ordinal i
 
 func TestTransientOrAbsentTranscriptCannotClaimDurableEmissionCoverage(t *testing.T) {
 	for _, tr := range []Transcript{nil, &transientEmissionRecorder{}} {
-		res, err := New(&scriptLLM{script: []llm.Response{wideBatch(1), textResp("done")}}, &fakeTools{}, &fakeDefs{}, tr, nil, Config{}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
+		res, err := New(&scriptLLM{script: []llm.Response{wideBatch(1), textResp("done")}}, &fakeTools{}, &fakeDefs{}, tr, nil, testBounds(Config{})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 		if err != nil || res.ToolCallsEmitted != 1 || res.ToolCallCoverageComplete {
 			t.Fatalf("result %+v, err %v", res, err)
 		}
@@ -282,7 +283,7 @@ func TestCancelledBatchStillAccountsForUnexecutedItems(t *testing.T) {
 	defer cancel()
 	r := &emissionRecorder{}
 	ex := &stopFirst{stop: cancel}
-	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(3)}}, ex, &fakeDefs{}, r, nil, Config{}).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(&scriptLLM{script: []llm.Response{wideBatch(3)}}, ex, &fakeDefs{}, r, nil, testBounds(Config{})).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 	if !errors.Is(err, context.Canceled) || res.ToolCallsEmitted != 3 || res.ToolCallsUsed != 3 || !res.ToolCallCoverageComplete || len(ex.ran) != 1 {
 		t.Fatalf("result %+v, err %v, ran %v", res, err, ex.ran)
 	}
@@ -299,7 +300,7 @@ func TestOutsideRequestRefusalCountsExactlyOneEmission(t *testing.T) {
 	r := &emissionRecorder{}
 	ex := &fakeTools{}
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("same", "unknown", `{}`)), textResp("done")}}
-	res, err := New(client, ex, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read")}}, r, nil, Config{}).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, ex, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read")}}, r, nil, testBounds(Config{})).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil || res.ToolCallsEmitted != 1 || res.ToolCallsUsed != 1 || !res.ToolCallCoverageComplete || len(ex.calls) != 0 {
 		t.Fatalf("result %+v, err %v, ran %v", res, err, ex.calls)
 	}

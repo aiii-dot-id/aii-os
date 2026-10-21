@@ -27,6 +27,9 @@ func TestTheDoorAndAReloadAgreeOnWhatIsLive(t *testing.T) {
 	// The two key families the door takes by prefix, before its switch.
 	atDoor["plugins.settings"] = false
 	atDoor["plugins.grants"] = false
+	// The overrides block's digest sets no field: it rides with a save of
+	// the block, which it guards, and alone is refused.
+	delete(atDoor, "overrides_digest")
 	keys := make([]string, 0, len(atDoor))
 	for k := range atDoor {
 		keys = append(keys, k)

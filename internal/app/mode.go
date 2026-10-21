@@ -82,6 +82,10 @@ func (a *App) enterSafeFor(t safeTrigger, detail string) {
 	logsink.Error("safe.start", "entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
 	a.applySafeState(reason)
 
+	if reg := a.toolReg; reg != nil {
+		a.runBackground(func() { a.endLeftJobs(reg, "safe.start") })
+	}
+
 	a.pluginMu.Lock()
 	f := a.facility
 	a.pluginMu.Unlock()

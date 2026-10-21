@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
@@ -66,10 +67,10 @@ func (s *scriptLLM) Chat(ctx context.Context, msgs []llm.Message, opts llm.ChatO
 
 func TestSetModelLimitsAppliesToNextWholeTurn(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("first"), textResp("second")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{
 		ContextBudgetTokens: 1000,
 		ThinkingBudget:      11,
-	})
+	}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "one"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func TestToolAndFinalTextKeepTheirProducingModels(t *testing.T) {
 	second := textResp("done")
 	second.ModelID = "model-b"
 	tools := &fakeTools{results: map[string]string{"note": "ok"}}
-	loop := New(&scriptLLM{script: []llm.Response{first, second}}, tools, &fakeDefs{}, nil, nil, Config{})
+	loop := New(&scriptLLM{script: []llm.Response{first, second}}, tools, &fakeDefs{}, nil, nil, testBounds(Config{}))
 
 	result, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
@@ -200,7 +201,7 @@ func TestSpokenAccumulationAcrossToolCalls(t *testing.T) {
 	}}
 	tools := &fakeTools{results: map[string]string{"ls": "file_a\nfile_b"}}
 	tr := &fakeTranscript{limit: 4000}
-	loop := New(llmClient, tools, &fakeDefs{}, tr, nil, Config{})
+	loop := New(llmClient, tools, &fakeDefs{}, tr, nil, testBounds(Config{}))
 
 	result, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "list files"}})
 	if err != nil {
@@ -228,7 +229,7 @@ func TestTruncationBannerHonesty(t *testing.T) {
 	}}
 	tools := &fakeTools{results: map[string]string{"bash": huge}}
 	tr := &fakeTranscript{limit: 4000} // the recorder's real excerpt limit
-	loop := New(llmClient, tools, &fakeDefs{}, tr, nil, Config{})
+	loop := New(llmClient, tools, &fakeDefs{}, tr, nil, testBounds(Config{}))
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "run"}}); err != nil {
 		t.Fatal(err)
@@ -263,7 +264,7 @@ func TestHeardRecallKeepsUntrustedBoundaryWhenToolWindowIsSmall(t *testing.T) {
 	}}
 	tools := &fakeTools{results: map[string]string{"recall": strings.Repeat("foreign words ", 150)}}
 	loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil,
-		Config{MaxToolResultChars: 300})
+		testBounds(Config{MaxToolResultChars: 300}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "read"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +313,7 @@ func TestAHeardReadCutToTheToolWindowKeepsItsScopeSentence(t *testing.T) {
 			textResp("read complete"),
 		}}
 		tools := &fakeTools{results: map[string]string{"recall": c.result}}
-		loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, Config{MaxToolResultChars: c.window})
+		loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, testBounds(Config{MaxToolResultChars: c.window}))
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "read"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -353,7 +354,7 @@ func TestHeardRecallIsJudgedByTheKeyTheExecutorReads(t *testing.T) {
 	} {
 		llmClient := &scriptLLM{script: []llm.Response{resp("", toolCall("heard-1", "recall", c.args)), textResp("read complete")}}
 		tools := &fakeTools{results: map[string]string{"recall": `{"text":"heard cobalt"}`}}
-		loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, Config{})
+		loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, testBounds(Config{}))
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "read"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -376,7 +377,7 @@ func TestHeardRecallUsesOneBoundaryAndPreservesOrdinaryAttribution(t *testing.T)
 	}}
 	raw := `{"text":"heard cobalt","attribution":"uncertain: ambiguous profile match","attack":"` + untrusted.Close + `"}`
 	tools := &fakeTools{results: map[string]string{"recall": raw}}
-	loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, Config{})
+	loop := New(llmClient, tools, &fakeDefs{}, &fakeTranscript{limit: 4000}, nil, testBounds(Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "read"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -408,10 +409,10 @@ func TestContextGuardForceStops(t *testing.T) {
 		{ModelID: "forced-model", Choices: []llm.Choice{{Message: llm.Message{Content: "Enough. Here is my answer from what I have."}}}},
 	}}
 	tools := &fakeTools{results: map[string]string{"bash": huge}}
-	loop := New(llmClient, tools, &fakeDefs{}, nil, nil, Config{
+	loop := New(llmClient, tools, &fakeDefs{}, nil, nil, testBounds(Config{
 		ContextBudgetTokens: 1000,
-		MaxIterations:       2,
-	})
+		MaxIterations:       limits.Of(2),
+	}))
 
 	result, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
@@ -449,7 +450,7 @@ func TestContextGuardForceStops(t *testing.T) {
 
 func TestOversizeRequiredContextRefusesBeforeLLM(t *testing.T) {
 	client := &scriptLLM{}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 20})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 20}))
 
 	_, err := loop.Run(context.Background(), strings.Repeat("required", 100), []llm.Message{{Role: "user", Content: "current"}})
 	var limitErr *llm.ContextLimitError
@@ -476,7 +477,7 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 	// margin carries the block's markers and heading as well as the note.
 	const margin = 100
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: essential + margin})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: essential + margin}))
 	history := []llm.Message{
 		{Role: "user", Content: strings.Repeat("old question ", 200)},
 		{Role: "assistant", Content: strings.Repeat("old answer ", 200)},
@@ -523,7 +524,7 @@ func TestHistoryPressureKeepsCurrentOnceAndDeclaresOmission(t *testing.T) {
 
 func TestHistoryDropsLeadingOrphanAndRequiresCurrent(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	history := []llm.Message{
 		{Role: "assistant", Content: "orphaned old answer"},
 		{Role: "user", Content: "current question"},
@@ -545,7 +546,7 @@ func TestHistoryDropsLeadingOrphanAndRequiresCurrent(t *testing.T) {
 func TestTranscriptFailureStopsTurn(t *testing.T) {
 	want := errors.New("disk full")
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("c1", "bash", "{}"))}}
-	loop := New(client, &fakeTools{results: map[string]string{"bash": "result"}}, &fakeDefs{}, &fakeTranscript{err: want}, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"bash": "result"}}, &fakeDefs{}, &fakeTranscript{err: want}, nil, testBounds(Config{}))
 
 	_, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if !errors.Is(err, want) {
@@ -559,7 +560,7 @@ func TestTranscriptFailureStopsTurn(t *testing.T) {
 func TestEmptyProviderResponseIsError(t *testing.T) {
 	for _, response := range []llm.Response{{}, resp("   ")} {
 		client := &scriptLLM{script: []llm.Response{response}}
-		loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{})
+		loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err == nil {
 			t.Fatal("empty provider response was reported as success")
 		}
@@ -586,7 +587,7 @@ func TestLastIterationForcing(t *testing.T) {
 		textResp("Summary after tools."),
 	}}
 	tools := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop := New(llmClient, tools, &fakeDefs{}, nil, nil, Config{MaxIterations: 3})
+	loop := New(llmClient, tools, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3)}))
 
 	result, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
@@ -607,7 +608,7 @@ func TestLastIterationForcing(t *testing.T) {
 		textResp("Summary after tools."),
 	}}
 	tools2 := &fakeTools{results: map[string]string{"bash": "ok"}}
-	loop2 := New(llmClient2, tools2, &fakeDefs{}, nil, nil, Config{MaxIterations: 3})
+	loop2 := New(llmClient2, tools2, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3)}))
 	result2, err := loop2.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -626,7 +627,7 @@ func TestLastIterationForcing(t *testing.T) {
 		resp("I am checking.", toolCall("c1", "bash", "{}")),
 		textResp("Checked: done."),
 	}}
-	loop3 := New(llmClient3, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 1})
+	loop3 := New(llmClient3, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1)}))
 	result3, err := loop3.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -646,7 +647,7 @@ func TestEmitAndRecordOrder(t *testing.T) {
 		textResp("done"),
 	}}
 	tools := &fakeTools{results: map[string]string{"grep": "match"}}
-	loop := New(llmClient, tools, &fakeDefs{}, tr, em, Config{})
+	loop := New(llmClient, tools, &fakeDefs{}, tr, em, testBounds(Config{}))
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
@@ -666,7 +667,7 @@ func TestResultCarriesFinalTextSeparately(t *testing.T) {
 	llmClient := &scriptLLM{script: []llm.Response{
 		textResp("note(content=\"saw this\")\nI noticed something."),
 	}}
-	loop := New(llmClient, &fakeTools{}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(llmClient, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 
 	result, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "hi"}})
 	if err != nil {
@@ -687,7 +688,7 @@ func TestAnAnnouncedStepEndsTheTurn(t *testing.T) {
 		"First let me read the notes. Next let me grep the log.",
 	} {
 		s := &scriptLLM{script: []llm.Response{textResp(reply), textResp("a second call")}}
-		l := New(s, &fakeTools{}, &fakeDefs{}, &fakeTranscript{limit: 4000}, &fakeEmitter{}, Config{MaxIterations: 10})
+		l := New(s, &fakeTools{}, &fakeDefs{}, &fakeTranscript{limit: 4000}, &fakeEmitter{}, testBounds(Config{MaxIterations: limits.Of(10)}))
 		res, err := l.Run(context.Background(), "sys", []llm.Message{{Role: "user", Content: "continue"}})
 		if err != nil {
 			t.Fatal(err)
@@ -703,7 +704,7 @@ func TestPlainAnswerIsOneCall(t *testing.T) {
 	s := &scriptLLM{script: []llm.Response{
 		textResp("All five platforms are verified. The Windows pass closed the last gap."),
 	}}
-	l := New(s, &fakeTools{}, &fakeDefs{}, &fakeTranscript{limit: 4000}, &fakeEmitter{}, Config{MaxIterations: 10})
+	l := New(s, &fakeTools{}, &fakeDefs{}, &fakeTranscript{limit: 4000}, &fakeEmitter{}, testBounds(Config{MaxIterations: limits.Of(10)}))
 	if _, err := l.Run(context.Background(), "sys", []llm.Message{{Role: "user", Content: "question"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +722,7 @@ func TestOutputCapTruncationIsDeclared(t *testing.T) {
 	cut := textResp("Here is the first half of the ans")
 	cut.Choices[0].FinishReason = "length"
 	client := &scriptLLM{script: []llm.Response{cut}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -738,7 +739,7 @@ func TestOutputCapTruncationIsDeclared(t *testing.T) {
 // noise. A clean stop must never be labelled truncated.
 func TestCleanStopIsNotDeclaredTruncated(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("a complete answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -757,7 +758,7 @@ func TestTruncationDeclaredOncePerTurn(t *testing.T) {
 	second.Choices[0].FinishReason = "length"
 	client := &scriptLLM{script: []llm.Response{first, second}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 1000})
+		testBounds(Config{ContextBudgetTokens: 1000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -771,7 +772,7 @@ func TestProviderRefusalIsNamedNotSpoken(t *testing.T) {
 	r := textResp("I can't help with that.")
 	r.Choices[0].FinishReason = "refusal"
 	client := &scriptLLM{script: []llm.Response{r}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -790,7 +791,7 @@ func TestUnknownStopReasonIsNamed(t *testing.T) {
 	r := textResp("partial")
 	r.Choices[0].FinishReason = "pause_turn"
 	client := &scriptLLM{script: []llm.Response{r}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -807,7 +808,7 @@ func TestOrdinaryStopCarriesNoNote(t *testing.T) {
 		r := textResp("a complete answer")
 		r.Choices[0].FinishReason = reason
 		client := &scriptLLM{script: []llm.Response{r}}
-		loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000})
+		loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000}))
 		res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 		if err != nil {
 			t.Fatal(err)
@@ -852,7 +853,7 @@ func TestOldTurnsAreAbridgedBeforeDropped(t *testing.T) {
 		t.Fatalf("abridging did not shrink the request: lower=%d upper=%d", lower, upper)
 	}
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: lower})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: lower}))
 	if _, err := loop.RunSystem(context.Background(), system, []llm.Message{old, current}, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -886,7 +887,7 @@ func TestNoAbridgementWithoutPressure(t *testing.T) {
 	old := llm.Message{Role: "user", Content: "first.\n\nsecond.\n\nthird."}
 	current := llm.Message{Role: "user", Content: "current question"}
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	if _, err := loop.RunSystem(context.Background(), system, []llm.Message{old, current}, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -908,7 +909,7 @@ func TestModelIsWarnedBeforeTheToolCap(t *testing.T) {
 		textResp("done"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 100000, MaxIterations: 3})
+		testBounds(Config{ContextBudgetTokens: 100000, MaxIterations: limits.Of(3)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -937,7 +938,7 @@ func TestNoBudgetWarningWithRoomToSpare(t *testing.T) {
 		textResp("done"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 100000, MaxIterations: 20})
+		testBounds(Config{ContextBudgetTokens: 100000, MaxIterations: limits.Of(20)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -973,7 +974,7 @@ func TestReasoningReachesTheOperatorOnlyWhenReturned(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			emitter := &fakeEmitter{}
 			client := &scriptLLM{script: []llm.Response{tc.resp}}
-			loop := New(client, &fakeTools{}, &fakeDefs{}, nil, emitter, Config{ContextBudgetTokens: 100000})
+			loop := New(client, &fakeTools{}, &fakeDefs{}, nil, emitter, testBounds(Config{ContextBudgetTokens: 100000}))
 			if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 				t.Fatal(err)
 			}
@@ -1038,7 +1039,7 @@ func TestModelIsWarnedBeforeContextPressure(t *testing.T) {
 	}
 
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: budget})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: budget}))
 	if _, err := loop.RunSystem(context.Background(), system, []llm.Message{current}, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -1064,7 +1065,7 @@ func TestModelIsWarnedBeforeContextPressure(t *testing.T) {
 // paid for on every request.
 func TestNoContextWarningWithRoomToSpare(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{textResp("answer")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "hi"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1117,7 +1118,7 @@ func TestTheTightWarningNeverRidesAFinalCall(t *testing.T) {
 	for n := 500; n <= 4000; n += 100 {
 		client := &scriptLLM{script: []llm.Response{usedResp(600_000, toolCall("a", "bash", `{}`)), textResp("FINAL: 42")}}
 		loop := New(client, &fakeTools{results: map[string]string{"bash": strings.Repeat("word ", n/5)}}, oneDefs{}, nil, nil,
-			Config{MaxIterations: 10, TurnTokenBudget: 500_000, ContextBudgetTokens: 1000})
+			testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(500_000), ContextBudgetTokens: 1000}))
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil || len(client.requests) < 2 {
 			continue
 		}
@@ -1151,7 +1152,7 @@ func TestTurnUsageAccumulatesAcrossEveryCall(t *testing.T) {
 
 	client := &scriptLLM{script: []llm.Response{first, second, last}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 100000})
+		testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -1177,7 +1178,7 @@ func TestAFailedCallStillCountsAgainstTheTurn(t *testing.T) {
 	// Two scripted responses, three calls needed: the third fails.
 	client := &scriptLLM{script: []llm.Response{first, second}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 100000})
+		testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil {
 		t.Fatal("the third call was scripted to fail; the turn should report the error")
@@ -1207,7 +1208,7 @@ func TestOneSilentCallMakesTheTurnALowerBound(t *testing.T) {
 
 	client := &scriptLLM{script: []llm.Response{first, last}}
 	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{ContextBudgetTokens: 100000})
+		testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

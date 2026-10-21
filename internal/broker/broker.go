@@ -263,6 +263,8 @@ type Config struct {
 
 	Later func(job func()) bool
 
+	MaxInflightReceipts int
+
 	Voice VoiceObserver
 
 	Embed Embedder
@@ -301,6 +303,8 @@ type Config struct {
 
 	MaxMemoryTextBytes int
 	MaxMemories        int
+
+	ReplacedMemoryWindow func() time.Duration
 }
 
 func (c Config) maxResponseBytes() int {
@@ -353,6 +357,8 @@ type Host struct {
 
 	instruments *memory.Facility
 	counter     atomic.Uint64
+
+	inflightReceipts atomic.Int64
 
 	policyMu sync.RWMutex
 
@@ -665,6 +671,8 @@ type OperationScope struct {
 	WorkSession   string
 	SessionReason string
 	CallID        string
+
+	DeliveredSession string
 }
 
 func (b *Binding) BeginOperation(s OperationScope) {
@@ -1240,13 +1248,17 @@ func (b *Binding) resultReply(operation, pluginOperation, target string, o outco
 	}
 
 	deferred := false
-	if later := b.host.cfg.Later; later != nil && answersFirst(operation) {
+	if later := b.host.cfg.Later; later != nil && answersFirst(operation) && b.host.holdReceipt() {
 		stored, pluginID, success := recRaw, b.pluginID, rec.Success
 		deferred = later(func() {
+			defer b.host.inflightReceipts.Add(-1)
 			if err := b.host.cfg.Store.AppendPluginReceipt(rec.ID, pluginID, operation, target, success, stored); err != nil {
 				logsink.Error("broker.error", "%s: the receipt of a %s answer was not recorded: %v", pluginID, operation, err)
 			}
 		})
+		if !deferred {
+			b.host.inflightReceipts.Add(-1)
+		}
 	}
 	if deferred {
 		pending := rec

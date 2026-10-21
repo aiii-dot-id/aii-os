@@ -433,6 +433,9 @@ func (x appToolExecutor) Execute(ctx context.Context, call llm.ToolCall) convers
 	started := time.Now()
 	obs := x.a.executeToolCall(ctx, call)
 	obs.Text = observedText(obs.Text)
+	if ctx.Err() == nil {
+		obs.Text += x.a.failureContext(ctx, call.Function.Name, obs)
+	}
 
 	if obs.Failed && !obs.Refused && errors.Is(ctx.Err(), context.Canceled) {
 		obs.Cancelled = true
@@ -454,7 +457,7 @@ func observedText(s string) string {
 }
 
 func (x appToolExecutor) ParallelSafe(call llm.ToolCall) bool {
-	call = targetCall(x.a.toolReg, call)
+	call = routedCall(x.a.toolReg, call)
 	for _, v := range identity.Verbs() {
 		if v.Name == call.Function.Name {
 			return false
@@ -504,7 +507,8 @@ func (t toolDiscovererAdapter) Discover(depth int) []identity.ToolInfo {
 func pluginOperations(reg *tools.Registry) func() prompt.PluginOperations {
 	return func() prompt.PluginOperations {
 		b := reg.Brief()
-		out := prompt.PluginOperations{MoreFamilies: b.MoreFamilies}
+		_, unlisted := reg.PromptNames(registryRoom())
+		out := prompt.PluginOperations{MoreFamilies: b.MoreFamilies, Unlisted: unlisted}
 		for _, f := range b.Families {
 			out.Families = append(out.Families, prompt.PluginFamily{Name: f.Name, Count: f.Count, Names: append([]string(nil), f.Names...), More: f.More})
 		}
@@ -514,7 +518,7 @@ func pluginOperations(reg *tools.Registry) func() prompt.PluginOperations {
 
 func (t toolDiscovererAdapter) Brief() identity.ToolBrief {
 	b := t.reg.Brief()
-	out := identity.ToolBrief{Total: b.Total, Offered: b.Offered, Unavailable: b.Unavailable, MoreFamilies: b.MoreFamilies, OfferedNames: b.OfferedNames}
+	out := identity.ToolBrief{Total: b.Total, Unavailable: b.Unavailable, MoreFamilies: b.MoreFamilies}
 	for _, f := range b.Families {
 		out.Families = append(out.Families, identity.ToolFamily{Name: f.Name, Count: f.Count, Names: f.Names, More: f.More})
 	}
@@ -525,7 +529,7 @@ func (t toolDiscovererAdapter) Search(query string, limit int) []identity.ToolHi
 	hits := t.reg.Search(query, limit)
 	out := make([]identity.ToolHit, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, identity.ToolHit{Name: h.Name, Operation: h.Operation, Plugin: h.Plugin, Summary: h.Summary, Effects: h.Effects, Primary: h.Primary, State: string(h.State)})
+		out = append(out, identity.ToolHit{Name: h.Name, Operation: h.Operation, Plugin: h.Plugin, Summary: h.Summary, Effects: h.Effects, Primary: h.Primary})
 	}
 	return out
 }
@@ -537,15 +541,8 @@ func (t toolDiscovererAdapter) Show(ref string) (identity.ToolCard, error) {
 	}
 	return identity.ToolCard{Name: c.Name, Operation: c.Operation, Plugin: c.Plugin, Version: c.Version, Tier: c.Tier,
 		Family: c.Family, Summary: c.Summary, Effects: c.Effects, Capabilities: c.Capabilities, MaxResultBytes: c.MaxResultBytes,
-		Examples: c.Examples, Primary: c.Primary, State: string(c.State), Reason: c.Reason, Receipt: c.Receipt, Parameters: c.Parameters}, nil
+		Examples: c.Examples, Primary: c.Primary, Reason: c.Reason, Receipt: c.Receipt, Parameters: c.Parameters}, nil
 }
-
-func (t toolDiscovererAdapter) OfferPrimary(plugin string) ([]string, error) {
-	return t.reg.OfferPrimary(plugin)
-}
-
-func (t toolDiscovererAdapter) Offer(ref string) (string, error)   { return t.reg.Offer(ref) }
-func (t toolDiscovererAdapter) Release(ref string) (string, error) { return t.reg.Release(ref) }
 
 type witnessMinter struct {
 	door *ledgerAdapter

@@ -62,19 +62,10 @@ func TestPluginActionInstallUninstallAndRefusal(t *testing.T) {
 		t.Fatalf("a refused action answers with error wearing the id: %+v", msg)
 	}
 
-	writeJSON(map[string]any{"type": "plugin", "request_id": "4",
-		"plugin": map[string]any{"action": "offer", "id": "org.notes"}})
-	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "4" {
-		t.Fatalf("primary selection answers with current config: %+v", msg)
-	}
-	writeJSON(map[string]any{"type": "plugin", "request_id": "5", "plugin": map[string]any{"action": "release", "id": "org.notes"}})
-	if msg := readMsg(t, conn); msg.Type != "config" || msg.RequestID != "5" {
-		t.Fatalf("release answers with current config: %+v", msg)
-	}
 	mu.Lock()
 	got := append([]PluginAction(nil), calls...)
 	mu.Unlock()
-	if len(got) != 5 || got[4] != (PluginAction{Action: "release", ID: "org.notes"}) || got[3] != (PluginAction{Action: "offer", ID: "org.notes"}) || got[0] != (PluginAction{Action: "install", ID: "org.x"}) || got[1] != (PluginAction{Action: "uninstall", ID: "org.y"}) {
+	if len(got) != 3 || got[0] != (PluginAction{Action: "install", ID: "org.x"}) || got[1] != (PluginAction{Action: "uninstall", ID: "org.y"}) {
 		t.Fatalf("PluginAct saw the operator's actions in order: %+v", got)
 	}
 }

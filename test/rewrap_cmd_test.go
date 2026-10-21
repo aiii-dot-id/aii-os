@@ -252,12 +252,14 @@ func runSplit(t *testing.T, bin string, args ...string) (code int, stdout, stder
 
 func TestRewrapAnswersByteForByte(t *testing.T) {
 	bin := buildRewrap(t)
-	const usage = "usage: rewrap -ledger ledger.jsonl -key identity.sec [-out new.jsonl] [-db aii.db]\n"
+	const usage = "usage: rewrap -ledger ledger.jsonl -key identity.sec [-out new.jsonl] [-db aii.db] [-platform-pubkey platform.pub.json] [-prior-shape-unchecked]\n"
 	defaults := "Usage of " + bin + ":\n" +
 		"  -db string\n    \tthe identity's projection (aii.db) to carry across the re-wrap: the mirror is rewritten from the new record, derived tables rebuild, every ephemeral table keeps every row\n" +
 		"  -key string\n    \tpath to identity.sec (required)\n" +
 		"  -ledger string\n    \tpath to ledger.jsonl (required)\n" +
-		"  -out string\n    \toutput path (default: replace -ledger atomically)\n"
+		"  -out string\n    \toutput path (default: replace -ledger atomically)\n" +
+		"  -platform-pubkey string\n    \tthe platform public key envelope the witness keys beside the ledger verify under, when the identity's config names one (witness.platform_pubkey_path); default: the root this build pins\n" +
+		"  -prior-shape-unchecked\n    \tre-wrap a ledger in the shape written before the record ruling: this build reads that shape and cannot check its links or its proofs, and the output says they were not checked\n"
 	check := func(name string, code int, stdout, stderr string, wantCode int, wantOut, wantErr string) {
 		t.Helper()
 		if code != wantCode || stdout != wantOut || stderr != wantErr {
@@ -287,12 +289,19 @@ func TestRewrapAnswersByteForByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// What was read and what it was held to comes first, and it names
+	// what could not be checked: this identity was never witnessed, so no
+	// head verified and no witness tail says how far the record once
+	// reached. The words after the proofs are the verify commands' own.
+	read := "read " + strconv.Itoa(n) + " records, 0 of them from sealed segments, and held them as a boot does: every link, every payload hash and every proof verified; " +
+		"0 witness heads verified under 0 persisted keys, no record witnessed; 0 tail heads unverified; " +
+		"no witness tail beside it — nothing outside the chain says how far it once reached\n"
 	out := filepath.Join(t.TempDir(), "rewrapped.jsonl")
 	code, o, e = runSplit(t, bin, "-ledger", ledgerPath, "-key", keyPath, "-out", out)
-	check("-out", code, o, e, 0, "rewrapped "+strconv.Itoa(n)+" events as the record → "+out+" (verified and replayable)\n", "")
+	check("-out", code, o, e, 0, read+"rewrapped "+strconv.Itoa(n)+" events as the record → "+out+" (verified and replayable)\n", "")
 
 	code, o, e = runSplit(t, bin, "-ledger", ledgerPath, "-key", keyPath, "-db", filepath.Join(filepath.Dir(ledgerPath), "aii.db"))
-	head := "rewrapped " + strconv.Itoa(n) + " events as the record → " + ledgerPath + " (verified and replayable)\n"
+	head := read + "rewrapped " + strconv.Itoa(n) + " events as the record → " + ledgerPath + " (verified and replayable)\n"
 	report := regexp.MustCompile(`^carried \d+ ephemeral tables unchanged:[^\n]*\nrebuilt \d+ derived tables from the record:[^\n]*(\nconverted [^\n]*)*\n$`)
 	if code != 0 || e != "" || !strings.HasPrefix(o, head) || !report.MatchString(strings.TrimPrefix(o, head)) {
 		t.Errorf("in place with -db: exit %d\n stdout %q\n stderr %q\n want the re-wrap line, then the carry report", code, o, e)

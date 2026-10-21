@@ -31,6 +31,7 @@ type sentPieces struct {
 	pieces [][]byte
 	queued uint64
 	fail   error
+	asked  func() // when set, runs as the queue's room is asked, outside the lock
 }
 
 func (s *sentPieces) Send(p []byte) error {
@@ -44,6 +45,12 @@ func (s *sentPieces) Send(p []byte) error {
 }
 
 func (s *sentPieces) BufferedAmount() uint64 {
+	s.mu.Lock()
+	asked := s.asked
+	s.mu.Unlock()
+	if asked != nil {
+		asked()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.queued
@@ -62,7 +69,7 @@ func framed(piece int) (*channelCarrier, *sentPieces, chan struct{}) {
 	gone := make(chan struct{})
 	var once sync.Once
 	c := &channelCarrier{dc: out, piece: piece, queue: 1 << 20, stall: 10 * time.Second,
-		in: make(chan []byte, 4096), low: make(chan struct{}, 1), gone: gone}
+		in: make(chan []byte, 4096), low: make(chan struct{}, 1), gone: gone, wsem: make(chan struct{}, 1)}
 	c.end = func() { once.Do(func() { close(gone) }) }
 	return c, out, gone
 }
@@ -212,6 +219,81 @@ func TestAChannelWriteHasItsTimeAndAMessageMustKeepArriving(t *testing.T) {
 		defer cancel2()
 		if _, _, err := idle.Read(ctx2); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("an idle channel was ended by %v after a minute, want only the caller's own time", err)
+		}
+	})
+}
+
+// A WRITE WHOSE TIME HAS RUN OUT SENDS NOTHING, ROOM OR NONE, AND A WRITER
+// WAITING FOR ANOTHER KEEPS ITS OWN TIME. The deadline was asked only while
+// the send queue was full, so a cancelled write with room went out, and the
+// writer's lock could not be given up, so a writer behind a slow one waited
+// past its own time for the other's. The
+// control half: a write within its time with room goes out whole.
+func TestAChannelWriteKeepsItsTimeWithRoomAndBehindAnotherWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, out, gone := framed(64)
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := c.Write(cancelled, websocket.MessageText, []byte("too late")); !errors.Is(err, context.Canceled) || len(out.taken()) != 0 {
+			t.Fatalf("a cancelled write with room: %v, %d pieces sent, want the cancellation and none", err, len(out.taken()))
+		}
+		select {
+		case <-gone:
+			t.Fatal("a write that sent nothing ended the carrier")
+		default:
+		}
+
+		c.queue = 1000
+		out.mu.Lock()
+		out.queued = 990 // the first writer holds the channel, waiting for room
+		out.mu.Unlock()
+		long, cancelLong := context.WithTimeout(context.Background(), time.Minute)
+		defer cancelLong()
+		held := make(chan error, 1)
+		go func() { held <- c.Write(long, websocket.MessageText, []byte("waits for room")) }()
+		synctest.Wait()
+		short, cancelShort := context.WithTimeout(context.Background(), time.Second)
+		defer cancelShort()
+		began := time.Now()
+		if err := c.Write(short, websocket.MessageText, []byte("behind it")); !errors.Is(err, context.DeadlineExceeded) || time.Since(began) != time.Second {
+			t.Fatalf("a writer behind another: %v after %s, want its own second", err, time.Since(began))
+		}
+		out.mu.Lock()
+		out.queued = 0
+		out.mu.Unlock()
+		c.low <- struct{}{}
+		if err := <-held; err != nil || len(out.taken()) != 1 {
+			t.Fatalf("the first writer goes on when the queue drains: %v, %d pieces", err, len(out.taken()))
+		}
+	})
+}
+
+// A WRITER WOKEN BY ROOM AFTER ITS TIME RAN OUT SENDS NOTHING. The deadline
+// was asked before the wait for room, so a writer whose time ran out while
+// it was woken by the queue draining, before it looked at the room again,
+// went on to send and answered success. Here the writer is woken by room, and its time ends just as
+// it asks the queue's room again: it sends nothing.
+func TestAWriterWokenByRoomAfterItsTimeSendsNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, out, _ := framed(64)
+		c.queue = 1000
+		out.mu.Lock()
+		out.queued = 995 // no room for the 9-byte piece
+		out.mu.Unlock()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- c.Write(ctx, websocket.MessageText, []byte("too late")) }()
+		synctest.Wait()
+		if len(out.taken()) != 0 {
+			t.Fatal("a piece was sent into a full queue")
+		}
+		out.mu.Lock()
+		out.queued = 0
+		out.asked = cancel // the time ends as the woken writer looks again
+		out.mu.Unlock()
+		c.low <- struct{}{}
+		if err := <-done; !errors.Is(err, context.Canceled) || len(out.taken()) != 0 {
+			t.Fatalf("a writer woken by room after its time: %v, %d pieces sent", err, len(out.taken()))
 		}
 	})
 }
@@ -370,7 +452,9 @@ func dialChannel(ctx context.Context, t *testing.T, s *Server, set ChannelSettin
 	}
 	go func() {
 		for {
-			m, ok := d.socket.page(t, 10*time.Second)
+			// Candidates may trail the answer on a loaded host: keep
+			// reading for the whole wait the identity itself allows.
+			m, ok := d.socket.page(t, time.Duration(set.WaitMS+set.ReadyAllowanceMS)*time.Millisecond)
 			if !ok {
 				return
 			}
@@ -379,11 +463,17 @@ func dialChannel(ctx context.Context, t *testing.T, s *Server, set ChannelSettin
 			}
 		}
 	}()
+	// The identity waits for the channel as long as the setting it was given
+	// says (WaitMS and ReadyAllowanceMS), so the page waits that long and a
+	// little more before it calls the choice missing. A fixed 15 s here was
+	// shorter than channelTest's own 22 s, and a loaded gate failed it on a
+	// channel the identity would still have taken.
+	wait := time.Duration(set.WaitMS+set.ReadyAllowanceMS)*time.Millisecond + 5*time.Second
 	select {
 	case got := <-chosen:
 		d.chosen, d.alive = got.c, got.alive
-	case <-time.After(15 * time.Second):
-		t.Fatal("no carrier was chosen")
+	case <-time.After(wait):
+		t.Fatalf("no carrier was chosen in %v", wait)
 	}
 	return d
 }

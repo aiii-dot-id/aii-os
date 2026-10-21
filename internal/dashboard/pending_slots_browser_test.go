@@ -81,7 +81,7 @@ export function __lostCalled() { return lost; }
 `),
 		"/views/memory.js":   []byte(`export const renderMemory = () => {};`),
 		"/views/identity.js": []byte(`export const renderIdentity = () => {};`),
-		"/views/plugins.js":  []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false;`),
+		"/views/plugins.js":  []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
 		"/views/settings.js": []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptDashboardToken = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
 		"/firstboot.js":      []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
 		"/sections.js":       []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),

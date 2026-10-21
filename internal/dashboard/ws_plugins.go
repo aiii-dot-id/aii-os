@@ -89,6 +89,43 @@ func (s *Server) handleSettingChoices(ctx context.Context, conn carrier, h *WSHa
 	})
 }
 
+func (s *Server) handlePluginStored(ctx context.Context, conn carrier, h *WSHandler, msg ClientMessage, secretsOK bool) {
+	reqID := msg.RequestID
+	if msg.Stored != nil && msg.Stored.Kind == "keys" && msg.Stored.Plugin != "" && !secretsOK {
+
+		s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "plugin_stored", PluginStored: &PluginStoredPage{
+			Plugin: msg.Stored.Plugin, Kind: msg.Stored.Kind, Before: msg.Stored.Before, Error: pluginStoredRefusal(msg, secretsOK)}})
+		return
+	}
+	if refusal := pluginStoredRefusal(msg, secretsOK); refusal != "" {
+		s.sendErrorFor(ctx, conn, reqID, refusal)
+		return
+	}
+	req := *msg.Stored
+	s.offLoop(ctx, conn, reqID, h, func() {
+		reply := &PluginStoredPage{Plugin: req.Plugin, Kind: req.Kind, Before: req.Before}
+		if h.PluginStored == nil {
+			reply.Error = "not available"
+		} else if page, err := h.PluginStored(req); err != nil {
+			reply.Error = err.Error()
+		} else if page != nil {
+			page.Plugin, page.Kind, page.Before = req.Plugin, req.Kind, req.Before
+			reply = page
+		}
+		s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "plugin_stored", PluginStored: reply})
+	})
+}
+
+func pluginStoredRefusal(msg ClientMessage, secretsOK bool) string {
+	switch {
+	case msg.Stored == nil || msg.Stored.Plugin == "" || (msg.Stored.Kind != "memories" && msg.Stored.Kind != "keys"):
+		return "plugin stored: name the plugin, and memories or keys"
+	case msg.Stored.Kind == "keys" && !secretsOK:
+		return "this connection is not private, so a plugin's keys and their values are not shown — open the dashboard on the machine itself, or switch on TLS in Settings → Dashboard"
+	}
+	return ""
+}
+
 func pluginKeyRefusal(msg ClientMessage, secretsOK bool) string {
 	pk := msg.PluginKey
 	switch {

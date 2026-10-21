@@ -158,7 +158,7 @@ func wsProbeModules(t *testing.T, script string) map[string][]byte {
 		"/views/projects.js": stubModule("renderProjPill", "renderProjects", "newlyCreatedID", "rejectCreate", "rejectFocusSave", "rejectContractSave", "acceptCreate", "acceptFocusSave", "acceptContractSave", "projectsConnectionLost"),
 		"/views/memory.js":   stubModule("renderMemory"),
 		"/views/identity.js": stubModule("renderIdentity"),
-		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction"),
+		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction", "applyPluginStored"),
 		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptDashboardToken", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
 		"/firstboot.js":      stubModule("renderProviderOptions", "setModelOptions", "fbHint", "fbResult", "acceptDiscoveryResponse", "firstbootConnectionLost", "discoveryAnswered", "discoveryFailed"),
 		"/sections.js":       stubModule("publish", "onSections", "onLayout", "onTokensChanged"),

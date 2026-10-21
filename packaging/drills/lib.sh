@@ -13,6 +13,16 @@
 # is the live log's inode. A fresh boot is a new inode, and the boot
 # line is then read from the new (short) live file — an old line can
 #
+# AND IT ROLLS WITHIN A BOOT, at logs.max_bytes: one boot is
+# then several files, the live one and the ones rolled since the start,
+# and a new inode is not always a new boot. fresh_boot still holds: a roll
+# alone carries no boot line, so it cannot pass for a boot; and a boot is
+# missed only where the new process writes a whole logs.max_bytes (never
+# under 1 MiB) between its first line and the next one-second look, which
+# ends as a timeout and a FAIL, never as a wrong PASS. saw_since_fresh
+# does not hold on the live file alone, since what it looks for may have
+# been rolled away, so it reads the boot's files (boot_logs).
+#
 # Inputs, all environment:
 #   AII       the aii binary            (default: `command -v aii`)
 #   AII_SLOT  the slot under the root   (default: identity-0)
@@ -57,7 +67,16 @@ fresh_boot(){ gen0="$1"; secs="$2"; i=0; while [ "$i" -lt "$secs" ]; do
 # restored pair still entering SAFE. A category is a closed vocabulary
 # with a gate test behind it; a sentence is prose anyone may improve.
 # TestDrillsGrepCategoriesTheTreeStillEmits keeps this honest.
-saw_since_fresh(){ grep -q -- "$1" "$LOG" 2>/dev/null; }  # read the NEW live file only
+#
+# It reads THIS BOOT'S files and no older one's: boot_logs prints the live
+# file and, where that one does not carry the boot line (it rolled within
+# the boot), the rolled files from the newest back to the one that does.
+# An absence is a verdict here ("the restored pair did not enter SAFE"),
+# and a line rolled out of the live file must not read as one.
+boot_logs(){ printf '%s\n' "$LOG"; if grep -q "Boot identity" "$LOG" 2>/dev/null; then return 0; fi
+    ls -t "$(dirname "$LOG")"/aii-*.log 2>/dev/null | while IFS= read -r f; do printf '%s\n' "$f"
+      if grep -q "Boot identity" "$f" 2>/dev/null; then break; fi; done; }
+saw_since_fresh(){ boot_logs | { while IFS= read -r f; do if grep -q -- "$1" "$f" 2>/dev/null; then exit 0; fi; done; exit 1; }; }
 
 start_slot(){ "$AII" register "$AII_SLOT" >/dev/null; }
 # slot_pid: the identity process for this slot, if any. On Windows the

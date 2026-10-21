@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -50,7 +51,7 @@ func TestAnInterruptedTurnKeepsWhatWasSaid(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			client := &failAfterSpeech{err: c.err}
 			loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil,
-				Config{MaxIterations: 4})
+				testBounds(Config{MaxIterations: limits.Of(4)}))
 			res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 
 			// The error is STILL returned: preserving speech must not
@@ -78,7 +79,7 @@ func TestAnInterruptedTurnKeepsWhatWasSaid(t *testing.T) {
 // a failure BEFORE anything was said has nothing to preserve.
 func TestACleanTurnIsNotMarkedInterrupted(t *testing.T) {
 	client := &captureLLM{script: []llm.Response{textResp("done")}}
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{MaxIterations: 2})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(2)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestACleanTurnIsNotMarkedInterrupted(t *testing.T) {
 	}
 
 	silent := &failAfterSpeech{calls: 1, err: errors.New("provider 500")} // fails on its FIRST call
-	loop2 := New(silent, &fakeTools{}, &fakeDefs{}, nil, nil, Config{MaxIterations: 2})
+	loop2 := New(silent, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(2)}))
 	res2, err2 := loop2.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err2 == nil {
 		t.Fatal("the failing turn must report its error")
@@ -121,7 +122,7 @@ func TestAProvidersAnswerIsNamedToTheIdentityByItsStatus(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			client := &failAfterSpeech{err: c.err}
 			loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil,
-				Config{MaxIterations: 4})
+				testBounds(Config{MaxIterations: limits.Of(4)}))
 			res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err == nil {
 				t.Fatal("a turn the provider refused must still report its error")
@@ -168,7 +169,7 @@ func TestACancelledTurnIsToldWhatCancelledIt(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			client := &captureLLM{script: []llm.Response{resp("looking", toolCall("1", "work", `{}`)), textResp("never asked for")}}
-			loop := New(client, &stopper{stop: func() { cancel(c.cause) }}, &fakeDefs{}, &fakeTranscript{}, nil, Config{MaxIterations: 8})
+			loop := New(client, &stopper{stop: func() { cancel(c.cause) }}, &fakeDefs{}, &fakeTranscript{}, nil, testBounds(Config{MaxIterations: limits.Of(8)}))
 			res, err := loop.Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("a cancelled turn ends cancelled, got %v", err)
@@ -243,7 +244,7 @@ func (e *emptyAfterSpeech) Chat(_ context.Context, _ []llm.Message, _ llm.ChatOp
 // no tool call. It was told as "the substrate failed mid-turn", which is a
 // different fact: nothing here failed.
 func TestAnEmptyReplyIsToldAsTheModelsAndNotTheSubstrates(t *testing.T) {
-	loop := New(&emptyAfterSpeech{}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 4})
+	loop := New(&emptyAfterSpeech{}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(4)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != "LLM response has no text or tool calls" {
 		t.Fatalf("err = %v, want the empty reply's own error, its text unchanged", err)
@@ -255,13 +256,13 @@ func TestAnEmptyReplyIsToldAsTheModelsAndNotTheSubstrates(t *testing.T) {
 		t.Fatalf("AN EMPTY REPLY IS TOLD AS %q", res.Interrupted)
 	}
 
-	silent := New(&silentAfterSpeech{}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 4})
+	silent := New(&silentAfterSpeech{}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(4)}))
 	if res, err := silent.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err == nil || res.Interrupted != "the substrate failed mid-turn" {
 		t.Fatalf("a call with no response is told as %q (%v)", res.Interrupted, err)
 	}
 	// A response with no choices at all is the same fact, at the site that
 	// reads it: the model answered, with nothing.
-	choiceless := New(&emptyAfterSpeech{choiceless: true}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 4})
+	choiceless := New(&emptyAfterSpeech{choiceless: true}, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(4)}))
 	res, err = choiceless.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != "LLM response has no choices" || res.Interrupted != "the model returned an empty reply" {
 		t.Fatalf("A RESPONSE WITH NO CHOICES IS TOLD AS %q (%v)", res.Interrupted, err)

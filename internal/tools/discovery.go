@@ -1,17 +1,14 @@
 package tools
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
-
-const MaxOffered = 8
 
 const (
 	MaxBriefFamilies = 16
@@ -20,16 +17,6 @@ const (
 
 	DefaultSearchLimit = 8
 	MaxSearchLimit     = 16
-)
-
-type State string
-
-const (
-	StateOffered State = "offered"
-
-	StateInspectOnly State = "inspect-only"
-
-	StateHidden State = "hidden"
 )
 
 type Discovery struct {
@@ -48,11 +35,137 @@ type Discovery struct {
 
 	OperatorConfirms bool
 
-	OutputSchema map[string]any
+	hostWords bool
 }
 
 type Discoverable interface {
 	Discovery() Discovery
+}
+
+var nameGrammar = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+
+const MaxNameBytes = 64
+
+var versionGrammar = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]*$`)
+
+const UnprintedVersion = "(a version this host does not print)"
+
+func PrintableName(name string) bool {
+	return len(name) <= MaxNameBytes && nameGrammar.MatchString(name)
+}
+
+var ReservedIDWords = []string{"host", "system", "manager", "broker", "registry", "runtime", "facility", "sandbox", "operator", "aii", "aiios"}
+
+func ReservedPluginID(id string) string {
+	first := id
+	if i := strings.IndexAny(id, ".-_"); i >= 0 {
+		first = id[:i]
+	}
+	for _, w := range ReservedIDWords {
+		if first == w {
+			return w
+		}
+	}
+	return ""
+}
+
+const MaxSummaryBytes = 256
+
+func AuthorLine(plugin, summary, tool string) string {
+	return "plugin " + plugin + " says: " + boundedQuote(summary, tool)
+}
+
+func boundedQuote(text, tool string) string {
+	shown := text
+	if len(shown) > MaxSummaryBytes {
+		cut := MaxSummaryBytes
+		for cut > 0 && !utf8.RuneStart(shown[cut]) {
+			cut--
+		}
+		shown = shown[:cut]
+	}
+	quoted := quoteAuthor(shown)
+	if len(shown) < len(text) {
+		quoted += fmt.Sprintf(" (the first %d of its %d bytes; tools action=show name=%s shows it whole)", len(shown), len(text), tool)
+	}
+	return quoted
+}
+
+type ModelSchemer interface {
+	ModelParameters() map[string]any
+}
+
+var formatToken = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+func ModelSchema(schema map[string]any, tool string) (model map[string]any, prose bool) {
+	model = make(map[string]any, len(schema))
+	for k, v := range schema {
+		switch node := v.(type) {
+		case string:
+			switch {
+			case (k == "description" || k == "title") && node != "":
+				v, prose = boundedQuote(node, tool), true
+			case k == "$id" || k == "$schema":
+
+				continue
+			case k == "format" && !formatToken.MatchString(node):
+
+				continue
+			}
+		case map[string]any:
+			switch k {
+			case "items":
+				sub, has := ModelSchema(node, tool)
+				v, prose = sub, prose || has
+			case "properties":
+
+				props := make(map[string]any, len(node))
+				for name, p := range node {
+					if ps, ok := p.(map[string]any); ok {
+						sub, has := ModelSchema(ps, tool)
+						p, prose = sub, prose || has
+					}
+					props[name] = p
+				}
+				v = props
+			}
+		}
+		model[k] = v
+	}
+	return model, prose
+}
+
+func authorWords(plugin, text string) string {
+	return "plugin " + plugin + " says: " + quoteAuthor(text)
+}
+
+const primes = "\u02ba\u02ee\u2033\u2036\u3003"
+
+func quoteAuthor(s string) string {
+	var b strings.Builder
+	for _, r := range strconv.Quote(s) {
+		switch {
+		case r <= unicode.MaxASCII || !(unicode.Is(unicode.Quotation_Mark, r) || strings.ContainsRune(primes, r)):
+			b.WriteRune(r)
+		case r > 0xffff:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+	}
+	return b.String()
+}
+
+func (r *Registry) Declared(name string) (operation, summary string, ok bool) {
+	t, found, _, origin := r.lookupWithHostOnly(name)
+	if !found || origin == "builtin" {
+		return "", "", false
+	}
+	if d, is := t.(Discoverable); is {
+		disc := d.Discovery()
+		operation, summary = disc.Operation, disc.Summary
+	}
+	return operation, summary, true
 }
 
 func FamilyOf(operation string) string {
@@ -97,12 +210,9 @@ type Family struct {
 
 type Brief struct {
 	Total        int
-	Offered      int
 	Unavailable  int
 	Families     []Family
 	MoreFamilies int
-	Offered_     []string
-	OfferedNames []string
 }
 
 type Hit struct {
@@ -112,7 +222,6 @@ type Hit struct {
 	Summary   string
 	Effects   string
 	Primary   bool
-	State     State
 }
 
 type Card struct {
@@ -128,7 +237,6 @@ type Card struct {
 	MaxResultBytes int
 	Examples       []string
 	Primary        bool
-	State          State
 	Reason         string
 	Receipt        string
 	Parameters     map[string]any
@@ -138,6 +246,13 @@ type dynEntry struct {
 	name string
 	tool Tool
 	disc Discovery
+}
+
+func (e dynEntry) line() string {
+	if e.disc.hostWords {
+		return e.disc.Summary
+	}
+	return AuthorLine(e.disc.Plugin, e.disc.Summary, e.name)
 }
 
 func (r *Registry) dynamicEntries() []dynEntry {
@@ -163,14 +278,19 @@ func discoveryOf(name string, t Tool, origin string) Discovery {
 	if d.Plugin == "" {
 		d.Plugin = origin
 	}
-	if d.Operation == "" {
+
+	if !PrintableName(d.Operation) {
 		d.Operation = name
 	}
-	if d.Family == "" {
+
+	if !PrintableName(d.Family) {
 		d.Family = familyOf(d.Plugin, d.Operation)
 	}
+	if d.Version != "" && !(len(d.Version) <= MaxNameBytes && versionGrammar.MatchString(d.Version)) {
+		d.Version = UnprintedVersion
+	}
 	if d.Summary == "" {
-		d.Summary = t.Description()
+		d.Summary, d.hostWords = t.Description(), true
 	}
 	return d
 }
@@ -186,68 +306,64 @@ func (r *Registry) HasDynamic() bool {
 	return false
 }
 
-func (r *Registry) PromptNames() []string {
+func (r *Registry) PromptNames(room int) (names []string, unlisted int) {
 	r.regMu.RLock()
-	names := make([]string, 0, len(r.tools))
-	var builtins, plugins []string
-	for name := range r.tools {
-		switch {
+	var builtins, primaries []string
+	for name, t := range r.tools {
+		switch src := r.sources[name]; {
 		case r.hostOnly[name]:
-		case r.sources[name] == "builtin":
+		case src == "builtin":
 			builtins = append(builtins, name)
-		case r.offered[name]:
-			plugins = append(plugins, name)
+		case discoveryOf(name, t, src).Primary:
+			primaries = append(primaries, name)
 		}
 	}
 	r.regMu.RUnlock()
+	sort.Strings(builtins)
+	sort.Strings(primaries)
 	for _, name := range builtins {
 		if r.ToolEnabled(name) {
 			names = append(names, name)
 		}
 	}
-	for _, name := range plugins {
-		if state, _, _, ok := r.State(name); ok && state == StateOffered {
-			names = append(names, name)
+	for _, name := range primaries {
+		if code, _, _ := r.Unavailable(name); code != "" {
+			continue
 		}
+		if len(names) >= room {
+			unlisted++
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names
+	return names, unlisted
 }
 
 const (
 	ReasonOperatorDisabled = "OPERATOR_DISABLED"
 	ReasonSafeSuspended    = "SAFE_SUSPENDED"
-	ReasonInspectOnly      = "INSPECT_ONLY"
+	ReasonNotInToolList    = "NOT_IN_TOOL_LIST"
 )
 
-const ReasonNotOfferedThisTurn = "NOT_OFFERED_THIS_TURN"
-
-func (r *Registry) State(name string) (state State, code, reason string, ok bool) {
+func (r *Registry) Unavailable(name string) (code, reason string, ok bool) {
 	r.regMu.RLock()
 	_, exists := r.tools[name]
 	src := r.sources[name]
 	host := r.hostOnly[name]
-	offered := r.offered[name]
-	waiting := !offered && len(r.offerOrder) >= MaxOffered && r.seatMatchesLocked(name)
 	r.regMu.RUnlock()
 	if !exists || src == "" || src == "builtin" || host {
-		return "", "", "", false
+		return "", "", false
 	}
 	if !r.ToolEnabled(name) {
-		return StateHidden, ReasonOperatorDisabled, "disabled by your operator", true
+		return ReasonOperatorDisabled, "disabled by your operator", true
 	}
 	if r.safeSource != nil {
 		if why, safe := r.safeSource(); safe {
-			return StateHidden, ReasonSafeSuspended, "suspended in safe mode: " + why, true
+			return ReasonSafeSuspended, "suspended in safe mode: " + why, true
 		}
 	}
-	if offered {
-		return StateOffered, "", "", true
-	}
-	if waiting {
-		return StateInspectOnly, ReasonInspectOnly, "waiting for free offer space", true
-	}
-	return StateInspectOnly, ReasonInspectOnly, "", true
+	return "", "", true
 }
 
 func (r *Registry) Resolve(ref string) (string, error) {
@@ -276,392 +392,18 @@ func (r *Registry) Resolve(ref string) (string, error) {
 	return "", fmt.Errorf("%s is declared by more than one plugin — name one of %s", ref, strings.Join(matches, ", "))
 }
 
-func (r *Registry) SetStandingOffer(seats []StandingSeat, persist func([]StandingSeat) error) {
-	r.persistMu.Lock()
-	defer r.persistMu.Unlock()
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	r.persistOffer = persist
-	r.standing = nil
-	seen := map[string]bool{}
-	for _, s := range seats {
-		s.Name = strings.TrimSpace(s.Name)
-		if s.Name != "" && !seen[s.Name] {
-			seen[s.Name] = true
-			r.standing = append(r.standing, s)
-		}
-	}
-	r.reconcileOfferLocked()
-}
-
-type StandingSeat struct {
-	Name  string
-	Print string
-}
-
-func Fingerprint(t Tool) string {
-	doc := map[string]any{"name": t.Name(), "parameters": t.Parameters()}
-	if d, ok := t.(Discoverable); ok {
-		disc := d.Discovery()
-		caps := append([]string(nil), disc.Capabilities...)
-		sort.Strings(caps)
-		doc["plugin"], doc["operation"], doc["output"] = disc.Plugin, disc.Operation, disc.OutputSchema
-		doc["effects"], doc["capabilities"] = disc.Effects, caps
-		doc["operator_confirms"], doc["max_result_bytes"] = disc.OperatorConfirms, disc.MaxResultBytes
-	}
-	b, err := json.Marshal(doc)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:16])
-}
-
-func (r *Registry) seatIndexLocked(name string) (int, bool) {
-	for i, s := range r.standing {
-		if s.Name == name {
-			return i, true
-		}
-	}
-	return -1, false
-}
-
-func (r *Registry) seatMatchesLocked(name string) bool {
-	i, ok := r.seatIndexLocked(name)
-	t, registered := r.tools[name]
-	return ok && registered && r.standing[i].Print != "" && r.standing[i].Print == Fingerprint(t)
-}
-
-func (r *Registry) reseatLocked(name string) {
-	if _, standing := r.seatIndexLocked(name); !standing || r.offered[name] || r.hostOnly[name] || len(r.offerOrder) >= MaxOffered {
-		return
-	}
-	if src, ok := r.sources[name]; !ok || src == "builtin" {
-		return
-	}
-	if !r.seatMatchesLocked(name) {
-		return
-	}
-	if r.offered == nil {
-		r.offered = map[string]bool{}
-	}
-	r.offered[name] = true
-	r.offerOrder = append(r.offerOrder, name)
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Registry) Offer(ref string) (string, error) {
-	name, err := r.Resolve(ref)
-	if err != nil {
-		return "", err
-	}
-	state, _, reason, _ := r.State(name)
-	switch state {
-	case StateHidden:
-		return name, fmt.Errorf("%s cannot be offered: %s", name, reason)
-	case StateOffered:
-		return name, nil
-	}
-	return name, r.changeStanding(func() error {
-		if _, still := r.tools[name]; !still {
-			return fmt.Errorf("%s was deactivated", name)
-		}
-
-		if r.offered[name] {
-			return nil
-		}
-		if len(r.offerOrder) >= MaxOffered {
-			return fmt.Errorf("the offer is full (%d of %d): release one of %s first", len(r.offerOrder), MaxOffered, strings.Join(r.offerOrder, ", "))
-		}
-		if r.offered == nil {
-			r.offered = map[string]bool{}
-		}
-		r.offered[name] = true
-		r.offerOrder = append(r.offerOrder, name)
-		seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
-		if i, standing := r.seatIndexLocked(name); standing {
-
-			r.standing[i] = seat
-		} else {
-			r.standing = append(r.standing, seat)
-		}
-		delete(r.told, name)
-		return nil
-	})
-}
-
-func (r *Registry) OfferPrimary(plugin string) ([]string, error) {
-	plugin = strings.TrimSpace(plugin)
-	if plugin == "" {
-		return nil, fmt.Errorf("name the exact plugin id whose primary tools you want to offer")
-	}
-	var names []string
-	err := r.changeStanding(func() error {
-		for name, t := range r.tools {
-			if r.sources[name] != plugin || r.hostOnly[name] || r.sources[name] == "builtin" {
-				continue
-			}
-			if discoveryOf(name, t, plugin).Primary {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		if len(names) == 0 {
-			return fmt.Errorf("plugin %s has no installed primary operations", plugin)
-		}
-		if r.safeSource != nil {
-			if why, safe := r.safeSource(); safe {
-				return fmt.Errorf("plugin %s cannot be offered: suspended in safe mode: %s", plugin, why)
-			}
-		}
-		newActive := 0
-		for _, name := range names {
-			if !r.ToolEnabled(name) {
-				return fmt.Errorf("%s cannot be offered: disabled by your operator", name)
-			}
-			if !r.offered[name] {
-				newActive++
-			}
-			if Fingerprint(r.tools[name]) == "" {
-				return fmt.Errorf("%s has no valid operation fingerprint", name)
-			}
-		}
-		if len(r.offerOrder)+newActive > MaxOffered {
-			return fmt.Errorf("offering %s needs %d active seats; the offer holds %d: release an existing choice first", plugin, newActive, MaxOffered)
-		}
-		if r.offered == nil {
-			r.offered = map[string]bool{}
-		}
-		for _, name := range names {
-			if !r.offered[name] {
-				r.offered[name] = true
-				r.offerOrder = append(r.offerOrder, name)
-			}
-			seat := StandingSeat{Name: name, Print: Fingerprint(r.tools[name])}
-			if i, exists := r.seatIndexLocked(name); exists {
-				r.standing[i] = seat
-			} else {
-				r.standing = append(r.standing, seat)
-			}
-			delete(r.told, name)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return names, nil
-}
-
-func (r *Registry) Release(ref string) (string, error) {
-	name, err := r.Resolve(ref)
-	if err != nil {
-		return "", err
-	}
-	return name, r.changeStanding(func() error {
-		i, standing := r.seatIndexLocked(name)
-		if !r.offered[name] && !standing {
-			return fmt.Errorf("%s is not in the offer", name)
-		}
-		r.unofferLocked(name)
-		if standing {
-			r.standing = append(r.standing[:i:i], r.standing[i+1:]...)
-		}
-		delete(r.told, name)
-		return nil
-	})
-}
-
-func (r *Registry) ReleasePlugin(plugin string) error {
-	plugin = strings.TrimSpace(plugin)
-	if plugin == "" || plugin == "builtin" {
-		return fmt.Errorf("name an installed plugin id whose tools you want to stop using")
-	}
-	return r.changeStanding(func() error {
-		owned := map[string]bool{}
-		for name := range r.tools {
-			if r.sources[name] == plugin {
-				owned[name] = true
-			}
-		}
-		if len(owned) == 0 {
-			return fmt.Errorf("plugin %s has no registered operations; release its tools before unloading it", plugin)
-		}
-		kept := r.standing[:0]
-		for _, seat := range r.standing {
-			if !owned[seat.Name] {
-				kept = append(kept, seat)
-			}
-		}
-		r.standing = kept
-		for name := range owned {
-			r.unofferLocked(name)
-			delete(r.told, name)
-		}
-		return nil
-	})
-}
-
-func (r *Registry) PluginSelection(plugin string) (selected bool, waiting int) {
-	r.regMu.RLock()
-	defer r.regMu.RUnlock()
-	if plugin == "" || plugin == "builtin" {
-		return false, 0
-	}
-	for name := range r.tools {
-		if r.sources[name] != plugin || r.hostOnly[name] {
-			continue
-		}
-		_, standing := r.seatIndexLocked(name)
-		selected = selected || standing || r.offered[name]
-		if standing && !r.offered[name] && len(r.offerOrder) >= MaxOffered && r.seatMatchesLocked(name) {
-			waiting++
-		}
-	}
-	return selected, waiting
-}
-
-type OfferNotice struct {
-	Name       string
-	Plugin     string
-	Version    string
-	Operation  string
-	Unrecorded bool
-}
-
-func (r *Registry) WithheldOffers() []OfferNotice {
-	r.regMu.RLock()
-	defer r.regMu.RUnlock()
-	var out []OfferNotice
-	for _, s := range r.standing {
-		t, registered := r.tools[s.Name]
-		if !registered || r.offered[s.Name] || r.told[s.Name] || r.hostOnly[s.Name] || r.sources[s.Name] == "builtin" {
-			continue
-		}
-		if r.seatMatchesLocked(s.Name) {
-			continue
-		}
-		n := OfferNotice{Name: s.Name, Unrecorded: s.Print == ""}
-		if d, ok := t.(Discoverable); ok {
-			disc := d.Discovery()
-			n.Plugin, n.Version, n.Operation = disc.Plugin, disc.Version, disc.Operation
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
-func (r *Registry) MarkOfferNoticesTold(names []string) {
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	if r.told == nil {
-		r.told = map[string]bool{}
-	}
-	for _, n := range names {
-		r.told[n] = true
-	}
-}
-
-func (r *Registry) changeStanding(change func() error) error {
-	r.persistMu.Lock()
-	defer r.persistMu.Unlock()
-	r.regMu.Lock()
-	previous, order, offered, told := r.standing, r.offerOrder, r.offered, r.told
-	r.standing, r.offerOrder = slices.Clone(previous), slices.Clone(order)
-	r.offered, r.told = maps.Clone(offered), maps.Clone(told)
-	err := change()
-	seats, nextTold := r.standing, r.told
-	var clearedNotices []string
-	for name := range told {
-		if !nextTold[name] {
-			clearedNotices = append(clearedNotices, name)
-		}
-	}
-	r.standing, r.offerOrder, r.offered, r.told = previous, order, offered, told
-	persist := r.persistOffer
-	r.regMu.Unlock()
-	if err != nil {
-		return err
-	}
-	if persist != nil {
-		if err := persist(slices.Clone(seats)); err != nil {
-			return fmt.Errorf("standing choice was not saved; selection unchanged: %w", err)
-		}
-	}
-	r.regMu.Lock()
-	defer r.regMu.Unlock()
-	r.standing = seats
-
-	r.reconcileOfferLocked()
-	beforePrints, afterPrints := map[string]string{}, map[string]string{}
-	for _, seat := range previous {
-		beforePrints[seat.Name] = seat.Print
-	}
-	for _, seat := range seats {
-		afterPrints[seat.Name] = seat.Print
-		if print, exists := beforePrints[seat.Name]; !exists || print != seat.Print {
-			delete(r.told, seat.Name)
-		}
-	}
-	for name := range beforePrints {
-		if _, remains := afterPrints[name]; !remains {
-			delete(r.told, name)
-		}
-	}
-	for _, name := range clearedNotices {
-		delete(r.told, name)
-	}
-	return nil
-}
-
-func (r *Registry) reconcileOfferLocked() {
-	for _, name := range slices.Clone(r.offerOrder) {
-		if r.hostOnly[name] || r.sources[name] == "builtin" || !r.seatMatchesLocked(name) {
-			r.unofferLocked(name)
-		}
-	}
-	for _, seat := range r.standing {
-		r.reseatLocked(seat.Name)
-	}
-}
-
-func (r *Registry) unofferLocked(name string) {
-	delete(r.offered, name)
-	for i, n := range r.offerOrder {
-		if n == name {
-			r.offerOrder = append(r.offerOrder[:i:i], r.offerOrder[i+1:]...)
-			break
-		}
-	}
-}
-
-func (r *Registry) Offered() []string {
-	r.regMu.RLock()
-	defer r.regMu.RUnlock()
-	return append([]string(nil), r.offerOrder...)
-}
-
 func (r *Registry) Brief() Brief {
 	var b Brief
 	fams := map[string]*Family{}
-	for _, e := range r.dynamicEntries() {
-		state, _, _, _ := r.State(e.name)
-		if state == StateHidden {
+	entries := r.dynamicEntries()
+
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].disc.Primary && !entries[j].disc.Primary })
+	for _, e := range entries {
+		if code, _, _ := r.Unavailable(e.name); code != "" {
 			b.Unavailable++
 			continue
 		}
 		b.Total++
-		if state == StateOffered {
-			b.Offered++
-		}
 		f := fams[e.disc.Family]
 		if f == nil {
 			f = &Family{Name: e.disc.Family}
@@ -686,16 +428,6 @@ func (r *Registry) Brief() Brief {
 		}
 		b.Families = append(b.Families, *fams[n])
 	}
-	for _, name := range r.Offered() {
-		if state, _, _, ok := r.State(name); !ok || state != StateOffered {
-			continue
-		}
-		op := name
-		if t, ok := r.lookup(name); ok {
-			op = discoveryOf(name, t, "").Operation
-		}
-		b.OfferedNames = append(b.OfferedNames, op+" ("+name+")")
-	}
 	return b
 }
 
@@ -716,8 +448,7 @@ func (r *Registry) Search(query string, limit int) []Hit {
 	}
 	var out []scored
 	for _, e := range r.dynamicEntries() {
-		state, _, _, _ := r.State(e.name)
-		if state == StateHidden {
+		if code, _, _ := r.Unavailable(e.name); code != "" {
 			continue
 		}
 		score := 0
@@ -750,7 +481,7 @@ func (r *Registry) Search(query string, limit int) []Hit {
 			}
 		}
 		if score > 0 {
-			out = append(out, scored{score: score, hit: Hit{Name: e.name, Operation: e.disc.Operation, Plugin: e.disc.Plugin, Summary: e.disc.Summary, Effects: e.disc.Effects, Primary: e.disc.Primary, State: state}})
+			out = append(out, scored{score: score, hit: Hit{Name: e.name, Operation: e.disc.Operation, Plugin: e.disc.Plugin, Summary: e.line(), Effects: e.disc.Effects, Primary: e.disc.Primary}})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -782,11 +513,15 @@ func (r *Registry) Show(ref string) (Card, error) {
 	src := r.sources[name]
 	r.regMu.RUnlock()
 	d := discoveryOf(name, t, src)
-	state, _, reason, _ := r.State(name)
+	_, reason, _ := r.Unavailable(name)
+	summary := d.Summary
+	if !d.hostWords {
+		summary = authorWords(d.Plugin, summary)
+	}
 	return Card{
 		Name: name, Operation: d.Operation, Plugin: d.Plugin, Version: d.Version, Tier: d.Tier,
-		Family: d.Family, Summary: d.Summary, Effects: d.Effects, Capabilities: d.Capabilities,
-		MaxResultBytes: d.MaxResultBytes, Examples: d.Examples, Primary: d.Primary, State: state, Reason: reason,
+		Family: d.Family, Summary: summary, Effects: d.Effects, Capabilities: d.Capabilities,
+		MaxResultBytes: d.MaxResultBytes, Examples: d.Examples, Primary: d.Primary, Reason: reason,
 		Receipt: ReceiptRule(d.Effects), Parameters: t.Parameters(),
 	}, nil
 }

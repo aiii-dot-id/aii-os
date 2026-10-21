@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,7 +146,12 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 			Grants: cfg.Plugins.Grants,
 
 			SlowStorageCall: time.Duration(cfg.Plugins.Runtime.SlowStorageCallMs) * time.Millisecond,
-			AuthProfiles:    cfg.Plugins.AuthProfiles,
+
+			MaxMemories: cfg.Plugins.Runtime.MaxMemories,
+
+			MaxInflightReceipts:  cfg.Plugins.Runtime.MaxInflightReceipts,
+			ReplacedMemoryWindow: func() time.Duration { return a.configSnapshot().Plugins.Runtime.replacedMemoryWindow() },
+			AuthProfiles:         cfg.Plugins.AuthProfiles,
 
 			ProfilesDir:  profiles,
 			ObserveFetch: toolReg.NotifyFetch,
@@ -182,6 +189,8 @@ func pluginLimits(opts *pluginhost.Options, cfg Config) error {
 		}
 		opts.StartupCeiling = ceiling
 	}
+
+	opts.MaxInputSchemaBytes = cfg.Plugins.Runtime.MaxInputSchemaBytes
 	opts.MemoryMax, opts.StreamMax, opts.FilesMax, opts.ReadyTimeout = nil, nil, nil, nil
 	if len(cfg.Plugins.Resources) > 0 {
 		opts.MemoryMax = make(map[string]uint64, len(cfg.Plugins.Resources))
@@ -205,6 +214,9 @@ func pluginLimits(opts *pluginhost.Options, cfg Config) error {
 func pluginLimitsMoved(before, after *Config) bool {
 	b, f := before.Plugins.Runtime, after.Plugins.Runtime
 	b.SlowStorageCallMs, f.SlowStorageCallMs = 0, 0
+	b.MaxMemories, f.MaxMemories = 0, 0
+	b.MaxInflightReceipts, f.MaxInflightReceipts = 0, 0
+	b.ReplacedMemoryDays, f.ReplacedMemoryDays = 0, 0
 	return !reflect.DeepEqual(b, f) || !reflect.DeepEqual(before.Plugins.Resources, after.Plugins.Resources)
 }
 
@@ -286,13 +298,35 @@ func (a *App) runPluginSweep(ctx context.Context, packages, trust <-chan struct{
 
 func (a *App) discoverPlugins() pluginfacility.Discovery {
 	var out pluginfacility.Discovery
-	dirs, _ := filepath.Glob(filepath.Join("plugins", "*"))
-	sort.Strings(dirs)
+	dirs, err := pluginDirs()
+	if err != nil {
+		return pluginfacility.Discovery{Err: err}
+	}
 	for _, pdir := range dirs {
-		if st, err := os.Stat(pdir); err != nil || !st.IsDir() {
+
+		dst, err := os.Stat(pdir)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		pkgs, _ := filepath.Glob(filepath.Join(pdir, "*.aiiospkg"))
+		if err != nil {
+			return pluginfacility.Discovery{Err: err}
+		}
+		if !dst.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(pdir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return pluginfacility.Discovery{Err: err}
+		}
+		var pkgs []string
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".aiiospkg") {
+				pkgs = append(pkgs, filepath.Join(pdir, e.Name()))
+			}
+		}
 		if len(pkgs) == 0 {
 			continue
 		}
@@ -362,7 +396,9 @@ func (a *App) rescanPlugins(ctx context.Context) {
 	installed := installedPluginIDs(f.Snapshot())
 	a.retireUnreferencedRuntimes(installed)
 
-	a.reconcileStoreRefs(ctx, installed, safe, cfg.Plugins.Runtime.RootsKept)
+	if installed != nil {
+		a.reconcileStoreRefs(ctx, installed, safe, cfg.Plugins.Runtime.RootsKept)
+	}
 	granted := make([]string, 0, len(cfg.Plugins.Grants))
 	for gid := range cfg.Plugins.Grants {
 		granted = append(granted, gid)
@@ -379,8 +415,27 @@ func (a *App) rescanPlugins(ctx context.Context) {
 	a.pluginsChanged()
 }
 
+func pluginDirs() ([]string, error) {
+	entries, err := os.ReadDir("plugins")
+	if errors.Is(err, fs.ErrNotExist) {
+
+		if _, serr := os.Lstat("plugins"); !errors.Is(serr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("plugins cannot be listed: %v", err)
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	dirs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		dirs = append(dirs, filepath.Join("plugins", e.Name()))
+	}
+	return dirs, nil
+}
+
 func installedPluginIDs(snap pluginfacility.Snapshot) map[string]bool {
-	dirs, err := filepath.Glob(filepath.Join("plugins", "*"))
+	dirs, err := pluginDirs()
 	if err != nil {
 		return nil
 	}

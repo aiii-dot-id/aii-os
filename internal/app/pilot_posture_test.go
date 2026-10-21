@@ -366,13 +366,10 @@ func TestAPilotPluginCannotWriteAuthorityOrReachTheDashboard(t *testing.T) {
 		kept[p] = string(raw)
 	}
 
-	// The identity offers the operation to itself (tools action=offer),
-	// as it would before calling it.
+	// The identity calls the operation through tools action=call: its
+	// author marked it no primary, so it is not in the tool list.
 	tool := a.plugins[0].ToolNames[0]
-	if _, err := a.toolReg.Offer(tool); err != nil {
-		t.Fatal(err)
-	}
-	out := pilotTurn(t, a, toolCall("probe", tool, `{}`))["probe"]
+	out := pilotTurn(t, a, toolCall("probe", "tools", `{"action":"call","name":"`+tool+`"}`))["probe"]
 	var relayed struct {
 		Relayed []json.RawMessage `json:"relayed"`
 	}

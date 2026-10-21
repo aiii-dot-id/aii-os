@@ -18,7 +18,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/store"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
@@ -131,6 +130,10 @@ func (a *App) buildWorkState() (string, error) {
 			parts = append(parts, card)
 		}
 		parts = append(parts, sessionNotesLine(ws.ID))
+
+		if line := a.familyCardLine(a.lifetime(), ws); line != "" {
+			parts = append(parts, line)
+		}
 	}
 
 	standing, authoredMs, serr := a.store.StandingStateAuthored()
@@ -229,17 +232,6 @@ func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string
 	if note := strings.TrimSpace(store.InterruptedNote(a.bootInterrupted) + "\n" + store.SweptSessionNote(a.bootSwept)); note != "" {
 		a.composedInterrupted = "### Interrupted at last shutdown\n" + note
 		parts = append(parts, a.composedInterrupted)
-	}
-
-	a.composedWithheld, a.composedWithheldText = nil, ""
-	if a.toolReg != nil {
-		if held := a.toolReg.WithheldOffers(); len(held) > 0 {
-			a.composedWithheldText = withheldOffersNote(held)
-			parts = append(parts, a.composedWithheldText)
-			for _, h := range held {
-				a.composedWithheld = append(a.composedWithheld, h.Name)
-			}
-		}
 	}
 
 	if a.store != nil {
@@ -420,23 +412,6 @@ func attentionUrgent(ws *store.WorkSession, subs []store.WorkSession) bool {
 	return false
 }
 
-func withheldOffersNote(held []tools.OfferNotice) string {
-	var b strings.Builder
-	b.WriteString("### Offers withheld\nAn operation you offered is not offered now: it came back declaring something other than what you offered.\n")
-	for _, h := range held {
-		fmt.Fprintf(&b, "- `%s`", h.Name)
-		if h.Operation != "" {
-			fmt.Fprintf(&b, " — %s in %s %s", h.Operation, h.Plugin, h.Version)
-		}
-		if h.Unrecorded {
-			b.WriteString(" (offered before offers recorded what they promised)")
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("`tools action=show name=…` shows it as it is now; `tools action=offer name=…` offers it again; `tools action=release name=…` lets it go.")
-	return b.String()
-}
-
 type composedOutcome struct{ id, text string }
 
 const outcomeTooLargeNote = "[the whole result (%d bytes) did not fit your turn's facts and is not shown; `work action=status id=%s` reads it whole]"
@@ -464,10 +439,6 @@ func (a *App) markComposedHarvests(turn string) {
 		a.bootInterrupted, a.bootSwept = nil, nil
 	}
 	a.composedInterrupted = ""
-	if len(a.composedWithheld) > 0 && a.toolReg != nil && carried(a.composedWithheldText) {
-		a.toolReg.MarkOfferNoticesTold(a.composedWithheld)
-	}
-	a.composedWithheld, a.composedWithheldText = nil, ""
 	if a.composedModel != "" && carried(a.composedModelText) {
 		a.toldModel = a.composedModel
 	}

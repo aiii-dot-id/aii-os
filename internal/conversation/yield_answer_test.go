@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -34,7 +35,7 @@ func TestYieldWithAnswerSpeaksItAndFlagsTheResult(t *testing.T) {
 	}
 	client := &captureLLM{script: script}
 	tools := &answerTools{fakeTools: fakeTools{results: map[string]string{"bash": "ok", "work": "Turn yielding with your answer carried to the operator"}}, answer: "Established: X. Missing: Y."}
-	res, err := New(client, tools, &fakeDefs{}, nil, nil, Config{MaxIterations: 20}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, tools, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(20)})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestYieldWithoutAnswerIsUnchanged(t *testing.T) {
 	script := []llm.Response{resp("", toolCall("c2", "work", `{"action":"yield"}`)), textResp("standing by")}
 	client := &captureLLM{script: script}
 	tools := &answerTools{fakeTools: fakeTools{results: map[string]string{"work": "Turn yielding"}}}
-	res, err := New(client, tools, &fakeDefs{}, nil, nil, Config{MaxIterations: 20}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, tools, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(20)})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}

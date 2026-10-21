@@ -3,6 +3,7 @@ package conversation
 import (
 	"bytes"
 	"context"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ func TestCacheSilentFailurePreservesReportedUsage(t *testing.T) {
 	first := resp("", toolCall("c1", "read", "{}"))
 	first.Usage = llm.Usage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010, CachedPromptTokens: 900, Reported: true}
 	client := &scriptLLM{script: []llm.Response{first}}
-	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 3, ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 100000}))
 	result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "inspect"}})
 	if err == nil || len(client.requests) != 2 {
 		t.Fatalf("fixture expected a successful tool call then script exhaustion; err=%v requests=%d", err, len(client.requests))
@@ -54,7 +55,7 @@ func TestCacheRetryDoesNotClaimCompleteUsage(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			c := llm.New(&llm.ClientConfig{Endpoint: server.URL, Provider: provider, Model: "fixture", Retries: 1, RetryBackoffMS: 1, TimeoutSeconds: 2})
-			loop := New(c, &fakeTools{}, &fakeDefs{}, nil, nil, Config{MaxIterations: 3, ContextBudgetTokens: 100000})
+			loop := New(c, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 100000}))
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			result, err := loop.Run(ctx, "stable identity", []llm.Message{{Role: "user", Content: "hello"}})

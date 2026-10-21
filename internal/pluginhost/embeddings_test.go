@@ -189,13 +189,13 @@ func TestASourcesOperationMayNotWaitForAnOperatorsCard(t *testing.T) {
 	asking := newEmbeddingsFixture()
 	asking.confirms = true
 	pkg, res := asking.build(t, "org.example.asking")
-	_, err := loadDescriptors(pkg, res, nil, res.Manifest)
+	_, err := loadDescriptors(pkg, res, nil, res.Manifest, 0)
 	var schema *SchemaError
 	if !errors.As(err, &schema) || !strings.Contains(err.Error(), "may not declare operator_confirms") {
 		t.Fatalf("a source's operation that waits for a card must be refused by its descriptor: %v", err)
 	}
 	pkg, res = newEmbeddingsFixture().build(t, "org.example.plain")
-	if _, err := loadDescriptors(pkg, res, nil, res.Manifest); err != nil {
+	if _, err := loadDescriptors(pkg, res, nil, res.Manifest, 0); err != nil {
 		t.Fatalf("the same descriptor without the request must be read: %v", err)
 	}
 }

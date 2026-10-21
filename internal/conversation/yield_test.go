@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -29,7 +30,7 @@ func runYieldTurn(t *testing.T, script []llm.Response, predicted func() int) (*c
 	client := &captureLLM{script: script}
 	tools := &yieldTools{fakeTools: fakeTools{results: map[string]string{"bash": "ok", "work": "Turn yielding — your gate frees when this round ends."}}, yieldOn: "work"}
 	loop := New(client, tools, &fakeDefs{}, nil, nil,
-		Config{MaxIterations: 20, PredictedThisTurn: budgetAtStart(predicted)})
+		testBounds(Config{MaxIterations: limits.Of(20), PredictedThisTurn: budgetAtStart(predicted)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

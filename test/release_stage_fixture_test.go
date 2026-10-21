@@ -124,7 +124,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	f.env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GO="+filepath.Join(bin, "go"), "FAKE_TOOL="+filepath.Join(side, "aii-release"),
-		"GH_LOG="+f.ghLog, "GUARD_LOG="+f.guardLog, "EXPECTED_PUBLIC_ROOT="+f.root,
+		"GH_LOG="+f.ghLog, "GUARD_LOG="+f.guardLog, "EXPECTED_PUBLIC_ROOT="+resolvedRoot(t, f.root),
 		"PUBLIC_DERIVE="+filepath.Join(bin, "public-derive"),
 		"RELEASE_REPO=example/aii-os", "EVIDENCE="+f.evidence)
 	return f
@@ -340,4 +340,16 @@ func TestStagingRefusesAnIncompleteOrStrayCandidateBeforeWriting(t *testing.T) {
 			}
 		})
 	}
+}
+
+// resolvedRoot is root as the release script's shell reaches it: on macOS
+// the default temporary folder is under /var, a link to /private/var, and the
+// script names the resolved path.
+func resolvedRoot(t *testing.T, root string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }

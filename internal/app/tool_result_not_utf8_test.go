@@ -37,7 +37,7 @@ func TestAToolResultThatIsNotUTF8IsRecordedAndSaysSo(t *testing.T) {
 				t.Fatal(err)
 			}
 			model := &argsScript{tool: "shell", args: string(args)}
-			loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+			loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			if _, err := loop.Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {

@@ -31,7 +31,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost/pluginhosttest"
-	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const compatPluginID = "com.aiii.examples.compat"
@@ -338,29 +337,24 @@ func (h *compatHost) grant(t *testing.T, fields ...string) {
 func (h *compatHost) enterSAFE() { h.app.enterSafe("sdk compat: the record cannot be trusted") }
 func (h *compatHost) leaveSAFE() { h.app.resetModeForTest() }
 
-// offer puts operations in the identity's offer, as its tools organ does.
-func (h *compatHost) offer(t *testing.T, ops ...string) {
-	t.Helper()
-	for _, op := range ops {
-		if _, err := h.app.toolReg.Offer(h.tool(op)); err != nil {
-			t.Fatal(err)
-		}
-	}
+// callable says whether op can be called by the identity: neither
+// disabled by the operator nor suspended in SAFE.
+func (h *compatHost) callable(op string) bool {
+	code, _, ok := h.app.toolReg.Unavailable(h.tool(op))
+	return ok && code == ""
 }
 
-// offered says whether op is callable by the identity's own name for it.
-func (h *compatHost) offered(op string) bool {
-	state, _, _, ok := h.app.toolReg.State(h.tool(op))
-	return ok && state == tools.StateOffered
+// routed is the identity's call of op through tools action=call, which
+// reaches an operation whether or not its author marked it primary.
+func (h *compatHost) routed(op string, args map[string]any) toolStep {
+	return toolStep{"tools", map[string]any{"action": "call", "name": h.tool(op), "args": args}}
 }
 
 // turn is one operator message whose scripted model calls op once and
-// then answers final; it returns the reply. The identity offered op
-// first, as it must before its own call can reach it.
+// then answers final; it returns the reply.
 func (h *compatHost) turn(t *testing.T, marker, op string, args map[string]any, final string) string {
 	t.Helper()
-	h.offer(t, op)
-	h.provider.use(t, marker, []toolStep{{h.tool(op), args}}, final)
+	h.provider.use(t, marker, []toolStep{h.routed(op, args)}, final)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	reply, err := h.app.handleMessage(ctx, marker+" use the plugin")
@@ -375,9 +369,8 @@ func (h *compatHost) turn(t *testing.T, marker, op string, args map[string]any, 
 // answers whether CancelTurn found the turn and the error it ended with.
 func (h *compatHost) turnCancelled(t *testing.T, marker, op string, args map[string]any, text string) (bool, error) {
 	t.Helper()
-	h.offer(t, op)
 	pid := h.active(t).SupervisedPid()
-	h.provider.use(t, marker, []toolStep{{h.tool(op), args}}, "never")
+	h.provider.use(t, marker, []toolStep{h.routed(op, args)}, "never")
 	done := make(chan error, 1)
 	go func() {
 		_, err := h.app.handleMessage(context.Background(), marker+" use the plugin")
@@ -530,7 +523,10 @@ type compatToolRow struct {
 // toolRows are the rows calls of op left, oldest first.
 func (h *compatHost) toolRows(t *testing.T, op string) []compatToolRow {
 	t.Helper()
-	rows, err := h.app.store.DB().Query(`SELECT kind, outcome, COALESCE(json_extract(details, '$.reason_code'), '') FROM conversations WHERE json_extract(details, '$.tool')=? ORDER BY turn_seq`, h.tool(op))
+	// A routed call (tools action=call) is recorded as the model emitted
+	// it, under the facade, with the operation's name in its excerpt.
+	rows, err := h.app.store.DB().Query(`SELECT kind, outcome, COALESCE(json_extract(details, '$.reason_code'), '') FROM conversations
+		WHERE json_extract(details, '$.tool')=? OR (json_extract(details, '$.tool')='tools' AND instr(content, ?) > 0) ORDER BY turn_seq`, h.tool(op), h.tool(op))
 	if err != nil {
 		t.Fatal(err)
 	}

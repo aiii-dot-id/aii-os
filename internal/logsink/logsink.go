@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +29,38 @@ type Config struct {
 	CompressDays int
 
 	MaxDays int
+
+	MaxBytes int64
+
+	MaxTotalBytes int64
+}
+
+const DefaultMaxBytes = 5 << 20
+
+const MinMaxBytes = tailReadBytes
+
+const MaxMaxBytes = maxGunzipBytes / 2
+
+func (c Config) maxBytes() int64 {
+	if c.MaxBytes <= 0 {
+		return DefaultMaxBytes
+	}
+	return c.MaxBytes
+}
+
+func DefaultMaxTotalBytes(maxBytes int64, maxBackups int) int64 {
+	c := Config{MaxBytes: maxBytes, MaxBackups: maxBackups}
+	if c.maxBackups() < 0 {
+		return 0
+	}
+	return c.maxTotalBytes()
+}
+
+func (c Config) maxTotalBytes() int64 {
+	if c.MaxTotalBytes > 0 {
+		return c.MaxTotalBytes
+	}
+	return c.maxBytes() * int64(c.maxBackups()+1)
 }
 
 func (c Config) Enabled() bool { return c.Dir != "" }
@@ -66,8 +98,11 @@ func (c Config) compressDays() int {
 type Sink struct {
 	cfg  Config
 	dir  string
-	file *os.File
+	file *liveLog
 	stop chan struct{}
+
+	retain sync.Mutex
+	work   sync.WaitGroup
 }
 
 func Install(cfg Config) (*Sink, error) {
@@ -87,7 +122,7 @@ func Install(cfg Config) (*Sink, error) {
 		return nil, fmt.Errorf("logsink: cannot create %s: %w", dir, err)
 	}
 	live := filepath.Join(dir, LiveName)
-	if err := rotateIfPresent(live); err != nil {
+	if _, err := rotateIfPresent(live, nil); err != nil {
 		return nil, fmt.Errorf("logsink: rotate: %w", err)
 	}
 
@@ -95,15 +130,29 @@ func Install(cfg Config) (*Sink, error) {
 	if err != nil {
 		return nil, fmt.Errorf("logsink: cannot open %s: %w", live, err)
 	}
-	s := &Sink{cfg: cfg, dir: dir, file: f}
+	s := &Sink{cfg: cfg, dir: dir}
+	s.file = &liveLog{path: live, f: f, limit: cfg.maxBytes(), rolled: s.afterRoll}
+	if fi, err := f.Stat(); err == nil {
+		s.file.size = fi.Size()
+	}
 	s.installStream()
 
-	if gz, rm, err := s.CompressOlder(); err != nil {
+	s.retainNow()
+	return s, nil
+}
+
+func (s *Sink) retainNow() {
+	s.retain.Lock()
+	defer s.retain.Unlock()
+	gz, rm, cut, err := s.compressAndPrune()
+	if err != nil {
 		Warn("logs.error", "retention error: %v", err)
 	} else if gz+rm > 0 {
 		Info("logs.end", "compressed %d, removed %d rotated log(s)", gz, rm)
 	}
-	return s, nil
+	if cut.files > 0 {
+		Info("logs.end", "of those, %d (%d bytes, the oldest left) went to hold the rotated logs under %d bytes (logs.max_total_bytes), whatever their age; they now sum %d", cut.files, cut.bytes, s.cfg.maxTotalBytes(), cut.left)
+	}
 }
 
 func (s *Sink) installStream() {
@@ -138,29 +187,48 @@ func (s *Sink) Close() {
 	}
 	_ = s.file.Close()
 	s.file = nil
+
+	s.work.Wait()
 }
 
 func (s *Sink) Dir() string { return s.dir }
 
-func rotateIfPresent(live string) error {
+func rotateIfPresent(live string, held *os.File) (string, error) {
 	fi, err := os.Stat(live)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
-	if fi.Size() == 0 {
-		return os.Remove(live)
-	}
-	base := filepath.Join(filepath.Dir(live),
-		rotatedPrefix+fi.ModTime().UTC().Format("20060102-150405")+rotatedExt)
-	target := base
-	for i := 1; ; i++ {
-		if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
-			break
+	mine := false
+	if held != nil {
+		if hfi, herr := held.Stat(); herr == nil && os.SameFile(fi, hfi) {
+			fi, mine = hfi, true
 		}
-		target = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, rotatedExt), i, rotatedExt)
 	}
-	return os.Rename(live, target)
+	if fi.Size() == 0 && !mine {
+		return "", os.Remove(live)
+	}
+	dir := filepath.Dir(live)
+	stamp := fi.ModTime().UTC().Format(rotatedStampLayout)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	last := -1
+	for _, e := range entries {
+		if !isRotatedName(e.Name()) {
+			continue
+		}
+		if s, n := rotatedStamp(e.Name()); s == stamp && n > last {
+			last = n
+		}
+	}
+	name := rotatedPrefix + stamp + rotatedExt
+	if last >= 0 {
+		name = fmt.Sprintf("%s%s-%d%s", rotatedPrefix, stamp, last+1, rotatedExt)
+	}
+	return name, os.Rename(live, filepath.Join(dir, name))
 }

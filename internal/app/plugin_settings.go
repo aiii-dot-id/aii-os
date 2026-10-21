@@ -140,19 +140,16 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 	for _, ap := range active {
 		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Mode: ap.Mode, Variant: ap.VariantID, Tools: ap.Tools()}
 		if a.toolReg != nil {
-			view.ToolsSelected, view.ToolsWaiting = a.toolReg.PluginSelection(ap.ID)
-			view.PrimaryOffered = true
 			for _, name := range view.Tools {
 				c, err := a.toolReg.Show(name)
 				if err == nil && c.Plugin == ap.ID && c.Primary {
 					view.PrimaryTools = append(view.PrimaryTools, c.Operation)
-					view.PrimaryOffered = view.PrimaryOffered && c.State == tools.StateOffered
 				}
 			}
-			view.PrimaryOffered = view.PrimaryOffered && len(view.PrimaryTools) > 0
 		}
 		view.Publisher, view.PublisherID, view.Family, view.Runtime, view.PackageHash = ap.Publisher, ap.PublisherID, ap.Family, ap.Runtime, ap.PackageHash
 		view.Title, view.Description = ap.Title, ap.Description
+		view.Operations = pluginOperationViews(a.toolReg, view.Tools)
 		view.Interfaces, view.Capabilities = append([]string(nil), ap.Interfaces...), append([]string(nil), ap.Capabilities...)
 		if a := ap.Accelerator; a != nil {
 			view.Accelerator = &dashboard.AcceleratorView{OS: a.OS, Arch: a.Arch, Backend: a.Backend, Operators: a.Operators, RuntimeLibraries: a.RuntimeLibraries, Precision: a.Precision, Models: a.Models, MemoryBytes: a.MemoryBytes, SessionLimit: a.SessionLimit, Fallback: a.Fallback}
@@ -239,6 +236,16 @@ func (a *App) settingViews(c *Config, ap *pluginhost.ActivePlugin, contracts fun
 		}
 		sv.Models = a.settingModelsView(c, ap, d.Key)
 		out = append(out, sv)
+	}
+	return out
+}
+
+func pluginOperationViews(reg *tools.Registry, names []string) []dashboard.PluginOperationView {
+	var out []dashboard.PluginOperationView
+	for _, name := range names {
+		if operation, summary, ok := reg.Declared(name); ok {
+			out = append(out, dashboard.PluginOperationView{Tool: name, Operation: operation, Summary: summary})
+		}
 	}
 	return out
 }

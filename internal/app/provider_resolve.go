@@ -74,7 +74,8 @@ func (a *App) resolveLLM() (llm.ClientConfig, providerEntry, error) {
 	if err != nil {
 		return llm.ClientConfig{}, providerEntry{}, err
 	}
-	cc, entry, err := a.resolveLLMConfig(cfg.LLM, reg)
+	sayUnusedOverrides(cfg.Overrides, reg)
+	cc, entry, err := a.resolveLLMConfig(cfg, reg)
 	if err == nil {
 
 		if note := reg.movedRouteNote(entry.Name); note != "" {
@@ -84,7 +85,8 @@ func (a *App) resolveLLM() (llm.ClientConfig, providerEntry, error) {
 	return cc, entry, err
 }
 
-func (a *App) resolveLLMConfig(cfg LLMConfig, reg *providerRegistry) (llm.ClientConfig, providerEntry, error) {
+func (a *App) resolveLLMConfig(full Config, reg *providerRegistry) (llm.ClientConfig, providerEntry, error) {
+	cfg := full.LLM
 
 	a.providers.runtime.mu.RLock()
 	signIns := a.providers.runtime.signIns
@@ -133,6 +135,9 @@ func (a *App) resolveLLMConfig(cfg LLMConfig, reg *providerRegistry) (llm.Client
 		return llm.ClientConfig{}, providerEntry{}, err
 	}
 	resolved = resolveOutputAllocation(resolved)
+	lim := limitsFor(full, *entry, model)
+	cfg.TimeoutSeconds, cfg.Retries, cfg.RetryBackoffMS = lim.N(timeoutSetting), lim.N(retriesSetting), lim.N(retryBackoffSetting)
+	cfg.Stream = lim.cfg.LLM.Stream
 
 	cc, terr := a.clientConfigForEntry(reg.effective(), resolved, cfg, model, apiKey)
 	if terr != nil {
@@ -304,9 +309,9 @@ func llmKeyEnvForProvider(block LLMConfig, reg *providerRegistry, provider strin
 	return ""
 }
 
-func (a *App) resolveRouteLLM(block LLMConfig, reg *providerRegistry, provider, model string) (llm.ClientConfig, providerEntry, error) {
-	route := block
-	route.Provider, route.Model, route.APIKeyEnv = provider, model, llmKeyEnvForProvider(block, reg, provider)
+func (a *App) resolveRouteLLM(cfg Config, reg *providerRegistry, provider, model string) (llm.ClientConfig, providerEntry, error) {
+	route := cfg
+	route.LLM.Provider, route.LLM.Model, route.LLM.APIKeyEnv = provider, model, llmKeyEnvForProvider(cfg.LLM, reg, provider)
 	return a.resolveLLMConfig(route, reg)
 }
 
@@ -458,7 +463,15 @@ func (a *App) currentPromptBudget() (int, budgetSource) {
 	return a.providers.runtime.activeBudget, a.providers.runtime.activeBudgetSource
 }
 
-func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPromptTokens int) {
+func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, cfg Config) {
+	model := cfg.LLM.Model
+	if client != nil {
+		model = client.ModelName()
+	} else if model == "" {
+		model = entry.DefaultModel
+	}
+	lim := limitsFor(cfg, entry, model)
+	maxPromptTokens := lim.N(promptMaxTokensSetting)
 	a.adoptRuntime(entry, client)
 	promptBudget := a.rememberPromptBudget(entry, maxPromptTokens)
 	if a.composer != nil {
@@ -484,6 +497,7 @@ func (a *App) activateLLMRuntime(client *llm.Client, entry providerEntry, maxPro
 	if a.llmSwap != nil {
 		a.llmSwap.Swap(client)
 	}
+	a.applyResidentLimits(lim)
 }
 
 func (a *App) adoptRuntime(entry providerEntry, client *llm.Client) {

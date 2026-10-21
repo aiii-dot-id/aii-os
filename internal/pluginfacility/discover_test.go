@@ -225,3 +225,55 @@ func TestTheSnapshotSaysWhichFamilyEachInstanceIs(t *testing.T) {
 		t.Fatalf("a policy pass dropped what the instance is: %+v", v)
 	}
 }
+
+// A LISTING THAT FAILED IS NOT AN EMPTY DIRECTORY. The host's scan answered
+// a plugins directory it could not open with nothing found, and the
+// facility withdrew every plugin mid-use and forgot what was installed.
+// What was observed last stands until a listing reads again; then a
+// package that really left is withdrawn as before.
+func TestAListingThatFailedWithdrawsNothing(t *testing.T) {
+	rt := newSharedRuntime()
+	scan := &scanFake{}
+	there := Discovery{Found: []Found{{Dir: "plugins/one", Package: "one.aiiospkg", Size: 10, MTime: 1}}}
+	scan.set(there)
+	var logs []string
+	var logMu sync.Mutex
+	f := New(Config{Runtime: rt, Capacity: ampleCapacity{}, Discover: scan.get,
+		Log: func(format string, args ...any) {
+			logMu.Lock()
+			logs = append(logs, strings.TrimSpace(format))
+			logMu.Unlock()
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	f.Attach(ctx)
+	t.Cleanup(func() { cancel(); f.Close() })
+	pol := Policy{Revision: 1, Allows: func(Evidence) (bool, string) { return true, "" }}
+	id := idOf("one.aiiospkg")
+	f.Rescan(pol)
+	until(t, "the plugin to serve", func() bool { return viewOf(f, id).State == StateActive })
+
+	// The directory cannot be opened: three sweeps in a row.
+	scan.set(Discovery{Err: errors.New("open plugins: too many open files")})
+	for i := 0; i < 3; i++ {
+		f.Rescan(pol)
+	}
+	if v := viewOf(f, id); !v.Wanted || !v.Installed || v.State != StateActive {
+		t.Fatalf("A PLUGIN WAS WITHDRAWN BECAUSE ITS DIRECTORY COULD NOT BE LISTED: wanted=%v installed=%v state=%v", v.Wanted, v.Installed, v.State)
+	}
+	logMu.Lock()
+	said := 0
+	for _, l := range logs {
+		if strings.Contains(l, "could not be listed") {
+			said++
+		}
+	}
+	logMu.Unlock()
+	if said != 1 {
+		t.Errorf("a listing that failed three times was said %d times; want once", said)
+	}
+
+	// It reads again, and the package is gone: now it is withdrawn.
+	scan.set(Discovery{})
+	f.Rescan(pol)
+	until(t, "a package that really left to be withdrawn", func() bool { return !viewOf(f, id).Wanted })
+}

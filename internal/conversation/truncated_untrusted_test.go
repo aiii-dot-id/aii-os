@@ -17,7 +17,7 @@ func TestTruncatedWebFetchKeepsItsUntrustedSourceAroundTheModelTail(t *testing.T
 	}}
 	tr := &fakeTranscript{limit: 4000}
 	loop := New(client, &fakeTools{results: map[string]string{"web_fetch": full}}, &fakeDefs{}, tr, nil,
-		Config{MaxToolResultChars: 180})
+		testBounds(Config{MaxToolResultChars: 180}))
 	if _, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "read the page"}}); err != nil {
 		t.Fatal(err)
 	}

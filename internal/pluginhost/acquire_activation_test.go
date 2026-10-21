@@ -54,7 +54,11 @@ func TestActivationHandsAbsentMaterialToTheAcquirerAndFollowsIt(t *testing.T) {
 	if !errors.As(err, &acquiring) {
 		t.Fatalf("an activation without its models must refuse typed, got: %v\n%s", err, capture.String())
 	}
-	if took := time.Since(started); took > 5*time.Second {
+	// The download is held open (fx.block) for the whole activation, so one
+	// that waited on it would run to its 30 s context. The bound is half of
+	// that: 5 s was a timing claim a loaded host broke, not a claim about
+	// waiting.
+	if took := time.Since(started); took > 15*time.Second {
 		t.Fatalf("the activation waited on the download: %s", took)
 	}
 	// Two files: the model and the runtime archive, counted as one (G2).

@@ -440,7 +440,14 @@ func TestPluginExpiryLookupUsesBothOwnerAndSuccessorKeys(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan, "plugin_id=? AND superseded_by=?") {
+	// The lookup is a search by the successor's key. Two indexes serve
+	// it: the owner's (plugin_id, superseded_by), and the one
+	// on superseded_by alone that the table's reference to itself is
+	// checked through when a row goes. Which of the two the planner takes
+	// is its own choice and a few rows either way; what must not come back
+	// is a lookup with no successor key in it, which walks a plugin's
+	// history, or the table, for every row that expires.
+	if !strings.Contains(plan, "superseded_by=?") {
 		t.Fatalf("expiry would rescan a plugin's whole history per row: %s", plan)
 	}
 }

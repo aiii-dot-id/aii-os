@@ -85,6 +85,9 @@ func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOuts
 		state := New(fresh).configState()
 		seen := map[string]bool{}
 		for _, s := range state.Cognition.Settings {
+			if s.Card != "" {
+				continue // drawn by its own card (limits.go), not the Cognition card
+			}
 			seen[s.Key] = true
 			want, ok := cognitionDefaults[s.Key]
 			if !ok {
@@ -179,7 +182,7 @@ func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOuts
 		}
 		s, _ := cognitionSettingFor(key)
 		if got := s.get(onDisk); fmt.Sprint(got) != fmt.Sprint(sent) {
-			t.Errorf("%s sent %v is %d in the file", key, sent, got)
+			t.Errorf("%s sent %v is %s in the file", key, sent, got)
 		}
 	}
 
@@ -188,7 +191,7 @@ func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOuts
 	for _, s := range cognitionSettings {
 		bads := []int{s.min - 1, s.max + 1}
 		if s.floor != "" {
-			bads = append(bads, max(1, s.def(before)/100)) // the default with two digits dropped
+			bads = append(bads, max(1, s.def(before).N/100)) // the default with two digits dropped
 		}
 		for _, bad := range bads {
 			if bad == 0 && s.zero {
@@ -219,7 +222,7 @@ func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOuts
 	after := a.configSnapshot()
 	for _, s := range cognitionSettings {
 		if s.get(&after) != s.get(&before) {
-			t.Errorf("%s moved from %d to %d across refused changes", s.key, s.get(&before), s.get(&after))
+			t.Errorf("%s moved from %s to %s across refused changes", s.key, s.get(&before), s.get(&after))
 		}
 	}
 	if after.Cognition.MorningBriefAt != before.Cognition.MorningBriefAt {

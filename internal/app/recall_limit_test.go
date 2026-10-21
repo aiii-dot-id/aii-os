@@ -169,7 +169,7 @@ func TestTheHeardLimitNoteStandsOutsideTheUntrustedBoundary(t *testing.T) {
 		a.retainHeard("heard-note", int64(i), fmt.Sprintf("final number %d", i), dashboard.VoiceEvent{}, "withheld", "pending", nil)
 	}
 	model := &heardReadScript{args: `{"source":"heard","query":"","limit":80}`}
-	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "what was said?"}}); err != nil {
 		t.Fatal(err)
 	}

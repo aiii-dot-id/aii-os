@@ -407,11 +407,8 @@ func TestTheToolDefinitionsTheAppBuildsAreOnesGeminiTakes(t *testing.T) {
 			}
 		}
 	}
-	if kinds["a plugin family's door"] != 0 {
-		t.Fatal("legacy category wrapper entered the ordinary provider schema sweep")
-	}
 	// The sweep saw what it claims to have swept.
-	for _, kind := range []string{"an offered plugin operation", "an identity verb", "a host tool", "the self-model's commit", "the substrate check's tool"} {
+	for _, kind := range []string{"a primary plugin operation", "an identity verb", "a host tool", "the self-model's commit", "the substrate check's tool"} {
 		if kinds[kind] == 0 {
 			t.Errorf("the definitions swept (%d) hold no %s", swept, kind)
 		}
@@ -432,10 +429,10 @@ func toolDefinitionsTheAppBuilds(t *testing.T) (requests [][]llm.ToolDefinition,
 		DBPath:     filepath.Join(dir, "aii.db"),
 	})
 	result.Ledger.Close()
-	// A legacy family remains dispatchable, but only the explicitly offered
-	// operation contributes a provider definition.
+	// Only the operation its author marked primary contributes a provider
+	// definition; the rest are reached through tools action=call.
 	const plugin = "org.example.schema"
-	installPluginDir(t, dir, plugin, buildResponderPkgWithOps(t, dir, plugin, []string{"memory.store", "memory.search", "memory.recent", "memory.reflect", "probe.ping"}))
+	installPluginDir(t, dir, plugin, buildResponderPkgWithPrimaries(t, dir, plugin, []string{"memory.store", "memory.search", "memory.recent", "memory.reflect", "probe.ping"}, "probe.ping"))
 	t.Chdir(dir)
 	app := New(&Config{
 		Identity: IdentityConfig{KeyPath: filepath.Join(dir, "identity.sec"),
@@ -451,17 +448,12 @@ func toolDefinitionsTheAppBuilds(t *testing.T) (requests [][]llm.ToolDefinition,
 		t.Fatal(err)
 	}
 	defer stopApp(t, app)
-	if _, err := app.toolReg.Offer("pl_org_example_schema_probe_ping"); err != nil {
-		t.Fatal(err)
-	}
 	turn := app.buildToolDefinitions()
 	kinds = map[string]int{}
 	for _, def := range turn {
 		switch name := def.Function.Name; {
 		case strings.HasPrefix(name, "pl_"):
-			kinds["an offered plugin operation"]++
-		case name == "memory":
-			kinds["a plugin family's door"]++
+			kinds["a primary plugin operation"]++
 		case name == "recall", name == "work":
 			kinds["an identity verb"]++
 		case name == "read", name == "tools":

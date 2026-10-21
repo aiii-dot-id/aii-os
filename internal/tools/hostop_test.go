@@ -93,7 +93,7 @@ func TestAHostOpIsExecutableAndInvisible(t *testing.T) {
 			t.Fatal("a host op reached Names() — the identity can see the raw pipe")
 		}
 	}
-	for _, d := range r.ToolDefinitions() {
+	for _, d := range r.ToolDefinitions(1 << 10) {
 		if d.Function.Name == "pl_x_send" {
 			t.Fatal("a host op reached the model's function list")
 		}
@@ -164,10 +164,9 @@ func TestHostDispatchBindsExactOwner(t *testing.T) {
 	}
 }
 
-func TestAHostOpIsNeverSeatedEvenForAMoment(t *testing.T) {
+func TestAHostOpIsNeverListedEvenForAMoment(t *testing.T) {
 	r := NewRegistry(t.TempDir(), nil, Timeouts{})
-	op := &namedTool{n: "pl_org_example_mail_send"}
-	r.SetStandingOffer([]StandingSeat{{Name: op.Name(), Print: Fingerprint(op)}}, nil)
+	op := opTool{name: "pl_org_example_mail_send", disc: Discovery{Operation: "mail.send", Primary: true}}
 	var seen atomic.Bool
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -178,7 +177,8 @@ func TestAHostOpIsNeverSeatedEvenForAMoment(t *testing.T) {
 				return
 			default:
 			}
-			for _, n := range r.PromptNames() {
+			names, _ := r.PromptNames(1 << 10)
+			for _, n := range names {
 				if n == op.Name() {
 					seen.Store(true)
 				}
@@ -194,6 +194,6 @@ func TestAHostOpIsNeverSeatedEvenForAMoment(t *testing.T) {
 	close(stop)
 	<-done
 	if seen.Load() {
-		t.Fatal("a host op that a standing seat named appeared in the identity's tool list")
+		t.Fatal("a host op marked primary appeared in the identity's tool list")
 	}
 }

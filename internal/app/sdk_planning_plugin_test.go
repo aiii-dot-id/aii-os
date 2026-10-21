@@ -63,7 +63,6 @@ func TestSDKPlanningPlugin(t *testing.T) {
 	}
 	h := startCompatHost(t, b, "T3")
 	h.grant(t, "kv", "interactions")
-	h.offer(t, "plan", "review")
 	st := h.app.store
 	if err := st.SetActiveProject("planning-project"); err != nil {
 		t.Fatal(err)
@@ -255,7 +254,6 @@ func TestSDKPlanningPlugin(t *testing.T) {
 func planningCalibrationRoundTrip(t *testing.T, h *compatHost) {
 	t.Helper()
 	h.grant(t, "kv")
-	h.offer(t, "plan")
 	const session = "planning-calibration-session"
 	ctx := pluginhost.WithActingSession(t.Context(), pluginhost.ActingSession{ID: session, CallID: "planning-calibration-call"})
 	call := func(mode string, fields map[string]any) map[string]any {

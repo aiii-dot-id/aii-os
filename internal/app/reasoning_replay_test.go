@@ -18,7 +18,7 @@ func TestAnEntryDecidesReasoningReplayForItsClient(t *testing.T) {
 		cfg := &Config{SourcePath: filepath.Join(dir, "config.json")}
 		cfg.LLM.Provider = entry.Name
 		a := New(cfg)
-		cc, _, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}})
+		cc, _, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, &providerRegistry{Providers: []providerEntry{entry}})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -57,6 +57,13 @@ function needsOf(e) {
   return '';
 }
 
+let storedById = {};
+function storedCounts(s) {
+  const count = (n, one, many) => (n === 1 ? '1 ' + one : n + ' ' + many);
+  return count(s.memories || 0, 'memory', 'memories') + (s.replaced ? ' (' + s.replaced + ' of them replaced)' : '') +
+    ' and ' + count(s.keys || 0, 'key', 'keys');
+}
+
 function entryHTML(e) {
   const id = esc(e.id);
   let badge = '', btns = '';
@@ -81,6 +88,9 @@ function entryHTML(e) {
       '</div>' +
       (e.summary ? '<div class="store-summary">' + esc(e.summary) + '</div>' : '') +
       (e.needs ? '<div class="store-hint store-needs">' + esc(e.needs) + '</div>' : '') +
+      (e.available && !e.installed && !e.pending ? '<div class="store-hint" data-install-grants="' + id + '">Install also grants what it asks of the identity\'s own storage, memory, records and embeddings; you can turn each off on its card.</div>' : '') +
+      ((e.installed || e.pending) && storedById[e.id] ? '<div class="store-hint" data-stored-kept="' + id + '">Uninstall removes its package. What it stored here (' +
+        esc(storedCounts(storedById[e.id])) + ') stays until you remove it under STORED BY PLUGINS.</div>' : '') +
       '<div class="store-detail" data-detail-of="' + id + '"' + (open ? '' : ' hidden') + '>' + detailHTMLFor(e) + '</div>' +
     '</div>' +
     '<div class="store-actions">' + btns + '</div></div>';
@@ -132,6 +142,8 @@ function catalogNote(pl) {
 }
 
 function listHTML(pl) {
+  storedById = {};
+  ((pl && pl.stored) || []).forEach(s => { storedById[s.id] = s; });
   const entries = (pl && pl.catalog) || [];
   const url = (pl && pl.catalog_url) || '';
   const dir = (pl && pl.catalog_dir) || '';
@@ -166,6 +178,92 @@ function storeHTML(pl) {
       '</select></div>' +
     '<div class="store-cats" id="store-cats">' + chipsHTML(pl) + '</div>' +
     '<div id="store-list">' + listHTML(pl) + '</div></div>';
+}
+
+function storedHTML(pl) {
+  const stored = (pl && pl.stored) || [];
+  const failed = (pl && pl.stored_error) || '', removed = (pl && pl.stored_removed) || '';
+  if (!stored.length && !failed && !removed) return '';
+  const days = (pl && pl.stored_replaced_days) || 0;
+  const rows = stored.map(s => '<div class="store-row" data-stored="' + esc(s.id) + '"><div class="store-main">' +
+    '<div><b>' + esc(s.id) + '</b> <span class="store-hint">' + esc(storedInstalled(s)) + '</span></div>' +
+    '<div class="store-hint">' + esc(storedCounts(s)) + '</div>' + storedReadHTML(s) + '</div>' +
+    '<div class="store-actions">' + storedReadButtons(s) +
+    '<button class="btn sm ghost" data-stored-remove="' + esc(s.id) + '">Remove what it stored</button></div></div>').join('');
+  return '<div class="card" data-stored-card><h3>STORED BY PLUGINS</h3>' +
+    '<div class="dim-note">What each plugin has stored in this identity\'s database: its memories and its keys. Uninstalling a plugin removes its package and nothing it stored.' +
+    (days ? ' A replaced memory is removed on its own ' + days + ' days after it was replaced (plugins.runtime.replaced_memory_days in the config file); a plugin may hold as many memories as plugins.runtime.max_memories allows.' : '') + '</div>' +
+    (failed ? '<div class="prep-err" data-stored-error>' + esc(failed) + '</div>' : '') + rows +
+    (removed ? '<div class="dim-note" data-stored-removed>' + esc(removed) + '</div>' : '') + '</div>';
+}
+function wireStored(st) {
+  st.querySelectorAll('[data-stored-remove]').forEach(btn => { btn.onclick = () => {
+    const id = btn.dataset.storedRemove;
+    const s = ((S.config && S.config.plugins && S.config.plugins.stored) || []).find(x => x.id === id);
+    if (!s) return;
+    const ask = 'Remove what ' + id + ' stored in this identity\'s database? ' + storedCounts(s) + ' will be deleted from it. Snapshots and exports already made still hold them.' +
+      (s.installed || s.pending ? ' The plugin stays installed, with an empty record.' : '') +
+      (storedRead && storedRead.id === id ? '' : ' You have not opened them on this page: Cancel, then Read its memories or Read its keys, to read them first.');
+    if (window.confirm && !window.confirm(ask)) return;
+    btn.disabled = true; btn.textContent = 'Removing…';
+    send({ type: 'plugin', plugin: { action: 'remove_stored', id: id } });
+  }; });
+  st.querySelectorAll('[data-stored-read]').forEach(btn => { btn.onclick = () => {
+    const spec = btn.dataset.storedRead, i = spec.indexOf(':'), kind = spec.slice(0, i), id = spec.slice(i + 1);
+    storedRead = { id: id, kind: kind, rows: [], total: 0, next: 0, error: '', loading: true };
+    send({ type: 'plugin_stored', stored: { plugin: id, kind: kind } });
+    renderPlugins();
+  }; });
+  const more = st.querySelector('[data-stored-more]');
+  if (more) more.onclick = () => {
+    if (!storedRead || !storedRead.next) return;
+    storedRead.loading = true;
+    send({ type: 'plugin_stored', stored: { plugin: storedRead.id, kind: storedRead.kind, before: storedRead.next } });
+    renderPlugins();
+  };
+  const close = st.querySelector('[data-stored-close]');
+  if (close) close.onclick = () => { storedRead = null; renderPlugins(); };
+}
+
+let storedRead = null;
+export function applyPluginStored(reply) {
+  if (!reply || !storedRead || reply.plugin !== storedRead.id || reply.kind !== storedRead.kind) return;
+  storedRead.loading = false;
+  storedRead.error = reply.error || '';
+  if (storedRead.error) return;
+  const page = (reply.kind === 'keys' ? reply.keys : reply.memories) || [];
+  storedRead.rows = reply.before ? storedRead.rows.concat(page) : page;
+  storedRead.total = reply.total || 0;
+  storedRead.next = reply.next || 0;
+}
+function storedInstalled(s) {
+  if (s.installed) return 'installed';
+  if (s.pending) return 'installed, ' + (s.pending === 'refused' ? 'refused' : s.pending === 'starting' ? 'starting' : s.pending === 'retiring' ? 'stopping' : s.pending === 'held' ? 'held' : 'preparing');
+  return 'not installed; what it stored is still here';
+}
+function storedReadButtons(s) {
+  const id = esc(s.id);
+  return (s.memories ? '<button class="btn sm ghost" data-stored-read="memories:' + id + '">Read its memories</button>' : '') +
+    (s.keys ? '<button class="btn sm ghost" data-stored-read="keys:' + id + '">Read its keys</button>' : '');
+}
+function storedReadHTML(s) {
+  const r = storedRead;
+  if (!r || r.id !== s.id) return '';
+  const what = r.kind === 'keys' ? 'keys' : 'memories';
+  const when = t => (t ? esc(String(t).replace('T', ' ').replace('Z', ' UTC')) : 'at a time that was not recorded');
+  const rows = r.rows.map(x => {
+    const about = r.kind === 'keys'
+      ? '<b>' + esc(x.key) + '</b> · ' + (x.deletion_marker ? 'a running activation\'s mark that it deleted this key for itself; no value' : 'last written ' + when(x.stored_at)) + (x.temporary ? ' · temporary, ends with its activation' : '')
+      : 'stored ' + when(x.stored_at) + ' · ' + (x.replaced_by ? 'replaced ' + when(x.replaced_at) + ' by ' + esc(x.replaced_by) : 'current') + (x.temporary ? ' · temporary, ends with its activation' : '') + ' · ' + esc(x.id);
+    const body = r.kind === 'keys' ? (x.deletion_marker ? '' : x.value) : x.text;
+    return '<div class="record-detail" data-stored-item><div class="store-hint">' + about + '</div>' + (r.kind === 'keys' && x.deletion_marker ? '' : '<pre>' + esc(body) + '</pre>') + '</div>';
+  }).join('');
+  const count = r.error ? '' : r.loading && !r.rows.length ? 'reading…'
+    : 'showing ' + r.rows.length + ' of ' + r.total + ', newest first' + (r.next ? '' : (r.rows.length < r.total ? '; the rest changed while this was read: read again' : '; that is all of them'));
+  return '<div class="store-detail" data-stored-reader="' + esc(r.kind) + '"><div class="dim-note">The ' + what + ' ' + esc(s.id) + ' stored, each whole. ' + count + '</div>' +
+    (r.error ? '<div class="prep-err" data-stored-read-error>' + esc(r.error) + '</div>' : '') + rows +
+    '<div class="savebar">' + (r.next ? '<button class="btn sm" data-stored-more' + (r.loading ? ' disabled' : '') + '>' + (r.loading ? 'Reading…' : 'Next ' + what) + '</button> ' : '') +
+    '<button class="btn sm ghost" data-stored-close>Close</button></div></div>';
 }
 
 function settingsHTML(c) {
@@ -251,16 +349,8 @@ function pendingHTML(pending) {
 }
 
 function primaryToolsHTML(p) {
-  let html = '';
-  if (p.primary_tools && p.primary_tools.length) {
-    html += '<div class="dim-note">Primary tools: ' + esc(p.primary_tools.join(', ')) + '</div>' +
-      '<div class="savebar"><button class="btn sm" data-plugin="offer:' + esc(p.id) + '"' + (p.primary_offered ? ' disabled' : '') + '>' +
-      (p.primary_offered ? 'Primary tools in use' : 'Use primary tools') + '</button></div>';
-  }
-  if (p.tools_waiting > 0) html += '<div class="dim-note">' + esc(p.tools_waiting) + ' selected operation' + (p.tools_waiting === 1 ? '' : 's') + ' waiting for free offer space.</div>';
-  if (p.tools_selected) html += '<div class="savebar"><button class="btn sm ghost" data-plugin="release:' + esc(p.id) + '">Stop using tools</button></div>' +
-    '<div class="dim-note">Stops using all selected operations of this plugin.</div>';
-  return html;
+  if (!p.primary_tools || !p.primary_tools.length) return '';
+  return '<div class="dim-note">Primary tools, in the identity\'s tool list: ' + esc(p.primary_tools.join(', ')) + '</div>';
 }
 
 function installedHTML(installed) {
@@ -272,7 +362,7 @@ function installedHTML(installed) {
       (p.description ? '<div class="pkg-desc">' + esc(p.description) + '</div>' : '') +
       '<div class="dim-note">' + esc(p.mode) + ', variant ' + esc(p.variant) +
       (p.tools && p.tools.length ? ' · ' + p.tools.length + ' operation' + (p.tools.length === 1 ? '' : 's') + ', available through the tools organ; selected operations carry their full arguments in the prompt' : '') + '</div>' +
-      primaryToolsHTML(p) + readinessHTML(p) + checksHTML(p) + startupHTML(p) + lifecycleHTML(p) + componentSetsHTML(servingSelection(p)) + detailHTML(p) + grantsHTML(p) + actsHTML(p);
+      primaryToolsHTML(p) + readinessHTML(p) + checksHTML(p) + startupHTML(p) + lifecycleHTML(p) + componentSetsHTML(servingSelection(p)) + detailHTML(p) + operationsHTML(p) + grantsHTML(p) + actsHTML(p);
     const all = p.settings || [];
     const elsewhere = all.filter(s => s.scope === 'hearing' || s.scope === 'speaking');
     const own = all.filter(s => !(s.scope === 'hearing' || s.scope === 'speaking'));
@@ -451,6 +541,16 @@ function grantsHTML(p) {
     (rows.length ? savebarHTML('grants:' + p.id, 'saved — applies to the plugin\'s next call', { label: 'Save grants' }) : '') +
     '</div>';
 }
+function operationsHTML(p) {
+  const ops = p.operations || [];
+  if (!ops.length) return '';
+  return '<div class="plugin-ops"><label class="f">OPERATIONS, IN THE AUTHOR\'S WORDS</label>' +
+    '<div class="store-hint">Each summary below is what this plugin\'s author wrote, whole. The identity is given one quoted line of it, cut when it is long (Settings, Tools shows that line).</div>' +
+    ops.map(o => '<div class="plugin-op"><b>' + esc(o.operation || o.tool) + '</b> <span class="store-hint">' + esc(o.tool) + '</span>' +
+      (o.summary ? '<div class="pkg-desc author-words">' + esc(o.summary) + '</div>'
+        : '<div class="store-hint">the package declared no summary for it</div>') + '</div>').join('') +
+    '</div>';
+}
 function detailHTML(p) {
   const row = (k, v) => v ? '<div class="sp-kv"><span>' + k + '</span><b>' + v + '</b></div>' : '';
   const publisher = p.publisher ? esc(p.publisher) + (p.publisher_id ? ' <span class="store-hint">(certified ' + esc(p.publisher_id) + ')</span>' : '') : '';
@@ -539,7 +639,7 @@ function wireList(st) {
   st.querySelectorAll('[data-plugin]').forEach(btn => { btn.onclick = () => {
     const spec = btn.dataset.plugin, i = spec.indexOf(':'), action = spec.slice(0, i), id = spec.slice(i + 1);
     btn.dataset.pluginLabel = btn.textContent;
-    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : action === 'retry' ? 'Retrying…' : action === 'offer' ? 'Selecting…' : action === 'release' ? 'Stopping use…' : 'Removing…';
+    btn.disabled = true; btn.textContent = action === 'install' ? 'Installing…' : action === 'retry' ? 'Retrying…' : 'Removing…';
     const requestID = send({ type: 'plugin', plugin: { action: action, id: id } });
     if (requestID) btn.dataset.pluginRequest = requestID;
     else restorePluginAction(btn);
@@ -597,7 +697,7 @@ export function renderPlugins() {
     S.connectRequest = null;
   }
   const typing = keyTyping();
-  st.innerHTML = configFeedbackHTML() + machineHTML(c && c.plugins && c.plugins.machine) + storeHTML(c && c.plugins) + pendingHTML(c && c.plugins.pending) + installedHTML(c && c.plugins.installed) + profilesHTML(c && c.plugins) + settingsHTML(c);
+  st.innerHTML = configFeedbackHTML() + machineHTML(c && c.plugins && c.plugins.machine) + storeHTML(c && c.plugins) + pendingHTML(c && c.plugins.pending) + installedHTML(c && c.plugins.installed) + storedHTML(c && c.plugins) + profilesHTML(c && c.plugins) + settingsHTML(c);
   restoreForm(st, activeForm);
   st.oncompositionstart = () => { st.formComposing = true; };
   st.oncompositionend = () => { st.formComposing = false; if (st.formRefreshDue) { st.formRefreshDue = false; renderPlugins(); } };
@@ -628,6 +728,7 @@ export function renderPlugins() {
   wireChoiceFilters(st);
   wireStore(st);
   wireMachine(st);
+  wireStored(st);
 }
 
 let profileDraft = null;

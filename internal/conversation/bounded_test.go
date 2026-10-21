@@ -39,7 +39,7 @@ func TestATurnIsBoundedPerToolCall(t *testing.T) {
 	script = append(script, textResp("done"))
 
 	tools := &fakeTools{results: map[string]string{"note": "ok"}}
-	loop := New(&scriptLLM{script: script}, tools, &fakeDefs{}, nil, nil, Config{})
+	loop := New(&scriptLLM{script: script}, tools, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
@@ -52,15 +53,12 @@ type contextSearch struct{ contextProbe }
 
 func (*contextSearch) ContextProvider() bool { return false }
 func (*contextSearch) Discovery() tools.Discovery {
-	return tools.Discovery{Plugin: "org.example.context", Operation: "search", Effects: "read.internal", MaxResultBytes: 4096}
+	return tools.Discovery{Plugin: "org.example.context", Operation: "search", Effects: "read.internal", MaxResultBytes: 4096, Primary: true}
 }
 func addContextProbe(t *testing.T, a *App, result string) *contextProbe {
 	t.Helper()
 	search := &contextSearch{contextProbe: contextProbe{name: "pl_example_search"}}
 	if e := a.toolReg.RegisterDynamic(search, "org.example.context"); e != nil {
-		t.Fatal(e)
-	}
-	if _, e := a.toolReg.Offer(search.Name()); e != nil {
 		t.Fatal(e)
 	}
 	p := &contextProbe{name: "pl_example_context", result: result}
@@ -110,7 +108,7 @@ func TestPluginContextReachesFirstFoldedChildRequestAndUsesChildSession(t *testi
 		_, _ = io.WriteString(w, textReply("completed"))
 	}))
 	defer srv.Close()
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 4, SubagentMaxToolRounds: 4, SubagentMaxToolCalls: 32, SubagentMaxLegs: 1, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(4), SubagentMaxToolRounds: limits.Of(4), SubagentMaxToolCalls: limits.Of(32), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5})
 	p := addContextProbe(t, a, `{"text":"synthetic child lesson survives folding","detail_route":"search id=exact-child"}`)
 	id := spawnChild(t, a, st, "inspect child fixture")
 	waitDelivered(t, st, id)

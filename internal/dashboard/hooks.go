@@ -144,6 +144,8 @@ type WSHandler struct {
 
 	SettingChoices func(plugin, key string) ([]SettingChoice, error)
 
+	PluginStored func(PluginStoredRequest) (*PluginStoredPage, error)
+
 	UpdateCheck func() (*UpdateState, error)
 
 	Continuity *ContinuityHooks

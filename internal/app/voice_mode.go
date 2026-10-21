@@ -133,6 +133,7 @@ func (a *App) voiceModeCommitted(prev, next VoiceModeConfig) {
 		h := v.(*voiceHandle)
 		if cur := h.loadInflight(); cur.id != "" && cur.rev < next.Revision && h.inflight.CompareAndSwap(cur, inflightSynthesis{}) {
 			targets = append(targets, target{h, cur.id})
+			cur.trace.end(why + " before any frame of its synthesis reached the sink")
 		}
 		a.hushFallback(h, why)
 		return true

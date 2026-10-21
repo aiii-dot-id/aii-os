@@ -53,6 +53,36 @@ func (e *KeepError) Error() string {
 
 func (e *KeepError) Unwrap() error { return e.Err }
 
+type OlderIndexError struct {
+	Held, Fetched string
+	Kept          string
+	Checkout      string
+}
+
+func (e *OlderIndexError) Error() string {
+	msg := fmt.Sprintf("the fetched index was generated %s, before the index held (%s): a verified index is never replaced by an older one", e.Fetched, e.Held)
+
+	if e.Kept != "" {
+		msg += fmt.Sprintf(". If the catalog URL was pointed at an older copy on purpose, remove the kept index at %s and restart the identity", e.Kept)
+	}
+	if e.Checkout != "" {
+		msg += fmt.Sprintf("; the checkout at %s (plugins.catalog_dir) is what a start loads", e.Checkout)
+	}
+	return msg
+}
+
+func olderThanHeld(held, fetched *Index) bool {
+	if held == nil {
+		return false
+	}
+	h, err := time.Parse(time.RFC3339, held.Generated)
+	if err != nil {
+		return false
+	}
+	f, err := time.Parse(time.RFC3339, fetched.Generated)
+	return err != nil || f.Before(h)
+}
+
 func (c *Catalog) Open(dir, cache string, root *sigenvelope.PublicKeyEnvelope, url func() string) {
 	c.dir, c.cache, c.root, c.url = dir, cache, root, url
 	c.poke = make(chan struct{}, 1)
@@ -127,6 +157,11 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 		return c.refused(err)
 	}
 	c.lockKeep()
+
+	if held := c.Current(); olderThanHeld(held, cat) {
+		c.keep.Unlock()
+		return c.refused(&OlderIndexError{Held: held.Generated, Fetched: cat.Generated, Kept: c.cache, Checkout: c.dir})
+	}
 	c.adopt(cat, time.Now().UTC().Format(time.RFC3339))
 	if c.adopted != nil {
 		c.adopted()

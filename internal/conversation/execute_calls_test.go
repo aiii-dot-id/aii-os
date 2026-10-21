@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -19,7 +20,7 @@ import (
 func TestACallWithNoExecutorEndsTheTurn(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{resp("looking", toolCall("c1", "bash", `{}`)), textResp("never")}}
 	em := &fakeEmitter{}
-	res, err := New(client, nil, &fakeDefs{}, nil, em, Config{}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, nil, &fakeDefs{}, nil, em, testBounds(Config{})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != `tool "bash" requested but no executor is available` {
 		t.Fatalf("err = %v", err)
 	}
@@ -52,7 +53,7 @@ func TestASerialCallAfterAStopIsRecordedNotRun(t *testing.T) {
 	tools := &stopFirst{stop: cancel}
 	tr := &fakeTranscript{}
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("c1", "first", `{}`), toolCall("c2", "second", `{}`)), textResp("never")}}
-	_, err := New(client, tools, &fakeDefs{}, tr, nil, Config{}).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
+	_, err := New(client, tools, &fakeDefs{}, tr, nil, testBounds(Config{})).Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
 	}
@@ -87,7 +88,7 @@ func (d *doneFails) RecordToolDone(string, int, string, string, Observation) err
 func TestAResultThatCannotBeRecordedEndsTheTurn(t *testing.T) {
 	tools := &fakeTools{results: map[string]string{"a": "ok", "b": "ok"}}
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("c1", "a", `{}`), toolCall("c2", "b", `{}`)), textResp("never")}}
-	_, err := New(client, tools, &fakeDefs{}, &doneFails{}, nil, Config{}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	_, err := New(client, tools, &fakeDefs{}, &doneFails{}, nil, testBounds(Config{})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != "record tool result: disk full" {
 		t.Fatalf("err = %v", err)
 	}
@@ -122,7 +123,7 @@ func TestAYieldInAParallelBatchEndsTheTurn(t *testing.T) {
 		resp("", toolCall("c1", "read", `{}`), toolCall("c2", "work", `{}`)),
 		textResp("standing by"),
 	}}
-	res, err := New(client, &safeYield{}, &fakeDefs{}, nil, nil, Config{MaxIterations: 10}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, &safeYield{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(10)})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestAParallelBatchThatCannotRecordItsStartRunsNothing(t *testing.T) {
 	tools := &safeYield{}
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("c1", "read", `{}`), toolCall("c2", "read", `{}`)), textResp("never")}}
 	em := &fakeEmitter{}
-	_, err := New(client, tools, &fakeDefs{}, &fakeTranscript{err: errors.New("disk full")}, em, Config{}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	_, err := New(client, tools, &fakeDefs{}, &fakeTranscript{err: errors.New("disk full")}, em, testBounds(Config{})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil || err.Error() != "record tool start: disk full" {
 		t.Fatalf("err = %v", err)
 	}

@@ -25,6 +25,18 @@ func keepConfigBeforeUpdate(path string, settled error) {
 	if path == "" || !errors.Is(settled, updates.ErrBootRecoveryPending) {
 		return
 	}
+	for _, f := range rollbackFiles(path) {
+		keepFileBeforeUpdate(f.path, f.what)
+	}
+}
+
+type rollbackFile struct{ path, what string }
+
+func rollbackFiles(configPath string) []rollbackFile {
+	return []rollbackFile{{configPath, "the configuration"}, {providerFilePath(configPath), ProvidersFileName}}
+}
+
+func keepFileBeforeUpdate(path, what string) {
 	if info, err := os.Stat(path + configBeforeUpdate); err == nil && info.Size() > 0 || err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return
 	}
@@ -33,43 +45,52 @@ func keepConfigBeforeUpdate(path string, settled error) {
 		return
 	}
 	if err != nil {
-		logsink.Warn("updates.refusal", "the configuration could not be read to keep a copy of it for a rollback: %v", err)
+		logsink.Warn("updates.refusal", "%s could not be read to keep a copy of it for a rollback: %v", what, err)
 		return
 	}
 	if _, err := writeFileAtomic(path+configBeforeUpdate, data); err != nil {
-		logsink.Warn("updates.refusal", "a copy of the configuration could not be kept for a rollback: %v", err)
+		logsink.Warn("updates.refusal", "a copy of %s could not be kept for a rollback: %v", what, err)
 		return
 	}
-	logsink.Info("updates.decision", "kept the configuration as the previous version left it (%s): a rollback puts it back", path+configBeforeUpdate)
+	logsink.Info("updates.decision", "kept %s as the previous version left it (%s): a rollback puts it back", what, path+configBeforeUpdate)
 }
 
 func restoreConfigBeforeUpdate(path string) error {
 	if path == "" {
 		return nil
 	}
+	for _, f := range rollbackFiles(path) {
+		if err := restoreFileBeforeUpdate(f.path, f.what); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func restoreFileBeforeUpdate(path, what string) error {
 	kept, err := atomicfile.ReadFile(path + configBeforeUpdate)
 	if errors.Is(err, fs.ErrNotExist) || err == nil && len(kept) == 0 {
-		logsink.Warn("updates.decision", "no copy of the configuration from before the update stands, so the restored version reads the file as the newer one left it; if it refuses a key, remove that key from %s", path)
+		logsink.Warn("updates.decision", "no copy of %s from before the update stands, so the restored version reads the file as the newer one left it; if it refuses a key, remove that key from %s", what, path)
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read the configuration kept from before the update: %w", err)
+		return fmt.Errorf("read %s kept from before the update: %w", what, err)
 	}
 	if now, err := atomicfile.ReadFile(path); err == nil && !bytes.Equal(now, kept) {
 		if _, err := writeFileAtomic(path+configRolledBack, now); err != nil {
-			return fmt.Errorf("set the newer version's configuration aside: %w", err)
+			return fmt.Errorf("set the newer version's %s aside: %w", what, err)
 		}
-		logsink.Warn("updates.decision", "the configuration the newer version left is set aside as %s; what was changed under it is there and not in use", path+configRolledBack)
+		logsink.Warn("updates.decision", "%s as the newer version left it is set aside as %s; what was changed under it is there and not in use", what, path+configRolledBack)
 	}
 
 	published, err := atomicfile.Replace(path+configBeforeUpdate, path)
 	if !published {
-		return fmt.Errorf("put back the configuration from before the update: %w", err)
+		return fmt.Errorf("put back %s from before the update: %w", what, err)
 	}
 	if err != nil {
-		logsink.Warn("updates.error", "the configuration from before the update is back at %s, and then: %v", path, err)
+		logsink.Warn("updates.error", "%s from before the update is back at %s, and then: %v", what, path, err)
 	}
-	logsink.Warn("updates.end", "the configuration is as the restored version left it")
+	logsink.Warn("updates.end", "%s is as the restored version left it", what)
 	return nil
 }
 
@@ -78,8 +99,10 @@ func dropConfigBeforeUpdate(path string, settled error) {
 		return
 	}
 
-	if err := atomicfile.Remove(path + configBeforeUpdate); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		logsink.Warn("updates.refusal", "the copy of the configuration from before the update could not be removed: %v", err)
+	for _, f := range rollbackFiles(path) {
+		if err := atomicfile.Remove(f.path + configBeforeUpdate); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			logsink.Warn("updates.refusal", "the copy of %s from before the update could not be removed: %v", f.what, err)
+		}
 	}
 }
 

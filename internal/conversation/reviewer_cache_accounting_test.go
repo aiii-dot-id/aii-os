@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -72,7 +73,7 @@ func TestReviewerRetryFenceIncludesToolSchemas(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = saved })
 	client := llm.New(&llm.ClientConfig{Endpoint: "http://review.invalid", Provider: "openai", Model: "synthetic", Retries: 1, RetryBackoffMS: 1})
 	tools := &fakeTools{results: map[string]string{"read": "ok"}}
-	loop := New(client, tools, defs, nil, nil, Config{MaxIterations: 5, TurnTokenBudget: budget, ContextBudgetTokens: 1_000_000})
+	loop := New(client, tools, defs, nil, nil, testBounds(Config{MaxIterations: limits.Of(5), TurnTokenBudget: limits.Of(budget), ContextBudgetTokens: 1_000_000}))
 	result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +97,7 @@ func TestReviewerNoChoicesPreservesKnownUsage(t *testing.T) {
 	})
 	t.Cleanup(func() { http.DefaultTransport = saved })
 	client := llm.New(&llm.ClientConfig{Endpoint: "http://review.invalid", Provider: "openai", Model: "synthetic", Retries: -1})
-	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, Config{MaxIterations: 2, ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(2), ContextBudgetTokens: 100000}))
 	result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil {
 		t.Fatal("expected no-choices refusal")

@@ -44,7 +44,7 @@ func TestLearnedDatabaseMaintenanceExportAndRestore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	note, err := s.HousekeepOptimized(ctx, CompressionOptimization{Levels: true, Dictionary: true})
+	note, err := s.HousekeepOptimized(ctx, CompressionOptimization{Levels: true, Dictionary: true}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,7 +35,28 @@ func (a *App) sinkConfig() logsink.Config {
 		MaxBackups:   cfg.Logs.MaxBackups,
 		CompressDays: cfg.Logs.CompressDays,
 		MaxDays:      cfg.Logs.MaxDays,
+		MaxBytes:     cfg.Logs.MaxBytes,
+
+		MaxTotalBytes: cfg.Logs.MaxTotalBytes,
 	}
+}
+
+func validLogMaxTotalBytes(total, maxBytes int64) error {
+	roll := maxBytes
+	if roll <= 0 {
+		roll = logsink.DefaultMaxBytes
+	}
+	if total < 0 || (total > 0 && total < 2*roll) {
+		return fmt.Errorf("logs.max_total_bytes must be zero (take the default, logs.max_bytes times max_backups+1) or at least twice logs.max_bytes (%d)", 2*roll)
+	}
+	return nil
+}
+
+func validLogMaxBytes(n int64) error {
+	if n != 0 && (n < logsink.MinMaxBytes || n > logsink.MaxMaxBytes) {
+		return fmt.Errorf("logs.max_bytes must be zero (take the default, %d) or between %d and %d", int64(logsink.DefaultMaxBytes), int64(logsink.MinMaxBytes), int64(logsink.MaxMaxBytes))
+	}
+	return nil
 }
 
 func (a *App) listLogs() ([]dashboard.LogFileState, error) {

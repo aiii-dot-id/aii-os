@@ -14,6 +14,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -43,7 +44,7 @@ func TestHarvestWakeCoalescesOnSweptSet(t *testing.T) {
 	cfg := &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2, SubagentWallSeconds: 5},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2), SubagentWallSeconds: 5},
 	}
 	a := New(cfg)
 	a.store = st
@@ -59,10 +60,10 @@ func TestHarvestWakeCoalescesOnSweptSet(t *testing.T) {
 	a.engine = identity.NewEngine(st, nil, rm, toolDiscovererAdapter{reg}, identity.Ports{WorkWake: ex.Wake})
 	a.engine.SetAgencyLimits(2, 1, 20, cfg.Agency.SubagentWallSeconds)
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
-		appTranscript{st: st}, appEmitter{a: a}, conversation.Config{
+		appTranscript{st: st}, appEmitter{a: a}, testLoop(conversation.Config{
 			MaxIterations:      cfg.Agency.MaxToolRounds,
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
-		})
+		}))
 
 	runCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()

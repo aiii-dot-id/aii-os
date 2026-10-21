@@ -69,4 +69,6 @@ var voiceWake = (*App).wake
 
 var voiceEngineOpen = (*pluginhost.VoiceSession).OpenWithAudio
 
+var voiceNow = time.Now
+
 var voiceFallbackMint = (*App).speakAhead

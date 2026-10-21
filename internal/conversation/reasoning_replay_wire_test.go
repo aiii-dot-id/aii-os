@@ -39,7 +39,7 @@ func TestTheSecondRequestCarriesReasoningOnlyWhenReplayed(t *testing.T) {
 			_, _ = w.Write([]byte(replies[n]))
 		}))
 		client := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Model: "m", NoStream: true, ReplayReasoning: replay})
-		loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+		loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 		res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 		srv.Close()
 		if err != nil {

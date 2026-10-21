@@ -2,16 +2,14 @@ package pluginhost
 
 import (
 	"fmt"
-	"regexp"
 	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/jsonschema"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const MaxPublishedTools = 32
-
-var rePublishedName = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 
 func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	if ap.superseded.Load() {
@@ -21,11 +19,11 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	if !ap.admitted.Load() {
 		return "", fmt.Errorf("plugin %s: this release is being admitted; publish once it serves", ap.ID)
 	}
-	if !rePublishedName.MatchString(spec.Name) || len(spec.Name) > 64 {
+	if !tools.PrintableName(spec.Name) {
 		return "", fmt.Errorf("name %q is not lowercase dotted segments of at most 64 bytes", spec.Name)
 	}
-	if spec.Summary == "" || len(spec.Summary) > 256 {
-		return "", fmt.Errorf("tool %s: summary must be 1..256 bytes", spec.Name)
+	if spec.Summary == "" || len(spec.Summary) > tools.MaxSummaryBytes {
+		return "", fmt.Errorf("tool %s: summary must be 1..%d bytes", spec.Name, tools.MaxSummaryBytes)
 	}
 	if !broker.KnownEffects(spec.Effects) || spec.Effects == "" {
 		return "", fmt.Errorf("tool %s: effects %q is not a declared class", spec.Name, spec.Effects)
@@ -44,6 +42,9 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 		var err error
 		if compiled, err = jsonschema.Compile(raw); err != nil {
 			return "", fmt.Errorf("tool %s: input schema: %v", spec.Name, err)
+		}
+		if err := checkInputSchemaSize(raw, ap.schemaBound); err != nil {
+			return "", fmt.Errorf("tool %s: input schema: %w", spec.Name, err)
 		}
 	}
 	name, err := toolName(ap.ID, "dyn."+spec.Name)
@@ -72,7 +73,7 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	desc := &opDescriptor{raw: raw, input: compiled, effects: spec.Effects, capabilities: append([]string(nil), spec.Capabilities...), capsDeclared: true, summary: spec.Summary, family: spec.Family}
 
 	t := ap.newOperationTool(name, spec.Name,
-		spec.Summary+fmt.Sprintf(" — published at run time by plugin %s (brokered under its signed envelope).", ap.ID),
+		tools.AuthorLine(ap.ID, spec.Summary, name)+fmt.Sprintf(" — published at run time by plugin %s (brokered under its signed envelope).", ap.ID),
 		desc, desc.discovery(ap.ID, ap.Version, ap.Tier.String(), spec.Name))
 	if err := ap.reg.RegisterDynamic(t, ap.ID); err != nil {
 		return "", fmt.Errorf("tool %s: %v", spec.Name, err)

@@ -34,7 +34,7 @@ func TestAShellCallsExitStatusReachesItsRecord(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			loop := conversation.New(&argsScript{tool: "shell", args: string(args)}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+			loop := conversation.New(&argsScript{tool: "shell", args: string(args)}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if _, err := loop.Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {

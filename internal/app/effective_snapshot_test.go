@@ -40,7 +40,7 @@ func resolveThrough(t *testing.T, dir string) (thinking string, effort []string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc, _, err := a.resolveLLMConfig(cfg.LLM, reg)
+	cc, _, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, reg)
 	if err != nil {
 		t.Fatal(err)
 	}

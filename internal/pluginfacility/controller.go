@@ -109,6 +109,7 @@ type Facility struct {
 	verified        map[string]verifyMemo
 	skips           []Skip
 	loggedAmbiguous map[string]bool
+	loggedUnlisted  string
 
 	poke chan struct{}
 

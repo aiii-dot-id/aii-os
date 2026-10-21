@@ -2,16 +2,21 @@ package app
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/fsdir"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
@@ -42,7 +47,7 @@ func (a *App) watchConfig(path string) {
 			continue
 		}
 
-		a.reloadConfig()
+		a.reloadIfChanged()
 	}
 }
 
@@ -55,6 +60,149 @@ func (a *App) applyLogOverlay(controlPath string) {
 	applyLogTaps(cfg, controlPath)
 }
 
+type reloadSum struct {
+	config, providers [sha256.Size]byte
+}
+
+type reloadMemory struct {
+	mu sync.Mutex
+
+	seen    reloadSum
+	applied bool
+
+	refusals  int
+	named     LLMConfig
+	refusedAt time.Time
+	retryAt   time.Time
+
+	saved bool
+
+	roots []string
+
+	now func() time.Time
+}
+
+func (m *reloadMemory) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+func (m *reloadMemory) due(sum reloadSum, asked bool, began time.Time) (run, changed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen != sum {
+		m.seen, m.applied = sum, false
+		return true, true
+	}
+	if asked || !m.applied {
+		return true, false
+	}
+	return m.refusals > 0 && !began.Before(m.retryAt), false
+}
+
+func (m *reloadMemory) standing() (named LLMConfig, refusals int, since time.Time, saved bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.named, m.refusals, m.refusedAt, m.saved
+}
+
+func (m *reloadMemory) waiting(began time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.refusals > 0 && began.Before(m.retryAt)
+}
+
+func (m *reloadMemory) refused(named LLMConfig, began time.Time, beat, ceiling time.Duration) (first bool, next time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.clock()
+	if m.refusals == 0 {
+		m.named, m.refusedAt, m.saved = named, now, false
+	}
+	m.refusals++
+	end := began.Add(refusedRetryWait(m.refusals, beat, ceiling))
+	m.retryAt = end.Add(-beat / 2)
+	return m.refusals == 1, max(end.Sub(now), 0).Round(time.Second)
+}
+
+func (m *reloadMemory) ownSave() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saved = m.refusals > 0
+}
+
+func (m *reloadMemory) soon() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.retryAt = time.Time{}
+}
+
+func (m *reloadMemory) end() (refusals int, since time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	refusals, since = m.refusals, m.refusedAt
+	m.refusals, m.saved = 0, false
+	return refusals, since
+}
+
+func (m *reloadMemory) settle(sum reloadSum) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen == sum {
+		m.applied = true
+	}
+}
+
+func (m *reloadMemory) spelled(named, held []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roots = nil
+	if !slices.Equal(named, held) {
+		m.roots = slices.Clone(named)
+	}
+}
+
+func (m *reloadMemory) rootsSpelled() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.roots
+}
+
+const (
+	refusedRetryMaxDefaultSeconds = 3600
+	refusedRetryMaxMinSeconds     = int(fsdir.DefaultHeartbeat / time.Second)
+	refusedRetryMaxMaxSeconds     = 86400
+)
+
+func validRefusedRetryMax(seconds int) error {
+	if seconds != 0 && (seconds < refusedRetryMaxMinSeconds || seconds > refusedRetryMaxMaxSeconds) {
+		return fmt.Errorf("llm.refused_retry_max_seconds must be zero (take the default, %d) or between %d and %d", refusedRetryMaxDefaultSeconds, refusedRetryMaxMinSeconds, refusedRetryMaxMaxSeconds)
+	}
+	return nil
+}
+
+func (l LLMConfig) refusedRetryMax() time.Duration {
+	if l.RefusedRetryMaxSeconds <= 0 {
+		return refusedRetryMaxDefaultSeconds * time.Second
+	}
+	return time.Duration(l.RefusedRetryMaxSeconds) * time.Second
+}
+
+func llmRuntimeChanged(fresh, current LLMConfig) bool {
+	fresh.RefusedRetryMaxSeconds, current.RefusedRetryMaxSeconds = 0, 0
+	return fresh != current
+}
+
+func refusedRetryWait(refusals int, beat, ceiling time.Duration) time.Duration {
+	wait := beat
+	for i := 1; i < refusals && wait < ceiling; i++ {
+		wait *= 2
+	}
+	return min(wait, ceiling)
+}
+
 func (a *App) watcherInterval() time.Duration {
 
 	if a.watchEvery > 0 {
@@ -63,14 +211,67 @@ func (a *App) watcherInterval() time.Duration {
 	return fsdir.DefaultHeartbeat
 }
 
-func (a *App) reloadConfig() {
+func (a *App) reloadConfig() { a.reload(true) }
+
+func (a *App) reloadIfChanged() { a.reload(false) }
+
+func (a *App) followFilesystem(cfg Config) {
+	if a.toolReg == nil {
+		return
+	}
+	placesMoved, rootsMoved := a.applySubstrate(cfg), false
+	if named := a.reloads.rootsSpelled(); named != nil {
+
+		a.cfgMu.Lock()
+		if slices.Equal(a.cfg.Tools.ExtraRoots, cfg.Tools.ExtraRoots) && a.toolReg.ExtraRootsMoved(named) {
+			a.toolReg.SetExtraRoots(named)
+			_, a.cfg.Tools.ExtraRoots = a.toolReg.Roots()
+			logsink.Info("config.decision", "sandbox roots applied live -> %v (floor updated)", a.cfg.Tools.ExtraRoots)
+			rootsMoved = true
+		}
+		a.cfgMu.Unlock()
+	}
+	if placesMoved || rootsMoved {
+		a.loadRing5()
+	}
+	if rootsMoved && a.dashboard != nil {
+		a.dashboard.BroadcastConfig()
+	}
+}
+
+func (a *App) reload(asked bool) {
 	current := a.configSnapshot()
 	if current.SourcePath == "" || !a.live.Load() {
 		return
 	}
-	fresh, err := ReadConfig(current.SourcePath)
+	began := a.reloads.clock()
+
+	data, err := readConfigBytes(current.SourcePath)
 	if err != nil {
 		logsink.Warn("config.error", "unreadable, keeping current: %v", err)
+		return
+	}
+	sum := reloadSum{config: sha256.Sum256(data)}
+	var providerPath string
+	var providerData []byte
+	var providerErr error
+	if a.llmSwap != nil {
+		providerPath = a.providersPath()
+		if providerData, providerErr = readProvidersBytes(providerPath); providerErr == nil {
+			sum.providers = sha256.Sum256(providerData)
+		}
+	}
+	run, changed := a.reloads.due(sum, asked, began)
+	if !run {
+		a.followFilesystem(current)
+		return
+	}
+	fresh, err := decodeConfig(current.SourcePath, data)
+	if err != nil {
+		logsink.Warn("config.error", "unreadable, keeping current: %v", err)
+
+		a.reloads.end()
+		a.reloads.settle(sum)
 		return
 	}
 	loaded := *fresh
@@ -79,21 +280,43 @@ func (a *App) reloadConfig() {
 		*fresh = current
 	}
 
-	llmChanged := fresh.LLM != current.LLM
+	if named, refusals, since, saved := a.reloads.standing(); refusals > 0 && !sameLLM(fresh.LLM, named) {
+		a.reloads.end()
+		if sameLLM(fresh.LLM, current.LLM) {
+			by := "config.json states the running one again"
+			if saved {
+				by = "a save of this host's own configuration wrote the running one over it, as every such save writes the whole running configuration"
+			}
+			logsink.Warn("config.refusal", "the llm section this host refused (provider %q, model %q; refused %d time(s) since %s) is not tried any more: %s. State it in config.json again to have it tried",
+				named.Provider, named.Model, refusals, since.Format("2006/01/02 15:04:05"), by)
+		}
+	}
+
+	waiting := !changed && !asked && a.reloads.waiting(began)
+
+	llmChanged := llmRuntimeChanged(fresh.LLM, current.LLM) || !reflect.DeepEqual(fresh.Overrides, current.Overrides)
 	substrateChanged := fresh.LLM.Provider != current.LLM.Provider ||
 		fresh.LLM.Model != current.LLM.Model ||
 		fresh.LLM.APIKeyEnv != current.LLM.APIKeyEnv
 	var client *llm.Client
 	var entry providerEntry
 	var providers *providerRegistry
-	var providerPath string
 
 	var measured substrateCapability
 	probed := false
-	if a.llmSwap != nil {
-		providerPath = a.providersPath()
-		providers, err = loadProvidersFile(providerPath)
+
+	retryCeiling := fresh.LLM.refusedRetryMax()
+	llmRefused := false
+	if a.llmSwap != nil && waiting {
+		llmChanged, llmRefused = false, true
+		fresh.LLM = current.LLM
+	} else if a.llmSwap != nil {
+		err = providerErr
 		if err == nil {
+			providers, err = decodeProviders(providerPath, providerData)
+		}
+		if err == nil {
+			sayUnusedOverrides(fresh.Overrides, providers)
 			a.cfgMu.RLock()
 			providerChanged := !a.providerRuntimeMatches(providers)
 			a.cfgMu.RUnlock()
@@ -101,9 +324,9 @@ func (a *App) reloadConfig() {
 		}
 		if err == nil && llmChanged {
 			var cc llm.ClientConfig
-			cc, entry, err = a.resolveLLMConfig(fresh.LLM, providers)
+			cc, entry, err = a.resolveLLMConfig(*fresh, providers)
 			if err == nil {
-				candidateBudget, _ := promptBudgetFor(entry, current.Prompt.MaxTokens)
+				candidateBudget, _ := promptBudgetFor(entry, promptCeilingFor(*fresh, entry, cc.Model))
 				client = a.newLLMClient(cc, candidateBudget)
 				if substrateChanged {
 					measured, err = a.probeSubstrate(client, cc, entry, providers, fresh.LLM.ProbeTimeoutSeconds)
@@ -112,9 +335,19 @@ func (a *App) reloadConfig() {
 			}
 		}
 		if err != nil {
+			named := fresh.LLM
 			llmChanged = false
 			fresh.LLM = current.LLM
-			logsink.Warn("config.refusal", "llm refused, current substrate kept: %v", err)
+			llmRefused = true
+
+			first, next := a.reloads.refused(named, began, a.watcherInterval(), retryCeiling)
+			if first || asked {
+				over := ""
+				if !sameLLM(named, current.LLM) {
+					over = " A save of this host's own configuration (a setting changed on the page, by voice or by a plugin) writes the running llm section over it in config.json; that ends the tries, and is said here when it happens."
+				}
+				logsink.Warn("config.refusal", "llm refused, current substrate kept: %v. It is tried again with no edit for as long as the files state it: next in about %s, each wait twice the last, up to one try every %s (llm.refused_retry_max_seconds).%s", err, next, retryCeiling, over)
+			}
 		}
 	}
 
@@ -150,11 +383,13 @@ func (a *App) reloadConfig() {
 	}
 
 	if llmChanged && holdTurn {
-		a.activateLLMRuntime(client, entry, current.Prompt.MaxTokens)
+		a.activateLLMRuntime(client, entry, current)
 		if probed {
 			a.setSubstrateCapability(measured)
 		}
 	}
+	tokenRefused := false
+	rootsNamed := fresh.Tools.ExtraRoots
 	rootsChanged := !reflect.DeepEqual(fresh.Tools.ExtraRoots, current.Tools.ExtraRoots)
 	sandboxSwitched := fresh.Tools.SandboxOff != current.Tools.SandboxOff
 	if (rootsChanged || sandboxSwitched) && a.toolReg != nil {
@@ -177,6 +412,7 @@ func (a *App) reloadConfig() {
 
 			fresh.Dashboard.RequireToken = current.Dashboard.RequireToken
 			fresh.Dashboard.AccessToken = current.Dashboard.AccessToken
+			tokenRefused = true
 		}
 
 		if a.toolReg != nil && a.toolReg.SandboxOff() && !a.accessTokenInForce() {
@@ -202,7 +438,8 @@ func (a *App) reloadConfig() {
 	catalogChanged := fresh.Plugins.CatalogURL != current.Plugins.CatalogURL
 	maintenanceChanged := !reflect.DeepEqual(fresh.Maintenance, current.Maintenance) ||
 		fresh.Identity.DBOptimizeLevels != current.Identity.DBOptimizeLevels ||
-		fresh.Identity.DBLearnDictionary != current.Identity.DBLearnDictionary
+		fresh.Identity.DBLearnDictionary != current.Identity.DBLearnDictionary ||
+		fresh.Plugins.Runtime.ReplacedMemoryDays != current.Plugins.Runtime.ReplacedMemoryDays
 
 	routeChanged := fresh.Certificate.RouteMode != current.Certificate.RouteMode ||
 		fresh.Certificate.RelayEndpoint != current.Certificate.RelayEndpoint ||
@@ -233,9 +470,12 @@ func (a *App) reloadConfig() {
 
 		if err := pluginLimits(&pluginhost.Options{}, *fresh); err != nil {
 			logsink.Warn("config.refusal", "plugin limits refused, current kept: %v", err)
-			slow := fresh.Plugins.Runtime.SlowStorageCallMs
+
+			was := fresh.Plugins.Runtime
 			fresh.Plugins.Runtime, fresh.Plugins.Resources = current.Plugins.Runtime, current.Plugins.Resources
-			fresh.Plugins.Runtime.SlowStorageCallMs = slow
+			fresh.Plugins.Runtime.SlowStorageCallMs = was.SlowStorageCallMs
+			fresh.Plugins.Runtime.MaxMemories, fresh.Plugins.Runtime.ReplacedMemoryDays = was.MaxMemories, was.ReplacedMemoryDays
+			fresh.Plugins.Runtime.MaxInflightReceipts = was.MaxInflightReceipts
 			limitsChanged = false
 		}
 	}
@@ -268,7 +508,7 @@ func (a *App) reloadConfig() {
 		a.store.SetOperatorVoices(fresh.Speech.OperatorSpeakers)
 	}
 
-	a.applyAgency(fresh.Agency)
+	a.applyAgency(*fresh)
 	rhythmChanged := fresh.Agency.RhythmSeconds != current.Agency.RhythmSeconds && a.timeFac != nil
 	if rhythmChanged {
 		if err := a.armRhythm(fresh.Agency.RhythmSeconds); err != nil {
@@ -292,8 +532,27 @@ func (a *App) reloadConfig() {
 		a.releaseTurn()
 	}
 
+	refusals, since := 0, time.Time{}
+	if !llmRefused {
+		refusals, since = a.reloads.end()
+	}
+	if !tokenRefused {
+		a.reloads.settle(sum)
+		if a.toolReg != nil {
+			_, held := a.toolReg.Roots()
+			a.reloads.spelled(rootsNamed, held)
+		}
+	}
+
 	if llmChanged {
-		logsink.Info("config.decision", "llm applied live (provider %q, model %q)", fresh.LLM.Provider, fresh.LLM.Model)
+		if refusals > 0 {
+			logsink.Info("config.decision", "llm applied live (provider %q, model %q): it answers now, after %d refused tries since %s", fresh.LLM.Provider, fresh.LLM.Model, refusals, since.Format("2006/01/02 15:04:05"))
+		} else {
+			logsink.Info("config.decision", "llm applied live (provider %q, model %q)", fresh.LLM.Provider, fresh.LLM.Model)
+		}
+	} else if refusals > 0 {
+
+		logsink.Info("config.decision", "llm no longer refused: the files resolve to the running substrate again (provider %q, model %q), after %d refused tries since %s", fresh.LLM.Provider, fresh.LLM.Model, refusals, since.Format("2006/01/02 15:04:05"))
 	}
 	if rootsChanged {
 		logsink.Info("config.decision", "sandbox roots applied live -> %v (floor updated)", fresh.Tools.ExtraRoots)
@@ -343,10 +602,10 @@ func (a *App) reloadConfig() {
 		if !agencyOn(ag.SpawnQueue) {
 			queue = "off"
 		}
-		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d (queue %s), mints %d, wall %ds, local wall %ds; a child %d rounds, %d calls, %d legs; a turn %d rounds, %d tokens, its checkpoint at %d calls undeclared or %d times a declared estimate, with %d rounds after, %d continuations in a row",
+		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d (queue %s), mints %d, wall %ds, local wall %ds; a child %s rounds, %s calls, %s legs; a turn %s rounds, %s tokens, its checkpoint at %s calls undeclared or %d times a declared estimate, with %d rounds after, %s continuations in a row",
 			ag.MaxSubagentDepth, ag.MaxParallelSubagents, queue, ag.SubagentMaxMints, ag.SubagentWallSeconds,
 			ag.SubagentWallSecondsLocal, ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs, ag.MaxToolRounds, ag.TurnTokenBudget,
-			checkpointCallsSetting.value(*fresh), slackSetting.value(*fresh), graceRoundsSetting.value(*fresh), continuationsSetting.value(*fresh))
+			checkpointCallsSetting.value(*fresh), slackSetting.n(*fresh), graceRoundsSetting.n(*fresh), continuationsSetting.value(*fresh))
 	}
 	if rhythmChanged {
 		logsink.Info("config.decision", "metabolism rhythm re-armed live -> every %ds from now", fresh.Agency.RhythmSeconds)
@@ -375,13 +634,13 @@ func cognitionMoved(before, after Config) bool {
 	return before.Cognition != after.Cognition || before.Timezone != after.Timezone
 }
 
-func (a *App) applyAgency(ag AgencyConfig) {
+func (a *App) applyAgency(cfg Config) {
+	ag := cfg.Agency
 	queue := agencyOn(ag.SpawnQueue)
 	if a.engine != nil {
+
 		a.engine.SetAgencyLimits(ag.MaxSubagentDepth, ag.MaxParallelSubagents, ag.SubagentMaxMints, ag.SubagentWallSeconds)
-		a.engine.SetLocalSpawnWall(ag.SubagentWallSecondsLocal)
 		a.engine.SetSpawnQueue(queue)
-		a.engine.SetSpawnBudget(ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs)
 	}
 	if a.store != nil {
 		slots := 0
@@ -390,11 +649,11 @@ func (a *App) applyAgency(ag AgencyConfig) {
 		}
 		a.store.SetClaimLimit(identity.SubagentWorkKind, slots)
 	}
-	if a.conv != nil {
-		a.conv.SetTurnBounds(ag.MaxToolRounds, ag.TurnTokenBudget, ag.checkpoint())
-		a.conv.SetToolSchemaRefusals(ag.ToolSchemaRefusals)
-	}
+
+	a.applyResidentLimits(a.residentLimitsFor(cfg))
 }
+
+func sameLLM(a, b LLMConfig) bool { return reflect.DeepEqual(a, b) }
 
 func sameWritten(a, b Config) bool {
 	x, err := json.Marshal(a)
@@ -415,6 +674,7 @@ func blankLiveAppliable(c *Config) {
 
 	c.Memory.MeaningSource = ""
 	c.LLM = LLMConfig{}
+	c.Overrides = nil
 	c.Speech = SpeechConfig{}
 	c.Tools.ExtraRoots = nil
 	c.Tools.SandboxOff = false
@@ -427,7 +687,8 @@ func blankLiveAppliable(c *Config) {
 	c.Plugins.Grants = nil
 	c.Plugins.AuthProfiles = nil
 
-	c.Plugins.Runtime = PluginRuntimeConfig{SlowStorageCallMs: c.Plugins.Runtime.SlowStorageCallMs}
+	c.Plugins.Runtime = PluginRuntimeConfig{SlowStorageCallMs: c.Plugins.Runtime.SlowStorageCallMs, MaxMemories: c.Plugins.Runtime.MaxMemories,
+		MaxInflightReceipts: c.Plugins.Runtime.MaxInflightReceipts}
 	c.Plugins.Resources = nil
 	c.Maintenance = continuity.MaintenanceConfig{}
 	c.Identity.DBOptimizeLevels = false
@@ -461,7 +722,9 @@ func blankLiveAppliable(c *Config) {
 
 	c.Timezone = ""
 	for _, s := range cognitionSettings {
-		s.set(c, 0)
+		if s.card == "" {
+			s.set(c, limits.Ceiling{})
+		}
 	}
 	c.Cognition = CognitionConfig{}
 	c.Dashboard.AccessToken = ""

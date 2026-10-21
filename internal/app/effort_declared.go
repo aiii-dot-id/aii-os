@@ -54,7 +54,7 @@ func (a *App) setActiveEffort(level string) error {
 	if err != nil {
 		return err
 	}
-	cc, entry, err := a.resolveLLMConfig(a.configSnapshot().LLM, reg)
+	cc, entry, err := a.resolveLLMConfig(a.configSnapshot(), reg)
 	if err != nil {
 		return err
 	}

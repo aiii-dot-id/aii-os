@@ -15,6 +15,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/coder/websocket"
 )
@@ -163,7 +164,7 @@ func TestRequestOptionsLiveCase(t *testing.T) {
 	zero := 0.0
 	client := llm.New(&llm.ClientConfig{Endpoint: endpoint, APIKey: os.Getenv("AII_REQUEST_CONTRACT_PROXY_KEY"), Model: os.Getenv("AII_REQUEST_CONTRACT_MODEL"), ReasoningEffort: effort, MaxOutputTokens: 2048, MaxInputTokens: 60000, Temperature: &zero, TimeoutSeconds: 240, NoStream: task.NoStream, Retries: -1, Extra: extra})
 	a.llmSwap.Swap(client)
-	a.conv = conversation.New(a.llmSwap, ex, appToolDefiner{a}, appTranscript{st: a.store, safe: a.safeTools}, appEmitter{a: a}, conversation.Config{MaxIterations: 8, MaxToolCalls: 8, ContextBudgetTokens: 60000, MaxToolResultChars: 32000, TurnTokenBudget: 400000, ReplaySafe: func(c llm.ToolCall) bool { return c.Function.Name == "read" || c.Function.Name == "grep" }})
+	a.conv = conversation.New(a.llmSwap, ex, appToolDefiner{a}, appTranscript{st: a.store, safe: a.safeTools}, appEmitter{a: a}, testLoop(conversation.Config{MaxIterations: limits.Of(8), MaxToolCalls: limits.Of(8), ContextBudgetTokens: 60000, MaxToolResultChars: 32000, TurnTokenBudget: limits.Of(400000), ReplaySafe: func(c llm.ToolCall) bool { return c.Function.Name == "read" || c.Function.Name == "grep" }}))
 	a.composer.SetMaxTokens(60000)
 	a.promptGate.SetMaxTokens(60000)
 	h := &dashboard.WSHandler{Speaker: "identity"}

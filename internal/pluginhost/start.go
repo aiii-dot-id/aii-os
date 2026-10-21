@@ -65,7 +65,11 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 		declared = append(declared, descriptorFile(decl))
 	}
 	held := walkMembers(pkgPath, res, nil, declared...)
-	descs, derr := loadDescriptors(pkgPath, res, held, m)
+	schemaBound := 0
+	if opts != nil {
+		schemaBound = opts.MaxInputSchemaBytes
+	}
+	descs, derr := loadDescriptors(pkgPath, res, held, m, schemaBound)
 	if derr != nil {
 		return nil, derr
 	}
@@ -126,6 +130,7 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 		Interfaces: interfaceNames(m.Interfaces), Capabilities: append([]string(nil), envelope...),
 		Runtime: variant.ExecutionRuntime, PackageHash: m.PackageHash,
 		reg: reg, binding: binding, envelope: envelope, validation: validation,
+		schemaBound: schemaBound,
 	}
 	if binding != nil {
 		binding.SetPublisher(ap)
@@ -188,7 +193,7 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 			description := fmt.Sprintf("Operation %q of interface %s@%d, plugin %s (brokered: every external effect is a per-invocation capability decision; ungranted plugins are pure compute).",
 				method, decl.ID, decl.Version, m.ID)
 			if desc != nil && desc.summary != "" {
-				description = desc.summary + " — " + description
+				description = tools.AuthorLine(m.ID, desc.summary, name) + " — " + description
 			}
 			t := ap.newOperationTool(name, method, description, desc,
 				desc.discovery(m.ID, m.Version, ap.Tier.String(), method))

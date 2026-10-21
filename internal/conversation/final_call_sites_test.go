@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -37,12 +38,12 @@ func closingSites() []closingSite {
 		Name: "bash", Description: strings.Repeat("d", 900), Parameters: map[string]any{"type": "object"}}}}}
 	return []closingSite{
 		{name: "token fence", label: "LLM final call under budget pressure: ", circ: "under budget pressure",
-			system: "system", defs: oneDefs{}, cfg: Config{MaxIterations: 10, TurnTokenBudget: 500_000}, first: fenced, rounds: 2},
+			system: "system", defs: oneDefs{}, cfg: testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(500_000)}), first: fenced, rounds: 2},
 		{name: "context wall", label: "LLM final call under context pressure: ", circ: "under context pressure",
-			system: strings.Repeat("s", 670-len(showNote)) + systemAdditions(), defs: wide, cfg: Config{ContextBudgetTokens: 1000, MaxIterations: 6},
+			system: strings.Repeat("s", 670-len(showNote)) + systemAdditions(), defs: wide, cfg: testBounds(Config{ContextBudgetTokens: 1000, MaxIterations: limits.Of(6)}),
 			first: resp("looking", toolCall("a", "bash", `{}`)), rounds: 2},
 		{name: "round limit", label: "LLM final call: ", circ: "at the round limit",
-			system: "system", defs: oneDefs{}, cfg: Config{MaxIterations: 1}, first: resp("looking", toolCall("a", "bash", `{}`)), rounds: 1},
+			system: "system", defs: oneDefs{}, cfg: testBounds(Config{MaxIterations: limits.Of(1)}), first: resp("looking", toolCall("a", "bash", `{}`)), rounds: 1},
 	}
 }
 
@@ -201,7 +202,7 @@ func TestAtTheRoundLimitTheFitFailsBeforeTheStopIsAsked(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	client := &captureLLM{script: []llm.Response{resp("", toolCall("1", "work", `{}`)), textResp("closing")}}
-	loop := New(client, &stopper{stop: func() { cancel(StoppedByOperator) }}, oneDefs{}, nil, nil, Config{MaxIterations: 1, ContextBudgetTokens: 2000})
+	loop := New(client, &stopper{stop: func() { cancel(StoppedByOperator) }}, oneDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1), ContextBudgetTokens: 2000}))
 	loop.SetSteering(hugeSteer())
 	res, err := loop.Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 	var limit *llm.ContextLimitError
@@ -220,7 +221,7 @@ func TestAtTheRoundLimitTheFitFailsBeforeTheStopIsAsked(t *testing.T) {
 // the loop's closing ask after them.
 func TestTheBoundaryCarriesTheOperatorBeforeTheLoop(t *testing.T) {
 	client := &scriptLLM{script: []llm.Response{resp("", toolCall("c1", "note", `{}`)), textResp("wrapped up")}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{MaxIterations: 1})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1)}))
 	loop.SetSteering(&scriptSteering{words: []string{"answer with what you have"}})
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
@@ -237,7 +238,7 @@ func TestTheBoundaryCarriesTheOperatorBeforeTheLoop(t *testing.T) {
 func TestAYieldOnTheLastRoundIsAYield(t *testing.T) {
 	client := &captureLLM{script: []llm.Response{resp("", toolCall("c1", "work", `{}`)), textResp("standing by")}}
 	tools := &answerTools{fakeTools: fakeTools{results: map[string]string{"work": "yielding"}}, answer: "X holds"}
-	res, err := New(client, tools, &fakeDefs{}, nil, nil, Config{MaxIterations: 1}).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	res, err := New(client, tools, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1)})).Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
 	}

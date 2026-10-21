@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -40,7 +41,7 @@ func TestAQueuedParallelReadIsNotRunAfterAStop(t *testing.T) {
 		textResp("done"),
 	}}
 	tr := &fakeTranscript{}
-	loop := New(client, tools, &fakeDefs{}, tr, nil, Config{MaxIterations: 8})
+	loop := New(client, tools, &fakeDefs{}, tr, nil, testBounds(Config{MaxIterations: limits.Of(8)}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type outcome struct {
@@ -118,7 +119,7 @@ func TestTheLastRoundBeginsNoClosingCallAfterAStop(t *testing.T) {
 				tools.stop = cancel
 			}
 			client := &captureLLM{script: []llm.Response{resp("", toolCall("1", "work", `{}`)), textResp("closing")}}
-			loop := New(client, tools, &fakeDefs{}, &fakeTranscript{}, nil, Config{MaxIterations: c.rounds})
+			loop := New(client, tools, &fakeDefs{}, &fakeTranscript{}, nil, testBounds(Config{MaxIterations: limits.Of(c.rounds)}))
 			res, err := loop.Run(ctx, "system", []llm.Message{{Role: "user", Content: "go"}})
 			if c.stop && !errors.Is(err, context.Canceled) {
 				t.Fatalf("a stopped turn ends cancelled, got %v", err)

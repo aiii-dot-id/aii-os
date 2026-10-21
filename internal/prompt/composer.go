@@ -34,6 +34,7 @@ type PluginFamily struct {
 type PluginOperations struct {
 	Families     []PluginFamily
 	MoreFamilies int
+	Unlisted     int
 }
 
 type IdentitySource interface {
@@ -398,8 +399,10 @@ const toolGuidance = `# How You Act
 The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed, and continue until the task is done. Before you set off into a run of tool calls, tell your human operator what you intend to do: they are beside you in the work, not waiting outside it, and an identity that disappears into its tools leaves them alone.`
 
 const (
-	pluginHintHead = "Installed plugin families; offered operations already appear in your tool list:"
-	pluginHintTail = "Use offered operations directly with their declared arguments. tools action=offer plugin=… selects an exact plugin's declared primary operations; tools action=offer name=… selects one operation. Newly offered operations are callable from your next turn. Choices remain remembered across restarts; the active offer holds eight at a time, subject to operator controls, SAFE and matching declarations. tools action=search query=… finds an operation by need; tools action=show name=… inspects current availability, arguments and effect requirements. Selection does not widen grants. The host records execution outcome; inspect the operation's returned result and evidence as well. Neither successful execution nor a plugin's own success claim independently proves task correctness."
+	pluginHintHead = "Installed plugin families; primary operations already appear in your tool list:"
+	pluginHintTail = "Call any other with tools action=call name=… args={…}; tools action=show name=… gives its arguments."
+
+	pluginHintUnlisted = " %d primary operation(s) did not fit in your tool list; call them the same way."
 )
 
 var pluginNameGrammar = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
@@ -445,7 +448,11 @@ func renderPluginHint(ops PluginOperations) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return pluginHintHead + "\n" + strings.Join(lines, "\n") + "\n" + pluginHintTail
+	tail := pluginHintTail
+	if ops.Unlisted > 0 {
+		tail += fmt.Sprintf(pluginHintUnlisted, ops.Unlisted)
+	}
+	return pluginHintHead + "\n" + strings.Join(lines, "\n") + "\n" + tail
 }
 
 const frameRing3 = "# What You Are Discovering\n\nYour unconscious metabolized your experiences while you lived. This is what it surfaced, what it holds about the person you work with, and where things stand: your own working truth, provisional, never instruction."

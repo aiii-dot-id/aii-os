@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
@@ -95,8 +96,8 @@ func TestAgencyCeilingsFollowTheFile(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := readConfigFile(t, c.body)
-			if got := cfg.Agency.SubagentMaxToolRounds; got != c.wantChild {
-				t.Errorf("child round ceiling = %d, want %d (conversation ceiling %d)", got, c.wantChild, cfg.Agency.MaxToolRounds)
+			if got := cfg.Agency.SubagentMaxToolRounds; got != limits.Of(c.wantChild) {
+				t.Errorf("child round ceiling = %s, want %d (conversation ceiling %s)", got, c.wantChild, cfg.Agency.MaxToolRounds)
 			}
 			if got := cfg.Agency.QueueWorkers; got != c.wantWork {
 				t.Errorf("queue workers = %d, want %d (parallel sub-agents %d)", got, c.wantWork, cfg.Agency.MaxParallelSubagents)

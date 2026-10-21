@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestCachePressureWarningPreservesSystemPrefix(t *testing.T) {
 		t.Fatal("fixture is not under pressure")
 	}
 	c := &scriptLLM{script: []llm.Response{iterateThinkingResponse("c1"), iterateThinkingResponse("c2"), textResp("done")}}
-	l := New(c, &fakeTools{results: map[string]string{"read": "ok"}}, defs, nil, nil, Config{MaxIterations: 10, ContextBudgetTokens: budget})
+	l := New(c, &fakeTools{results: map[string]string{"read": "ok"}}, defs, nil, nil, testBounds(Config{MaxIterations: limits.Of(10), ContextBudgetTokens: budget}))
 	if _, err := l.RunSystem(context.Background(), system, []llm.Message{current}, 0); err != nil {
 		t.Fatal(err)
 	}

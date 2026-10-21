@@ -333,6 +333,7 @@ func (a *App) drainHeld(h *voiceHandle) {
 			}
 		} else {
 			a.withhold(h, seq, f.reason, f.revision)
+			f.heard.trace.end("withheld by the speaker policy, no reply")
 		}
 
 		if f.observation != nil && !safe {
@@ -352,6 +353,7 @@ func (a *App) drainHeld(h *voiceHandle) {
 }
 
 func (a *App) admitHeldInOrder(h *voiceHandle, f *heldFinal) {
+	f.heard.trace.stamp(stageReleased)
 	if f.heard.words == nil {
 
 		f.heard.words = a.deliverSpoken(f.heard, h.work.Done)
@@ -369,6 +371,7 @@ func (a *App) admitHeldInOrder(h *voiceHandle, f *heldFinal) {
 		f.heard.admitted = func() { once.Do(func() { close(next) }) }
 		defer f.heard.admitted()
 		if previous != nil && !a.awaitWordsAhead(h, f.heard, previous) {
+			f.heard.trace.end("not recorded: the identity is stopping and the session is over")
 			return
 		}
 		if reason, safe := a.SafeMode(); safe {
@@ -376,6 +379,7 @@ func (a *App) admitHeldInOrder(h *voiceHandle, f *heldFinal) {
 			a.voiceSafeDropped.Add(1)
 			logsink.Warn("voice.refusal", "SAFE holds (%s): final %d on %s, delivered before SAFE began, is heard by no record", reason, f.heard.Sequence, h.id)
 			a.noteReplyOutcome(h.id, "withheld under SAFE, no reply")
+			f.heard.trace.end("withheld under SAFE, no reply")
 			if f.heard.Sequence != 0 {
 				a.speakerPending.Delete(voiceRefKey(h.id, f.heard.Sequence))
 			}
@@ -411,6 +415,7 @@ func (a *App) withholdHeld(h *voiceHandle, why string) {
 		f.timer.Stop()
 		a.retainHeard(h.id, seq, f.heard.Text, f.ve, "withheld", why, f.observation)
 		a.withhold(h, seq, why, revision)
+		f.heard.trace.end("withheld: " + why)
 		h.work.Done()
 	}
 }

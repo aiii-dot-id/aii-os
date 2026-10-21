@@ -13,6 +13,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 )
 
+var errArchiveDamaged = errors.New("the runtime archive is not the declared bytes")
+
 func extractRuntimeArchive(ctx context.Context, r io.Reader, d *RuntimeDecl, limits packagefmt.TreeLimits, dest string) (*packagefmt.TreeReport, bool, error) {
 	limits = runtimeLimits(*d, limits)
 	input := &runtimeInput{Reader: acquisitionReader{ctx, r}}
@@ -25,8 +27,12 @@ func extractRuntimeArchive(ctx context.Context, r io.Reader, d *RuntimeDecl, lim
 		_, readErr := io.Copy(io.Discard, stream)
 		var extra [1]byte
 		n, endErr := input.Read(extra[:])
-		verified = limited.N == 0 && readErr == nil && n == 0 && endErr == io.EOF && input.fault == nil && hex.EncodeToString(digest.Sum(nil)) == d.SHA256
+		whole := limited.N == 0 && readErr == nil && n == 0 && endErr == io.EOF && input.fault == nil
+		verified = whole && hex.EncodeToString(digest.Sum(nil)) == d.SHA256
 		err = errors.Join(err, readErr, input.fault)
+		if whole && !verified {
+			err = errors.Join(err, errArchiveDamaged)
+		}
 	}
 	if err == nil && !verified {
 		err = errors.New("runtime archive bytes changed during extraction or exceed the compressed-size ceiling")

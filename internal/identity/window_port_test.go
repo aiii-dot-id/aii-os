@@ -22,7 +22,7 @@ func TestTheEnginesFacilityIsGivenTheProvidersWindow(t *testing.T) {
 	if _, err := e.Instruments().Backfill(context.Background(), 100); err != nil {
 		t.Fatal(err)
 	}
-	_, cov, unavailable, err := e.Instruments().VectorCoverage(context.Background())
+	_, cov, unavailable, err := e.Instruments().HeldCoverage(context.Background())
 	if err != nil || unavailable != "" {
 		t.Fatalf("coverage: %v %q", err, unavailable)
 	}

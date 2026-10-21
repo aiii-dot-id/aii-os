@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
@@ -64,7 +65,7 @@ func TestTheRetiredCoachingKeysDoNotStopTheBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a retired coaching key must not stop the boot: %v", err)
 	}
-	if cfg.Agency.MaxToolRounds != 31 || cfg.Agency.YieldAnswer == nil || *cfg.Agency.YieldAnswer {
+	if cfg.Agency.MaxToolRounds != limits.Of(31) || cfg.Agency.YieldAnswer == nil || *cfg.Agency.YieldAnswer {
 		t.Fatalf("every other agency value loads as written: %+v", cfg.Agency)
 	}
 	if n := strings.Count(logs.String(), "retired and not applied"); n != 1 {

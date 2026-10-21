@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -27,12 +27,6 @@ type ToolPlane interface {
 	Brief() ToolBrief
 	Search(query string, limit int) []ToolHit
 	Show(ref string) (ToolCard, error)
-	Offer(ref string) (string, error)
-	Release(ref string) (string, error)
-}
-
-type ToolPrimaryOffer interface {
-	OfferPrimary(plugin string) ([]string, error)
 }
 
 type ToolFamily struct {
@@ -44,11 +38,9 @@ type ToolFamily struct {
 
 type ToolBrief struct {
 	Total        int
-	Offered      int
 	Unavailable  int
 	Families     []ToolFamily
 	MoreFamilies int
-	OfferedNames []string
 }
 
 type ToolHit struct {
@@ -58,7 +50,6 @@ type ToolHit struct {
 	Summary   string
 	Effects   string
 	Primary   bool
-	State     string
 }
 
 type ToolCard struct {
@@ -74,7 +65,6 @@ type ToolCard struct {
 	MaxResultBytes int
 	Examples       []string
 	Primary        bool
-	State          string
 	Reason         string
 	Receipt        string
 	Parameters     map[string]any
@@ -116,11 +106,7 @@ type Engine struct {
 	maxSubagentMints     int
 	subagentWallSeconds  int
 
-	subagentWallSecondsLocal int
-
 	spawnQueueOff bool
-
-	spawnRounds, spawnCalls, spawnLegs int
 
 	store    storePort
 	ledger   EventWriter
@@ -135,10 +121,11 @@ type Engine struct {
 	timers       TimerSetter
 	reachable    func(name string) bool
 	askProposer  func(session, text string, choices []string, connector string) error
+	workStarted  func(ctx context.Context, session, family, description string) string
 	workState    func(context.Context) (string, error)
 	workWake     func()
 	yieldGate    func() (need bool, why string)
-	routeIsLocal func(role string) bool
+	routeLimits  func(role string) SpawnLimits
 
 	toolResultChars int
 
@@ -165,13 +152,20 @@ type Ports struct {
 
 	AskProposer func(session, text string, choices []string, connector string) error
 
+	WorkStarted func(ctx context.Context, session, family, description string) string
+
 	WorkState func(context.Context) (string, error)
 
 	WorkWake func()
 
 	YieldGate func() (need bool, why string)
 
-	RouteIsLocal func(role string) bool
+	RouteLimits func(role string) SpawnLimits
+}
+
+type SpawnLimits struct {
+	Rounds, Calls, Legs limits.Ceiling
+	WallSeconds         int
 }
 
 func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscoverer, p Ports) *Engine {
@@ -188,10 +182,11 @@ func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscovere
 		timers:       p.Timers,
 		reachable:    p.Reachable,
 		askProposer:  p.AskProposer,
+		workStarted:  p.WorkStarted,
 		workState:    p.WorkState,
 		workWake:     p.WorkWake,
 		yieldGate:    p.YieldGate,
-		routeIsLocal: p.RouteIsLocal,
+		routeLimits:  p.RouteLimits,
 
 		toolResultChars: p.ToolResultChars,
 		alarmFirings:    p.AlarmFirings,
@@ -205,7 +200,7 @@ func (e *Engine) ToolResultLimit() int {
 	if e.toolResultChars > 0 {
 		return e.toolResultChars
 	}
-	return conversation.DefaultMaxToolResultChars
+	return limits.DefaultToolResultChars
 }
 
 func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, args map[string]any) (string, error) {
@@ -233,27 +228,15 @@ func (e *Engine) SetSpawnQueue(on bool) {
 	e.spawnQueueOff = !on
 }
 
-func (e *Engine) SetSpawnBudget(rounds, calls, legs int) {
-	e.agencyMu.Lock()
-	defer e.agencyMu.Unlock()
-	e.spawnRounds, e.spawnCalls, e.spawnLegs = rounds, calls, legs
-}
-
-func (e *Engine) spawnBudget() (rounds, calls, legs int) {
-	e.agencyMu.RLock()
-	defer e.agencyMu.RUnlock()
-	return e.spawnRounds, e.spawnCalls, e.spawnLegs
-}
-
-func (e *Engine) spawnBudgetLine(wallSeconds int) string {
-	rounds, calls, legs := e.spawnBudget()
-	if rounds <= 0 && calls <= 0 {
+func spawnBudgetLine(l SpawnLimits) string {
+	rounds, calls, legs := l.Rounds, l.Calls, l.Legs
+	if rounds.IsZero() && calls.IsZero() {
 		return ""
 	}
-	if legs < 1 {
-		legs = 1
+	if !legs.Unlimited && legs.N < 1 {
+		legs = limits.Of(1)
 	}
-	return fmt.Sprintf(" Its budget: %d rounds and %d calls per leg, up to %d leg(s), %d s wall per leg — size the deliverable to that; a leg that ends at its budget continues from the child's recorded next move.", rounds, calls, legs, wallSeconds)
+	return fmt.Sprintf(" Its budget: %s rounds and %s calls per leg, up to %s leg(s), %d s wall per leg — size the deliverable to that; a leg that ends at its budget continues from the child's recorded next move.", rounds, calls, legs, l.WallSeconds)
 }
 
 func (e *Engine) spawnQueueOn() bool {
@@ -271,20 +254,15 @@ func (e *Engine) SetAgencyLimits(maxDepth, maxParallel, maxMints, wallSeconds in
 	e.subagentWallSeconds = wallSeconds
 }
 
-func (e *Engine) SetLocalSpawnWall(seconds int) {
-	e.agencyMu.Lock()
-	defer e.agencyMu.Unlock()
-	e.subagentWallSecondsLocal = seconds
-}
-
-func (e *Engine) spawnWall(role string) int {
-	e.agencyMu.RLock()
-	wall, local := e.subagentWallSeconds, e.subagentWallSecondsLocal
-	e.agencyMu.RUnlock()
-	if e.routeIsLocal != nil && local > 0 && e.routeIsLocal(role) {
-		return local
+func (e *Engine) spawnLimits(role string) SpawnLimits {
+	if e.routeLimits != nil {
+		if l := e.routeLimits(role); l.WallSeconds > 0 {
+			return l
+		}
 	}
-	return wall
+	e.agencyMu.RLock()
+	defer e.agencyMu.RUnlock()
+	return SpawnLimits{WallSeconds: e.subagentWallSeconds}
 }
 
 func (e *Engine) agencyLimits() (maxDepth, maxParallel, maxMints, wallSeconds int) {

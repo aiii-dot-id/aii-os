@@ -106,10 +106,9 @@ func TestGoldFormatVectors(t *testing.T) {
 }
 
 // Rewrap: the routine pre-gold format transition (no eras, no
-// migration). A ledger whose signatures are garbage — the exact state
-// of any test ledger after a format change — rewraps into a fully
-// verifying gold chain; a ledger whose HISTORY is corrupted is refused
-// untouched.
+// migration). A ledger a boot would accept rewraps into a fully verifying
+// gold chain; a ledger whose proofs do not verify, or whose HISTORY is
+// corrupted, is refused untouched.
 func TestRewrapRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ledger.jsonl")
@@ -135,7 +134,8 @@ func TestRewrapRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate a superseded signature input: scramble every proof.
+	// Every proof broken: no boot accepts this ledger, and neither does
+	// a re-wrap. It is left as it was.
 	raw, _ := os.ReadFile(path)
 	scrambled := strings.ReplaceAll(string(raw), `"sig":"`, `"sig":"XX`)
 	if err := os.WriteFile(path, []byte(scrambled), 0600); err != nil {
@@ -143,6 +143,16 @@ func TestRewrapRoundtrip(t *testing.T) {
 	}
 	if _, err := VerifyChain(path, kp.PublicKeyBytes(), nil); err == nil {
 		t.Fatal("scrambled chain must not verify (precondition)")
+	}
+	var failure *VerifyFailure
+	if _, err := Rewrap(path, kp, "", acceptReplay); !errors.As(err, &failure) {
+		t.Fatalf("rewrap must refuse a ledger whose proofs do not verify, as the verifier's own refusal; got %v", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != scrambled {
+		t.Fatal("refused rewrap changed the ledger")
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
 	}
 
 	n, err := Rewrap(path, kp, "", acceptReplay)
@@ -281,7 +291,14 @@ func TestRewrapRefusesNoncanonicalRing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ring is in the entry, so the entry's hash moves with it: the
+	// record is signed again here, so that its ring is all that is wrong
+	// with it and the ring rule is what refuses.
 	events[1].Ring = 2
+	events[1].Sig, err = crypto.SignB64(kp, SignatureInputGold(crypto.SigAlg, kp.Fingerprint(), events[1].EntryHash()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	first, err := json.Marshal(events[0])
 	if err != nil {
 		t.Fatal(err)
@@ -342,12 +359,20 @@ func TestRewrapReadsThePriorShape(t *testing.T) {
 		t.Fatal("the prior shape must not read as the record (precondition)")
 	}
 
-	n, err := Rewrap(path, kp, "", acceptReplay)
+	prior, _ := os.ReadFile(path)
+	if _, err := Rewrap(path, kp, "", acceptReplay); !errors.Is(err, ErrPriorShapeUnchecked) {
+		t.Fatalf("a prior-shape ledger must be refused until its links and proofs are declared unchecked, got %v", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(prior) {
+		t.Fatal("refused rewrap changed the ledger")
+	}
+	unchecked := RewrapChecks{PriorShapeUnchecked: true}
+	done, err := RewrapWith(path, kp, "", acceptReplay, unchecked)
 	if err != nil {
 		t.Fatalf("rewrap of the prior shape: %v", err)
 	}
-	if n != 3 {
-		t.Fatalf("rewrapped %d events, want 3", n)
+	if done.Records != 3 || !done.PriorShape {
+		t.Fatalf("rewrapped %+v, want 3 records read in the prior shape", done)
 	}
 	if _, err := VerifyChain(path, kp.PublicKeyBytes(), nil); err != nil {
 		t.Fatalf("rewrapped chain must verify: %v", err)
@@ -371,7 +396,7 @@ func TestRewrapReadsThePriorShape(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Rewrap(path, other, "", acceptReplay); err == nil {
+	if _, err := RewrapWith(path, other, "", acceptReplay, unchecked); err == nil {
 		t.Fatal("rewrap adopted another key's prior-shape history")
 	}
 }

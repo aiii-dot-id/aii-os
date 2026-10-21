@@ -129,7 +129,7 @@ func TestTheRouteToMoreRoomIsTrueOfTheBudgetInForce(t *testing.T) {
 			r0: "R0-CONSTITUTION " + strings.Repeat("word ", 4500),
 			r3: "R3-WORKING-TRUTH " + strings.Repeat("x", 4500),
 		}, 0)
-		a.activateLLMRuntime(nil, c.entry, c.conversation)
+		a.activateLLMRuntime(nil, c.entry, Config{Prompt: PromptConfig{MaxTokens: c.conversation}})
 		if got, source := a.currentFacilityBudget(); got != budget || source != c.source {
 			t.Fatalf("%s: rig: the rhythm's budget is %d (%s); want %d (%s)", c.name, got, source, budget, c.source)
 		}

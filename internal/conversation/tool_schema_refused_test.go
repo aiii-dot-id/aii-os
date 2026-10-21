@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -150,7 +151,7 @@ func TestAToolWhoseDefinitionAProviderRefusesIsLeftOutAndTheTurnGoesOn(t *testin
 		t.Run(dialect, func(t *testing.T) {
 			p := &schemaProvider{dialect: dialect}
 			defs := &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("correct", unreadable), toolDef("write", "^[a-z]+$")}}
-			loop := schemaLoop(t, p, &fakeTools{}, defs, Config{})
+			loop := schemaLoop(t, p, &fakeTools{}, defs, testBounds(Config{}))
 			result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
 				t.Fatalf("THE TURN ENDED ON ONE TOOL'S DEFINITION: %v", err)
@@ -214,7 +215,7 @@ func TestARefusalThatNamesNoToolsDefinitionStillEndsTheTurn(t *testing.T) {
 			}
 			p := &schemaProvider{dialect: c.dialect, refuse: body}
 			defs := &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("write", "^[a-z]+$")}}
-			loop := schemaLoop(t, p, &fakeTools{}, defs, Config{})
+			loop := schemaLoop(t, p, &fakeTools{}, defs, testBounds(Config{}))
 			_, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			var refused *llm.ToolSchemaRefusedError
 			var answered *llm.HTTPError
@@ -233,12 +234,12 @@ func TestATurnLeavesOutAsManyToolsAsItMayAndThenFailsOnTheRefusal(t *testing.T) 
 		return &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("a", unreadable), toolDef("b", unreadable), toolDef("c", unreadable), toolDef("d", unreadable)}}
 	}
 	p := &schemaProvider{dialect: "openai"}
-	loop := schemaLoop(t, p, &fakeTools{}, four(), Config{})
+	loop := schemaLoop(t, p, &fakeTools{}, four(), testBounds(Config{}))
 	_, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	var refused *llm.ToolSchemaRefusedError
 	var answered *llm.HTTPError
-	if !errors.As(err, &refused) || refused.Tool != "d" || !errors.As(err, &answered) || len(p.seen()) != DefaultToolSchemaRefusals+1 {
-		t.Fatalf("WITH THE DEFAULT OF %d THE FOURTH REFUSAL ENDS THE TURN, NAMING ITS TOOL: %v after %d request(s)", DefaultToolSchemaRefusals, err, len(p.seen()))
+	if !errors.As(err, &refused) || refused.Tool != "d" || !errors.As(err, &answered) || len(p.seen()) != limits.DefaultToolSchemaRefusals+1 {
+		t.Fatalf("WITH THE DEFAULT OF %d THE FOURTH REFUSAL ENDS THE TURN, NAMING ITS TOOL: %v after %d request(s)", limits.DefaultToolSchemaRefusals, err, len(p.seen()))
 	}
 	// What the client learned in that turn it keeps: the next turn sends
 	// none of the four, and is answered at once.
@@ -251,7 +252,7 @@ func TestATurnLeavesOutAsManyToolsAsItMayAndThenFailsOnTheRefusal(t *testing.T) 
 
 	// The bound is the operator's: with four allowed, one turn does it.
 	p = &schemaProvider{dialect: "openai"}
-	loop = schemaLoop(t, p, &fakeTools{}, four(), Config{ToolSchemaRefusals: 4})
+	loop = schemaLoop(t, p, &fakeTools{}, four(), testBounds(Config{ToolSchemaRefusals: 4}))
 	if _, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil || len(p.seen()) != 5 {
 		t.Fatalf("with four allowed the turn leaves out all four and is answered: %v after %d request(s)", err, len(p.seen()))
 	}
@@ -285,7 +286,7 @@ func TestACallThatNamesAToolLeftOutIsRefusedByTheLoop(t *testing.T) {
 	p.callWhen = func(answered int) bool { return answered == 0 || answered == 2 }
 	defs := &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("correct", unreadable)}}
 	asker := &shownAsker{}
-	loop := schemaLoop(t, p, asker, defs, Config{})
+	loop := schemaLoop(t, p, asker, defs, testBounds(Config{}))
 	refusal := "Error: [" + line("correct") + "]" // the substrate's own statement, bracketed as its others are
 	if _, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
@@ -318,7 +319,7 @@ func TestACallThatNamesAToolLeftOutIsRefusedByTheLoop(t *testing.T) {
 func TestARefusalAfterARoundOfToolsIsSaidAtTheTailOfTheNewestResult(t *testing.T) {
 	p := &schemaProvider{dialect: "openai", call: "read", refuseAt: map[int]int{2: 1}}
 	defs := &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("correct", "^[a-z]+$")}}
-	loop := schemaLoop(t, p, &fakeTools{results: map[string]string{"read": "what was read"}}, defs, Config{})
+	loop := schemaLoop(t, p, &fakeTools{results: map[string]string{"read": "what was read"}}, defs, testBounds(Config{}))
 	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +339,7 @@ func TestARefusalAfterARoundOfToolsIsSaidAtTheTailOfTheNewestResult(t *testing.T
 func TestADefinitionRefusedOnTheTurnsFinalCallIsLeftOutThereToo(t *testing.T) {
 	p := &schemaProvider{dialect: "openai", call: "read", refuseAt: map[int]int{2: 1}}
 	defs := &fakeDefs{defs: []llm.ToolDefinition{toolDef("read", "^[a-z]+$"), toolDef("correct", "^[a-z]+$")}}
-	loop := schemaLoop(t, p, &fakeTools{results: map[string]string{"read": "what was read"}}, defs, Config{MaxIterations: 1})
+	loop := schemaLoop(t, p, &fakeTools{results: map[string]string{"read": "what was read"}}, defs, testBounds(Config{MaxIterations: limits.Of(1)}))
 	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	seen := p.seen()
 	if err != nil || len(seen) != 3 || !strings.Contains(seen[1].body, `"tool_choice":"none"`) || seen[1].said != http.StatusBadRequest ||

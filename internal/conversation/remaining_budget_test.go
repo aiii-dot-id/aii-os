@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -75,11 +76,11 @@ func TestRemainingBudgetCountsCallsAfterTheDeclaration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &captureLLM{script: tt.script}
 			meter := &remainingBudgetTools{}
-			loop := New(client, meter, &fakeDefs{}, nil, nil, Config{
-				MaxIterations:     60,
+			loop := New(client, meter, &fakeDefs{}, nil, nil, testBounds(Config{
+				MaxIterations:     limits.Of(60),
 				PredictedThisTurn: func() (int, int) { return meter.predicted, meter.ordinal },
-				Checkpoint:        Checkpoint{Calls: 100, Slack: 1},
-			})
+				Checkpoint:        Checkpoint{Calls: limits.Of(100), Slack: 1},
+			}))
 			result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
 				t.Fatal(err)
@@ -102,11 +103,11 @@ func TestRemainingBudgetRevisionCannotExtendAnArmedGrace(t *testing.T) {
 		textResp("checkpointed"),
 	}}
 	meter := &remainingBudgetTools{}
-	loop := New(client, meter, &fakeDefs{}, nil, nil, Config{
-		MaxIterations:     60,
+	loop := New(client, meter, &fakeDefs{}, nil, nil, testBounds(Config{
+		MaxIterations:     limits.Of(60),
 		PredictedThisTurn: func() (int, int) { return meter.predicted, meter.ordinal },
-		Checkpoint:        Checkpoint{Calls: 100, Slack: 1, GraceRounds: 1},
-	})
+		Checkpoint:        Checkpoint{Calls: limits.Of(100), Slack: 1, GraceRounds: 1},
+	}))
 	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -123,11 +124,11 @@ func TestInvalidRemainingBudgetPositionKeepsTheUndeclaredFloor(t *testing.T) {
 			resp("", toolCall("r2", "read", `{}`)),
 			textResp("checkpointed"),
 		}}
-		loop := New(client, &remainingBudgetTools{}, &fakeDefs{}, nil, nil, Config{
-			MaxIterations:     60,
+		loop := New(client, &remainingBudgetTools{}, &fakeDefs{}, nil, nil, testBounds(Config{
+			MaxIterations:     limits.Of(60),
 			PredictedThisTurn: func() (int, int) { return 100, ordinal },
-			Checkpoint:        Checkpoint{Calls: 1, GraceRounds: 1},
-		})
+			Checkpoint:        Checkpoint{Calls: limits.Of(1), GraceRounds: 1},
+		}))
 		result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 		if err != nil {
 			t.Fatal(err)
@@ -153,10 +154,10 @@ func TestRemainingBudgetDoesNotSpendEarlierCalls(t *testing.T) {
 	script = append(script, textResp("done"))
 	client := &captureLLM{script: script}
 	meter := &remainingBudgetTools{}
-	loop := New(client, meter, &fakeDefs{}, nil, nil, Config{
-		MaxIterations:     60,
+	loop := New(client, meter, &fakeDefs{}, nil, nil, testBounds(Config{
+		MaxIterations:     limits.Of(60),
 		PredictedThisTurn: func() (int, int) { return meter.predicted, meter.ordinal },
-	})
+	}))
 	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

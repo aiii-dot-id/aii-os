@@ -132,20 +132,16 @@ type Registry struct {
 	tools      map[string]Tool
 	sources    map[string]string
 	hostOnly   map[string]bool
-	offered    map[string]bool
-	offerOrder []string
-
-	standing     []StandingSeat
-	persistOffer func([]StandingSeat) error
-	told         map[string]bool
-	persistMu    sync.Mutex
-	webFetch     *WebFetchTool
-	extraRoots   []string
-	cwd          string
-	policy       *firewall.Policy
-	timeouts     Timeouts
-	sandbox      string
-	disabled     map[string]bool
+	webFetch   *WebFetchTool
+	shell      *ShellTool
+	extraRoots []string
+	cwd        string
+	policy     *firewall.Policy
+	timeouts   Timeouts
+	sandbox    string
+	afterAdmit func()
+	afterOpen  func()
+	disabled   map[string]bool
 
 	malformedCalls atomic.Uint64
 
@@ -264,17 +260,23 @@ type ToolState struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
+
+	Plugin string `json:"plugin,omitempty"`
 }
 
 func (r *Registry) ToolStates() []ToolState {
 	names := r.Names()
 	out := make([]ToolState, 0, len(names))
 	for _, name := range names {
-		t, ok := r.lookup(name)
+		t, ok, _, origin := r.lookupWithHostOnly(name)
 		if !ok {
 			continue
 		}
-		out = append(out, ToolState{Name: name, Description: t.Description(), Enabled: r.ToolEnabled(name)})
+		state := ToolState{Name: name, Description: t.Description(), Enabled: r.ToolEnabled(name)}
+		if origin != "builtin" {
+			state.Plugin = origin
+		}
+		out = append(out, state)
 	}
 	return out
 }
@@ -306,7 +308,17 @@ func (r *Registry) registerDefaults() {
 		if wf, ok := b.tool.(*WebFetchTool); ok {
 			r.webFetch = wf
 		}
+		if st, ok := b.tool.(*ShellTool); ok {
+			r.shell = st
+		}
 	}
+}
+
+func (r *Registry) EndLeftJobs(wait time.Duration) (int, error) {
+	if r.shell == nil {
+		return 0, nil
+	}
+	return r.shell.left.end(wait)
 }
 
 func AllBuiltins() []string {
@@ -366,7 +378,6 @@ func (r *Registry) register(t Tool, origin string, hostOnly bool) error {
 		}
 		r.hostOnly[t.Name()] = true
 	}
-	r.reseatLocked(t.Name())
 	return nil
 }
 
@@ -383,8 +394,6 @@ func (r *Registry) Deregister(name string) {
 	delete(r.tools, name)
 	delete(r.sources, name)
 	delete(r.hostOnly, name)
-	r.unofferLocked(name)
-	r.reconcileOfferLocked()
 }
 
 func (r *Registry) SupersedeOrigin(origin string, set []Tool, hostOnly map[string]bool) error {
@@ -415,7 +424,6 @@ func (r *Registry) SupersedeOriginIf(origin string, set []Tool, hostOnly map[str
 			delete(r.tools, name)
 			delete(r.sources, name)
 			delete(r.hostOnly, name)
-			r.unofferLocked(name)
 		}
 	}
 	for _, t := range set {
@@ -427,22 +435,32 @@ func (r *Registry) SupersedeOriginIf(origin string, set []Tool, hostOnly map[str
 				r.hostOnly = map[string]bool{}
 			}
 			r.hostOnly[name] = true
-			r.unofferLocked(name)
 		} else {
 			delete(r.hostOnly, name)
-
-			if r.offered[name] && !r.seatMatchesLocked(name) {
-				r.unofferLocked(name)
-			}
 		}
 	}
-	r.reconcileOfferLocked()
 	return nil
 }
 
 func (r *Registry) SetExtraRoots(roots []string) {
+	resolved, refused := r.readExtraRoots(roots)
+	for _, abs := range refused {
+		logsink.Warn("tools.refusal", "REFUSED grant %q — it would expose the identity's own substrate", abs)
+	}
+	r.regMu.Lock()
+	r.extraRoots = resolved
+	r.regMu.Unlock()
+}
+
+func (r *Registry) ExtraRootsMoved(roots []string) bool {
+	resolved, _ := r.readExtraRoots(roots)
+	_, held := r.Roots()
+	return !slices.Equal(resolved, held)
+}
+
+func (r *Registry) readExtraRoots(roots []string) (resolved, refused []string) {
 	sandbox, places := r.sandbox, r.policy.Places()
-	resolved := make([]string, 0, len(roots))
+	resolved = make([]string, 0, len(roots))
 	for _, root := range roots {
 		root = strings.TrimSpace(root)
 		if root == "" || !filepath.IsAbs(root) {
@@ -454,14 +472,12 @@ func (r *Registry) SetExtraRoots(roots []string) {
 		}
 
 		if rootExposesSubstrate(abs, sandbox, places) {
-			logsink.Warn("tools.refusal", "REFUSED grant %q — it would expose the identity's own substrate", abs)
+			refused = append(refused, abs)
 			continue
 		}
 		resolved = append(resolved, abs)
 	}
-	r.regMu.Lock()
-	r.extraRoots = resolved
-	r.regMu.Unlock()
+	return resolved, refused
 }
 
 func (r *Registry) RootRejectionReason(path string) string {
@@ -593,6 +609,11 @@ func (r *Registry) heldAs(ctx context.Context, tool, path string, file os.FileIn
 	if err := r.heldBy(policy, tool, file, by); err != nil {
 		return err
 	}
+	if tool != "read" {
+		if err := r.heldWhere(ctx, tool, by); err != nil {
+			return err
+		}
+	}
 	if rule := r.substrateDenied(policy, tool, path); rule != nil {
 		return &SubstrateError{Rule: r.asTold(rule)}
 	}
@@ -600,10 +621,33 @@ func (r *Registry) heldAs(ctx context.Context, tool, path string, file os.FileIn
 }
 
 func (r *Registry) heldRead(ctx context.Context, path string, file os.FileInfo, by *os.File) error {
+	if err := r.heldWhere(ctx, "read", by); err != nil {
+		return err
+	}
 	if firewall.Names(file, by) < 2 {
 		return nil
 	}
 	return r.heldAs(ctx, "read", path, file, by)
+}
+
+func (r *Registry) heldWhere(ctx context.Context, op string, by *os.File) error {
+	if by == nil {
+		return nil
+	}
+	at, err := openedAt(by)
+	if err != nil {
+		return fmt.Errorf("where the opened file lies could not be asked (%v), so it is not read or written", err)
+	}
+
+	held, err := by.Stat()
+	if err != nil {
+		return err
+	}
+	if there, err := os.Stat(at); err != nil || !os.SameFile(there, held) {
+		return fmt.Errorf("the opened file is no longer at %s, where the system says it lies, so it is not read or written", at)
+	}
+	_, _, err = r.admitOwn(r.wallOf(ctx), op, at)
+	return err
 }
 
 type undoWall struct{}
@@ -1001,6 +1045,9 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 					return Refusal(ReasonRootInside, "access denied: "+resolved+" holds "+root+", the home or a granted root, which may not be "+action+"d with it; the operator removes that grant first"), nil
 				}
 			}
+		}
+		if r.afterAdmit != nil {
+			r.afterAdmit()
 		}
 	}
 
@@ -1475,7 +1522,8 @@ func (r *Registry) expandGlobsFrom(base string, tokens []string) []string {
 
 func (r *Registry) Discover(depth int) []ToolInfo {
 	var infos []ToolInfo
-	for _, name := range r.PromptNames() {
+	builtins, _ := r.PromptNames(0)
+	for _, name := range builtins {
 		t, ok := r.lookup(name)
 		if !ok {
 			continue
@@ -1503,8 +1551,8 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-func (r *Registry) ToolDefinitions() []wire.ToolDefinition {
-	names := r.PromptNames()
+func (r *Registry) ToolDefinitions(room int) []wire.ToolDefinition {
+	names, _ := r.PromptNames(room)
 	defs := make([]wire.ToolDefinition, 0, len(names))
 	for _, name := range names {
 		t, ok := r.lookup(name)
@@ -1514,6 +1562,12 @@ func (r *Registry) ToolDefinitions() []wire.ToolDefinition {
 		params := t.Parameters()
 		if params == nil {
 			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+
+		if m, ok := t.(ModelSchemer); ok {
+			if model := m.ModelParameters(); model != nil {
+				params = model
+			}
 		}
 		defs = append(defs, wire.ToolDefinition{Type: "function", Function: wire.ToolFunction{
 			Name:        name,

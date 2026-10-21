@@ -10,6 +10,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -46,7 +47,7 @@ func TestChildMetricIncludesBudgetRefusedRequests(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 3, SubagentMaxToolRounds: 3, SubagentMaxToolCalls: 1, SubagentMaxLegs: 1, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(3), SubagentMaxToolRounds: limits.Of(3), SubagentMaxToolCalls: limits.Of(1), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5})
 	id := spawnChild(t, a, st, "synthetic bounded child")
 	waitDelivered(t, st, id)
 	var calls, emitted, complete int
@@ -101,7 +102,7 @@ func TestDeliveredChildRecoveryMarksAnUnmeasuredFinalLegIncomplete(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, calls := deliveringChild(t)
-			a, st, _ := legFixture(t, srv.URL, AgencyConfig{SubagentMaxLegs: 4})
+			a, st, _ := legFixture(t, srv.URL, AgencyConfig{SubagentMaxLegs: limits.Of(4)})
 			const id = "ws_delivered_crash"
 			if err := st.StartWorkSession(t.Context(), id, store.SubagentDescription("synthetic crash")); err != nil {
 				t.Fatal(err)

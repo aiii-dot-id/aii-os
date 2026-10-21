@@ -386,7 +386,7 @@ func TestConfigStateNamesWhereThePromptBudgetCameFrom(t *testing.T) {
 			if st := a.configState(); st.LLM.PromptBudget != 0 || st.LLM.PromptBudgetSource != "" {
 				t.Fatalf("before a client is adopted the budget must be unknown, got %d/%q", st.LLM.PromptBudget, st.LLM.PromptBudgetSource)
 			}
-			a.activateLLMRuntime(nil, tc.entry, tc.maxTokens)
+			a.activateLLMRuntime(nil, tc.entry, Config{Prompt: PromptConfig{MaxTokens: tc.maxTokens}})
 			st := a.configState()
 			if st.LLM.PromptBudget != tc.wantBudget || st.LLM.PromptBudgetSource != tc.wantSource {
 				t.Fatalf("budget = %d/%q, want %d/%q", st.LLM.PromptBudget, st.LLM.PromptBudgetSource, tc.wantBudget, tc.wantSource)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -50,7 +51,7 @@ func TestTimerWakeTurnHasBudget(t *testing.T) {
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
 		// The turn's wall, agency.alarm_wall_seconds: 2s, under the LLM's
 		// 3.5s latency.
-		Agency: AgencyConfig{MaxToolRounds: 2, SubagentWallSeconds: 5, AlarmWallSeconds: 2},
+		Agency: AgencyConfig{MaxToolRounds: limits.Of(2), SubagentWallSeconds: 5, AlarmWallSeconds: 2},
 	}
 	a := New(cfg)
 	a.store = st
@@ -62,10 +63,10 @@ func TestTimerWakeTurnHasBudget(t *testing.T) {
 	}))
 	a.engine = identity.NewEngine(st, nil, rm, toolDiscovererAdapter{reg}, identity.Ports{})
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
-		appTranscript{st: st}, appEmitter{a: a}, conversation.Config{
+		appTranscript{st: st}, appEmitter{a: a}, testLoop(conversation.Config{
 			MaxIterations:      cfg.Agency.MaxToolRounds,
 			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
-		})
+		}))
 
 	done := make(chan struct{})
 	go func() {

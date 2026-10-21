@@ -274,3 +274,51 @@ func TestASafeBootThatSettlesTheUpdateDropsTheCopy(t *testing.T) {
 		t.Fatalf("the update is settled by a SAFE boot and its copy still stands: %v", err)
 	}
 }
+
+// A ROLLBACK PUTS BACK THE PROVIDERS FILE THE PREVIOUS VERSION RAN WITH.
+// 0.1.17 reads providers.json strictly: a field it does not know on a
+// capability row (a model's own window, the picture fields, what a model
+// takes and returns) or a top-level table it never declared refuses the
+// whole file, and the restored program starts on no provider. So the file
+// is kept at the update's first boot beside the configuration, and put back
+// with it; what the newer version left is set aside, and a settled update
+// drops the copy.
+func TestARollbackPutsBackTheProvidersFileThePreviousVersionRanWith(t *testing.T) {
+	path := writeConfigFile(t)
+	providers := providerFilePath(path)
+	const previous = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}]}`
+	if err := os.WriteFile(providers, []byte(previous), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
+	if got := readText(t, providers+configBeforeUpdate); got != previous {
+		t.Fatalf("the update's first boot did not keep providers.json as it found it: %q", got)
+	}
+	// The newer version writes a field the previous one does not know.
+	reg, err := loadProvidersFile(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.ModelCapabilities = map[string]modelCapability{"m": {ContextLength: 64000}}
+	if _, err := saveProvidersFile(providers, reg); err != nil {
+		t.Fatal(err)
+	}
+	newer := readText(t, providers)
+	if !strings.Contains(newer, `"context_length"`) {
+		t.Fatalf("the newer file holds no field the previous version refuses, so this proves nothing: %s", newer)
+	}
+	if err := restoreConfigBeforeUpdate(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := readText(t, providers); got != previous {
+		t.Fatalf("the restored program must read the providers file it left, and reads: %q", got)
+	}
+	if got := readText(t, providers+configRolledBack); got != newer {
+		t.Fatalf("what the newer version left must be kept beside the providers file: %q", got)
+	}
+	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
+	dropConfigBeforeUpdate(path, nil)
+	if _, err := os.Stat(providers + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a settled update left its copy of providers.json: %v", err)
+	}
+}

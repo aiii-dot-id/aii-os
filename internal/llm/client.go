@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
@@ -280,7 +281,7 @@ func normalizeRetries(n int) int {
 	case n < 0:
 		return 0
 	case n == 0:
-		return 1
+		return limits.DefaultRetries
 	default:
 		return n
 	}
@@ -288,7 +289,7 @@ func normalizeRetries(n int) int {
 
 func normalizeBackoff(ms int) time.Duration {
 	if ms <= 0 {
-		return 2 * time.Second
+		ms = limits.DefaultRetryBackoffMS
 	}
 	return time.Duration(ms) * time.Millisecond
 }
@@ -397,7 +398,7 @@ func newHTTPClient(timeoutSeconds int) *http.Client {
 
 func idleCeiling(timeoutSeconds int) time.Duration {
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 120
+		timeoutSeconds = limits.DefaultTimeoutSeconds
 	}
 	return time.Duration(timeoutSeconds) * time.Second
 }

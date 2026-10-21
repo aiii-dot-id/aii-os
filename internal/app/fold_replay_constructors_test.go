@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 // foldProbeLLM is a provider that answers the run carrying `marker` with
@@ -123,7 +125,7 @@ func TestASubagentsFoldedReadMayBeRepeatedAndItsFoldedActMayNot(t *testing.T) {
 			const goal = "FOLDPROBE inspect the diagnostics"
 			probe, srv := newFoldProbeLLM(t, goal, tc.tool, "")
 			a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{
-				MaxToolRounds: 4, SubagentMaxToolRounds: 4, SubagentMaxToolCalls: 16, SubagentMaxLegs: 1, SubagentWallSeconds: 20,
+				MaxToolRounds: limits.Of(4), SubagentMaxToolRounds: limits.Of(4), SubagentMaxToolCalls: limits.Of(16), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 20,
 			}, 13000)
 			root, _ := a.toolReg.Roots()
 			probe.mu.Lock()

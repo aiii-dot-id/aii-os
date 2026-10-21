@@ -215,7 +215,7 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 				if r.Content == compatSaid {
 					said++
 				}
-				if r.Tool == compatTool("remember") {
+				if r.Tool == compatTool("remember") || r.Tool == "tools" && strings.Contains(r.Content, compatTool("remember")) {
 					switch r.Kind {
 					case "tool_call":
 						call = r.Model == "m"
@@ -309,8 +309,8 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 		if out, code := h.call(t, "overreach", nil); code != "POLICY_DENY" {
 			t.Errorf("and the wall still stands: %q %s", code, out)
 		}
-		if !h.offered("remember") || !h.offered("spin") {
-			t.Errorf("the offer holds: remember %v, spin %v", h.offered("remember"), h.offered("spin"))
+		if !h.callable("remember") || !h.callable("spin") {
+			t.Errorf("the operations stay callable: remember %v, spin %v", h.callable("remember"), h.callable("spin"))
 		}
 	}
 

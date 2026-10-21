@@ -36,6 +36,8 @@ type invoker interface {
 type ActivePlugin struct {
 	calibration calibrationSlot
 
+	schemaBound int
+
 	inFlight opGate
 
 	teardown sync.Mutex
@@ -159,6 +161,8 @@ type Options struct {
 
 	StartupCeiling time.Duration
 
+	MaxInputSchemaBytes int
+
 	StreamMax map[string]int
 
 	PluginDataDir string
@@ -223,7 +227,7 @@ func (ap *ActivePlugin) newOperationTool(name, operation, description string, de
 
 		inv = sessionInvoker{voice: ap.Voice.Load}
 	}
-	return &operationTool{
+	t := &operationTool{
 		owner:       ap,
 		name:        name,
 		operation:   operation,
@@ -239,6 +243,14 @@ func (ap *ActivePlugin) newOperationTool(name, operation, description string, de
 		plugin:      ap.ID,
 		acts:        ap.acts,
 	}
+
+	if t.parameters != nil {
+		var prose bool
+		if t.model, prose = tools.ModelSchema(t.parameters, name); prose {
+			t.description += fmt.Sprintf(" The descriptions and titles of its arguments are plugin %s's words, each quoted.", ap.ID)
+		}
+	}
+	return t
 }
 
 func (ap *ActivePlugin) offersOperationsFor(interfaceID string) bool {

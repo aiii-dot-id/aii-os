@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 )
 
 type File struct {
@@ -95,7 +97,7 @@ func (s *Sink) Tail(name string, n int) ([]string, error) {
 }
 
 func plainTail(path string, limit int64) ([]byte, bool, error) {
-	f, err := os.Open(path)
+	f, err := atomicfile.Open(path)
 	if err != nil {
 		return nil, false, err
 	}
@@ -116,7 +118,8 @@ func plainTail(path string, limit int64) ([]byte, bool, error) {
 }
 
 func gunzipTail(path string, limit int64) ([]byte, bool, error) {
-	f, err := os.Open(path)
+
+	f, err := atomicfile.Open(path)
 	if err != nil {
 		return nil, false, err
 	}

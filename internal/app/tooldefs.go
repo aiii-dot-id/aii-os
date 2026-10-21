@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
@@ -21,18 +22,20 @@ import (
 
 const PromptToolDefinitionCeiling = 32
 
+func registryRoom() int { return PromptToolDefinitionCeiling - len(identity.Verbs()) }
+
 func (a *App) buildToolDefinitions() []llm.ToolDefinition {
-	var ag AgencyConfig
+	var cfg Config
 	a.cfgMu.RLock()
 	if a.cfg != nil {
-		ag = a.cfg.Agency
+		cfg = *a.cfg
 	}
 	a.cfgMu.RUnlock()
-	return a.toolDefinitions(ag.checkpoint())
+	return a.toolDefinitions(a.residentLimitsFor(cfg).cfg.Agency.checkpoint())
 }
 
 func (a *App) toolDefinitions(turn conversation.Checkpoint) []llm.ToolDefinition {
-	defs := a.toolReg.ToolDefinitions()
+	defs := a.toolReg.ToolDefinitions(registryRoom())
 
 	for _, v := range identity.VerbsAt(turn) {
 		defs = append(defs, llm.ToolDefinition{Type: "function", Function: llm.ToolFunction{
@@ -125,36 +128,37 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		}
 	}
 
-	name := tc.Function.Name
 	if args == nil {
 		args = map[string]any{}
 	}
 
-	if a.toolReg != nil {
-		state, code, reason, ok := a.toolReg.State(name)
-		if ok && state != tools.StateOffered {
-			detail := string(state)
-			if reason != "" {
-				detail += ": " + reason
-			}
-			return conversation.Observation{Text: fmt.Sprintf("Error: %s is not in your active offer (%s) — inspect it with tools action=show name=%s, then tools action=offer name=%s to make it callable from your next turn.", name, detail, name, name), Failed: true, Refused: true, ReasonCode: code}
-		}
-		if shown, inTurn := conversation.ShownThisTurn(ctx, name); ok && inTurn && !shown {
-			res := tools.Refusal(tools.ReasonNotOfferedThisTurn, fmt.Sprintf("%s is offered; callable from your next turn — this turn's tool list was sent before the offer, so its arguments were never shown to you, and nothing ran.", name))
-			return conversation.Observation{Text: res.Text(), Failed: true, Refused: res.Refused, ReasonCode: res.ReasonCode}
-		}
-	}
-
-	call, inner, err := doorCall(a.toolReg, tc, args)
+	call, inner, routed, err := callRoute(a.toolReg, tc, args)
 	if err != nil {
-		var refusal *tools.DoorError
-		code := ""
-		if errors.As(err, &refusal) {
-			code = refusal.Code
+		obs := conversation.Observation{Text: "Error: " + err.Error(), Failed: true, Refused: true}
+		if errors.Is(err, errCallArgs) {
+			obs.ReasonCode = tools.ReasonArgumentsRequired
+			obs.Text += a.callCard(call.Function.Name)
 		}
-		return conversation.Observation{Text: "Error: " + err.Error(), Failed: true, Refused: true, ReasonCode: code}
+		return obs
 	}
-	tc, name, args = call, call.Function.Name, inner
+	tc, args = call, inner
+	name := tc.Function.Name
+
+	if a.toolReg != nil {
+		if code, reason, ok := a.toolReg.Unavailable(name); ok {
+			shown, inTurn := conversation.ShownThisTurn(ctx, name)
+			var res tools.Result
+			switch {
+			case code != "":
+				res = tools.Refusal(code, fmt.Sprintf("%s is unavailable (%s); nothing ran.", name, reason))
+			case !routed && inTurn && !shown:
+				res = tools.Refusal(tools.ReasonNotInToolList, fmt.Sprintf("%s is not in your tool list; call it with tools action=call name=%s args={…} (tools action=show name=%s gives its arguments). Nothing ran.", name, name, name))
+			}
+			if res.Refused {
+				return conversation.Observation{Text: res.Text(), Failed: true, Refused: true, ReasonCode: res.ReasonCode}
+			}
+		}
+	}
 
 	countExecuted := func() {
 		if seat.actor == actorSubagent {
@@ -234,7 +238,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		return obs
 	}
 
-	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: seat.session, Reason: seat.reason, CallID: store.ToolCallRecordID(interaction.TurnID(ctx), tc.EmissionOrdinal)})
+	ctx = pluginhost.WithActingSession(ctx, pluginhost.ActingSession{ID: seat.session, Reason: seat.reason, CallID: store.ToolCallRecordID(interaction.TurnID(ctx), tc.EmissionOrdinal), Delivered: seat.delivered})
 	a.keepSandboxOffPlaces()
 	started := time.Now()
 	result, err := a.toolReg.ExecuteModel(ctx, name, args)
@@ -250,6 +254,10 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 
 	a.emitPluginEventAttributed(pluginhost.TopicToolCalled, map[string]any{"tool": name, "failed": result.Failed(), "duration_ms": elapsed, "actor": seat.actor, "session": seat.session}, seat.lookup != nil)
 	text, picture := a.readPicture(ctx, result)
+	if routed && (result.ReasonCode == tools.ReasonArgumentsRequired || result.ReasonCode == broker.ReasonArgumentInvalid) {
+
+		text += a.callCard(name)
+	}
 	return conversation.Observation{Text: text, Image: picture, Failed: result.Failed(), Refused: result.Refused, Truncated: result.Truncated, DurationMS: &elapsed, ExitStatus: result.ExitStatus, WorkSession: seat.session, SessionReason: seat.reason, ReasonCode: result.ReasonCode}
 }
 
@@ -264,6 +272,8 @@ type callSeat struct {
 	session string
 	reason  string
 	lookup  error
+
+	delivered string
 }
 
 func (a *App) callSeat(ctx context.Context) callSeat {
@@ -289,41 +299,79 @@ func (a *App) callSeat(ctx context.Context) callSeat {
 	}
 	if seat.session == "" && seat.reason == "" {
 		seat.reason = "no_session"
+		if a.store != nil {
+
+			delivered, err := a.store.SessionDeliveredInTurn(interaction.TurnID(ctx))
+			if err != nil {
+				seat.reason, seat.lookup = "session_lookup_failed", err
+			}
+			seat.delivered = delivered
+		}
 	}
 	return seat
 }
 
-func doorCall(reg *tools.Registry, tc llm.ToolCall, args map[string]any) (llm.ToolCall, map[string]any, error) {
-	if reg == nil || !tools.IsDoor(tc.Function.Name) {
-		return tc, args, nil
+var errCallArgs = errors.New("args must be an object: the operation's arguments")
+
+func callRoute(reg *tools.Registry, tc llm.ToolCall, args map[string]any) (llm.ToolCall, map[string]any, bool, error) {
+	if action, _ := args["action"].(string); tc.Function.Name != "tools" || strings.ToLower(strings.TrimSpace(action)) != "call" {
+		return tc, args, false, nil
 	}
-	action, _ := args["action"].(string)
-	target, err := reg.ShadowTool(tc.Function.Name, action)
+	ref, _ := args["name"].(string)
+	if strings.TrimSpace(ref) == "" {
+		return tc, args, false, fmt.Errorf("tools action=call needs name=<operation> and args={…}; tools action=show name=<operation> gives its arguments")
+	}
+	if reg == nil {
+		return tc, args, false, fmt.Errorf("no plugin operations are installed beside you")
+	}
+	target, err := reg.Resolve(ref)
 	if err != nil {
-		return tc, args, err
+		return tc, args, false, err
 	}
-	inner, _ := args["args"].(map[string]any)
-	if inner == nil {
+	tc.Function.Name = target
+	var inner map[string]any
+	switch v := args["args"].(type) {
+	case nil:
 		inner = map[string]any{}
+	case map[string]any:
+		inner = v
+	case string:
+
+		if json.Unmarshal([]byte(v), &inner) != nil || inner == nil {
+			return tc, args, false, errCallArgs
+		}
+	default:
+		return tc, args, false, errCallArgs
 	}
 	raw, err := json.Marshal(inner)
 	if err != nil {
-		return tc, args, fmt.Errorf("%s: the arguments for %s do not encode: %w", tc.Function.Name, action, err)
+		return tc, args, false, fmt.Errorf("the arguments for %s do not encode: %w", target, err)
 	}
-	tc.Function.Name, tc.Function.Arguments = target, string(raw)
-	return tc, inner, nil
+	tc.Function.Arguments = string(raw)
+	return tc, inner, true, nil
 }
 
-func targetCall(reg *tools.Registry, tc llm.ToolCall) llm.ToolCall {
-	if reg == nil || !tools.IsDoor(tc.Function.Name) {
+func routedCall(reg *tools.Registry, tc llm.ToolCall) llm.ToolCall {
+	if tc.Function.Name != "tools" {
 		return tc
 	}
 	var args map[string]any
 	if json.Unmarshal([]byte(tc.Function.Arguments), &args) != nil {
 		return tc
 	}
-	if call, _, err := doorCall(reg, tc, args); err == nil {
+	if call, _, routed, err := callRoute(reg, tc, args); err == nil && routed {
 		return call
 	}
 	return tc
+}
+
+func (a *App) callCard(name string) string {
+	if a.toolReg == nil {
+		return ""
+	}
+	card, err := toolDiscovererAdapter{a.toolReg}.Show(name)
+	if err != nil {
+		return ""
+	}
+	return "\n\n" + identity.ToolCardText(card, false)
 }

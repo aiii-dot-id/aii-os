@@ -197,7 +197,7 @@ func (a *App) meaningState(ctx context.Context, f *memory.Facility, pick meaning
 		state.Unavailable, state.Why = pick.off.Detail, pick.off.Kind
 		return state, nil
 	}
-	basis, cov, unavailable, err := f.VectorCoverage(ctx)
+	basis, cov, unavailable, err := f.HeldCoverage(ctx)
 	if err != nil {
 		return nil, err
 	}

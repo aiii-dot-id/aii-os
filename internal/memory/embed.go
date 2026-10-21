@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/vec"
@@ -84,6 +85,27 @@ type queryVector struct {
 	floor float64
 }
 
+type lengthSeen struct {
+	mu    sync.Mutex
+	basis string
+	dims  int
+}
+
+func (l *lengthSeen) note(basis string, dims int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.basis, l.dims = basis, dims
+}
+
+func (l *lengthSeen) of(basis string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.basis != basis {
+		return 0
+	}
+	return l.dims
+}
+
 func (f *Facility) embedQuery(ctx context.Context, text string) (*queryVector, MeaningStatus) {
 	source := f.source()
 	if source == nil {
@@ -101,6 +123,7 @@ func (f *Facility) embedQuery(ctx context.Context, text string) (*queryVector, M
 	if !(floor >= 0 && floor <= 1) {
 		return nil, MeaningStatus{Status: StatusSourceUnavailable, Basis: basis, Detail: fmt.Sprintf("the source of vectors declares no usable floor (%v); exact words and fuzzy matches answered", floor)}
 	}
+	f.length.note(basis, len(vectors[0]))
 	q, scale := vec.Quantize(vectors[0])
 	return &queryVector{basis: basis, q: q, scale: scale, floor: floor}, MeaningStatus{Status: StatusFoundNothing, Basis: basis, Floor: floor}
 }
@@ -111,12 +134,12 @@ const MeaningReadBound = 1024
 
 func layerMeaning(ctx context.Context, db store.Reader, d Store, q Query, qv *queryVector, pool int) (kept []Hit, passed int, err error) {
 	where, args := predicates(d, q, true)
-	from := " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ?"
+	from := " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND v.dims = ?"
 	if where != "" {
 		from += " AND " + where
 	}
 	query := "SELECT " + selectList(d) + ", vec_cosine_q8(v.q, v.scale, ?, ?) AS sim, v.content_sha" + from + " ORDER BY sim DESC LIMIT ?"
-	qargs := append([]any{qv.q, qv.scale, d.Name, qv.basis}, args...)
+	qargs := append([]any{qv.q, qv.scale, d.Name, qv.basis, len(qv.q)}, args...)
 	for read := min(pool*staleSlack, MeaningReadBound); ; read = min(read*staleSlack, MeaningReadBound) {
 		candidates, err := meaningCandidates(ctx, db, d, query, append(qargs, read))
 		if err != nil {
@@ -237,7 +260,15 @@ type Coverage struct {
 	BeyondEmbedded int64
 }
 
-func (f *Facility) VectorCoverage(ctx context.Context) (basis string, cov []Coverage, unavailable string, err error) {
+func (f *Facility) HeldCoverage(ctx context.Context) (basis string, cov []Coverage, unavailable string, err error) {
+	return f.coverage(ctx, vectorsHeld)
+}
+
+func (f *Facility) UsableCoverage(ctx context.Context) (basis string, cov []Coverage, unavailable string, err error) {
+	return f.coverage(ctx, vectorsUsable)
+}
+
+func (f *Facility) coverage(ctx context.Context, vectors func(ctx context.Context, db store.Reader, d Store, basis, where string) (int64, error)) (basis string, cov []Coverage, unavailable string, err error) {
 	source := f.source()
 	if source == nil {
 		return "", nil, NoSource, nil
@@ -247,6 +278,10 @@ func (f *Facility) VectorCoverage(ctx context.Context) (basis string, cov []Cove
 		return "", nil, err.Error(), nil
 	}
 
+	ofLength := ""
+	if n := f.length.of(basis); n > 0 {
+		ofLength = fmt.Sprintf(" AND v.dims = %d", n)
+	}
 	err = f.st.ReadWith(ctx, func(db store.Reader) error {
 		for _, d := range stores {
 			c := Coverage{Store: d.Name}
@@ -258,7 +293,7 @@ func (f *Facility) VectorCoverage(ctx context.Context) (basis string, cov []Cove
 				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+d.Name+" b WHERE "+where).Scan(&rows); err != nil {
 					return 0, 0, fmt.Errorf("%s: %w", d.Name, err)
 				}
-				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_vectors v JOIN "+d.Name+" b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND "+where, d.Name, basis).Scan(&embedded); err != nil {
+				if embedded, err = vectors(ctx, db, d, basis, where+ofLength); err != nil {
 					return 0, 0, fmt.Errorf("%s: %w", d.Name, err)
 				}
 				return rows, embedded, nil
@@ -280,6 +315,20 @@ func (f *Facility) VectorCoverage(ctx context.Context) (basis string, cov []Cove
 		return nil
 	})
 	return basis, cov, "", err
+}
+
+func vectorsHeld(ctx context.Context, db store.Reader, d Store, basis, where string) (n int64, err error) {
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_vectors v JOIN "+d.Name+" b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND "+where, d.Name, basis).Scan(&n)
+	return n, err
+}
+
+func vectorsUsable(ctx context.Context, db store.Reader, d Store, basis, where string) (n int64, err error) {
+	err = vectorsByText(ctx, db, d, basis, where, func(_ string, speaks bool) {
+		if speaks {
+			n++
+		}
+	})
+	return n, err
 }
 
 func RenderCoverage(basis string, cov []Coverage, unavailable string) string {
@@ -377,6 +426,28 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 	if rep.Dropped, err = f.st.DropMemoryVectorsOffBasis(basis); err != nil {
 		return rep, fmt.Errorf("drop vectors off basis: %w", err)
 	}
+
+	began := f.length.of(basis)
+	held := began
+	oneLength := func(vectors [][]float32) error {
+		n := len(vectors[0])
+		for _, v := range vectors {
+			if len(v) != n {
+				return fmt.Errorf("vectors of %d and %d dimensions in one answer", n, len(v))
+			}
+		}
+		if n == 0 {
+			return nil
+		}
+		f.length.note(basis, n)
+		if held == 0 {
+			held = n
+		}
+		if n != held {
+			return fmt.Errorf("the length of the source's vectors changed (%d → %d dimensions); nothing of this answer was kept, and the next pass starts over", held, n)
+		}
+		return nil
+	}
 	if budget <= 0 {
 		budget = BackfillBudget
 	}
@@ -426,7 +497,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 			if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 				var err error
 
-				candidates, err = missingVectors(ctx, db, d, f.windowFor(d, source), basis, want+f.aside.in(d.Name))
+				candidates, err = missingVectors(ctx, db, d, f.windowFor(d, source), began, basis, want+f.aside.in(d.Name))
 				return err
 			}); err != nil {
 				return rep, fmt.Errorf("%s: candidates: %w", d.Name, err)
@@ -487,6 +558,10 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 								rep.Stores = append(rep.Stores, bs)
 								return rep, fmt.Errorf("%s: %d vectors for 1 input", d.Name, len(one))
 							}
+							if err := oneLength(one); err != nil {
+								rep.Stores = append(rep.Stores, bs)
+								return rep, fmt.Errorf("%s: %w", d.Name, err)
+							}
 							q, scale := vec.Quantize(one[0])
 							if err := f.st.PutMemoryVectors([]store.MemoryVector{{
 								Store: d.Name, ID: h.ID, Basis: basis, ContentSHA: textSHA(h.Text),
@@ -529,6 +604,10 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 					rep.Stores = append(rep.Stores, bs)
 					return rep, fmt.Errorf("%s: %d vectors for %d inputs", d.Name, len(vectors), len(inputs))
 				}
+				if err := oneLength(vectors); err != nil {
+					rep.Stores = append(rep.Stores, bs)
+					return rep, fmt.Errorf("%s: %w", d.Name, err)
+				}
 				rows := make([]store.MemoryVector, 0, len(batch))
 				now := time.Now()
 				for i, h := range batch {
@@ -548,7 +627,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 			}
 		}
 		if err := f.st.ReadWith(ctx, func(db store.Reader) error {
-			return db.QueryRowContext(ctx, missingCountSQL(d, f.windowFor(d, source)), d.Name, basis).Scan(&bs.Remaining)
+			return db.QueryRowContext(ctx, missingCountSQL(d, f.windowFor(d, source), began), d.Name, basis).Scan(&bs.Remaining)
 		}); err != nil {
 			return rep, fmt.Errorf("%s: remaining: %w", d.Name, err)
 		}
@@ -561,27 +640,11 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 func (f *Facility) dropStaleVectors(ctx context.Context, d Store, basis string) (int64, error) {
 	var stale []string
 	err := f.st.ReadWith(ctx, func(db store.Reader) error {
-		rows, err := db.QueryContext(ctx, "SELECT b.id, v.content_sha"+textColumns(d)+" FROM memory_vectors v JOIN "+d.Name+" b ON b.id = v.id WHERE v.store = ? AND v.basis = ?", d.Name, basis)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		texts := make([]string, len(d.Text))
-		var id, vectorOf string
-		dest := []any{&id, &vectorOf}
-		for i := range texts {
-			dest = append(dest, &texts[i])
-		}
-		for rows.Next() {
-			if err := rows.Scan(dest...); err != nil {
-				return err
-			}
-			if vectorOf != textSHA(joinText(texts)) {
+		return vectorsByText(ctx, db, d, basis, "", func(id string, speaks bool) {
+			if !speaks {
 				stale = append(stale, id)
 			}
-		}
-		return rows.Err()
+		})
 	})
 	if err != nil || len(stale) == 0 {
 		return 0, err
@@ -589,8 +652,34 @@ func (f *Facility) dropStaleVectors(ctx context.Context, d Store, basis string) 
 	return f.st.DeleteMemoryVectors(d.Name, stale)
 }
 
-func missingVectors(ctx context.Context, db store.Reader, d Store, window int, basis string, limit int) ([]Hit, error) {
-	q := "SELECT " + selectList(d) + missingFrom(d, window) + " ORDER BY b.rowid DESC LIMIT ?"
+func vectorsByText(ctx context.Context, db store.Reader, d Store, basis, where string, see func(id string, speaks bool)) error {
+	q := "SELECT b.id, v.content_sha" + textColumns(d) + " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ?"
+	if where != "" {
+		q += " AND " + where
+	}
+	rows, err := db.QueryContext(ctx, q, d.Name, basis)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	texts := make([]string, len(d.Text))
+	var id, vectorOf string
+	dest := []any{&id, &vectorOf}
+	for i := range texts {
+		dest = append(dest, &texts[i])
+	}
+	for rows.Next() {
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		see(id, vectorOf == textSHA(joinText(texts)))
+	}
+	return rows.Err()
+}
+
+func missingVectors(ctx context.Context, db store.Reader, d Store, window, dims int, basis string, limit int) ([]Hit, error) {
+	q := "SELECT " + selectList(d) + missingFrom(d, window, dims) + " ORDER BY b.rowid DESC LIMIT ?"
 	rows, err := db.QueryContext(ctx, q, d.Name, basis, limit)
 	if err != nil {
 		return nil, err
@@ -599,12 +688,16 @@ func missingVectors(ctx context.Context, db store.Reader, d Store, window int, b
 	return scanHits(rows, d)
 }
 
-func missingCountSQL(d Store, window int) string {
-	return "SELECT COUNT(*)" + missingFrom(d, window)
+func missingCountSQL(d Store, window, dims int) string {
+	return "SELECT COUNT(*)" + missingFrom(d, window, dims)
 }
 
-func missingFrom(d Store, window int) string {
-	from := " FROM " + d.Name + " b LEFT JOIN memory_vectors v ON v.store = ? AND v.id = b.id AND v.basis = ? WHERE v.id IS NULL AND " + hasText(d)
+func missingFrom(d Store, window, dims int) string {
+	ofLength := ""
+	if dims > 0 {
+		ofLength = fmt.Sprintf(" AND v.dims = %d", dims)
+	}
+	from := " FROM " + d.Name + " b LEFT JOIN memory_vectors v ON v.store = ? AND v.id = b.id AND v.basis = ?" + ofLength + " WHERE v.id IS NULL AND " + hasText(d)
 	if scope := vectorScope(d, window); scope != "" {
 		from += " AND " + scope
 	}

@@ -13,6 +13,10 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
+// ONE OWNER PER CALLABLE NAME, refused where the names meet. The boot
+// holds the three static sets to it on the registry it built; this shows the check the real
+// sets, then a collision between every pair of owners and a name one owner
+// declares twice, each refused with both owners named.
 func TestEveryCallableNameHasOneOwner(t *testing.T) {
 	reg := tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
 	sets := staticNames(reg)
@@ -25,7 +29,6 @@ func TestEveryCallableNameHasOneOwner(t *testing.T) {
 		{"an offered verb", "note", 6},
 		{"an absorbed operation", "timer", 6},
 		{"a registry builtin", "read", 4},
-		{"a category door", "memory", 3},
 	} {
 		s := sets[i]
 		if !strings.HasPrefix(s.owner, want.owner) || !slices.Contains(s.names, want.member) || len(s.names) < want.atLeast {
@@ -54,7 +57,6 @@ func TestEveryCallableNameHasOneOwner(t *testing.T) {
 	for _, c := range []struct{ name, other string }{
 		{"note", "an offered verb"},
 		{"timer", "an absorbed operation"},
-		{"memory", "a category door"},
 	} {
 		r := tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
 		r.Register(declaredOp{name: c.name, op: c.name})
@@ -67,10 +69,10 @@ func TestEveryCallableNameHasOneOwner(t *testing.T) {
 		into        int
 		name, other string
 	}{
-		{3, "work", "an offered verb"},
-		{3, "measure", "an absorbed operation"},
+		{2, "work", "an offered verb"},
+		{2, "measure", "an absorbed operation"},
 		{1, "recall", "an offered verb"},
-		{3, "voice", "a category door"},
+		{1, "read", "a registry builtin"},
 	} {
 		doctored := slices.Clone(sets)
 		doctored[c.into].names = append(slices.Clone(sets[c.into].names), c.name)

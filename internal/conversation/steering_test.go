@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -50,7 +51,7 @@ func TestSteeringReachesTheModelAtTheToolBoundary(t *testing.T) {
 		textResp("done"),
 	}}
 	steer := &scriptSteering{words: []string{"stop — that file is already fixed"}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	loop.SetSteering(steer)
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
@@ -82,7 +83,7 @@ func TestWithoutSteeringTheBoundaryIsUnchanged(t *testing.T) {
 		resp("", toolCall("c1", "note", `{}`)),
 		textResp("done"),
 	}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
@@ -110,7 +111,7 @@ func TestSteeringAndTheToolLimitShareOneMessage(t *testing.T) {
 	}}
 	steer := &scriptSteering{words: []string{"answer with what you have"}}
 	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{MaxIterations: 1})
+		testBounds(Config{MaxIterations: limits.Of(1)}))
 	loop.SetSteering(steer)
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
@@ -140,7 +141,7 @@ func TestSteeringIsDeliveredOnce(t *testing.T) {
 		textResp("done"),
 	}}
 	steer := &scriptSteering{words: []string{"only once"}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	loop.SetSteering(steer)
 
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
@@ -171,7 +172,7 @@ func TestDrainedSteeringSurvivesAFailedTurn(t *testing.T) {
 		// no second response: the next call fails
 	}}
 	steer := &scriptSteering{words: []string{"actually, use the other file"}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	loop.SetSteering(steer)
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil {
@@ -203,7 +204,7 @@ func TestAFailedTurnsReplyHoldsOnlyTheIdentitysWords(t *testing.T) {
 		// no second response: the next call fails
 	}}
 	steer := &scriptSteering{words: []string{"[voice] stop, the parser is fine", "look at the lexer"}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	loop.SetSteering(steer)
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil {
@@ -227,7 +228,7 @@ func TestAnsweredSteeringIsNotReplayedByALaterFailure(t *testing.T) {
 		// round 3: the script is exhausted -> failure
 	}}
 	steer := &scriptSteering{words: []string{"switch to the other branch"}}
-	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 	loop.SetSteering(steer)
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err == nil {
@@ -258,7 +259,7 @@ func TestTheSteeringFrameClaimsNoAuthority(t *testing.T) {
 			resp("", toolCall("c1", "note", `{}`)),
 			textResp("done"),
 		}}
-		loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, Config{})
+		loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
 		loop.SetSteering(&scriptSteering{words: []string{words}})
 		if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 			t.Fatal(err)

@@ -82,7 +82,7 @@ func TestAStoppedCallIsRecordedCancelledAndAFailedOneFailed(t *testing.T) {
 				return c.run(ctx, started)
 			}})
 			model := &callsScript{tools: []string{"fixture_stop"}}
-			loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+			loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 			ctx, done := a.beginCancellableTurn(context.Background())
 			defer done()
 			ended := make(chan error, 1)
@@ -133,7 +133,7 @@ func TestTheOperatorsStopStopsTheRestOfTheBatch(t *testing.T) {
 		return tools.Result{Output: "written"}, nil
 	}})
 	model := &callsScript{tools: []string{"fixture_first", "fixture_second"}}
-	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+	loop := conversation.New(model, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 	ctx, done := a.beginCancellableTurn(context.Background())
 	defer done()
 	ended := make(chan error, 1)
@@ -230,7 +230,7 @@ func TestARefusedCallIsRecordedRefusedAndAFailedOneFailed(t *testing.T) {
 				t.Fatal(err)
 			}
 			a.toolReg = tools.NewRegistry(home, nil, tools.Timeouts{})
-			loop := conversation.New(&argsScript{tool: c.tool, args: c.args}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, conversation.Config{})
+			loop := conversation.New(&argsScript{tool: c.tool, args: c.args}, appToolExecutor{a}, appToolDefiner{a}, appTranscript{st: a.store}, nil, testLoop(conversation.Config{}))
 			if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 				t.Fatal(err)
 			}
@@ -281,7 +281,7 @@ func TestBootSafesRecordOfEachOutcomeIsTheLiveRecords(t *testing.T) {
 				}})
 			}
 			rec := &safeToolRecord{}
-			loop := conversation.New(&argsScript{tool: c.tool, args: c.args}, appToolExecutor{a}, appToolDefiner{a}, rec, nil, conversation.Config{})
+			loop := conversation.New(&argsScript{tool: c.tool, args: c.args}, appToolExecutor{a}, appToolDefiner{a}, rec, nil, testLoop(conversation.Config{}))
 			ctx, done := a.beginCancellableTurn(context.Background())
 			defer done()
 			ended := make(chan error, 1)

@@ -47,9 +47,10 @@ export function meaningCard(m) {
         (kept > 0 ? kept + ' keep the one they have and are read by meaning, ' : '') + (c.beyond - kept) + ' are read by words alone</span>' : '') + '</div>';
   }
   const waiting = rows - embedded;
-  html += '<div class="item">' + (waiting <= 0 ? 'Every row in scope holds a vector'
+  const stale = '. A row whose text has changed since the last pass is read by its words until the next pass makes its vector again';
+  html += '<div class="item">' + (waiting <= 0 ? 'Every row in scope holds a vector' + stale
     : m.waiting ? waiting + ' waiting for voice: the backfill holds off while a session is listening or a reply is being spoken'
-    : waiting + ' waiting for the backfill\'s next pass') + '.</div>';
+    : waiting + ' waiting for the backfill\'s next pass' + stale) + '.</div>';
   if (m.set_aside > 0) {
     html += '<div class="item">' + m.set_aside + ' set aside: the source could not embed ' + (m.set_aside === 1 ? 'it' : 'them') +
       (m.set_aside_why ? ' (' + esc(m.set_aside_why) + ')' : '') + '. Asked again when the source next starts.</div>';

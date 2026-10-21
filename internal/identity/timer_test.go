@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
-	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -409,7 +409,7 @@ func TestTheAlarmsReadListsWhatIsSetAfterEveryFiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const loopBound = conversation.DefaultMaxToolResultChars
+	const loopBound = limits.DefaultToolResultChars
 	runes := []rune(list)
 	if len(runes) <= loopBound {
 		t.Fatalf("the history must pass the loop's bound for the cut to show: %d characters", len(runes))

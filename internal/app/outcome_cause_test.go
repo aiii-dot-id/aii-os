@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -61,7 +62,7 @@ func TestRouteResolutionDistinguishesFallbackCauses(t *testing.T) {
 func TestTheDeliveredOutcomeLineCarriesEachCause(t *testing.T) {
 	seen := map[string]string{}
 	for _, cause := range []string{"no-route", "route-down", "providers-unavailable"} {
-		line := subagentOutcomeHeader("critic", "m1", cause, 4, 12, 23, 64, 6, "1200", false)
+		line := subagentOutcomeHeader("critic", "m1", cause, 4, limits.Of(12), 23, limits.Of(64), 6, "1200", false)
 		if !strings.Contains(line, `cause="`+cause+`"`) {
 			t.Errorf("the delivered line does not carry cause %q: %s", cause, line)
 		}
@@ -74,7 +75,7 @@ func TestTheDeliveredOutcomeLineCarriesEachCause(t *testing.T) {
 		seen[line] = line
 	}
 	// A run that did NOT fall back says so, and carries no cause.
-	ok := subagentOutcomeHeader("critic", "m1", "", 4, 12, 23, 64, 6, "1200", false)
+	ok := subagentOutcomeHeader("critic", "m1", "", 4, limits.Of(12), 23, limits.Of(64), 6, "1200", false)
 	if !strings.Contains(ok, "fallback=false") || !strings.Contains(ok, `cause=""`) {
 		t.Errorf("a clean run is not distinguishable from a fallback: %s", ok)
 	}
@@ -85,7 +86,7 @@ func TestTheDeliveredOutcomeLineCarriesEachCause(t *testing.T) {
 }
 
 func TestTheOutcomeLineReportsToolCallUtilisation(t *testing.T) {
-	line := subagentOutcomeHeader("worker", "m1", "", 4, 12, 23, 64, 6, "1200", false)
+	line := subagentOutcomeHeader("worker", "m1", "", 4, limits.Of(12), 23, limits.Of(64), 6, "1200", false)
 	if !strings.Contains(line, "tool_calls=23/64") {
 		t.Fatalf("the outcome line must report calls used against the call ceiling: %s", line)
 	}

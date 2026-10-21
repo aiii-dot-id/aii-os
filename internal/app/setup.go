@@ -37,8 +37,10 @@ func (a *App) configState() *dashboard.ConfigState {
 
 	llmSt := dashboard.LLMConfigState{
 		Provider: c.LLM.Provider, Model: c.LLM.Model,
-		TimeoutSeconds:      c.LLM.TimeoutSeconds,
-		ProbeTimeoutSeconds: c.LLM.ProbeTimeoutSeconds,
+		TimeoutSeconds:         c.LLM.TimeoutSeconds,
+		ProbeTimeoutSeconds:    c.LLM.ProbeTimeoutSeconds,
+		RefusedRetryMaxSeconds: c.LLM.RefusedRetryMaxSeconds,
+		RefusedRetryMaxDefault: refusedRetryMaxDefaultSeconds,
 	}
 	reg, err := a.loadProviders()
 	speechSt := speechState(c, reg, err, a.speechEngines())
@@ -49,7 +51,7 @@ func (a *App) configState() *dashboard.ConfigState {
 	speechSt.Mode = a.voiceModeState()
 	if err != nil {
 		llmSt.Error = err.Error()
-	} else if cc, entry, err := a.resolveLLMConfig(c.LLM, reg); err != nil {
+	} else if cc, entry, err := a.resolveLLMConfig(c, reg); err != nil {
 		llmSt.Error = err.Error()
 	} else {
 		llmSt.ResolvedProvider = entry.Name
@@ -138,10 +140,12 @@ func (a *App) configState() *dashboard.ConfigState {
 			AlarmWallSeconds:        c.Agency.AlarmWallSeconds,
 			HarvestWallSeconds:      c.Agency.HarvestWallSeconds,
 		},
-		Cognition: a.cognitionState(c),
+		Cognition: a.cognitionState(c, reg),
 		Updates:   dashboard.UpdatesConfigState{Automatic: c.Updates.Automatic},
 		Logs: dashboard.LogsConfigState{
 			Dir: c.Logs.Dir, MaxBackups: c.Logs.MaxBackups, CompressDays: c.Logs.CompressDays,
+			MaxBytes: c.Logs.MaxBytes, MaxBytesDefault: logsink.DefaultMaxBytes,
+			MaxTotalBytes: c.Logs.MaxTotalBytes, MaxTotalBytesDefault: logsink.DefaultMaxTotalBytes(c.Logs.MaxBytes, c.Logs.MaxBackups),
 		},
 		Timezone: c.Timezone,
 		Contacts: contactStates(c.Contacts),
@@ -215,6 +219,8 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 
 	cognitionChanged := false
 
+	logsChanged := false
+
 	orig := a.configSnapshot()
 	candidate := orig
 	cfg := &candidate
@@ -271,6 +277,19 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			continue
 		}
 		switch key {
+		case "overrides":
+
+			o, err := doorOverrides(v, changes["overrides_digest"], orig.Overrides)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Overrides = o
+
+			llmChanged, cognitionChanged = true, true
+		case "overrides_digest":
+			if _, with := changes["overrides"]; !with {
+				return nil, fmt.Errorf("overrides_digest: it is sent with a save of the overrides block, and alone changes nothing")
+			}
 		case "identity.db_optimize_levels", "identity.db_learn_dictionary":
 			enabled, ok := v.(bool)
 			if !ok {
@@ -323,18 +342,27 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, fmt.Errorf("llm.probe_timeout_seconds: must be positive")
 			}
 			cfg.LLM.ProbeTimeoutSeconds = n
-		case "llm.timeout_seconds":
-			n, err := integer(key, v)
+		case "llm.refused_retry_max_seconds":
+
+			n := 0
+			if v != nil {
+				got, err := integer(key, v)
+				if err != nil {
+					return nil, err
+				}
+				n = got
+			}
+			if err := validRefusedRetryMax(n); err != nil {
+				return nil, err
+			}
+			cfg.LLM.RefusedRetryMaxSeconds = n
+		case "llm.timeout_seconds", "llm.retries", "llm.retry_backoff_ms":
+
+			changed, err := tableNumber(cfg, key, v, integer)
 			if err != nil {
 				return nil, err
 			}
-			if n <= 0 {
-				return nil, fmt.Errorf("llm.timeout_seconds: must be positive")
-			}
-			if n != cfg.LLM.TimeoutSeconds {
-				cfg.LLM.TimeoutSeconds = n
-				llmChanged = true
-			}
+			llmChanged = llmChanged || changed
 
 		case "dashboard.host":
 			s, err := str(key, v)
@@ -666,6 +694,35 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Logs.MaxDays = n
 			restart = append(restart, key)
+		case "logs.max_bytes":
+
+			n := 0
+			if v != nil {
+				got, err := integer(key, v)
+				if err != nil {
+					return nil, err
+				}
+				n = got
+			}
+			if err := validLogMaxBytes(int64(n)); err != nil {
+				return nil, err
+			}
+			cfg.Logs.MaxBytes = int64(n)
+			logsChanged = true
+			restart = append(restart, key)
+		case "logs.max_total_bytes":
+
+			n := 0
+			if v != nil {
+				got, err := integer(key, v)
+				if err != nil {
+					return nil, err
+				}
+				n = got
+			}
+			cfg.Logs.MaxTotalBytes = int64(n)
+			logsChanged = true
+			restart = append(restart, key)
 		case "plugins.autoload":
 			s, err := str(key, v)
 			if err != nil {
@@ -944,15 +1001,11 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Genesis.BootstrapURL = s
 			restart = append(restart, key)
-		case "prompt.max_tokens":
-			n, err := integer(key, v)
-			if err != nil {
+		case "prompt.max_tokens", "prompt.max_tool_result_chars":
+
+			if _, err := tableNumber(cfg, key, v, integer); err != nil {
 				return nil, err
 			}
-			if n < 0 {
-				return nil, fmt.Errorf("prompt.max_tokens: must be zero (derive from the model window) or positive")
-			}
-			cfg.Prompt.MaxTokens = n
 			restart = append(restart, key)
 		case "prompt.recent_turns":
 			n, err := integer(key, v)
@@ -973,16 +1026,6 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, fmt.Errorf("prompt.pulse_interval_seconds: minimum 30 (a faster pulse is a busier life)")
 			}
 			cfg.Prompt.PulseIntervalSeconds = n
-			restart = append(restart, key)
-		case "prompt.max_tool_result_chars":
-			n, err := integer(key, v)
-			if err != nil {
-				return nil, err
-			}
-			if n < 0 {
-				return nil, fmt.Errorf("prompt.max_tool_result_chars: negative")
-			}
-			cfg.Prompt.MaxToolResultChars = n
 			restart = append(restart, key)
 		case "timezone":
 			s, err := str(key, v)
@@ -1028,6 +1071,11 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			return nil, err
 		}
 	}
+	if logsChanged {
+		if err := validLogMaxTotalBytes(cfg.Logs.MaxTotalBytes, cfg.Logs.MaxBytes); err != nil {
+			return nil, err
+		}
+	}
 	if cognitionChanged {
 
 		if err := validCognition(*cfg); err != nil {
@@ -1056,12 +1104,12 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 		if rerr != nil {
 			return nil, fmt.Errorf("substrate refused: %w", rerr)
 		}
-		cc, entry, rerr := a.resolveLLMConfig(cfg.LLM, reg)
+		cc, entry, rerr := a.resolveLLMConfig(*cfg, reg)
 		if rerr != nil {
 			return nil, fmt.Errorf("substrate refused: %w", rerr)
 		}
 		resolvedRegistry = reg
-		candidateBudget, _ := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+		candidateBudget, _ := promptBudgetFor(entry, promptCeilingFor(*cfg, entry, cc.Model))
 		validatedClient = a.newLLMClient(cc, candidateBudget)
 		if substrateChanged {
 			m, err := a.probeSubstrate(validatedClient, cc, entry, reg, cfg.LLM.ProbeTimeoutSeconds)
@@ -1118,7 +1166,7 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 		configPublished, err = a.persistLocked(cfg, persist)
 		if configPublished && cognitionChanged && a.live.Load() {
 
-			a.applyAgency(cfg.Agency)
+			a.applyAgency(*cfg)
 			if cfg.Agency.RhythmSeconds != orig.Agency.RhythmSeconds && a.timeFac != nil {
 				if rerr := a.armRhythm(cfg.Agency.RhythmSeconds); rerr != nil {
 					logsink.Warn("config.refusal", "metabolism rhythm not re-armed, it keeps its cadence until the next boot: %v", rerr)
@@ -1134,7 +1182,7 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 
 			if holdTurn {
-				a.activateLLMRuntime(validatedClient, resolvedEntry, cfg.Prompt.MaxTokens)
+				a.activateLLMRuntime(validatedClient, resolvedEntry, *cfg)
 				if probed {
 					a.setSubstrateCapability(measured)
 				}
@@ -1414,7 +1462,7 @@ func (a *App) wireSettingsHooks(h *dashboard.WSHandler) {
 		states := a.toolReg.ToolStates()
 		out := make([]dashboard.ToolState, len(states))
 		for i, ts := range states {
-			out[i] = dashboard.ToolState{Name: ts.Name, Description: ts.Description, Enabled: ts.Enabled}
+			out[i] = dashboard.ToolState{Name: ts.Name, Description: ts.Description, Enabled: ts.Enabled, Plugin: ts.Plugin}
 		}
 		return out
 	}

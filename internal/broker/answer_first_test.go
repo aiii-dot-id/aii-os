@@ -201,3 +201,59 @@ func TestTheOperationsThatAnswerFirstAreListed(t *testing.T) {
 		t.Fatalf("the operations answered before their record: %v, want %s", got, want)
 	}
 }
+
+// THE RECEIPTS HELD UNWRITTEN ARE BOUNDED. Each answer-first
+// call left one job holding its receipt, and nothing bounded how many
+// could wait. Past the operator's bound (plugins.runtime.max_inflight_receipts;
+// 4096 where none is named) a call records first, as before: here a
+// bound of two, with a runner that holds its jobs, answers two reads
+// first and records the third before its answer; once the held jobs have
+// written theirs, a read is answered first again. A runner that refuses a
+// job gives its place back at once.
+func TestAnswerFirstReceiptsHeldUnwrittenAreBounded(t *testing.T) {
+	if got := (Config{}).maxInflightReceipts(); got != 4096 {
+		t.Fatalf("with no bound named the host holds %d receipts unwritten, want 4096", got)
+	}
+	st := newStore(t)
+	runner := &laterJobs{}
+	h, err := New(Config{Store: st, Later: runner.later, MaxInflightReceipts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := h.Bind("org.example.cfg", packagefmt.TierT0, nil)
+	b.SetSettings(func() map[string]any { return map[string]any{"voice": "calm"} })
+	read := func() map[string]any {
+		t.Helper()
+		reply, err := b.Dispatch(context.Background(), methodInvokeCall, []byte(`{"operation":"settings.get"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return receiptOf(t, reply)
+	}
+	for i := 1; i <= 2; i++ {
+		if got := read(); got["audit_persisted"] != false {
+			t.Fatalf("read %d, under the bound, was not answered first: %v", i, got)
+		}
+	}
+	if got := read(); got["audit_persisted"] != true {
+		t.Fatalf("the third read, past a bound of two, was not recorded before its answer: %v", got)
+	}
+	if recs, err := st.PluginReceipts("org.example.cfg"); err != nil || len(recs) != 1 {
+		t.Fatalf("past the bound the record is written first: want 1 receipt on the record, got %d (%v)", len(recs), err)
+	}
+	runner.run()
+	if n := h.inflightReceipts.Load(); n != 0 {
+		t.Fatalf("after the held jobs wrote their receipts %d places are still taken", n)
+	}
+	if got := read(); got["audit_persisted"] != false {
+		t.Fatalf("with the held receipts written a read is not answered first again: %v", got)
+	}
+	runner.run()
+	runner.refuses = true
+	if got := read(); got["audit_persisted"] != true {
+		t.Fatalf("a runner that refuses the job: the read must be recorded first: %v", got)
+	}
+	if n := h.inflightReceipts.Load(); n != 0 {
+		t.Fatalf("a job the runner refused kept its place: %d taken", n)
+	}
+}

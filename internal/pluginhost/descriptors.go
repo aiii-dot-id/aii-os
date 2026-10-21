@@ -30,9 +30,37 @@ func (e *SchemaError) Error() string {
 
 func (e *SchemaError) Unwrap() error { return e.Err }
 
+const DefaultMaxInputSchemaBytes = 16 << 10
+
+type SchemaSizeError struct {
+	Bytes, Max int
+}
+
+func (e *SchemaSizeError) Error() string {
+	return fmt.Sprintf("the argument schema is %d bytes as compact JSON; a tool definition carries it whole, and the most one may be is %d (plugins.runtime.max_input_schema_bytes)", e.Bytes, e.Max)
+}
+
+func (e *SchemaSizeError) Final() string {
+	return fmt.Sprintf("An operation's argument schema is %d bytes, over the %d this host takes (plugins.runtime.max_input_schema_bytes): install a release whose schema fits, or raise the setting.", e.Bytes, e.Max)
+}
+
+func checkInputSchemaSize(schema map[string]any, bound int) error {
+	if bound <= 0 {
+		bound = DefaultMaxInputSchemaBytes
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return err
+	}
+	if len(raw) > bound {
+		return &SchemaSizeError{Bytes: len(raw), Max: bound}
+	}
+	return nil
+}
+
 func (e *SchemaError) WaitsOnPackage() bool { return !e.Unread }
 
-func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) (*descriptorSet, error) {
+func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest, schemaBound int) (*descriptorSet, error) {
 	decls := append(append([]packagefmt.InterfaceDecl{}, m.Interfaces.Core...), m.Interfaces.Optional...)
 	held = walkMembers(pkgPath, res, held, namedSchemas(decls, held)...)
 	set := &descriptorSet{ops: make(map[string]*opDescriptor), files: make(map[string][]byte)}
@@ -97,6 +125,9 @@ func loadDescriptors(pkgPath string, res *packagefmt.Result, held map[string][]b
 				raw, compiled, unread, err := loadSchema(pkgPath, res, held, op.Input)
 				if err != nil {
 					return nil, &SchemaError{Operation: op.ID, File: op.Input, Err: err, Unread: unread}
+				}
+				if err := checkInputSchemaSize(raw, schemaBound); err != nil {
+					return nil, &SchemaError{Operation: op.ID, File: op.Input, Err: err}
 				}
 				d.raw, d.input = raw, compiled
 			}

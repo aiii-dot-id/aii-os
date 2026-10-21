@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
@@ -45,7 +46,7 @@ func TestTurnTokenBudgetFencesTheTurn(t *testing.T) {
 		textResp("wrapped up what I had"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 10, TurnTokenBudget: 500_000})
+		testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(500_000)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestTheTokenFenceAsksForTheContinuation(t *testing.T) {
 		textResp("wrapped up what I had"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 10, TurnTokenBudget: 500_000})
+		testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(500_000)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +101,7 @@ func TestSilentUsageCountsAgainstTheFence(t *testing.T) {
 	// Usage deliberately unreported.
 	client := &optsLLM{script: []llm.Response{big, textResp("done what I could")}}
 	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 10, TurnTokenBudget: 1_000})
+		testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(1_000)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +147,7 @@ func TestTheFenceSaysAboutWhenACallDidNotReportItsSpend(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			logs := logsink.CaptureForTest(t)
 			loop := New(&optsLLM{script: c.script}, &fakeTools{results: map[string]string{"bash": "ok"}}, oneDefs{}, nil, nil,
-				Config{MaxIterations: 10, TurnTokenBudget: c.fence})
+				testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(c.fence)}))
 			res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
 				t.Fatal(err)
@@ -179,7 +180,7 @@ func TestUnderBudgetTurnsAreUntouched(t *testing.T) {
 		textResp("done"),
 	}}
 	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, oneDefs{}, nil, nil,
-		Config{MaxIterations: 10, TurnTokenBudget: 600_000})
+		testBounds(Config{MaxIterations: limits.Of(10), TurnTokenBudget: limits.Of(600_000)}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

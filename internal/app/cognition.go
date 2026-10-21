@@ -68,7 +68,7 @@ func briefConfig(cfg Config) cognitive.MorningBriefConfig {
 }
 
 func rhythmSpacing(cfg Config) time.Duration {
-	return time.Duration(spacingSetting.value(cfg)) * time.Second
+	return time.Duration(spacingSetting.n(cfg)) * time.Second
 }
 
 func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, door *ledgerAdapter, cfg Config) error {
@@ -225,7 +225,7 @@ func (a *App) goLive(started Config) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	a.live.Store(true)
-	a.applyAgency(a.cfg.Agency)
+	a.applyAgency(*a.cfg)
 	if a.cfg.Agency.RhythmSeconds != started.Agency.RhythmSeconds && a.timeFac != nil {
 		if err := a.armRhythm(a.cfg.Agency.RhythmSeconds); err != nil {
 			logsink.Warn("config.refusal", "metabolism rhythm not re-armed, it keeps its cadence until the next boot: %v", err)
@@ -278,7 +278,7 @@ func cognitionValue(cfg Config, key string) int {
 	if !ok {
 		panic("cognitionValue: no setting " + key)
 	}
-	return s.value(cfg)
+	return s.n(cfg)
 }
 
 func (a *App) applyCognition(cfg Config) {

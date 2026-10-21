@@ -43,7 +43,7 @@ func dialogueCoverage(t *testing.T, f *Facility) Coverage {
 			break
 		}
 	}
-	_, cov, unavailable, err := f.VectorCoverage(context.Background())
+	_, cov, unavailable, err := f.HeldCoverage(context.Background())
 	if err != nil || unavailable != "" {
 		t.Fatalf("coverage: %v %q", err, unavailable)
 	}
@@ -90,7 +90,7 @@ func TestAProvidersWindowIsTheOperatorsNumber(t *testing.T) {
 	}
 
 	seedTurns(t, s, 10)
-	_, cov, _, err := f.VectorCoverage(context.Background())
+	_, cov, _, err := f.HeldCoverage(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

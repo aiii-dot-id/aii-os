@@ -49,7 +49,7 @@ func TestARowWithNoTextIsNeverHandedToASourceAndIsNotCountedAsWaiting(t *testing
 		t.Fatalf("the next pass found something to hand over: %+v %v (%q)", rep, err, src.asked)
 	}
 
-	basis, cov, unavailable, err := f.VectorCoverage(context.Background())
+	basis, cov, unavailable, err := f.HeldCoverage(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

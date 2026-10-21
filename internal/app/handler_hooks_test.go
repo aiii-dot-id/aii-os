@@ -100,6 +100,7 @@ var liveHookPin = map[string]string{
 	"PagesClosed":                "app.(*App).pokeOutbox",
 	"PendingSteers":              "app.(*App).PendingSteers",
 	"PluginAct":                  "closure",
+	"PluginStored":               "app.(*App).PluginStoredPage",
 	"ProjectAct":                 "closure",
 	"PublicNameClaim":            "publicname.(*Runtime).Claim",
 	"PublicNameLook":             "publicname.(*Runtime).Look",

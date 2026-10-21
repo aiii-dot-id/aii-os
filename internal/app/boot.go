@@ -481,7 +481,7 @@ func (a *App) startLive() (retErr error) {
 	lg.SetModelID(cc.Model)
 
 	a.adoptRuntime(llmEntry, nil)
-	promptBudget := a.rememberPromptBudget(llmEntry, cfg.Prompt.MaxTokens)
+	promptBudget := a.rememberPromptBudget(llmEntry, promptCeilingFor(cfg, llmEntry, cc.Model))
 	_, budgetSrc := a.currentPromptBudget()
 
 	a.llmClient = a.newLLMClient(cc, promptBudget)
@@ -505,7 +505,9 @@ func (a *App) startLive() (retErr error) {
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
 		appTranscript{st: st, safe: a.safeTools}, appEmitter{a: a}, conversation.Config{
 
-			MaxToolResultChars: cfg.Prompt.MaxToolResultChars,
+			MaxToolResultChars: toolResultCharsSetting.n(cfg),
+
+			WrapUpAtCallLimit: true,
 
 			ContextBudgetTokens: promptBudget,
 
@@ -533,7 +535,6 @@ func (a *App) startLive() (retErr error) {
 	a.composer.SetName(a.store.IdentityName())
 
 	a.composer.SetPluginOperations(pluginOperations(toolReg))
-	restoreStandingOffer(st, toolReg)
 
 	a.applySubstrate(cfg)
 	toolReg.SetExtraRoots(cfg.Tools.ExtraRoots)
@@ -648,11 +649,12 @@ func (a *App) startLive() (retErr error) {
 		AlarmFirings:       a.alarmFirings,
 		Reachable:          func(name string) bool { return len(a.reachFor(name)) > 0 },
 		AskProposer:        a.proposeAsk,
+		WorkStarted:        a.workStarted,
 		WorkWake:           a.executor.Wake,
 		YieldGate:          a.yieldGate,
-		RouteIsLocal:       a.routeIsLocal,
+		RouteLimits:        a.spawnLimitsFor,
 	}))
-	a.applyAgency(cfg.Agency)
+	a.applyAgency(cfg)
 
 	if p, why := a.activeOpenProject(); p == nil && why != "" {
 		logsink.Info("project.decision", "restored project focus dropped — %s", why)
@@ -915,7 +917,7 @@ func replaySafeHook(reg *tools.Registry) func(llm.ToolCall) bool {
 	if reg == nil {
 		return nil
 	}
-	return func(tc llm.ToolCall) bool { return reg.ReplaySafe(targetCall(reg, tc).Function.Name) }
+	return func(tc llm.ToolCall) bool { return reg.ReplaySafe(routedCall(reg, tc).Function.Name) }
 }
 
 func (a *App) bootHeadVerifier(cfg Config) (*witness.HeadVerifier, error) {
@@ -938,26 +940,4 @@ func (a *App) newComposer(promptBudget int) *prompt.Composer {
 	c := prompt.New(a.rings, promptBudget)
 	c.SetClosing(conversation.SystemAdditions())
 	return c
-}
-
-func restoreStandingOffer(st *store.Store, toolReg *tools.Registry) {
-
-	if recorded, err := st.StandingOffer(); err != nil {
-		logsink.Warn("tools.error", "standing offer unreadable; plugin operations start inspect-only this run: %v", err)
-		toolReg.SetStandingOffer(nil, func([]tools.StandingSeat) error {
-			return fmt.Errorf("standing choices are unavailable until their saved record can be read: %w", err)
-		})
-	} else {
-		seats := make([]tools.StandingSeat, 0, len(recorded))
-		for _, s := range recorded {
-			seats = append(seats, tools.StandingSeat{Name: s.Name, Print: s.Print})
-		}
-		toolReg.SetStandingOffer(seats, func(seats []tools.StandingSeat) error {
-			record := make([]store.StandingSeat, 0, len(seats))
-			for _, s := range seats {
-				record = append(record, store.StandingSeat{Name: s.Name, Print: s.Print})
-			}
-			return st.SetStandingOffer(record)
-		})
-	}
 }

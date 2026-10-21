@@ -38,6 +38,8 @@ import (
 )
 
 type App struct {
+	failurePushed failurePushes
+
 	dash dashState
 
 	embeddedAuthentication bool
@@ -147,9 +149,6 @@ type App struct {
 	queueWake func()
 
 	composedInterrupted string
-
-	composedWithheld     []string
-	composedWithheldText string
 
 	toldModel, composedModel, composedModelText string
 
@@ -282,6 +281,8 @@ type App struct {
 	gate *quiesce.Gate
 
 	watchEvery time.Duration
+
+	reloads reloadMemory
 
 	projectsPush     func(id string, ws *dashboard.WorkspaceState)
 	projectsListPush func()

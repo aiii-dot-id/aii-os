@@ -176,9 +176,6 @@ func prepareSchemaStore(ctx context.Context, db *sql.DB, head *MirrorHead, sourc
 		} else if note != "" {
 			notes = append(notes, note)
 		}
-		if e := s.upgradeStandingOffer(); e != nil {
-			return &SchemaError{Phase: "standing offer", Cause: e}
-		}
 
 		if startup {
 			if e := clearPluginKVTemp(s.h(), nil); e != nil {

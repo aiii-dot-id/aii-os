@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,6 +148,8 @@ type Facility struct {
 	embedder Embedder
 	aside    asideSet
 
+	length lengthSeen
+
 	clock func() time.Time
 
 	convWindow int
@@ -200,6 +203,8 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 		match = phraseQuery(words)
 	}
 
+	within, rest := withinWords(words, q.Exact)
+
 	var qv *queryVector
 	var meaning MeaningStatus
 	if !q.Exact && !q.WordsOnly && !q.AnyWords {
@@ -225,7 +230,14 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 				res.Sources = append(res.Sources, src)
 				continue
 			}
-			exact, matched, err := layerExact(ctx, db, d, q, match, pool, true)
+			var exact []Hit
+			var matched int
+			var err error
+			if len(within) > 0 {
+				exact, matched, err = layerWithin(ctx, db, d, q, within, rest, pool, true)
+			} else {
+				exact, matched, err = layerExact(ctx, db, d, q, match, pool, true)
+			}
 			if err != nil {
 				src.Status = classify(err)
 				src.Detail = err.Error()
@@ -500,6 +512,7 @@ func (f *Facility) Enumerate(ctx context.Context, storeName, text string, exact 
 	}
 	text = strings.TrimSpace(text)
 	match := ""
+	var within, rest []string
 	if text != "" {
 		words := wordsOf(text)
 		match = wordsQuery(words)
@@ -509,6 +522,7 @@ func (f *Facility) Enumerate(ctx context.Context, storeName, text string, exact 
 		if match == "" {
 			return nil, 0, errors.New("no searchable words in the query")
 		}
+		within, rest = withinWords(words, exact)
 	}
 	var hits []Hit
 	var total int
@@ -526,6 +540,10 @@ func (f *Facility) Enumerate(ctx context.Context, storeName, text string, exact 
 		if match == "" {
 			sqlText = "SELECT " + selectList(d) + " FROM " + d.Name + " b WHERE b." + d.Seq + " < ?"
 			qargs = append(qargs, int64(beforeSeq))
+		} else if len(within) > 0 {
+			from, wargs := withinFrom(d, within, rest)
+			sqlText = "SELECT " + selectList(d) + from + " AND b." + d.Seq + " < ?"
+			qargs = append(wargs, int64(beforeSeq))
 		} else {
 			sqlText = "SELECT " + selectList(d) + " FROM " + d.FTS + " f JOIN " + d.Name + " b ON b.rowid = f.rowid WHERE " + d.FTS + " MATCH ? AND b." + d.Seq + " < ?"
 			qargs = append(qargs, match, int64(beforeSeq))
@@ -937,7 +955,11 @@ func carriesAllWords(words []string, text string) bool {
 		have[strings.ToLower(w)] = true
 	}
 	for _, w := range words {
-		if !have[strings.ToLower(w)] {
+		if have[strings.ToLower(w)] {
+			continue
+		}
+
+		if !readWithin(w) || !slices.ContainsFunc(caseForms(w), func(form string) bool { return strings.Contains(text, form) }) {
 			return false
 		}
 	}
@@ -983,6 +1005,86 @@ func trigramQuery(words []string) string {
 		}
 	}
 	return strings.Join(terms, " OR ")
+}
+
+var unspaced = []*unicode.RangeTable{unicode.Han, unicode.Hiragana, unicode.Katakana}
+
+func readWithin(word string) bool {
+	n, in := 0, false
+	for _, r := range word {
+		n++
+		in = in || unicode.In(r, unspaced...)
+	}
+	return in && n < 3
+}
+
+func withinWords(words []string, exact bool) (within, rest []string) {
+	if exact && len(words) != 1 {
+		return nil, words
+	}
+	for _, w := range words {
+		if readWithin(w) {
+			within = append(within, w)
+		} else {
+			rest = append(rest, w)
+		}
+	}
+	return within, rest
+}
+
+func caseForms(word string) []string {
+	forms := []string{word}
+	for _, form := range []string{strings.ToLower(word), strings.ToUpper(word), strings.ToTitle(word)} {
+		if !slices.Contains(forms, form) {
+			forms = append(forms, form)
+		}
+	}
+	return forms
+}
+
+func withinFrom(d Store, within, rest []string) (string, []any) {
+	var conds []string
+	var args []any
+	for _, w := range within {
+		var cols []string
+		for _, form := range caseForms(w) {
+			for _, c := range d.Text {
+				cols = append(cols, "instr(COALESCE(b."+c+", ''), ?) > 0")
+				args = append(args, form)
+			}
+		}
+		conds = append(conds, "("+strings.Join(cols, " OR ")+")")
+	}
+	if len(rest) > 0 {
+		conds = append(conds, "b.rowid IN (SELECT rowid FROM "+d.FTS+" WHERE "+d.FTS+" MATCH ?)")
+		args = append(args, wordsQuery(rest))
+	}
+	return " FROM " + d.Name + " b WHERE " + strings.Join(conds, " AND "), args
+}
+
+func layerWithin(ctx context.Context, db store.Reader, d Store, q Query, within, rest []string, pool int, ranked bool) ([]Hit, int, error) {
+	from, qargs := withinFrom(d, within, rest)
+	if where, args := predicates(d, q, ranked); where != "" {
+		from += " AND " + where
+		qargs = append(qargs, args...)
+	}
+	var matched int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*)"+from, qargs...).Scan(&matched); err != nil {
+		return nil, 0, err
+	}
+	rows, err := db.QueryContext(ctx, "SELECT "+selectList(d)+from+" ORDER BY b.rowid DESC LIMIT ?", append(qargs, pool)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	hits, err := scanHits(rows, d)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range hits {
+		hits[i].Match = MatchExactWords
+	}
+	return hits, matched, nil
 }
 
 func Excerpt(text string, words []string, max int) string {

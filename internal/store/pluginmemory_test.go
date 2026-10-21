@@ -9,9 +9,10 @@ import (
 func TestPluginMemoriesAreScopedSupersededAndBounded(t *testing.T) {
 	s := testStore(t)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	replace := func(id, plugin, text, supersedes string) error {
-		return s.PluginMemoryAdd(PluginScope{PluginID: plugin}, PluginMemory{ID: id, Text: text, Project: "p1", CreatedAt: now}, 2, supersedes)
+	replaceUnder := func(ceiling int, id, plugin, text, supersedes string) error {
+		return s.PluginMemoryAdd(PluginScope{PluginID: plugin}, PluginMemory{ID: id, Text: text, Project: "p1", CreatedAt: now}, ceiling, supersedes)
 	}
+	replace := func(id, plugin, text, supersedes string) error { return replaceUnder(3, id, plugin, text, supersedes) }
 	add := func(id, plugin, text string, temp bool) error {
 		return s.PluginMemoryAdd(PluginScope{PluginID: plugin}, PluginMemory{ID: id, Text: text, Project: "p1", Temp: temp, CreatedAt: now}, 2, "")
 	}
@@ -39,9 +40,18 @@ func TestPluginMemoriesAreScopedSupersededAndBounded(t *testing.T) {
 	if n := countRows(t, s, pmFTS, "second"); n != 1 {
 		t.Fatalf("the sidecar does not hold the memory: %d", n)
 	}
-
+	// A replacement takes room like any other memory: the replaced row is
+	// kept, so it is a row the plugin holds. At the ceiling it is refused
+	// and nothing changes; with room for one more, m3 replaces m1, and the
+	// old row stays, marked.
+	if err := replaceUnder(2, "m3", "id.a", "third, replacing the first", "m1"); !errors.Is(err, ErrPluginMemoryQuota) {
+		t.Fatalf("a replacement at the ceiling must be refused: %v", err)
+	}
+	if kept, found, _ := s.PluginMemoryGet(PluginScope{PluginID: "id.a"}, "m1"); !found || kept.SupersededBy != "" {
+		t.Fatalf("a refused replacement changed the memory it named: %+v found=%v", kept, found)
+	}
 	if err := replace("m3", "id.a", "third, replacing the first", "m1"); err != nil {
-		t.Fatalf("a replacement must not count against the ceiling: %v", err)
+		t.Fatalf("a replacement with room for one more row: %v", err)
 	}
 	old, _, _ := s.PluginMemoryGet(PluginScope{PluginID: "id.a"}, "m1")
 	if old.SupersededBy != "m3" {
@@ -89,5 +99,29 @@ func TestTempPluginMemoriesDieWithTheActivation(t *testing.T) {
 	}
 	if failed := checkSidecarsOn(s.db); len(failed) != 0 {
 		t.Fatalf("sidecars disagree after the clear: %v", failed)
+	}
+}
+
+// A KEY A RUNNING ACTIVATION DELETED FOR ITSELF IS NOT A KEY THE PLUGIN
+// HOLDS. Its deletion marker has no value; the listing counts the keys the
+// plugin holds, and the removal takes the marker with them.
+func TestAKeysDeletionMarkerIsNotCountedAsAKeyHeld(t *testing.T) {
+	s := testStore(t)
+	shared, live := PluginScope{PluginID: "id.m"}, PluginScope{PluginID: "id.m", Activation: "live"}
+	if err := s.PluginKVPut(shared, "kept", "a value", false, 16, 1<<16); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := s.PluginKVDelete(live, "kept", true); err != nil || !deleted {
+		t.Fatalf("a temporary activation's delete of a persistent key: %v %v", deleted, err)
+	}
+	want := PluginStored{PluginID: "id.m", Keys: 1}
+	if stored, err := s.PluginsStored(); err != nil || len(stored) != 1 || stored[0] != want {
+		t.Fatalf("what the plugin holds = %+v (%v), want %+v", stored, err, want)
+	}
+	if removed, err := s.RemovePluginStored("id.m"); err != nil || removed != want {
+		t.Fatalf("the removal says it took %+v (%v), want %+v", removed, err, want)
+	}
+	if n := countRows(t, s, `SELECT COUNT(*) FROM plugin_kv WHERE plugin_id = ?`, "id.m"); n != 0 {
+		t.Fatalf("%d kv rows of the removed plugin stayed, the marker among them", n)
 	}
 }

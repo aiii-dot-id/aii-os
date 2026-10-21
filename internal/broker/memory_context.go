@@ -86,8 +86,19 @@ func (b *Binding) memoryWriteContext(kind string) (memoryContext, error) {
 	if kind == "legacy" {
 		return c, nil
 	}
-	if selection.WorkSession == "" {
+
+	if selection.WorkSession == "" && kind != "reusable" {
 		return c, fmt.Errorf("scoped memory writes require a resolvable executing work session")
+	}
+
+	if scope := b.scope.Load(); selection.WorkSession == "" && scope != nil && scope.DeliveredSession != "" {
+		ws, err := b.host.cfg.Store.WorkSessionByID(scope.DeliveredSession)
+		if err != nil {
+			return c, fmt.Errorf("delivered work session unavailable: %w", err)
+		}
+		if ws != nil && ws.Status == "delivered" {
+			selection.WorkSession, selection.Project = ws.ID, ws.Project
+		}
 	}
 	c.WorkSessionID, c.ProjectID = selection.WorkSession, selection.Project
 	c.SourceIncarnation = b.host.cfg.Store.InteractionIncarnation()

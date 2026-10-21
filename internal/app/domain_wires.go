@@ -66,6 +66,8 @@ func continuitySettingsOf(cfg Config) continuity.Settings {
 		Identity:    continuity.Identity{LedgerPath: cfg.Identity.LedgerPath, DBPath: cfg.Identity.DBPath, KeyPath: cfg.Identity.KeyPath},
 		Compression: store.CompressionOptimization{Levels: cfg.Identity.DBOptimizeLevels, Dictionary: cfg.Identity.DBLearnDictionary},
 		WitnessURL:  cfg.Witness.URL, WitnessPlatform: cfg.Witness.PlatformPubkeyPath,
+
+		ReplacedPluginMemories: cfg.Plugins.Runtime.replacedMemoryWindow(),
 	}
 }
 

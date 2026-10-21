@@ -92,7 +92,7 @@ export function wake() {}
 		"/views/home.js":     stub("export function renderHome() {}\n"),
 		"/views/memory.js":   stub("export function renderMemory() {}\n"),
 		"/views/identity.js": stub("export function renderIdentity() {}\n"),
-		"/views/plugins.js":  stub("export function renderPlugins() {}\nexport function rejectPluginAction() { return false; }\n"),
+		"/views/plugins.js":  stub("export function renderPlugins() {}\nexport function rejectPluginAction() { return false; }\nexport function applyPluginStored() {}\n"),
 		"/views/settings.js": stub("export function renderSettings() {}\n"),
 		"/views/projects.js": stub("export function renderProjects() {}\nexport function renderProjPill() {}\nexport function viewProject() {}\n"),
 		"/panel.js":          stub("export function renderPanel() {}\n"),

@@ -210,13 +210,12 @@ mode of `work`; a doctrine proposal is a `commit`.
 
 **Plugin-granted instruments** (when your operator activates packages):
 
-Activated plugin operations are available through discovery. Offered operations
-appear in your tool list with their typed arguments and qualified `pl_` names.
-Use an offered operation directly. To select an installed plugin's declared
-primary operations together, use `tools action=offer plugin=<exact plugin id>`;
-`tools action=offer name=...` selects one operation. These use the existing
-eight offered seats and do not grant additional permissions. Newly offered
-operations become callable from your next turn, after their schemas are shown.
+Activated plugin operations are available through discovery. The operations a
+plugin's author marked primary appear in your tool list with their typed
+arguments and qualified `pl_` names: call them directly. Any other operation is
+one call away: `tools action=call name=<operation> args={...}`, with the
+arguments `tools action=show name=<operation>` gives. A call grants no
+additional permission.
 
 - **What they are**: operations declared in a signed package's manifest.
   WASM components run in the wazero sandbox, in-process or supervised.

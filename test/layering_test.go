@@ -64,6 +64,7 @@ var layers = map[string]int{
 	"internal/memory/fuse": 0, "internal/memory/trigram": 0, "internal/memory/vec": 0,
 	"internal/pluginworker/wasmgen": 0, "internal/genesis/genesislive": 0, "config": 0, "packaging/icon": 0,
 	"internal/tlsfault": 0, "internal/tlsfault/tlsfaulttest": 0,
+	"internal/limits": 0, // a limit the operator may lift, and the code defaults of a run's limits (one owner)
 	// 1 the record.
 	"internal/ledger": 1,
 	// 2 values shared by record owners — and every leaf carved out of an

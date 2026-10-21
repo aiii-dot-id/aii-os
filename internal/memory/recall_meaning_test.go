@@ -126,7 +126,7 @@ func TestMeaningLayerMatchesWithinTheFloorAndSaysSo(t *testing.T) {
 	if fe.calls != 2 {
 		t.Fatalf("two stores hold rows, so two provider calls, got %d", fe.calls)
 	}
-	basis, cov, unavailable, err := f.VectorCoverage(context.Background())
+	basis, cov, unavailable, err := f.HeldCoverage(context.Background())
 	if err != nil || unavailable != "" || basis != "fake/v1" {
 		t.Fatalf("coverage: %v %q %q", err, basis, unavailable)
 	}
@@ -340,7 +340,7 @@ func TestMeaningLayerIsUnavailableNotSilent(t *testing.T) {
 	if !strings.Contains(rep.Line(), "idle") {
 		t.Fatalf("receipt: %s", rep.Line())
 	}
-	if _, _, unavailable, err := f.VectorCoverage(context.Background()); err != nil || unavailable == "" {
+	if _, _, unavailable, err := f.HeldCoverage(context.Background()); err != nil || unavailable == "" {
 		t.Fatalf("coverage without an endpoint: %q %v", unavailable, err)
 	}
 	if line := RenderCoverage("", nil, "no embeddings model is named"); !strings.Contains(line, "unavailable") {
@@ -457,7 +457,7 @@ func TestConversationVectorsAreBoundedToTheWindow(t *testing.T) {
 	if conv.Embedded != ConversationVectorWindow || conv.Remaining != 0 {
 		t.Fatalf("conversations = %+v, want the newest %d embedded and nothing remaining", conv, ConversationVectorWindow)
 	}
-	_, cov, _, err := f.VectorCoverage(context.Background())
+	_, cov, _, err := f.HeldCoverage(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

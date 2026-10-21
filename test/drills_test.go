@@ -102,6 +102,39 @@ func TestTheDrillMarkerDistinguishesAFreshBootFromAnOldLine(t *testing.T) {
 	}
 }
 
+// ONE BOOT IS NOT ALWAYS ONE FILE. The live log rolls within a boot at
+// logs.max_bytes, so what a drill looks for since the fresh boot may lie
+// in a file rolled since: read from the live file alone, a category
+// written before a roll was not seen, and the SAFE drill's "the restored
+// pair did not enter SAFE" is an absence. saw_since_fresh reads the
+// boot's files, back to the one that carries the boot line, and nothing
+// older.
+func TestADrillReadsEveryFileOfTheBootAndNoOlderOne(t *testing.T) {
+	if out, ok := runLib(t, `
+		dir=$(dirname "$LOG")
+		# The boot before: it entered SAFE. Rotated at the start of this one.
+		printf '%s\n' "Boot identity: AII OS v0.1.0" "[safe.start] entering" > "$dir/aii-20261012-090000.log"
+		touch -t 202610120900 "$dir/aii-20261012-090000.log"
+		# This boot: its first file, rolled at a size, then a second, then the live one.
+		printf '%s\n' "Boot identity: AII OS v0.2.0" "[ledger.start] opened" > "$dir/aii-20261013-100000.log"
+		touch -t 202610131000 "$dir/aii-20261013-100000.log"
+		printf '%s\n' "[plugins.start] loaded" > "$dir/aii-20261013-100500.log"
+		touch -t 202610131005 "$dir/aii-20261013-100500.log"
+		printf '%s\n' "[turn.start] first" > "$LOG"
+		saw_since_fresh "turn.start" || { echo "a line in the live file was not seen"; exit 1; }
+		saw_since_fresh "plugins.start" || { echo "a line rolled out of the live file was not seen"; exit 1; }
+		saw_since_fresh "ledger.start" || { echo "a line in the first file of the boot was not seen"; exit 1; }
+		if saw_since_fresh "safe.start"; then echo "a line of the boot before was read as this one's"; exit 1; fi
+		[ "$(boot_logs | wc -l | tr -d ' ')" = 3 ] || { echo "the files of the boot are not three: $(boot_logs | tr '\n' ' ')"; exit 1; }
+		# No roll since the boot: the live file alone, as it always was.
+		printf '%s\n' "Boot identity: AII OS v0.2.0" "[turn.start] first" > "$LOG"
+		[ "$(boot_logs | wc -l | tr -d ' ')" = 1 ] || { echo "a boot that has not rolled reads more than its live file"; exit 1; }
+		if saw_since_fresh "plugins.start"; then echo "a rolled file of an earlier boot was read"; exit 1; fi
+	`); !ok {
+		t.Fatalf("a drill's reading of one boot's log: %s", out)
+	}
+}
+
 func TestTheSafeDrillFindsTheNewestCompleteSnapshot(t *testing.T) {
 	out, ok := runLib(t, `
 mkdir -p "$DATA/backups/ledger-20260902T040000Z-seq5" "$DATA/backups/ledger-20260904T040000Z-seq20" "$DATA/backups/ledger-20260905T040000Z-seq30"

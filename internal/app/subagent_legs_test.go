@@ -16,6 +16,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -132,7 +133,7 @@ func waitDelivered(t *testing.T, st *store.Store, id string) *store.WorkSession 
 // that names the legs, one notice, one metric row summing both legs.
 func TestChildContinuesAtItsCeilingAndDeliversOnce(t *testing.T) {
 	srv, _ := scriptedChild(t, 2)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 2, SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(2), SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	if err := st.StartWorkSession(t.Context(), "ws_parent", "parent work"); err != nil {
 		t.Fatal(err)
 	}
@@ -186,8 +187,8 @@ func TestChildContinuesAtItsCeilingAndDeliversOnce(t *testing.T) {
 func TestChildWithoutLegsDeliversUnfinishedAsBefore(t *testing.T) {
 	off := false
 	for name, agency := range map[string]AgencyConfig{
-		"one leg": {MaxToolRounds: 2, SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 64, SubagentMaxLegs: 1, SubagentWallSeconds: 5},
-		"off":     {MaxToolRounds: 2, SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5, SubagentContinuation: &off},
+		"one leg": {MaxToolRounds: limits.Of(2), SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5},
+		"off":     {MaxToolRounds: limits.Of(2), SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5, SubagentContinuation: &off},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, _ := scriptedChild(t, 2)
@@ -243,13 +244,13 @@ func TestChildDeclarationFeedsItsLegMeterOnly(t *testing.T) {
 // The preface quotes the session and says what to do without a next move.
 func TestContinuationPrefaceQuotesTheSession(t *testing.T) {
 	ws := &store.WorkSession{Focus: "beans", NextMove: "count jar 3", Plan: "- jars 1..5", State: "two counted", ExpectedEvidence: "five jars counted", Falsifier: "a jar is missing", DecisionNeeded: "which jar is in scope"}
-	p := continuationPreface(2, 4, ws)
+	p := continuationPreface(2, limits.Of(4), ws)
 	for _, want := range []string{"leg 2 of 4", "SAME work session", "Next action: count jar 3", "- jars 1..5", "Established: two counted", "Expected evidence: five jars counted", "Falsifier: a jar is missing", "Decision needed: which jar is in scope", "Continue from the next move", "steps="} {
 		if !strings.Contains(p, want) {
 			t.Errorf("preface missing %q", want)
 		}
 	}
-	if q := continuationPreface(3, 4, &store.WorkSession{}); !strings.Contains(q, "No next move was recorded") {
+	if q := continuationPreface(3, limits.Of(4), &store.WorkSession{}); !strings.Contains(q, "No next move was recorded") {
 		t.Error("a session without a next move must be told to record one first")
 	}
 }
@@ -293,7 +294,7 @@ func TestChildContinuationSendsItsOwnWholeContractUnderPressure(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			const budget = 32000
-			a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 8, SubagentMaxLegs: 3, SubagentWallSeconds: 10}, budget)
+			a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(8), SubagentMaxLegs: limits.Of(3), SubagentWallSeconds: 10}, budget)
 			t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
 			// Pressure is inherited elastic material, not the child's contract.
 			rm := ring.NewManager()
@@ -412,7 +413,7 @@ func TestChildWorkReadUsesTheEffectiveBootResultLimit(t *testing.T) {
 				_, _ = io.WriteString(w, `{"model":"fake-child","choices":[{"message":{"role":"assistant","content":"served: read checked"},"finish_reason":"stop"}]}`)
 			}))
 			t.Cleanup(srv.Close)
-			a, st, _ := legFixture(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 3, SubagentMaxToolCalls: 8, SubagentMaxLegs: 1, SubagentWallSeconds: 10})
+			a, st, _ := legFixture(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: limits.Of(3), SubagentMaxToolCalls: limits.Of(8), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 10})
 			t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
 			a.engine = identity.NewEngine(st, nil, ring.NewManager(), toolDiscovererAdapter{a.toolReg}, identity.Ports{WorkState: a.readWorkState, ToolResultChars: bounds[0]})
 			// Exactly the pending-config state produced by reload: the engine
@@ -484,7 +485,7 @@ func TestChildWorkReadUsesTheEffectiveBootResultLimit(t *testing.T) {
 
 func TestChildContractThatCannotFitIsRefusedBeforeTheLegStarts(t *testing.T) {
 	srv, calls := deliveringChild(t)
-	a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 8, SubagentMaxLegs: 3, SubagentWallSeconds: 10}, 32000)
+	a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(8), SubagentMaxLegs: limits.Of(3), SubagentWallSeconds: 10}, 32000)
 	t.Cleanup(func() { a.bgCancel(); a.bgWG.Wait() })
 	const id = "ws_unfit_contract"
 	queueChild(t, st, id)
@@ -541,7 +542,7 @@ func deliveringChild(t *testing.T) (*httptest.Server, *atomic.Int32) {
 
 func TestChildThatDeliversEndsItsRunAndIsNotContinued(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	id := spawnChild(t, a, st, "count the beans and deliver")
 	ws := waitDelivered(t, st, id)
 	if ws.Result != "served: beans counted by the child" {
@@ -571,7 +572,7 @@ func TestChildThatDeliversEndsItsRunAndIsNotContinued(t *testing.T) {
 // carried across a restart.
 func TestLegAgainstADeliveredSessionIsNotRun(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	id := spawnChild(t, a, st, "count the beans and deliver")
 	waitDelivered(t, st, id)
 	before := n.Load()
@@ -636,7 +637,7 @@ func recoverAfterAHardKill(t *testing.T, a *App, st *store.Store, dedup string) 
 
 func TestARecoveredFirstLegAgainstADeliveredSessionIsNotRun(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	id := spawnChild(t, a, st, "count the beans and deliver")
 	waitDelivered(t, st, id)
 	before := n.Load()
@@ -661,7 +662,7 @@ func TestARecoveredFirstLegAgainstADeliveredSessionIsNotRun(t *testing.T) {
 // marker. The guard reads delivered as a real result, never the marker.
 func TestAFirstLegThatFailedBeforeItStartedIsRunAgain(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	const id = "ws_prestart"
 	const goal = "count the beans after a failed start"
 	if err := st.StartWorkSession(t.Context(), id, store.SubagentDescription(goal)); err != nil {
@@ -717,7 +718,7 @@ func TestALegsStartIsRecordedBeforeItsFirstModelCall(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"c","model":"fake-child","choices":[{"index":0,"message":{"role":"assistant","content":"served: counted"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105}}`)
 	}))
 	t.Cleanup(srv.Close)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	held.Store(st)
 	id := spawnChild(t, a, st, "count the beans")
 	waitDelivered(t, st, id)
@@ -728,7 +729,7 @@ func TestALegsStartIsRecordedBeforeItsFirstModelCall(t *testing.T) {
 
 func TestALegThatHadBegunIsDeliveredAsEffectUnknownAndNotRunAgain(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	const parent = "ws_resident_recovery"
 	if err := st.StartWorkSession(t.Context(), parent, "resident recovery work"); err != nil {
 		t.Fatal(err)
@@ -770,7 +771,7 @@ func TestALegThatHadBegunIsDeliveredAsEffectUnknownAndNotRunAgain(t *testing.T) 
 // it can have acted.
 func TestALegRecoveredBeforeItsStartStillRuns(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	const id = "ws_unstarted"
 	killedLeg(t, st, id, "count the beans after a kill before the start", false)
 	recoverAfterAHardKill(t, a, st, id)
@@ -785,7 +786,7 @@ func TestALegRecoveredBeforeItsStartStillRuns(t *testing.T) {
 // completing this one. It completes quietly, and the next leg runs.
 func TestALegThatHandedOverOwesNothingWhenItsItemComesBack(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5})
 	const id = "ws_handed"
 	const goal = "count the beans in two legs"
 	killedLeg(t, st, id, goal, true)
@@ -849,7 +850,7 @@ func pressureRound() string {
 }
 
 func TestAChildEndedByItsTokenFenceOrItsContextContinues(t *testing.T) {
-	agency := AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5}
+	agency := AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5}
 	for name, c := range map[string]struct {
 		first  string
 		budget int
@@ -887,8 +888,8 @@ func TestAChildEndedByABudgetItCannotContinueIsDeliveredUnfinished(t *testing.T)
 		{"context", pressureRound(), "context filled", pressureBudget},
 	} {
 		for legs, agency := range map[string]AgencyConfig{
-			"one leg": {MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 1, SubagentWallSeconds: 5},
-			"off":     {MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5, SubagentContinuation: &off},
+			"one leg": {MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5},
+			"off":     {MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5, SubagentContinuation: &off},
 		} {
 			t.Run(c.name+"/"+legs, func(t *testing.T) {
 				srv, _ := boundedChild(t, c.first)
@@ -913,7 +914,7 @@ func TestAChildEndedByABudgetItCannotContinueIsDeliveredUnfinished(t *testing.T)
 
 func TestAChildIsFencedByTheConfiguredTurnTokenBudget(t *testing.T) {
 	srv, _ := boundedChild(t, fenceRound(1500))
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5, TurnTokenBudget: 1000})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5, TurnTokenBudget: limits.Of(1000)})
 	id := spawnChild(t, a, st, "count the beans under a small fence")
 	ws := waitDelivered(t, st, id)
 	if !strings.Contains(ws.Result, "done in leg two") || !strings.Contains(ws.Result, "legs=2/4") {
@@ -924,7 +925,7 @@ func TestAChildIsFencedByTheConfiguredTurnTokenBudget(t *testing.T) {
 func TestRuntimeDeliveriesBeginWithTheVerdict(t *testing.T) {
 	t.Run("exhausted", func(t *testing.T) {
 		srv, _ := scriptedChild(t, 2)
-		a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 2, SubagentMaxToolRounds: 2, SubagentMaxToolCalls: 64, SubagentMaxLegs: 1, SubagentWallSeconds: 5})
+		a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(2), SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5})
 		id := spawnChild(t, a, st, "count the beans")
 		ws := waitDelivered(t, st, id)
 		if !strings.HasPrefix(ws.Result, "partial: UNFINISHED") {
@@ -937,7 +938,7 @@ func TestRuntimeDeliveriesBeginWithTheVerdict(t *testing.T) {
 	})
 	t.Run("final message without a verdict", func(t *testing.T) {
 		srv, _ := scriptedChild(t, 1)
-		a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 4, SubagentMaxToolRounds: 4, SubagentMaxToolCalls: 64, SubagentMaxLegs: 1, SubagentWallSeconds: 5})
+		a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(4), SubagentMaxToolRounds: limits.Of(4), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5})
 		id := spawnChild(t, a, st, "count the beans")
 		ws := waitDelivered(t, st, id)
 		if !strings.HasPrefix(ws.Result, "partial: ended without a stated verdict") || !strings.Contains(ws.Result, "done in leg two") {

@@ -95,6 +95,23 @@ func answersChecks(op string) bool { return operations[op].checks }
 
 func answersFirst(op string) bool { return operations[op].answerFirst }
 
+const DefaultMaxInflightReceipts = 4096
+
+func (c Config) maxInflightReceipts() int64 {
+	if c.MaxInflightReceipts > 0 {
+		return int64(c.MaxInflightReceipts)
+	}
+	return DefaultMaxInflightReceipts
+}
+
+func (h *Host) holdReceipt() bool {
+	if h.inflightReceipts.Add(1) > h.cfg.maxInflightReceipts() {
+		h.inflightReceipts.Add(-1)
+		return false
+	}
+	return true
+}
+
 func usesStorage(op string) bool { return operations[op].storage }
 
 func effectsAllow(effects, op string) bool {

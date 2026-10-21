@@ -16,6 +16,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
@@ -43,17 +44,18 @@ func loopCheckpoint(a *App) conversation.Checkpoint {
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
 	c := reflect.ValueOf(a.conv).Elem().FieldByName("cfg").FieldByName("Checkpoint")
-	return conversation.Checkpoint{Calls: int(c.FieldByName("Calls").Int()), GraceRounds: int(c.FieldByName("GraceRounds").Int()), Slack: int(c.FieldByName("Slack").Int())}
+	calls := c.FieldByName("Calls")
+	return conversation.Checkpoint{Calls: limits.Ceiling{N: int(calls.FieldByName("N").Int()), Unlimited: calls.FieldByName("Unlimited").Bool()}, GraceRounds: int(c.FieldByName("GraceRounds").Int()), Slack: int(c.FieldByName("Slack").Int())}
 }
 
 // The defaults are the numbers the constants were, each has one owner, and
 // with nothing configured the tool list is the registry's own.
 func TestTheTurnShapeDefaults(t *testing.T) {
 	c := *defaultConfig()
-	if calls, grace, chain := checkpointCallsSetting.value(c), graceRoundsSetting.value(c), continuationsSetting.value(c); calls != 32 || grace != 4 || chain != 8 {
-		t.Errorf("in force with nothing set: %d calls, %d grace rounds, %d continuations; the code carried 32, 4, 8", calls, grace, chain)
+	if calls, grace, chain := checkpointCallsSetting.value(c), graceRoundsSetting.n(c), continuationsSetting.value(c); calls != limits.Of(32) || grace != 4 || chain != limits.Of(8) {
+		t.Errorf("in force with nothing set: %s calls, %d grace rounds, %s continuations; the code carried 32, 4, 8", calls, grace, chain)
 	}
-	if got, want := c.Agency.checkpoint().InForce(), (conversation.Checkpoint{Calls: checkpointCallsSetting.value(c), GraceRounds: graceRoundsSetting.value(c), Slack: slackSetting.value(c)}); got != want {
+	if got, want := c.Agency.checkpoint(), (conversation.Checkpoint{Calls: checkpointCallsSetting.value(c), GraceRounds: graceRoundsSetting.n(c), Slack: slackSetting.n(c)}); got != want {
 		t.Errorf("the loop's default checkpoint is %+v and the table's is %+v", got, want)
 	}
 	var registry string
@@ -73,10 +75,10 @@ func TestTheTurnShapeDefaults(t *testing.T) {
 // measured outside a turn is written at the configuration's own.
 func TestTheStepsSentenceStatesTheTurnsCheckpoint(t *testing.T) {
 	a := &App{toolReg: tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{}),
-		cfg: &Config{Agency: AgencyConfig{TurnCheckpointCalls: 500, TurnCheckpointGraceRounds: 1}}}
+		cfg: &Config{Agency: AgencyConfig{TurnCheckpointCalls: limits.Of(500), TurnCheckpointGraceRounds: 1}}}
 	for name, defs := range map[string][]llm.ToolDefinition{
 		"the configuration's": a.buildToolDefinitions(),
-		"a turn's":            appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: 500, GraceRounds: 1}),
+		"a turn's":            appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 1}),
 	} {
 		got := stepsSentence(t, defs)
 		for _, want := range []string{"(with none declared, at 500)", "gives you one more round to say"} {
@@ -87,7 +89,7 @@ func TestTheStepsSentenceStatesTheTurnsCheckpoint(t *testing.T) {
 	}
 	// A turn's list follows what its loop hands it and nothing else: a
 	// child's loop, or a turn begun before a reload, is told its own.
-	if got := stepsSentence(t, appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: 64, GraceRounds: 12})); !strings.Contains(got, "(with none declared, at 64), gives you 12 more rounds to say") {
+	if got := stepsSentence(t, appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12})); !strings.Contains(got, "(with none declared, at 64), gives you 12 more rounds to say") {
 		t.Errorf("a turn handed 64 and 12 was told: %s", got)
 	}
 }
@@ -102,7 +104,7 @@ func TestTheStepsSentenceStatesTheTurnsCheckpoint(t *testing.T) {
 func TestTheOperatorsCheckpointReachesTheTurn(t *testing.T) {
 	app, dir := dispatchApp(t)
 	defer stopApp(t, app)
-	if got := loopCheckpoint(app); got != (conversation.Checkpoint{Calls: 32, GraceRounds: 4, Slack: 2}) {
+	if got := loopCheckpoint(app); got != (conversation.Checkpoint{Calls: limits.Of(32), GraceRounds: 4, Slack: 2}) {
 		t.Fatalf("rig: the loop began at %+v", got)
 	}
 	st, err := app.applyConfigChange(map[string]any{"agency.turn_checkpoint_calls": float64(500), "agency.turn_checkpoint_grace_rounds": float64(2)})
@@ -112,7 +114,7 @@ func TestTheOperatorsCheckpointReachesTheTurn(t *testing.T) {
 	if len(st.RestartRequired) != 0 {
 		t.Errorf("the checkpoint applies at the next turn; the door asked for a restart of %v", st.RestartRequired)
 	}
-	if got := loopCheckpoint(app); got != (conversation.Checkpoint{Calls: 500, GraceRounds: 2, Slack: 2}) {
+	if got := loopCheckpoint(app); got != (conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 2, Slack: 2}) {
 		t.Errorf("after the door's change the loop holds %+v for its next turn; want 500 and 2", got)
 	}
 	if got := stepsSentence(t, app.buildToolDefinitions()); !strings.Contains(got, "(with none declared, at 500), gives you two more rounds to say") {
@@ -156,7 +158,7 @@ func TestTheOperatorsCheckpointReachesTheTurn(t *testing.T) {
 			continue
 		}
 		held := cfg.cognitionHeld["agency.turn_checkpoint_grace_rounds"]
-		if got := graceRoundsSetting.value(*cfg); got != c.held {
+		if got := graceRoundsSetting.n(*cfg); got != c.held {
 			t.Errorf("%s: a grace of %d is in force; want %d", body, got, c.held)
 		}
 		if c.said == "" {
@@ -195,7 +197,7 @@ func TestTheGraceLeavesAChildWithLegsARoundForItsCheckpoint(t *testing.T) {
 	app, dir := dispatchApp(t)
 	defer stopApp(t, app)
 	app.cfgMu.Lock()
-	app.cfg.Agency.SubagentMaxToolRounds = 10 // the resident's stays thirty
+	app.cfg.Agency.SubagentMaxToolRounds = limits.Of(10) // the resident's stays thirty
 	app.cfgMu.Unlock()
 	var refusal *CognitionRefusal
 	_, err := app.applyConfigChange(map[string]any{"agency.turn_checkpoint_grace_rounds": float64(9)})
@@ -236,8 +238,8 @@ func TestTheGraceLeavesAChildWithLegsARoundForItsCheckpoint(t *testing.T) {
 			}
 			continue
 		}
-		if !strings.Contains(held, said) || graceRoundsSetting.value(*cfg) != 8 || validCognition(*cfg) != nil {
-			t.Errorf("%s: the loader's sentence is %q and %d grace rounds are in force; want it to say %q and 8, the most that fits, in force",
+		if !strings.Contains(held, said) || graceRoundsSetting.value(*cfg) != limits.Of(8) || validCognition(*cfg) != nil {
+			t.Errorf("%s: the loader's sentence is %q and %s grace rounds are in force; want it to say %q and 8, the most that fits, in force",
 				body, held, graceRoundsSetting.value(*cfg), said)
 		}
 	}
@@ -267,7 +269,7 @@ func TestAGraceIsHeldToTheMostThatFitsAndTheAdviceIsTrue(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := cfg.cognitionHeld["agency.turn_checkpoint_grace_rounds"]
-	if got := graceRoundsSetting.value(*cfg); got != 3 || validCognition(*cfg) != nil {
+	if got := graceRoundsSetting.n(*cfg); got != 3 || validCognition(*cfg) != nil {
 		t.Errorf("a grace of 4 beside a child's 5 rounds is held to %d (%v); want 3, the most that leaves a round", got, validCognition(*cfg))
 	}
 	if want := "no leg of a child's would be checkpointed or continued, though the identity's own turns still would: 3 is in force"; !strings.Contains(held, want) || strings.Contains(held, "the default") {
@@ -288,14 +290,14 @@ func TestAGraceIsHeldToTheMostThatFitsAndTheAdviceIsTrue(t *testing.T) {
 	want := "agency.turn_checkpoint_grace_rounds 1 is too many to leave a round of agency.subagent_max_tool_rounds (2) for a checkpoint, and no grace leaves one; " +
 		"until it is raised to at least 3, no leg of a child's would be checkpointed or continued, though the identity's own turns still would: " +
 		"the default, 4, is in force, and the file is left as it is; raise agency.subagent_max_tool_rounds to at least 3, or leave the grace unset"
-	if held := cfg.cognitionHeld["agency.turn_checkpoint_grace_rounds"]; held != want || graceRoundsSetting.value(*cfg) != 4 {
-		t.Errorf("a file's grace beside a child's two rounds loads as %d, said %q; want the default, said %q", graceRoundsSetting.value(*cfg), held, want)
+	if held := cfg.cognitionHeld["agency.turn_checkpoint_grace_rounds"]; held != want || graceRoundsSetting.value(*cfg) != limits.Of(4) {
+		t.Errorf("a file's grace beside a child's two rounds loads as %s, said %q; want the default, said %q", graceRoundsSetting.value(*cfg), held, want)
 	}
 
 	app, _ := dispatchApp(t)
 	defer stopApp(t, app)
 	app.cfgMu.Lock()
-	app.cfg.Agency.SubagentMaxToolRounds = 2
+	app.cfg.Agency.SubagentMaxToolRounds = limits.Of(2)
 	app.cfgMu.Unlock()
 	var refusal *CognitionRefusal
 	_, err = app.applyConfigChange(map[string]any{"agency.turn_checkpoint_grace_rounds": float64(1)})
@@ -361,8 +363,8 @@ func TestAResidentTurnEndsAtTheOperatorsCheckpoint(t *testing.T) {
 // delivers; under the constants the three reads were one leg.
 func TestAChildLegEndsAtTheOperatorsCheckpoint(t *testing.T) {
 	srv, _ := scriptedChild(t, 3)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 20, SubagentMaxToolRounds: 20, SubagentMaxToolCalls: 64, SubagentMaxLegs: 4, SubagentWallSeconds: 5,
-		TurnCheckpointCalls: 2, TurnCheckpointGraceRounds: 1})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(20), SubagentMaxToolRounds: limits.Of(20), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(4), SubagentWallSeconds: 5,
+		TurnCheckpointCalls: limits.Of(2), TurnCheckpointGraceRounds: 1})
 	id := spawnChild(t, a, st, "list the directory until stopped")
 	ws := waitDelivered(t, st, id)
 	if !strings.Contains(ws.Result, "legs=2/4") {
@@ -379,7 +381,7 @@ func TestTheContinuationChainStandsDownAtTheOperatorsBound(t *testing.T) {
 	app, _ := dispatchApp(t)
 	bound := func(n int) {
 		app.cfgMu.Lock()
-		app.cfg.Agency.MaxTurnContinuations = n
+		app.cfg.Agency.MaxTurnContinuations = limits.Of(n)
 		app.cfgMu.Unlock()
 	}
 	bound(2)
@@ -426,7 +428,7 @@ func TestTheContinuationChainStandsDownAtTheOperatorsBound(t *testing.T) {
 // THE RELOAD'S LINE STATES THE THREE, as it states the other ceilings.
 func TestAReloadStatesTheTurnShape(t *testing.T) {
 	out := reloadLog(t, func(c *Config) {
-		c.Agency.TurnCheckpointCalls, c.Agency.TurnCheckpointGraceRounds, c.Agency.MaxTurnContinuations = 500, 2, 9
+		c.Agency.TurnCheckpointCalls, c.Agency.TurnCheckpointGraceRounds, c.Agency.MaxTurnContinuations = limits.Of(500), 2, limits.Of(9)
 	})
 	if want := "its checkpoint at 500 calls undeclared or 2 times a declared estimate, with 2 rounds after, 9 continuations in a row"; !strings.Contains(out, want) {
 		t.Errorf("the reload did not state the turn's shape (%q):\n%s", want, out)

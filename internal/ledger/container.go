@@ -65,6 +65,18 @@ func IsSegmentName(name string) bool {
 	return ok
 }
 
+func SegmentNames(dir string) ([]string, error) {
+	segments, err := listSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(segments))
+	for i := range segments {
+		names[i] = filepath.Base(segments[i].path)
+	}
+	return names, nil
+}
+
 func RecordArtifact(path string) (string, error) {
 	if _, err := os.Lstat(path); err == nil {
 		return path, nil
@@ -336,6 +348,7 @@ func streamTail(r io.Reader, path string, newest *segment, fn func(evt *Event, l
 		}
 	}()
 	n := 0
+	fromOne := false
 	return scanLines(r, func(line []byte, _, _ int64, at int) error {
 		evt, err := decodeEvent(line)
 		if err != nil {
@@ -344,10 +357,13 @@ func streamTail(r io.Reader, path string, newest *segment, fn func(evt *Event, l
 		}
 		evt.container = filepath.Base(path)
 		n++
+		if n == 1 {
+			fromOne = evt.Seq == 1
+		}
 		if newest != nil && evt.Seq <= newest.last {
 			if oc == nil {
 				if n != 1 || evt.Seq < newest.first {
-					return fmt.Errorf("%w: tail record %d repeats a sealed record outside an overlap", ErrTailConflict, evt.Seq)
+					return afterRewrap(fromOne, fmt.Errorf("%w: tail record %d repeats a sealed record outside an overlap", ErrTailConflict, evt.Seq))
 				}
 				oc, err = newOverlapChecker(newest, evt.Seq)
 				if err != nil {
@@ -356,7 +372,7 @@ func streamTail(r io.Reader, path string, newest *segment, fn func(evt *Event, l
 			}
 			finished, err := oc.check(&evt)
 			if err != nil {
-				return err
+				return afterRewrap(fromOne, err)
 			}
 			if finished {
 				oc.close()
@@ -370,6 +386,13 @@ func streamTail(r io.Reader, path string, newest *segment, fn func(evt *Event, l
 		}
 		return fn(&evt, line, at)
 	})
+}
+
+func afterRewrap(fromOne bool, err error) error {
+	if !fromOne || !errors.Is(err, ErrTailConflict) {
+		return err
+	}
+	return fmt.Errorf("%w — a tail that begins the record again beside its segments is what an in-place re-wrap leaves when it is stopped before the segments are retired: run rewrap on this ledger again (built from cmd/rewrap in the source tree: the release does not ship it), which finishes a re-wrap it can prove and refuses anything else (docs/LEDGER_GOLD_FORMAT.md §7)", err)
 }
 
 func segmentEnd(seg *segment) (uint64, string, error) {

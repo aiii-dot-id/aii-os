@@ -17,6 +17,7 @@ import (
 	"uuid"
 
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
@@ -70,26 +71,8 @@ type ToolDefiner interface {
 }
 
 type Checkpoint struct {
-	Calls, GraceRounds, Slack int
-}
-
-const (
-	DefaultCheckpointCalls       = 32
-	DefaultCheckpointGraceRounds = 4
-	DefaultCheckpointSlack       = 2
-)
-
-func (c Checkpoint) InForce() Checkpoint {
-	if c.Calls <= 0 {
-		c.Calls = DefaultCheckpointCalls
-	}
-	if c.GraceRounds <= 0 {
-		c.GraceRounds = DefaultCheckpointGraceRounds
-	}
-	if c.Slack <= 0 {
-		c.Slack = DefaultCheckpointSlack
-	}
-	return c
+	Calls              limits.Ceiling
+	GraceRounds, Slack int
 }
 
 func (c Checkpoint) declaredLimit(p int) int {
@@ -134,7 +117,7 @@ type Steering interface {
 }
 
 type Config struct {
-	MaxIterations       int
+	MaxIterations       limits.Ceiling
 	MaxToolResultChars  int
 	ContextBudgetTokens int
 
@@ -145,7 +128,7 @@ type Config struct {
 
 	ToolSchemaRefusals int
 
-	TurnTokenBudget int
+	TurnTokenBudget limits.Ceiling
 
 	PredictedThisTurn func() (remaining, ordinal int)
 
@@ -159,32 +142,49 @@ type Config struct {
 
 	ThinkingKept func() bool
 
-	MaxToolCalls int
+	MaxToolCalls limits.Ceiling
+
+	WrapUpAtCallLimit bool
 }
 
-const DefaultMaxToolResultChars = 32_000
+const (
+	callLimitResult = "not executed: this turn's call limit (%d) is reached"
+	callLimitLine   = "This turn reached its limit of %d tool calls and was finished without further tools. Ask again to continue."
+)
 
-func (c Config) withDefaults() Config {
-	if c.MaxIterations <= 0 {
-		c.MaxIterations = 10
-	}
-	if c.MaxToolResultChars <= 0 {
-		c.MaxToolResultChars = DefaultMaxToolResultChars
-	}
-	if c.ContextBudgetTokens <= 0 {
-		c.ContextBudgetTokens = llm.DefaultContextBudgetTokens
-	}
-	if c.TurnTokenBudget <= 0 {
-		c.TurnTokenBudget = 600_000
-	}
-	if c.ToolSchemaRefusals <= 0 {
-		c.ToolSchemaRefusals = DefaultToolSchemaRefusals
-	}
-	c.Checkpoint = c.Checkpoint.InForce()
-	return c
+type Bounds struct {
+	Rounds, TurnTokens, Calls limits.Ceiling
+	Checkpoint                Checkpoint
+
+	ToolResultChars int
 }
 
-const DefaultToolSchemaRefusals = 3
+type UnsetBound string
+
+func (e UnsetBound) Error() string {
+	return "conversation: " + string(e) + " is not set — the caller names every limit a turn is held to, and the loop holds no default of its own"
+}
+
+func (c Config) unset() error {
+	for _, f := range []struct {
+		name string
+		zero bool
+	}{
+		{"MaxIterations", c.MaxIterations.IsZero()},
+		{"TurnTokenBudget", c.TurnTokenBudget.IsZero()},
+		{"MaxToolCalls", c.MaxToolCalls.IsZero()},
+		{"Checkpoint.Calls", c.Checkpoint.Calls.IsZero()},
+		{"Checkpoint.GraceRounds", c.Checkpoint.GraceRounds <= 0},
+		{"Checkpoint.Slack", c.Checkpoint.Slack <= 0},
+		{"ToolSchemaRefusals", c.ToolSchemaRefusals <= 0},
+		{"MaxToolResultChars", c.MaxToolResultChars <= 0},
+	} {
+		if f.zero {
+			return UnsetBound(f.name)
+		}
+	}
+	return nil
+}
 
 type CallReasoning struct {
 	Call  int
@@ -321,7 +321,10 @@ type Loop struct {
 }
 
 func New(l LLMClient, ex ToolExecutor, d ToolDefiner, tr Transcript, em Emitter, cfg Config) *Loop {
-	return &Loop{llm: l, tools: ex, defs: d, transcript: tr, emit: em, cfg: cfg.withDefaults()}
+	if cfg.ContextBudgetTokens <= 0 {
+		cfg.ContextBudgetTokens = llm.DefaultContextBudgetTokens
+	}
+	return &Loop{llm: l, tools: ex, defs: d, transcript: tr, emit: em, cfg: cfg}
 }
 
 func (l *Loop) SetSteering(s Steering) {
@@ -346,18 +349,35 @@ func (l *Loop) SetModelLimits(contextBudgetTokens, thinkingBudget int) {
 	l.cfg.ThinkingBudget = thinkingBudget
 }
 
-func (l *Loop) SetTurnBounds(maxIterations, turnTokenBudget int, checkpoint Checkpoint) {
+func (l *Loop) SetTurnBounds(b Bounds) error {
 	l.cfgMu.Lock()
 	defer l.cfgMu.Unlock()
-	l.cfg.MaxIterations, l.cfg.TurnTokenBudget, l.cfg.Checkpoint = maxIterations, turnTokenBudget, checkpoint
-	l.cfg = l.cfg.withDefaults()
+	next := l.cfg
+	next.MaxIterations, next.TurnTokenBudget, next.MaxToolCalls, next.Checkpoint, next.MaxToolResultChars = b.Rounds, b.TurnTokens, b.Calls, b.Checkpoint, b.ToolResultChars
+	for _, f := range []struct {
+		name string
+		zero bool
+	}{
+		{"Rounds", b.Rounds.IsZero()}, {"TurnTokens", b.TurnTokens.IsZero()}, {"Calls", b.Calls.IsZero()},
+		{"Checkpoint.Calls", b.Checkpoint.Calls.IsZero()}, {"Checkpoint.GraceRounds", b.Checkpoint.GraceRounds <= 0}, {"Checkpoint.Slack", b.Checkpoint.Slack <= 0},
+		{"ToolResultChars", b.ToolResultChars <= 0},
+	} {
+		if f.zero {
+			return UnsetBound(f.name)
+		}
+	}
+	l.cfg = next
+	return nil
 }
 
-func (l *Loop) SetToolSchemaRefusals(n int) {
+func (l *Loop) SetToolSchemaRefusals(n int) error {
+	if n <= 0 {
+		return UnsetBound("ToolSchemaRefusals")
+	}
 	l.cfgMu.Lock()
 	defer l.cfgMu.Unlock()
 	l.cfg.ToolSchemaRefusals = n
-	l.cfg = l.cfg.withDefaults()
+	return nil
 }
 
 func (l *Loop) SetContextBudgetFallback(fallback bool) {
@@ -399,14 +419,14 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 	silentSpent := 0
 	degenNudged := false
 	truncated := false
-	for i := 0; i < t.cfg.MaxIterations; i++ {
+	for i := 0; t.cfg.MaxIterations.Allows(i); i++ {
 
 		if err := t.ctx.Err(); err != nil {
 			return t.fail(err)
 		}
 		t.roundsUsed = i + 1
 
-		if i > 0 && t.turnUsage.TotalTokens+silentSpent >= t.cfg.TurnTokenBudget {
+		if i > 0 && !t.cfg.TurnTokenBudget.Allows(t.turnUsage.TotalTokens+silentSpent) {
 			continuedAtTokenBudget = true
 			addBoundaryNote(&t.messages, &t.fit, budgetPressureNote)
 			if err := t.finalCall("LLM final call under budget pressure", "under budget pressure", false); err != nil {
@@ -417,12 +437,15 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			if !t.turnUsage.Complete() {
 				spent = "about " + spent
 			}
-			budgetLine = declare("This turn's token budget (%d) is spent: %s tokens over %d calls. The answer above ends the turn; while its work session is still active, the work continues automatically in a fresh turn.",
+			budgetLine = declare("This turn's token budget (%s) is spent: %s tokens over %d calls. The answer above ends the turn; while its work session is still active, the work continues automatically in a fresh turn.",
 				t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls)
 			t.spoken = append(t.spoken, t.finalText, budgetLine)
-			logsink.InfoCtx(t.ctx, "turn.budget", "TURN BUDGET: fence at %d tokens — %s spent over %d call(s)%s; turn ended with a bounded wrap-up",
+			logsink.InfoCtx(t.ctx, "turn.budget", "TURN BUDGET: fence at %s tokens — %s spent over %d call(s)%s; turn ended with a bounded wrap-up",
 				t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls, t.turnUsage.unreported())
 			break
+		}
+		if i > 0 {
+			t.refreshDefs()
 		}
 		if err := fitRequest(&t.messages, &t.fit, t.systemBase,
 			t.toolDefs, t.cfg.ContextBudgetTokens, l.transcript); err != nil {
@@ -537,15 +560,15 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		t.messages = append(t.messages, choice.Message)
 
 		var callBudgetSurplus []llm.ToolCall
-		if t.cfg.MaxToolCalls > 0 && t.toolCallsSoFar+len(choice.Message.ToolCalls) > t.cfg.MaxToolCalls {
-			allowed := t.cfg.MaxToolCalls - t.toolCallsSoFar
+		if !t.cfg.MaxToolCalls.Unlimited && t.toolCallsSoFar+len(choice.Message.ToolCalls) > t.cfg.MaxToolCalls.N {
+			allowed := t.cfg.MaxToolCalls.N - t.toolCallsSoFar
 			if allowed < 0 {
 				allowed = 0
 			}
 			callBudgetSurplus = append(callBudgetSurplus, choice.Message.ToolCalls[allowed:]...)
 			choice.Message.ToolCalls = choice.Message.ToolCalls[:allowed]
 			logsink.InfoCtx(t.ctx, "turn.budget", "CALL BUDGET: %d of %d calls spent — %d call(s) in this batch not executed",
-				t.toolCallsSoFar+allowed, t.cfg.MaxToolCalls, len(callBudgetSurplus))
+				t.toolCallsSoFar+allowed, t.cfg.MaxToolCalls.N, len(callBudgetSurplus))
 		}
 
 		yielded, yieldAnswer, err = t.executeCalls(resp.ModelID, choice.Message.ToolCalls)
@@ -553,6 +576,17 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			return t.fail(err)
 		}
 
+		if len(callBudgetSurplus) > 0 && t.cfg.WrapUpAtCallLimit {
+			for _, tc := range callBudgetSurplus {
+				t.messages = append(t.messages, llm.FormatToolResult(tc.ID, fmt.Sprintf(callLimitResult, t.cfg.MaxToolCalls.N)))
+			}
+			exhaustedCallBudget = true
+			if err := t.finalCall("LLM final call at the call limit", "at the call limit", true); err != nil {
+				return t.fail(err)
+			}
+			t.spoken = append(t.spoken, t.finalText, declare(callLimitLine, t.cfg.MaxToolCalls.N))
+			break
+		}
 		if len(callBudgetSurplus) > 0 {
 			if err := t.refuseCalls(resp.ModelID, callBudgetSurplus, ReasonToolCallBudget, "not executed: child call budget exhausted"); err != nil {
 				return t.fail(err)
@@ -564,7 +598,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			exhaustedCallBudget = true
 			t.spoken = append(t.spoken, declare(
 				"This run reached its budget of %d tool calls with work unfinished; %d call(s) in the final batch were not executed.",
-				t.cfg.MaxToolCalls, len(callBudgetSurplus)))
+				t.cfg.MaxToolCalls.N, len(callBudgetSurplus)))
 			break
 		}
 
@@ -574,23 +608,23 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			spent := t.toolCallsSoFar
 			if p, ordinal := t.cfg.PredictedThisTurn(); p > 0 && ordinal >= 0 && ordinal <= t.ordinal {
 				declared, declarationOrdinal = p, ordinal
-				limit = t.cfg.Checkpoint.declaredLimit(p)
+				limit = limits.Of(t.cfg.Checkpoint.declaredLimit(p))
 
 				spent = t.ordinal - ordinal
 			}
 
-			if spent >= limit && grace < t.cfg.MaxIterations-1-i {
+			if !limit.Allows(spent) && (t.cfg.MaxIterations.Unlimited || grace < t.cfg.MaxIterations.N-1-i) {
 				softCapFinal = i + grace
 				t.messages[len(t.messages)-1].Content += checkpointNote(declared, spent, grace)
-				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %d) — turn will continue in a fresh turn after %d more rounds",
+				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %s) — turn will continue in a fresh turn after %d more rounds",
 					i+1, spent, declared, declarationOrdinal, limit, grace)
 			}
 		}
 
-		if remaining := t.cfg.MaxIterations - 1 - i; remaining > 0 && remaining <= toolBudgetWarnAt && len(t.messages) > 0 {
+		if remaining := t.cfg.MaxIterations.N - 1 - i; !t.cfg.MaxIterations.Unlimited && remaining > 0 && remaining <= toolBudgetWarnAt && len(t.messages) > 0 {
 			t.messages[len(t.messages)-1].Content += toolBudgetNote(remaining)
 
-			logsink.InfoCtx(t.ctx, "turn.budget", "Tool budget warning sent: %d round(s) remain of %d", remaining, t.cfg.MaxIterations)
+			logsink.InfoCtx(t.ctx, "turn.budget", "Tool budget warning sent: %d round(s) remain of %d", remaining, t.cfg.MaxIterations.N)
 		}
 
 		var boundary []string
@@ -608,7 +642,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				boundary = append(boundary, steeringNote(said))
 			}
 		}
-		if i == t.cfg.MaxIterations-1 {
+		if t.cfg.MaxIterations.Last(i) {
 			boundary = append(boundary, "You've reached this turn's round limit. Please respond to me now with what you've found.")
 		} else if yielded {
 			boundary = append(boundary, "You yielded this turn. Reply with one line of status — your gate is free, and a delivery or message wakes you next.")
@@ -619,16 +653,16 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			t.messages = append(t.messages, llm.Message{Role: "user", Content: strings.Join(boundary, "\n\n"), Images: shown})
 		}
 
-		if i == t.cfg.MaxIterations-1 || i == softCapFinal || yielded {
+		if t.cfg.MaxIterations.Last(i) || i == softCapFinal || yielded {
 
-			if !yielded && i == softCapFinal && i != t.cfg.MaxIterations-1 {
+			if !yielded && i == softCapFinal && !t.cfg.MaxIterations.Last(i) {
 				continuedAtCap = true
 			}
 
 			if err := t.finalCall("LLM final call", "at the round limit", true); err != nil {
 				return t.fail(err)
 			}
-			capLine := declare("This turn reached its limit of %d rounds and was finished without further tools. Ask again to continue.", t.cfg.MaxIterations)
+			capLine := declare("This turn reached its limit of %d rounds and was finished without further tools. Ask again to continue.", t.cfg.MaxIterations.N)
 
 			exhaustedBudget = !yielded && !continuedAtCap
 			if yielded {
@@ -700,6 +734,9 @@ func (l *Loop) newTurn(ctx context.Context, system llm.Message, history []llm.Me
 	l.cfgMu.RLock()
 	cfg := l.cfg
 	l.cfgMu.RUnlock()
+	if err := cfg.unset(); err != nil {
+		return nil, err
+	}
 	if len(history) == 0 || history[len(history)-1].Role != "user" {
 		return nil, fmt.Errorf("conversation context: current input must be the final user message")
 	}
@@ -803,6 +840,44 @@ func (t *turn) fail(err error) (Result, error) {
 		err = fmt.Errorf("%w: %w", err, stop)
 	}
 	return r, err
+}
+
+func (t *turn) refreshDefs() {
+	if t.l.defs == nil {
+		return
+	}
+	defs, err := FilterRequestTools(t.ctx, t.l.defs.ToolDefinitions(t.cfg.Checkpoint))
+	if err != nil {
+		return
+	}
+	if w, ok := t.l.llm.(toolWithholder); ok {
+		defs, _ = w.WithheldTools(defs)
+	}
+	kept := withoutRefused(defs, t.refusedDefs)
+	if sameToolNames(kept, t.toolDefs) {
+		return
+	}
+	t.toolDefs = kept
+	t.ctx = withShown(t.ctx, kept)
+	t.offered = make(map[string]bool, len(kept))
+	for _, d := range kept {
+		t.offered[d.Function.Name] = true
+	}
+	if limits, lerr := LimitsNote(t.ctx, t.toolDefs); lerr == nil && limits != "" {
+		t.fit.facts = withLimits(limits, t.plainFacts)
+	}
+}
+
+func sameToolNames(a, b []llm.ToolDefinition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Function.Name != b[i].Function.Name {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *turn) leaveOutRefusedTool(err error) bool {

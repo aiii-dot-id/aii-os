@@ -13,7 +13,10 @@ func TestPluginMemoryActivationReplacementViews(t *testing.T) {
 	stamp := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
 	add := func(scope PluginScope, id, replaces string, temp bool) {
 		t.Helper()
-		if err := s.PluginMemoryAdd(scope, PluginMemory{ID: id, Text: "memory " + id, Temp: temp, CreatedAt: stamp}, 1, replaces); err != nil {
+		// The ceiling is of every row an activation's view holds, the
+		// replaced ones with the current: three is the most this test's
+		// views ever hold (root, a1, a2).
+		if err := s.PluginMemoryAdd(scope, PluginMemory{ID: id, Text: "memory " + id, Temp: temp, CreatedAt: stamp}, 3, replaces); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -72,8 +75,14 @@ func TestPluginMemoryActivationReplacementViews(t *testing.T) {
 func TestPluginMemoryScopedAtomicRollbackQuotaAndSAFE(t *testing.T) {
 	s := testStore(t)
 	a, b := PluginScope{"p", "a"}, PluginScope{"p", "b"}
+	// A replacement holds two rows, the replaced one and its successor:
+	// a new memory is held to one row here, a replacement to two.
 	add := func(scope PluginScope, id, old string) error {
-		return s.PluginMemoryAdd(scope, PluginMemory{ID: id, Text: id, Temp: true}, 1, old)
+		ceiling := 1
+		if old != "" {
+			ceiling = 2
+		}
+		return s.PluginMemoryAdd(scope, PluginMemory{ID: id, Text: id, Temp: true}, ceiling, old)
 	}
 	if err := add(a, "a", ""); err != nil {
 		t.Fatal(err)

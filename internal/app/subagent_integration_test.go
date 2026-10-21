@@ -12,6 +12,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -43,7 +44,7 @@ func TestWorkSpawnRunsAndDelivers(t *testing.T) {
 	cfg := &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2, SubagentWallSeconds: 5},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2), SubagentWallSeconds: 5},
 	}
 	a := New(cfg)
 	a.store = st

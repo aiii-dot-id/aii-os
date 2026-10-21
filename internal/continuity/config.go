@@ -1,6 +1,8 @@
 package continuity
 
 import (
+	"time"
+
 	"github.com/aiii-dot-id/aii-os/internal/escrow"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -21,6 +23,8 @@ type Settings struct {
 	WitnessURL  string
 
 	WitnessPlatform string
+
+	ReplacedPluginMemories time.Duration
 }
 
 type Identity struct {

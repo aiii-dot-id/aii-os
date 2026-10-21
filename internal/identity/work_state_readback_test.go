@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -127,7 +127,7 @@ func TestWorkStatusFitsItsWholeFormattedResponseOrRefuses(t *testing.T) {
 	const rendezvous = "\n\nSub-agents: 0 running, 0 delivered awaiting your next compose."
 	const short = "HEAD é界🧭 TAIL"
 	shortSize := utf8.RuneCountInString(short + rendezvous)
-	defaultState := strings.Repeat("界", conversation.DefaultMaxToolResultChars-utf8.RuneCountInString(rendezvous))
+	defaultState := strings.Repeat("界", limits.DefaultToolResultChars-utf8.RuneCountInString(rendezvous))
 	for _, tc := range []struct {
 		name  string
 		state string
@@ -289,7 +289,7 @@ func TestEngineToolResultLimitUsesItsImmutableBootValue(t *testing.T) {
 		ports.ToolResultChars = 1
 		want := value
 		if want <= 0 {
-			want = conversation.DefaultMaxToolResultChars
+			want = limits.DefaultToolResultChars
 		}
 		if got := e.ToolResultLimit(); got != want {
 			t.Errorf("boot value %d resolved to %d, want %d", value, got, want)

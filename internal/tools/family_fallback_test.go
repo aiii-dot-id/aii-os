@@ -30,9 +30,9 @@ func TestUndottedOperationsGroupUnderTheirPlugin(t *testing.T) {
 			t.Fatalf("memory family names = %v (+%d)", f.Names, f.More)
 		}
 	}
-	// An offer still resolves the bare id the brief shows.
-	if _, err := r.Offer("recall"); err != nil {
-		t.Fatalf("offer by the bare operation id: %v", err)
+	// The bare id the brief shows resolves (show, call).
+	if _, err := r.Resolve("recall"); err != nil {
+		t.Fatalf("resolve the bare operation id: %v", err)
 	}
 }
 

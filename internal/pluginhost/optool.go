@@ -52,7 +52,6 @@ func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.
 	disc.Examples = append([]string(nil), d.examples...)
 	disc.OperatorConfirms = d.operatorConfirms
 	disc.Primary = d.primary
-	disc.OutputSchema = d.outputRaw
 	return disc
 }
 
@@ -78,6 +77,7 @@ type operationTool struct {
 	acts        ActProposer
 	gate        *atomic.Bool
 	authorized  func() bool
+	model       map[string]any
 }
 
 func (t *operationTool) Discovery() tools.Discovery { return t.disc }
@@ -96,6 +96,8 @@ func (t *operationTool) ReplaySafe() bool {
 
 func (t *operationTool) Name() string        { return t.name }
 func (t *operationTool) Description() string { return t.description }
+
+func (t *operationTool) ModelParameters() map[string]any { return t.model }
 
 func (t *operationTool) Parameters() map[string]any {
 	if t.parameters != nil {
@@ -269,7 +271,7 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 	}
 	if t.seam != nil && (t.desc != nil || checking) {
 		scope := broker.OperationScope{Operation: t.operation, Validation: checking, ContextRead: t.ContextProvider()}
-		scope.WorkSession, scope.SessionReason, scope.CallID = acting.ID, acting.Reason, acting.CallID
+		scope.WorkSession, scope.SessionReason, scope.CallID, scope.DeliveredSession = acting.ID, acting.Reason, acting.CallID, acting.Delivered
 		if t.desc != nil {
 			scope.Effects, scope.Capabilities, scope.Declared = t.desc.effects, t.desc.capabilities, t.desc.capsDeclared
 		}

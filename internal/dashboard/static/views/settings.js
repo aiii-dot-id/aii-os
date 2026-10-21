@@ -212,8 +212,10 @@ function substrateHTML(c) {
   return '<div class="card"><h3>SUBSTRATE — LLM</h3>' +
     provSel +
     modelField('cfg-model', cur, c.llm.model) +
-    cfgField('cfg-timeout', 'TIMEOUT (SECONDS)', c.llm.timeout_seconds) +
+    cfgField('cfg-timeout', 'TIMEOUT (SECONDS)', c.llm.timeout_seconds) + limitExtrasFor('llm.timeout_seconds', c) +
+    limitRowsHTML('substrate', c) +
     cfgField('cfg-probe-timeout', 'SUBSTRATE CHECK (SECONDS)', c.llm.probe_timeout_seconds) +
+    cfgField('cfg-refused-retry', 'LONGEST WAIT BEFORE A REFUSED MODEL IS TRIED AGAIN (SECONDS; BLANK = ' + (c.llm.refused_retry_max_default || 'THE DEFAULT') + ')', c.llm.refused_retry_max_seconds || '') +
     resolved +
     '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">providers.json owns the provider data; this card points at an entry. Endpoint, key, context/output budgets, REASONING EFFORT, and THINKING mode are edited on the entry in the Providers section. A substrate change applies only after the candidate completes a real inference request.</div>' +
     savebarHTML('llm', 'applies live after inference check') + '</div>';
@@ -942,8 +944,9 @@ function witnessHTML(c) {
 function promptHTML(c) {
   if (!c) return loadingCard('configuration');
   return '<div class="card"><h3>PROMPT</h3>' +
-    cfgField('cfg-ptokens', 'MAX TOKENS', c.prompt.max_tokens) +
+    cfgField('cfg-ptokens', 'MAX TOKENS', c.prompt.max_tokens) + limitExtrasFor('prompt.max_tokens', c) +
     cfgField('cfg-pturns', 'RECENT TURNS', c.prompt.recent_turns) +
+    limitRowsHTML('prompt', c) +
     savebarHTML('prompt', 'saved — applies next boot') + '</div>';
 }
 function agencyHTML(c) {
@@ -953,7 +956,8 @@ function agencyHTML(c) {
     '<label class="f" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="cfg-plr"' + (on ? ' checked' : '') + '> USE LOCAL MODEL FOR SUB-AGENT ROLES</label>' +
     '<div data-lifecycle="routing" style="font-size:11.5px;margin-top:4px">Applies live &mdash; the next role-tagged spawn honors it. Explicit agency.roles routes still win.</div>' +
     '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">When checked and a provider entry marked <b>local</b> answers /models, role-tagged spawns (proposer, critic, judge…) run there — free, private evaluation on your own metal. Explicit agency.roles routes still win; untagged spawns are copies of the identity and always think with the configured model. If the local host is down, everything falls back to the configured model (logged).</div>' +
-    savebarHTML('agency', 'role routing applies live') + '</div>';
+    limitRowsHTML('agency', c) +
+    savebarHTML('agency', 'applies live: role routing at the next spawn, each limit as its field says') + '</div>';
 }
 
 const COGNITION_FIELDS = {
@@ -997,18 +1001,178 @@ const COGNITION_APPLIES = {
   'agency.harvest_wall_seconds': 'applies from the next harvest\u2019s turn',
   'prompt.alarm_firings': 'applies at the next read of the alarms',
 };
-function cognitionApplies(key) { return COGNITION_APPLIES[key] || 'the rhythm reads it at its next pass'; }
+function cognitionApplies(key) {
+  if (key === 'overrides') return 'the overrides apply from the next turn';
+  return COGNITION_APPLIES[key] || LIMIT_APPLIES[key] || 'the rhythm reads it at its next pass';
+}
 const FACILITY_NAMES = { consolidate: 'Consolidation', dream: 'Dreaming', self_model: 'Self-portrait', outcomes: 'Outcome intake', brief: 'Morning brief' };
 function cognitionField(set, c) {
-  const [label, note] = COGNITION_FIELDS[set.key] || [set.key, ''];
+  const [label, note] = COGNITION_FIELDS[set.key] || LIMIT_FIELDS[set.key] || [set.key, ''];
   const configured = configValue(c, set.key);
+  const lifted = configured === LIMIT_WORD;
   const id = 'cog-' + set.key.replace(/[^a-z0-9]+/g, '-');
-  const dflt = set.default + ' (default' + (set.key === 'cognition.consolidate_spacing_seconds' ? ', three ticks of the cadence and at least thirty minutes' : '') + ')';
+  const dflt = set.default_unlimited ? 'no limit (default)' : set.default + ' (default' + (set.key === 'cognition.consolidate_spacing_seconds' ? ', three ticks of the cadence and at least thirty minutes' : '') + ')';
   return '<label class="f" for="' + id + '">' + esc(label) + ' — ' + esc(set.unit) + ', ' + esc(set.min) + ' to ' + esc(set.max) + '</label>' +
-    '<input type="number" id="' + id + '" data-cog-key="' + esc(set.key) + '" min="' + esc(set.min) + '" max="' + esc(set.max) + '" step="1" placeholder="' + esc(dflt) + '" value="' + esc(configured == null ? '' : configured) + '"' +
-    hinted(configured, 'Blank takes the default: ' + dflt) + '>' +
+    '<input type="number" id="' + id + '" data-cog-key="' + esc(set.key) + '" min="' + esc(set.min) + '" max="' + esc(set.max) + '" step="1" placeholder="' + esc(dflt) + '" value="' + esc(configured == null || lifted ? '' : configured) + '"' +
+    (lifted ? ' disabled' : '') + hinted(lifted ? null : configured, 'Blank takes the default: ' + dflt) + '>' +
+    (set.unlimited ? limitUnlimitedHTML(id + '-unl', 'data-cog-unl="' + esc(set.key) + '"', lifted) : '') +
     (set.held ? '<div class="dim-note" data-cog-held="' + esc(set.key) + '" style="margin:2px 0">' + esc(set.held) + '</div>' : '') +
-    '<div class="muted" data-cog-applies="' + esc(set.key) + '" style="font-size:11.5px;margin:2px 0 8px">' + esc((note ? note + ' ' : '') + cognitionApplies(set.key).replace(/^./, c => c.toUpperCase()) + '.') + '</div>';
+    '<div class="muted" data-cog-applies="' + esc(set.key) + '" style="font-size:11.5px;margin:2px 0 8px">' + esc((note ? note + ' ' : '') + cognitionApplies(set.key).replace(/^./, c => c.toUpperCase()) + '.') + '</div>' +
+    (set.per_model ? limitRowHTML(set, c) : '');
+}
+
+const LIMIT_WORD = 'unlimited';
+const LIMIT_FIELDS = {
+  'agency.max_tool_rounds': ['ROUNDS A TURN', 'The rounds one turn of the identity may run; at the last it is asked for its answer.'],
+  'agency.max_tool_calls': ['TOOL CALLS A TURN', 'The tool calls one turn of the identity may make; at the limit the turn is finished without further tools.'],
+  'agency.subagent_max_tool_rounds': ['A SUB-AGENT\u2019S ROUNDS A LEG', 'Held to the identity\u2019s own rounds.'],
+  'agency.subagent_max_tool_calls': ['A SUB-AGENT\u2019S TOOL CALLS A LEG', ''],
+  'agency.subagent_max_legs': ['A SUB-AGENT\u2019S LEGS', 'How many legs one sub-agent run may continue in.'],
+  'agency.subagent_wall_seconds': ['WALL OF A SUB-AGENT\u2019S LEG', 'Never lifted: a leg that outlives it is cut.'],
+  'agency.subagent_wall_seconds_local': ['WALL OF A LEG ON A LOCAL MODEL', 'The wall above, for a provider entry marked local.'],
+  'prompt.max_tokens': ['MAX TOKENS', 'Blank derives the prompt\u2019s budget from the model\u2019s window.'],
+  'prompt.max_tool_result_chars': ['ONE TOOL RESULT', 'How much of one tool result the model is shown.'],
+  'llm.timeout_seconds': ['TIMEOUT', 'How long a request may wait for the model provider; a streamed reply, how long it may be silent.'],
+  'llm.retries': ['RETRIES', 'How many times a request the network failed is tried again; -1 for none.'],
+  'llm.retry_backoff_ms': ['PAUSE BEFORE A RETRY', ''],
+};
+const LIMIT_APPLIES = {
+  'agency.max_tool_rounds': 'applies from the next turn',
+  'agency.max_tool_calls': 'applies from the next turn',
+  'agency.subagent_max_tool_rounds': 'applies from the next leg',
+  'agency.subagent_max_tool_calls': 'applies from the next leg',
+  'agency.subagent_max_legs': 'applies from the next spawn',
+  'agency.subagent_wall_seconds': 'applies from the next spawn',
+  'agency.subagent_wall_seconds_local': 'applies from the next spawn',
+  'prompt.max_tokens': 'applies after a restart',
+  'prompt.max_tool_result_chars': 'applies after a restart',
+  'llm.timeout_seconds': 'applies to the next request',
+  'llm.retries': 'applies to the next request',
+  'llm.retry_backoff_ms': 'applies to the next request',
+};
+const LIMIT_LEVELS = { model: 'the model override', provider: 'the provider override', main: 'the main setting', default: 'the default' };
+const LIMIT_STILL_BOUNDS = 'Unlimited lifts this fence only. A turn is still fitted to the model\u2019s window, ends at the continued turn\u2019s wall (agency.continuation_wall_seconds) and the request\u2019s silence ceiling (llm.timeout_seconds), and stops when you press Stop. A turn with no fence once spent 1,945,593 tokens over 101 calls and ran to the context wall.';
+let limitDraft = null;
+function limitBlock(c) {
+  if (limitDraft) return limitDraft;
+  const raw = c && c.cognition && c.cognition.overrides_block;
+  return raw ? JSON.parse(JSON.stringify(raw)) : {};
+}
+function limitDrafted(c) {
+  return limitDraft !== null && JSON.stringify(limitDraft) !== JSON.stringify((c && c.cognition && c.cognition.overrides_block) || {});
+}
+function limitUnlimitedHTML(id, attr, checked) {
+  return '<label class="f" style="display:flex;gap:6px;align-items:center;margin-top:2px"><input type="checkbox" id="' + id + '" ' + attr + (checked ? ' checked' : '') + '> UNLIMITED</label>' +
+    '<div class="muted" data-lim-bounds style="font-size:11.5px;margin:0 0 4px">' + esc(LIMIT_STILL_BOUNDS) + '</div>';
+}
+function limitValueText(v) { return v === LIMIT_WORD ? 'no limit' : String(v); }
+function limitEntries(block, key) {
+  const [section, name] = [key.slice(0, key.indexOf('.')), key.slice(key.indexOf('.') + 1)];
+  const out = [];
+  for (const provider of Object.keys(block).sort()) {
+    const p = block[provider] || {};
+    if (p[section] && p[section][name] !== undefined) out.push({ provider, model: '', value: p[section][name] });
+    for (const model of Object.keys(p.models || {}).sort()) {
+      const m = p.models[model] || {};
+      if (m[section] && m[section][name] !== undefined) out.push({ provider, model, value: m[section][name] });
+    }
+  }
+  return out;
+}
+function limitRowHTML(set, c) {
+  const slug = set.key.replace(/[^a-z0-9]+/g, '-');
+  const eff = set.effective || {};
+  const unused = (c.cognition && c.cognition.overrides_unused) || [];
+  const where = eff.provider ? ' for ' + eff.provider + (eff.model ? ' \u00b7 ' + eff.model : '') : '';
+  const held = new Map((set.overrides || []).filter(o => o.held).map(o => [o.provider + '\u0000' + (o.model || ''), o.held]));
+  const rows = limitEntries(limitBlock(c), set.key).map(o => {
+    const path = 'overrides.' + o.provider + (o.model ? '.models.' + o.model : '');
+    const gone = unused.includes(path) || unused.includes('overrides.' + o.provider);
+    const said = held.get(o.provider + '\u0000' + o.model);
+    return '<li data-lim-override="' + esc(set.key) + '">' + esc(o.provider + (o.model ? ' \u00b7 ' + o.model : '')) + ': <b>' + esc(limitValueText(o.value)) + '</b>' +
+      (gone ? ' <span class="dim-note">unused: providers.json holds no such provider or listed model</span>' : '') +
+      (said ? ' <span class="dim-note">' + esc(said) + '</span>' : '') +
+      ' <button class="btn ghost" type="button" data-lim-remove="' + esc(set.key) + '" data-lim-provider="' + esc(o.provider) + '" data-lim-model="' + esc(o.model) + '" style="padding:2px 8px;font-size:11px">Remove</button></li>';
+  }).join('');
+  const providers = (S.providers || []).filter(p => p.chat !== false);
+  const models = [...new Set(providers.flatMap(p => p.models || []))];
+  return '<div data-lim-row="' + esc(set.key) + '" style="margin:0 0 10px 12px;font-size:12px">' +
+    '<div data-lim-effective="' + esc(set.key) + '">In force' + esc(where) + ': <b>' + esc(limitValueText(eff.value == null ? '' : eff.value)) + '</b>, from ' + esc(LIMIT_LEVELS[eff.level] || 'the default') + '</div>' +
+    (rows ? '<ul style="margin:4px 0 4px 18px">' + rows + '</ul>' : '') +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px">' +
+    '<select id="lim-add-p-' + slug + '" aria-label="provider"><option value="">add for a provider\u2026</option>' + providers.map(p => '<option>' + esc(p.name) + '</option>').join('') + '</select>' +
+    (set.per_model === 'model' ? '<input id="lim-add-m-' + slug + '" list="lim-models-' + slug + '" placeholder="all its models, or one" aria-label="model" style="min-width:0;flex:1 1 140px"><datalist id="lim-models-' + slug + '">' + models.map(m => '<option value="' + esc(m) + '">').join('') + '</datalist>' : '') +
+    '<input type="number" id="lim-add-v-' + slug + '" min="' + esc(set.min) + '" max="' + esc(set.max) + '" step="1" aria-label="value" style="width:110px">' +
+    (set.unlimited ? '<label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="lim-add-u-' + slug + '"> unlimited</label>' : '') +
+    '<button class="btn ghost" type="button" data-lim-add="' + esc(set.key) + '" style="padding:2px 8px;font-size:11px">Add</button></div>' +
+    (limitDrafted(c) ? '<div class="dim-note" data-lim-drafted>Overrides changed \u2014 Save to put them in force.</div>' : '') +
+    '</div>';
+}
+const LIMIT_OWN_FIELD = new Set(['prompt.max_tokens', 'llm.timeout_seconds']);
+function limitRowsHTML(card, c) {
+  return ((c.cognition && c.cognition.settings) || []).filter(set => set.card === card && !LIMIT_OWN_FIELD.has(set.key)).map(set => cognitionField(set, c)).join('');
+}
+function limitExtrasFor(key, c) {
+  const set = ((c.cognition && c.cognition.settings) || []).find(s => s.key === key);
+  return set && set.per_model ? limitRowHTML(set, c) : '';
+}
+function limitSet(block, key, provider, model, value) {
+  const section = key.slice(0, key.indexOf('.')), name = key.slice(key.indexOf('.') + 1);
+  const p = block[provider] = block[provider] || {};
+  const at = model ? ((p.models = p.models || {})[model] = p.models[model] || {}) : p;
+  const sec = at[section] = at[section] || {};
+  if (value === undefined) delete sec[name]; else sec[name] = value;
+  if (!Object.keys(sec).length) delete at[section];
+  if (model && !Object.keys(at).length) delete p.models[model];
+  if (p.models && !Object.keys(p.models).length) delete p.models;
+  if (!Object.keys(p).length) delete block[provider];
+}
+function wireLimits(st) {
+  st.querySelectorAll('[data-cog-unl]').forEach(box => { box.onchange = () => {
+    const input = st.querySelector('[data-cog-key="' + box.dataset.cogUnl + '"]');
+    if (input) input.disabled = box.checked;
+  }; });
+  st.querySelectorAll('[data-lim-remove]').forEach(btn => { btn.onclick = () => {
+    const block = limitBlock(S.config);
+    limitSet(block, btn.dataset.limRemove, btn.dataset.limProvider, btn.dataset.limModel, undefined);
+    limitDraft = block;
+    renderSettings();
+  }; });
+  st.querySelectorAll('[data-lim-add]').forEach(btn => { btn.onclick = () => {
+    const key = btn.dataset.limAdd, slug = key.replace(/[^a-z0-9]+/g, '-');
+    const provider = ($('lim-add-p-' + slug) || {}).value || '';
+    const model = (($('lim-add-m-' + slug) || {}).value || '').trim();
+    const lifted = !!($('lim-add-u-' + slug) || {}).checked;
+    const n = Number(($('lim-add-v-' + slug) || {}).value);
+    if (!provider) { configResult = { kind: 'bad', section: limitSection(key), text: 'Choose the provider the limit is for.' }; renderSettings(); return; }
+    if (!lifted && (!Number.isInteger(n) || ($('lim-add-v-' + slug) || {}).value.trim() === '')) { configResult = { kind: 'bad', section: limitSection(key), text: 'A limit is a whole number' + (st.querySelector('#lim-add-u-' + slug) ? ', or unlimited.' : '.') }; renderSettings(); return; }
+    const block = limitBlock(S.config);
+    limitSet(block, key, provider, model, lifted ? LIMIT_WORD : n);
+    limitDraft = block;
+    renderSettings();
+  }; });
+}
+function limitSection(key) {
+  const set = ((S.config && S.config.cognition && S.config.cognition.settings) || []).find(s => s.key === key);
+  return !set || !set.card ? 'cognition' : set.card === 'substrate' ? 'llm' : set.card;
+}
+function collectLimits(ch) {
+  let bad = '';
+  document.querySelectorAll('[data-cog-key]').forEach(el => {
+    const key = el.dataset.cogKey, had = configValue(S.config, key);
+    const box = document.querySelector('[data-cog-unl="' + key + '"]');
+    if (box && box.checked) { if (had !== LIMIT_WORD) ch[key] = LIMIT_WORD; return; }
+    const raw = el.value.trim();
+    if (raw === '') { if (had != null && had !== LIMIT_WORD) ch[key] = null; else if (had === LIMIT_WORD) ch[key] = null; return; }
+    const n = Number(raw);
+    if (!Number.isInteger(n)) { bad = bad || ((COGNITION_FIELDS[key] || LIMIT_FIELDS[key] || [key])[0]) + ' is a whole number, or blank for the default.'; return; }
+    if (n !== had) ch[key] = n;
+  });
+  if (limitDrafted(S.config)) {
+    ch['overrides'] = Object.keys(limitDraft).length ? limitDraft : null;
+    ch['overrides_digest'] = S.config.cognition.overrides_digest;
+  }
+  return bad;
 }
 function cognitionHTML(c) {
   if (!c) return loadingCard('configuration');
@@ -1025,7 +1189,7 @@ function cognitionHTML(c) {
     '<p class="muted">The rhythm\u2019s own numbers, and the turn\u2019s: how the identity digests, reflects and is briefed, and how far a turn goes. Each says under it when it applies. A blank field takes the default shown in it.</p>' +
     '<div class="kv"><span>input budget</span><b data-cog-budget>' + budget + '</b></div>' +
     (conditions ? '<div class="dim-note" style="margin:8px 0">What the last passes came to:</div><ul data-cog-conditions style="margin:0 0 10px 18px;font-size:12.5px;line-height:1.6">' + conditions + '</ul>' : '<div class="dim-note" data-cog-conditions style="margin:8px 0">No facility\u2019s last pass reported carrying less than it was asked.</div>') +
-    (cog.settings || []).map(set => cognitionField(set, c)).join('') +
+    (cog.settings || []).filter(set => !set.card).map(set => cognitionField(set, c)).join('') +
     '<label class="f" for="cog-brief-at">MORNING BRIEF AT \u2014 local time</label>' +
     '<input type="time" id="cog-brief-at" value="' + esc(off ? '' : at) + '" placeholder="' + esc(cog.morning_brief_default || '') + '"' + (off ? ' disabled' : '') + hinted(off ? 'off' : at, 'Blank takes the default: ' + (cog.morning_brief_default || '')) + '>' +
     '<label class="f" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="cog-brief-off"' + (off ? ' checked' : '') + '> NO MORNING BRIEF</label>' +
@@ -1040,6 +1204,8 @@ function logsHTML(c) {
     cfgField('cfg-ldir', 'DIRECTORY (RELATIVE TO IDENTITY HOME; EMPTY = DISABLED)', cfg.dir) +
     cfgField('cfg-lbackups', 'MAX BACKUPS (-1 = KEEP ALL)', cfg.max_backups == null ? '' : cfg.max_backups) +
     cfgField('cfg-lcomp', 'COMPRESS AFTER DAYS (-1 = NEVER)', cfg.compress_days == null ? '' : cfg.compress_days) +
+    cfgField('cfg-lbytes', 'ROLL THE LIVE LOG AT (BYTES; BLANK = ' + (cfg.max_bytes_default || 'THE DEFAULT') + ')', cfg.max_bytes || '') +
+    cfgField('cfg-ltotal', 'KEEP THE ROTATED LOGS UNDER (BYTES, OLDEST GO FIRST; BLANK = ' + (cfg.max_total_bytes_default || 'NO BOUND WHILE ALL ARE KEPT') + ')', cfg.max_total_bytes || '') +
     savebarHTML('logs', 'saved — applies next restart') + '</div>';
   if (cfg.dir === '') {
     html += '<div class="card"><div class="empty">logging disabled — empty dir</div></div>';
@@ -1066,10 +1232,14 @@ function logsHTML(c) {
   html += '</div>';
   return html;
 }
+function pluginToolNote(t) {
+  return t.plugin ? '<br><span class="store-hint">An operation of plugin ' + esc(t.plugin) + ', shown as the identity is given it. ' +
+    'Its author\'s summary is on that plugin\'s card on the Plugins page, whole.</span>' : '';
+}
 function toolsHTML() {
   return '<div class="card"><h3>TOOLS — RING 5 REACH</h3>' +
     (S.tools.length ? S.tools.map(t =>
-      '<div class="tool-row"><span class="tn">' + esc(t.name) + '</span><span class="td">' + esc(t.description) + '</span>' +
+      '<div class="tool-row"><span class="tn">' + esc(t.name) + '</span><span class="td">' + esc(t.description) + pluginToolNote(t) + '</span>' +
       '<label class="switch"><input type="checkbox" data-tool="' + esc(t.name) + '"' + (t.enabled ? ' checked' : '') + '><span class="tk"></span></label></div>').join('') :
       '<div class="empty">no tools</div>') + '</div>';
 }
@@ -1907,6 +2077,7 @@ export function renderSettings() {
     btn.onclick = () => { sec = btn.dataset.sec; provOpen = null; S.requestSettingsSection(); renderSettings(); };
   });
   st.querySelectorAll('[data-save]').forEach(btn => { btn.onclick = () => { saveSettings(btn.dataset.save); renderSettings(); }; });
+  wireLimits(st);
   if (sec === 'held-mail') wireMailRepair(st);
   if (sec === 'messages') { wireMessages(st); wireContacts(st); }
   wirePublicName(st);
@@ -2049,7 +2220,11 @@ function saveSettings(section, collecting = false) {
     ch['llm.provider'] = $('cfg-provider').value;
     ch['llm.model'] = $('cfg-model').value.trim();
     const tmo = num($('cfg-timeout').value); if (tmo > 0) ch['llm.timeout_seconds'] = tmo;
+    const bad = collectLimits(ch);
+    if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
     const ptmo = num($('cfg-probe-timeout').value); if (ptmo > 0) ch['llm.probe_timeout_seconds'] = ptmo;
+    const retry = num($('cfg-refused-retry').value);
+    if (retry !== ((S.config && S.config.llm && S.config.llm.refused_retry_max_seconds) || 0)) ch['llm.refused_retry_max_seconds'] = retry === 0 ? null : retry;
   } else if (section === 'plugins') {
     ch['plugins.autoload'] = $('cfg-plevel').value;
   } else if (section === 'catalog') {
@@ -2140,20 +2315,17 @@ function saveSettings(section, collecting = false) {
   } else if (section === 'prompt') {
     ch['prompt.max_tokens'] = num($('cfg-ptokens').value);
     ch['prompt.recent_turns'] = num($('cfg-pturns').value);
+    const bad = collectLimits(ch);
+    if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
   } else if (section === 'witness') {
     ch['witness.url'] = $('cfg-wurl').value.trim();
     ch['witness.interval_events'] = num($('cfg-wint').value);
   } else if (section === 'agency') {
     ch['agency.prefer_local_for_roles'] = !!$('cfg-plr').checked;
+    const bad = collectLimits(ch);
+    if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
   } else if (section === 'cognition') {
-    let bad = '';
-    document.querySelectorAll('[data-cog-key]').forEach(el => {
-      const key = el.dataset.cogKey, raw = el.value.trim(), had = configValue(S.config, key);
-      if (raw === '') { if (had != null) ch[key] = null; return; }
-      const n = Number(raw);
-      if (!Number.isInteger(n)) { bad = bad || (COGNITION_FIELDS[key] ? COGNITION_FIELDS[key][0] : key) + ' is a whole number, or blank for the default.'; return; }
-      if (n !== had) ch[key] = n;
-    });
+    const bad = collectLimits(ch);
     if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
     const at = $('cog-brief-off').checked ? 'off' : $('cog-brief-at').value.trim();
     const hadAt = (S.config && S.config.cognition && S.config.cognition.morning_brief_at) || '';
@@ -2163,6 +2335,10 @@ function saveSettings(section, collecting = false) {
     ch['logs.dir'] = $('cfg-ldir').value.trim();
     ch['logs.max_backups'] = num($('cfg-lbackups').value);
     ch['logs.compress_days'] = num($('cfg-lcomp').value);
+    const roll = num($('cfg-lbytes').value);
+    if (roll !== ((S.config && S.config.logs && S.config.logs.max_bytes) || 0)) ch['logs.max_bytes'] = roll === 0 ? null : roll;
+    const total = num($('cfg-ltotal').value);
+    if (total !== ((S.config && S.config.logs && S.config.logs.max_total_bytes) || 0)) ch['logs.max_total_bytes'] = total === 0 ? null : total;
   }
   if (collecting) return { changes: ch, service };
   sendConfigChanges(section, ch, submittedEditor(section));
@@ -2280,6 +2456,7 @@ function configValue(state, path) {
 
 function savedValue(state, path) {
   if (path === 'identity.db_format') return state && state.database && state.database.preferred;
+  if (path === 'overrides') return (state && state.cognition && state.cognition.overrides_block) || null;
   if (path === 'certificate.route_mode') return state?.public_name?.route_mode;
   if (path === 'certificate.relay_endpoint') return state?.public_name?.relay_endpoint;
   if (path === 'certificate.direct_addresses') return state?.public_name?.direct_addresses ?? null;
@@ -2328,7 +2505,7 @@ export function acceptSettingsConfig(requestID) {
     sendConfigStep(pending);
     return true;
   }
-  const missed = Object.keys(pending.changes).filter(p => {
+  const missed = Object.keys(pending.changes).filter(p => p !== 'overrides_digest').filter(p => {
     let sent = pending.changes[p], saved = savedValue(S.config, p);
     const heard = p.startsWith('speech.heard_history.') && HEARD_FIELDS.find(f => 'speech.heard_history.' + f[1] === p);
     if (heard && sent === 0) sent = heard[5];
@@ -2355,6 +2532,7 @@ export function acceptSettingsConfig(requestID) {
   let newer = finishEditor(pending.editor);
   if (pending.editor?.saved?.()) newer = true;
   if (pending.editor) speechDraftSaved(pending.section, pending.editor.choice);
+  if ('overrides' in pending.changes) limitDraft = null;
   configResult = { kind: 'good', section: pending.section, text: savedText(pending.section, (S.config && S.config.restart_required) || [], pending.changes) };
   const newerKey = pending.section.startsWith('plugin:') ? [...keyDrafts.keys()].some(k => k.split('\u0000')[0] === pending.section.slice('plugin:'.length))
     : pending.section === 'speech' && keyDraftsFor('speech').length > 0;
@@ -2375,9 +2553,12 @@ export function savedText(section, restartRequired, changes) {
   if (section === 'speech_heard') return 'Saved — applies to the next words heard and the next read.';
   if (section === 'contacts') return 'Saved — the contacts are in force now.';
   if (section === 'route') return 'Saved — the name is re-routed on the route owner\'s next pass, within the minute.';
-  if (section === 'agency') return 'Saved — role routing applies live to the next role-tagged spawn.';
+  if (section === 'agency') {
+    const when = [...new Set(Object.keys(changes || {}).filter(k => LIMIT_APPLIES[k]).map(k => LIMIT_APPLIES[k]))];
+    return 'Saved — role routing applies live to the next role-tagged spawn' + (when.length ? '; ' + when.join('; ') : '') + '.';
+  }
   if (section === 'cognition') {
-    const when = [...new Set(Object.keys(changes || {}).map(k => k === 'cognition.morning_brief_at' ? 'the rhythm reads it at its next pass' : cognitionApplies(k)))];
+    const when = [...new Set(Object.keys(changes || {}).filter(k => k !== 'overrides_digest').map(k => k === 'cognition.morning_brief_at' ? 'the rhythm reads it at its next pass' : cognitionApplies(k)))];
     return 'Saved — ' + (when.length ? when.join('; ') : 'the rhythm reads it at its next pass') + '.';
   }
   if (restartRequired.length) return 'Saved — takes effect after restart: ' + restartRequired.join(', ') + '.';

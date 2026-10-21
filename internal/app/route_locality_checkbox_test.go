@@ -19,7 +19,7 @@ func TestTheCheckboxRoutedLocalRoleGetsTheLocalWall(t *testing.T) {
 
 	// A tagged role with no explicit route: the router sends it to the
 	// local entry, so the oracle must call it local.
-	if !a.routeIsLocal("researcher") {
+	if !localWall(a, "researcher") {
 		t.Fatal("a checkbox-routed role was not recognised as local — it would be stamped the remote wall")
 	}
 	// With the checkbox OFF and no route, the same role follows the
@@ -27,7 +27,7 @@ func TestTheCheckboxRoutedLocalRoleGetsTheLocalWall(t *testing.T) {
 	a.cfgMu.Lock()
 	a.cfg.Agency.PreferLocalForRoles = false
 	a.cfgMu.Unlock()
-	if a.routeIsLocal("researcher") {
+	if localWall(a, "researcher") {
 		t.Fatal("with the checkbox off and a remote active model, the role must not be local")
 	}
 }

@@ -17,8 +17,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
-const defaultMaxTurnContinuations = 8
-
 type capReason int
 
 const (
@@ -103,7 +101,7 @@ func (a *App) scheduleContinuation(reason capReason, from string) (bool, string)
 	if !agencyOn(cfg.Agency.TurnContinuation) {
 		return false, "continuation is switched off (agency.turn_continuation)"
 	}
-	bound := continuationsSetting.value(cfg)
+	bound := a.residentLimitsFor(cfg).Value(continuationsSetting)
 
 	ws, err := a.store.ActiveWorkSession()
 	if err != nil {
@@ -121,9 +119,9 @@ func (a *App) scheduleContinuation(reason capReason, from string) (bool, string)
 	a.turn.contChain++
 	leg := a.turn.contChain
 	a.turn.mu.Unlock()
-	if leg > bound {
-		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s, and agency.max_turn_continuations is %d — standing down so the operator can look", leg-1, sessionID, bound)
-		return false, chainSpentWhy(bound)
+	if !bound.Allows(leg - 1) {
+		logsink.Warn("continuation.refusal", "refused: %d consecutive capped turns on %s, and agency.max_turn_continuations is %s — standing down so the operator can look", leg-1, sessionID, bound)
+		return false, chainSpentWhy(bound.N)
 	}
 	if !a.runBackground(func() { a.continueCappedTurn(sessionID, leg, reason, from) }) {
 		logsink.Info("continuation.refusal", "not scheduled for %s: runtime stopping", sessionID)
@@ -371,7 +369,7 @@ func (a *App) legCutShort(sessionID string, leg int, cause error, wall bool) {
 	case a.lifetime().Err() != nil:
 		why = "the identity was stopping"
 	case wall:
-		why = fmt.Sprintf("it reached the wall of a continued turn (agency.continuation_wall_seconds, %d s)", continuationWallSetting.value(a.configSnapshot()))
+		why = fmt.Sprintf("it reached the wall of a continued turn (agency.continuation_wall_seconds, %d s)", a.residentLimitsFor(a.configSnapshot()).N(continuationWallSetting))
 	}
 	a.tellNextPart(sessionID, leg, nil, fmt.Sprintf("The next part of %s was cut short: %s.", a.workName(sessionID), why), "")
 }

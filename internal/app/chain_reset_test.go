@@ -49,7 +49,7 @@ func cappedOnce(t *testing.T, dir string) func(n int) string {
 func standDown(app *App) {
 	bound := continuationsSetting.value(app.configSnapshot())
 	app.turn.mu.Lock()
-	app.turn.contChain = bound
+	app.turn.contChain = bound.N
 	app.turn.mu.Unlock()
 }
 

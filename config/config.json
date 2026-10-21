@@ -10,7 +10,8 @@
     "api_key_env": "OPENAI_API_KEY",
     "timeout_seconds": 0,
     "retries": 0,
-    "retry_backoff_ms": 0
+    "retry_backoff_ms": 0,
+    "refused_retry_max_seconds": 0
   },
   "dashboard": {
     "port": 8180,
@@ -59,7 +60,9 @@
   "logs": {
     "dir": "log",
     "max_backups": 9,
-    "compress_days": 7
+    "compress_days": 7,
+    "max_bytes": 0,
+    "max_total_bytes": 0
   },
   "maintenance": {
     "enabled": true,

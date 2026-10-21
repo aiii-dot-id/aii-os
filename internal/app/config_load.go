@@ -18,6 +18,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
@@ -42,12 +43,22 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func ReadConfig(path string) (*Config, error) {
+	data, err := readConfigBytes(path)
+	if err != nil {
+		return nil, err
+	}
+	return decodeConfig(path, data)
+}
 
-	loadedFrom := path
+func readConfigBytes(path string) ([]byte, error) {
 	data, err := atomicfile.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	return data, nil
+}
+
+func decodeConfig(loadedFrom string, data []byte) (*Config, error) {
 
 	cfg := *defaultConfig()
 
@@ -65,7 +76,7 @@ func ReadConfig(path string) (*Config, error) {
 	if !agency["queue_workers"] && agency["max_parallel_subagents"] && cfg.Agency.MaxParallelSubagents > 0 {
 		cfg.Agency.QueueWorkers = cfg.Agency.MaxParallelSubagents
 	}
-	if !agency["subagent_max_tool_rounds"] && cfg.Agency.MaxToolRounds > 0 && cfg.Agency.SubagentMaxToolRounds > cfg.Agency.MaxToolRounds {
+	if !agency["subagent_max_tool_rounds"] && (cfg.Agency.MaxToolRounds.Unlimited || cfg.Agency.MaxToolRounds.N > 0) && cfg.Agency.SubagentMaxToolRounds.Above(cfg.Agency.MaxToolRounds) {
 		cfg.Agency.SubagentMaxToolRounds = cfg.Agency.MaxToolRounds
 	}
 	for _, said := range applyRuled(&cfg) {
@@ -86,6 +97,27 @@ func ReadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("plugins.runtime.slow_storage_call_ms must be zero (take the default) or positive")
 	}
 	if err := validHardwareQueryMs(cfg.Plugins.Runtime.HardwareQueryMs); err != nil {
+		return nil, err
+	}
+	if err := validMaxMemories(cfg.Plugins.Runtime.MaxMemories); err != nil {
+		return nil, err
+	}
+	if err := validReplacedMemoryDays(cfg.Plugins.Runtime.ReplacedMemoryDays); err != nil {
+		return nil, err
+	}
+	if cfg.Plugins.Runtime.MaxInputSchemaBytes < 0 {
+		return nil, fmt.Errorf("plugins.runtime.max_input_schema_bytes must be zero (take the default, %d) or positive", pluginhost.DefaultMaxInputSchemaBytes)
+	}
+	if cfg.Plugins.Runtime.MaxInflightReceipts < 0 {
+		return nil, fmt.Errorf("plugins.runtime.max_inflight_receipts must be zero (take the default, %d) or positive", broker.DefaultMaxInflightReceipts)
+	}
+	if err := validRefusedRetryMax(cfg.LLM.RefusedRetryMaxSeconds); err != nil {
+		return nil, err
+	}
+	if err := validLogMaxBytes(cfg.Logs.MaxBytes); err != nil {
+		return nil, err
+	}
+	if err := validLogMaxTotalBytes(cfg.Logs.MaxTotalBytes, cfg.Logs.MaxBytes); err != nil {
 		return nil, err
 	}
 	if err := validGenesisPatience(cfg.Genesis); err != nil {
@@ -147,16 +179,8 @@ func ReadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	switch {
-	case cfg.Prompt.MaxTokens < 0:
-		return nil, fmt.Errorf("prompt.max_tokens must be zero (derive from the model window) or positive")
 	case cfg.Prompt.RecentTurns <= 0:
 		return nil, fmt.Errorf("prompt.recent_turns must be positive")
-	case cfg.Agency.SubagentMaxToolCalls < 0:
-		return nil, fmt.Errorf("agency.subagent_max_tool_calls must be zero (take the default) or positive")
-	case cfg.Agency.SubagentMaxToolRounds < 0:
-		return nil, fmt.Errorf("agency.subagent_max_tool_rounds must be zero (take the default) or positive")
-	case cfg.Prompt.MaxToolResultChars < 0:
-		return nil, fmt.Errorf("prompt.max_tool_result_chars cannot be negative")
 	case cfg.Memory.BackfillSeconds < 0:
 		return nil, fmt.Errorf("memory.backfill_seconds must be zero (take the default) or positive")
 	case cfg.Memory.BackfillRows < 0:
@@ -177,16 +201,10 @@ func ReadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("maintenance.on_demand_spacing_seconds must be zero (take the default, 600) or between 1 and 86400")
 	case cfg.Prompt.PulseIntervalSeconds < 0:
 		return nil, fmt.Errorf("prompt.pulse_interval_seconds cannot be negative")
-	case cfg.Agency.MaxToolRounds <= 0:
-		return nil, fmt.Errorf("agency.max_tool_rounds must be positive")
 	case cfg.Agency.MaxSubagentDepth < 0:
 		return nil, fmt.Errorf("agency.max_subagent_depth cannot be negative")
 	case cfg.Agency.MaxParallelSubagents < 0:
 		return nil, fmt.Errorf("agency.max_parallel_subagents cannot be negative")
-	case cfg.Agency.SubagentWallSeconds <= 0:
-		return nil, fmt.Errorf("agency.subagent_wall_seconds must be positive")
-	case cfg.Agency.SubagentWallSecondsLocal <= 0:
-		return nil, fmt.Errorf("agency.subagent_wall_seconds_local must be positive")
 	case cfg.Agency.SubagentMaxMints <= 0:
 		return nil, fmt.Errorf("agency.subagent_max_mints must be positive")
 	}
@@ -201,7 +219,46 @@ func ReadConfig(path string) (*Config, error) {
 	if err := validCognition(cfg); err != nil {
 		return nil, err
 	}
+
+	for _, said := range holdOverrides(&cfg) {
+		logsink.Warn("config.decision", "%s: %s", loadedFrom, said)
+	}
 	return &cfg, nil
+}
+
+func holdOverrides(cfg *Config) (said []string) {
+	names := make([]string, 0, len(cfg.Overrides))
+	for name := range cfg.Overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		profiles := []string{""}
+		for id := range cfg.Overrides[name].models {
+			profiles = append(profiles, id)
+		}
+		sort.Strings(profiles[1:])
+		for _, model := range profiles {
+			l := limitsFor(*cfg, providerEntry{Name: name}, model)
+			paths := make([]string, 0, len(l.Held))
+			for path := range l.Held {
+				paths = append(paths, path)
+			}
+			sort.Strings(paths)
+			for _, path := range paths {
+				if _, again := cfg.cognitionHeld[path]; again {
+					continue
+				}
+				sentence := l.Held[path]
+				if cfg.cognitionHeld == nil {
+					cfg.cognitionHeld = map[string]string{}
+				}
+				cfg.cognitionHeld[path] = sentence
+				said = append(said, sentence)
+			}
+		}
+	}
+	return said
 }
 
 func (r PluginResources) startupTimeout() (time.Duration, error) {
@@ -213,6 +270,30 @@ func (r PluginResources) startupTimeout() (time.Duration, error) {
 
 func (r PluginRuntimeConfig) startupCeiling() (time.Duration, error) {
 	return positiveMilliseconds(r.MaxStartupMS)
+}
+
+const replacedMemoryDaysMax = 36500
+
+func validMaxMemories(n int) error {
+	if n < 0 {
+		return fmt.Errorf("plugins.runtime.max_memories must be zero (take the default, %d) or positive", broker.DefaultMaxMemories)
+	}
+	return nil
+}
+
+func validReplacedMemoryDays(days int) error {
+	if days < 0 || days > replacedMemoryDaysMax {
+		return fmt.Errorf("plugins.runtime.replaced_memory_days must be zero (take the default, %d) or between 1 and %d",
+			int(store.DefaultPluginMemoryReplacedRetention/(24*time.Hour)), replacedMemoryDaysMax)
+	}
+	return nil
+}
+
+func (r PluginRuntimeConfig) replacedMemoryWindow() time.Duration {
+	if r.ReplacedMemoryDays <= 0 {
+		return store.DefaultPluginMemoryReplacedRetention
+	}
+	return time.Duration(r.ReplacedMemoryDays) * 24 * time.Hour
 }
 
 func positiveMilliseconds(ms int64) (time.Duration, error) {
@@ -425,6 +506,7 @@ func (a *App) persistLocked(candidate *Config, persist func(*Config) (bool, erro
 		return false, nil
 	}
 	*a.cfg = *candidate
+	a.reloads.ownSave()
 	if err != nil {
 		return true, fmt.Errorf("config was published and applied live, but directory durability is unconfirmed: %w", err)
 	}

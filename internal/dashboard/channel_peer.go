@@ -326,7 +326,7 @@ type channelCarrier struct {
 	low   chan struct{}
 	gone  <-chan struct{}
 	end   func()
-	wmu   sync.Mutex
+	wsem  chan struct{}
 }
 
 var (
@@ -338,7 +338,7 @@ var (
 
 func newChannelCarrier(pc *webrtc.PeerConnection, dc *webrtc.DataChannel, piece int, set ChannelSettings, gone <-chan struct{}, end func()) *channelCarrier {
 	c := &channelCarrier{dc: dc, piece: piece, queue: uint64(set.QueueBytes), stall: time.Duration(set.StallMS) * time.Millisecond,
-		in: make(chan []byte), low: make(chan struct{}, 1), gone: gone}
+		in: make(chan []byte), low: make(chan struct{}, 1), gone: gone, wsem: make(chan struct{}, 1)}
 	var once sync.Once
 	c.end = func() {
 		once.Do(func() {
@@ -425,8 +425,17 @@ func (c *channelCarrier) Read(ctx context.Context) (websocket.MessageType, []byt
 }
 
 func (c *channelCarrier) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case c.wsem <- struct{}{}:
+	case <-c.gone:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.wsem }()
 	head := byte(0)
 	if typ == websocket.MessageBinary {
 		head = pieceBinary
@@ -450,6 +459,11 @@ func (c *channelCarrier) Write(ctx context.Context, typ websocket.MessageType, p
 				c.end()
 				return ctx.Err()
 			}
+		}
+
+		if err := ctx.Err(); err != nil {
+			c.end()
+			return err
 		}
 		if err := c.dc.Send(piece); err != nil {
 			c.end()

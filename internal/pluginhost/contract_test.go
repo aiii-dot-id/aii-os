@@ -301,14 +301,14 @@ func TestTheContractLoadersPreserveTheVerifiedMemberFailure(t *testing.T) {
 		t.Fatalf("a declared schema the package does not list is refused as the package's answer, got %v unread=%v", err, unread)
 	}
 
-	if set, err := loadDescriptors(pkg, res, nil, res.Manifest); err != nil || set.ops["ping"] == nil || set.ops["ping"].input == nil {
+	if set, err := loadDescriptors(pkg, res, nil, res.Manifest, 0); err != nil || set.ops["ping"] == nil || set.ops["ping"].input == nil {
 		t.Fatalf("the verified descriptor loads with its input contract: %v", err)
 	}
-	_, err = loadDescriptors(pkg, otherDigest(contractDescriptor), nil, res.Manifest)
+	_, err = loadDescriptors(pkg, otherDigest(contractDescriptor), nil, res.Manifest, 0)
 	if !errors.As(err, &se) || se.Operation != "" || se.File != contractDescriptor || !errors.As(err, &de) || de.Member != contractDescriptor || !se.Unread {
 		t.Fatalf("a descriptor that is not the verified bytes refuses, naming the file, keeping the digest error, unread, got %v", err)
 	}
-	_, err = loadDescriptors(gone, res, nil, res.Manifest)
+	_, err = loadDescriptors(gone, res, nil, res.Manifest, 0)
 	if !errors.As(err, &se) || se.File != contractDescriptor || !errors.As(err, &pe) || pe.Step != "open" || !se.Unread {
 		t.Fatalf("a descriptor read that fails after verification refuses, keeping the reader's error, unread, got %v", err)
 	}

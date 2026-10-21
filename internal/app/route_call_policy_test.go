@@ -34,7 +34,7 @@ func TestARoleRoutedToAnotherModelKeepsTheIdentitysCallPolicy(t *testing.T) {
 		{"beta", "other", "other"}, // an explicit route, its model
 		{"alpha", "am", "am"},      // a route that names the selected entry
 	} {
-		cc, entry, err := a.resolveRouteLLM(a.configSnapshot().LLM, reg, route.provider, route.model)
+		cc, entry, err := a.resolveRouteLLM(a.configSnapshot(), reg, route.provider, route.model)
 		if err != nil {
 			t.Fatalf("route %s/%s: %v", route.provider, route.model, err)
 		}
@@ -47,7 +47,7 @@ func TestARoleRoutedToAnotherModelKeepsTheIdentitysCallPolicy(t *testing.T) {
 		}
 	}
 
-	if cc, _, err := a.resolveRouteLLM(LLMConfig{Provider: "alpha", APIKeyEnv: "ROUTE_POLICY_TEST_KEY", TimeoutSeconds: 900}, reg, "beta", ""); err != nil || cc.APIKey != "" || cc.TimeoutSeconds != 900 {
+	if cc, _, err := a.resolveRouteLLM(Config{LLM: LLMConfig{Provider: "alpha", APIKeyEnv: "ROUTE_POLICY_TEST_KEY", TimeoutSeconds: 900}}, reg, "beta", ""); err != nil || cc.APIKey != "" || cc.TimeoutSeconds != 900 {
 		t.Errorf("a route to another entry carries the policy and never the block's key variable: key %q, timeout %d, %v", cc.APIKey, cc.TimeoutSeconds, err)
 	}
 }

@@ -112,8 +112,22 @@ func TestMemoryScopedRetrievalAndExactCorrections(t *testing.T) {
 
 func TestMemoryMissingContextAndSelectorValidation(t *testing.T) {
 	_, b := memHost(t, Config{})
-	for _, args := range []string{`{"text":"x","applicability":"task"}`, `{"text":"x","applicability":"project"}`, `{"text":"x","applicability":"reusable"}`, `{"text":"x","applicability":"relevant"}`, `{"text":"x","applicability":"task","work_session_id":"forged"}`} {
+	for _, args := range []string{`{"text":"x","applicability":"task"}`, `{"text":"x","applicability":"project"}`, `{"text":"x","applicability":"relevant"}`, `{"text":"x","applicability":"task","work_session_id":"forged"}`} {
 		wantResult(t, dispatch(t, b, memParams(opMemoryRemember, args)), statusDenied, reasonArgumentInvalid)
+	}
+	// A reusable lesson needs no open session; it is the
+	// identity's, and carries no session when none is acting.
+	raw := dispatch(t, b, memParams(opMemoryRemember, `{"text":"a lesson after the work was delivered","applicability":"reusable"}`))
+	wantResult(t, raw, statusSucceeded, "")
+	var lesson struct {
+		ID      string `json:"id"`
+		Context struct {
+			Applicability string `json:"applicability"`
+			WorkSession   string `json:"work_session_id"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(raw["operation_result"], &lesson); err != nil || lesson.ID == "" || lesson.Context.Applicability != "reusable" || lesson.Context.WorkSession != "" {
+		t.Fatal("a reusable lesson without a session was not kept as the identity's", string(raw["operation_result"]), err)
 	}
 	for _, args := range []string{`{"query":"x","recent":true}`, `{"query":"x","id":"p"}`, `{"recent":true,"selection":"task"}`, `{"recent":true,"selection":"alien"}`, `{"recent":true,"exact":true}`, `{"recent":true,"limit":51}`, `{"id":"x","since":"2026-01-01T00:00:00Z"}`} {
 		wantResult(t, dispatch(t, b, memParams(opMemoryRecall, args)), statusDenied, reasonArgumentInvalid)
@@ -219,4 +233,41 @@ func TestMemoryEvidenceBindsExactRetainedRecord(t *testing.T) {
 	if err != nil || count != 1 {
 		t.Fatal("rejected references wrote memory", count, err)
 	}
+}
+
+// A LESSON STORED AFTER DELIVERY KEEPS ITS WORK. With no session acting, a
+// reusable lesson is linked to the session the call's turn delivered, and
+// the store's reply carries the link; a session named as delivered that is
+// still active links nothing, and a task note still needs an acting session.
+func TestALessonStoredAfterDeliveryIsLinkedToTheDeliveredSession(t *testing.T) {
+	_, b := memHost(t, Config{})
+	st := b.host.cfg.Store
+	for _, id := range []string{"ws_delivered", "ws_active"} {
+		if err := st.StartWorkSession(t.Context(), id, "synthetic work"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.DeliverWorkSession(t.Context(), "ws_delivered", "served: done", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(delivered, args string) (string, map[string]json.RawMessage) {
+		t.Helper()
+		b.BeginOperation(OperationScope{Operation: "store", SessionReason: "no_session", DeliveredSession: delivered, Declared: true, Capabilities: []string{"ring4.memory"}})
+		raw := dispatch(t, b, memParams(opMemoryRemember, args))
+		var lesson struct {
+			Context struct {
+				WorkSession string `json:"work_session_id"`
+			} `json:"context"`
+		}
+		_ = json.Unmarshal(raw["operation_result"], &lesson)
+		return lesson.Context.WorkSession, raw
+	}
+	if got, raw := stored("ws_delivered", `{"text":"the preview URL is in the build log","applicability":"reusable"}`); got != "ws_delivered" {
+		t.Fatalf("a lesson after delivery must be linked to the delivered session: %q, %s", got, raw["operation_result"])
+	}
+	if got, _ := stored("ws_active", `{"text":"a lesson beside an active session","applicability":"reusable"}`); got != "" {
+		t.Fatalf("a session still active is not a delivered one: %q", got)
+	}
+	_, raw := stored("ws_delivered", `{"text":"a task note","applicability":"task"}`)
+	wantResult(t, raw, statusDenied, reasonArgumentInvalid)
 }

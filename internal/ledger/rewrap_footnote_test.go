@@ -40,15 +40,15 @@ func TestRewrapKeepsEverySeqAndFootnotesEarlierReceipts(t *testing.T) {
 	}
 	lg.Close()
 
-	if n, err := EarlierReceipts(path); err != nil || n != 1 {
-		t.Fatalf("EarlierReceipts = %d, %v; want 1", n, err)
-	}
-	n, err := Rewrap(path, kp, "", func(string) error { return nil })
+	done, err := RewrapWith(path, kp, "", func(string) error { return nil }, RewrapChecks{})
 	if err != nil {
 		t.Fatalf("rewrap: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("rewrapped %d records, want 5 — nothing is dropped", n)
+	if done.Records != 5 {
+		t.Fatalf("rewrapped %d records, want 5 — nothing is dropped", done.Records)
+	}
+	if done.Footnoted != 1 {
+		t.Fatalf("the re-wrap says it kept %d receipts as footnotes, want 1", done.Footnoted)
 	}
 	events, err := ReadAll(path)
 	if err != nil {
@@ -73,15 +73,12 @@ func TestRewrapKeepsEverySeqAndFootnotesEarlierReceipts(t *testing.T) {
 	if _, has := payload["receipt_before_rewrap"]; !has {
 		t.Fatal("the footnote is missing")
 	}
-	if n, err := EarlierReceipts(path); err != nil || n != 0 {
-		t.Fatalf("after the re-wrap EarlierReceipts = %d, %v; want 0", n, err)
-	}
 	if m, err := VerifyChain(path, kp.PublicKeyBytes(), &acceptHeads{}); err != nil || m != 5 {
 		t.Fatalf("verify: n=%d err=%v", m, err)
 	}
-	// A second re-wrap leaves the footnote as it is.
-	if _, err := Rewrap(path, kp, "", func(string) error { return nil }); err != nil {
-		t.Fatalf("second rewrap: %v", err)
+	// A second re-wrap leaves the footnote as it is, and counts none made.
+	if done, err := RewrapWith(path, kp, "", func(string) error { return nil }, RewrapChecks{}); err != nil || done.Footnoted != 0 {
+		t.Fatalf("second rewrap: %+v, %v; want no receipt left to footnote", done, err)
 	}
 	events, _ = ReadAll(path)
 	json.Unmarshal(events[3].Payload, &payload)

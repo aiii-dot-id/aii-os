@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
 	"time"
@@ -112,10 +113,6 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if leg < 1 {
 		leg = 1
 	}
-	maxLegs := cfg.Agency.SubagentMaxLegs
-	if maxLegs < 1 {
-		maxLegs = 1
-	}
 	legsOn := agencyOn(cfg.Agency.SubagentContinuation)
 
 	if h.sessionDelivered(p.SessionID) {
@@ -127,6 +124,11 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		return nil
 	}
 
+	target := h.a.resolveRunTarget(p.Role)
+	maxLegs := target.limits.Value(subLegsSetting)
+	if !maxLegs.Unlimited && maxLegs.N < 1 {
+		maxLegs = limits.Of(1)
+	}
 	started, serr := h.a.store.WorkSessionStartedLeg(p.SessionID)
 	if serr != nil {
 		return fmt.Errorf("subagent %s: read its started leg: %w", p.SessionID, serr)
@@ -141,7 +143,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 
 	wallSeconds := p.WallSeconds
 	if wallSeconds <= 0 {
-		wallSeconds = cfg.Agency.SubagentWallSeconds
+		wallSeconds = target.limits.N(subWallSetting)
 	}
 	wall := time.Duration(wallSeconds) * time.Second
 	runCtx, cancel := context.WithTimeout(ctx, wall)
@@ -155,7 +157,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 
 	h.a.emitToolEvent("subagent", "spawn", fmt.Sprintf("depth %d: %s", p.Depth, p.Goal))
 
-	goalText := buildSubagentGoal(p.Depth, p.Goal, cfg.Agency.SubagentMaxToolRounds, cfg.Agency.SubagentMaxToolCalls, maxLegs, wallSeconds)
+	goalText := buildSubagentGoal(p.Depth, p.Goal, target.limits.Value(subRoundsSetting), target.limits.Value(subCallsSetting), maxLegs, wallSeconds)
 	goalText += "\n\n" + sessionNotesLine(p.SessionID)
 	if leg > 1 {
 		ws, werr := h.a.store.WorkSessionByID(p.SessionID)
@@ -165,7 +167,6 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		goalText += "\n\n" + continuationPreface(leg, maxLegs, ws)
 	}
 	goalMsg := llm.Message{Role: "user", Content: goalText}
-	target := h.a.resolveRunTarget(p.Role)
 
 	h.a.emitPluginEvent(pluginhost.TopicSubagentSpawned, map[string]any{"session": p.SessionID, "role": p.Role, "model": target.modelID, "depth": p.Depth, "leg": leg})
 	reserve, err := h.a.promptReserve(goalMsg, 0)
@@ -191,13 +192,13 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	subLoop := conversation.New(target.client, appToolExecutor{h.a}, appToolDefiner{h.a},
 		appTranscript{st: h.a.store, actor: p.SessionID, safe: h.a.safeTools}, appEmitter{a: h.a, actor: p.SessionID}, conversation.Config{
 
-			MaxIterations: cfg.Agency.SubagentMaxToolRounds,
+			MaxIterations: target.limits.Value(subRoundsSetting),
 
-			MaxToolCalls: cfg.Agency.SubagentMaxToolCalls,
+			MaxToolCalls: target.limits.Value(subCallsSetting),
 
-			TurnTokenBudget:    cfg.Agency.TurnTokenBudget,
-			ToolSchemaRefusals: cfg.Agency.ToolSchemaRefusals,
-			Checkpoint:         cfg.Agency.checkpoint(),
+			TurnTokenBudget:    target.limits.Value(turnTokenBudgetSetting),
+			ToolSchemaRefusals: toolSchemaRefusalsSetting.n(cfg),
+			Checkpoint:         target.limits.cfg.Agency.checkpoint(),
 
 			MaxToolResultChars:    h.a.engine.ToolResultLimit(),
 			ContextBudgetTokens:   target.budget,
@@ -249,7 +250,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 
 	unfinished := result.ExhaustedBudget || result.ExhaustedCallBudget || capReasonOf(result) != noCap
 	bounded := err == nil && unfinished
-	if bounded && legsOn && leg < maxLegs {
+	if bounded && legsOn && maxLegs.Allows(leg) {
 		if merr := h.a.store.InsertSubagentMetric(store.SubagentMetric{
 			SessionID: p.SessionID, TsMs: time.Now().UTC().UnixMilli(),
 			Calls: accCalls, Tokens: accTokens, WallMs: accWall, Failed: false,
@@ -272,7 +273,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 			logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d could not enqueue leg %d: %v — delivering unfinished", p.SessionID, leg, leg+1, qerr)
 		} else {
 			ended := legEnding(result)
-			logsink.InfoCtx(ctx, "subagent.end", "%s: leg %d of %d ended %s after %d calls — leg %d enqueued", p.SessionID, leg, maxLegs, ended, result.ToolCallsUsed, leg+1)
+			logsink.InfoCtx(ctx, "subagent.end", "%s: leg %d of %s ended %s after %d calls — leg %d enqueued", p.SessionID, leg, maxLegs, ended, result.ToolCallsUsed, leg+1)
 			h.a.emitToolEvent("subagent", "continue", fmt.Sprintf("%s: leg %d → %d (%s)", p.SessionID, leg, leg+1, ended))
 			if h.a.dashboard != nil {
 				h.a.dashboard.BroadcastWork()
@@ -299,10 +300,10 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		outcome = "partial: UNFINISHED — the sub-agent reached its tool-call budget before it was done; calls in its final batch were not executed. What follows is real but partial; decide whether to spawn a continuation.\n\n" + body
 	case capReasonOf(result) != noCap:
 
-		why := fmt.Sprintf("this was leg %d of %d, the last", leg, maxLegs)
+		why := fmt.Sprintf("this was leg %d of %s, the last", leg, maxLegs)
 		if !legsOn {
 			why = "sub-agent continuation is off"
-		} else if leg < maxLegs {
+		} else if maxLegs.Allows(leg) {
 			why = "its next leg could not be enqueued"
 		}
 		outcome = "partial: UNFINISHED — the sub-agent stopped " + capReasonOf(result).how() + " before it was done, and nothing continues it: " + why + ". What follows is real but partial; decide whether to spawn a continuation.\n\n" + body
@@ -320,14 +321,14 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	}
 
 	header := subagentOutcomeHeader(p.Role, modelID, target.cause,
-		result.RoundsUsed, cfg.Agency.SubagentMaxToolRounds,
-		result.ToolCallsUsed, cfg.Agency.SubagentMaxToolCalls,
+		result.RoundsUsed, target.limits.Value(subRoundsSetting),
+		result.ToolCallsUsed, target.limits.Value(subCallsSetting),
 		result.Usage.Calls, tokens, unfinished)
 	if leg > 1 {
 
-		header = strings.TrimSuffix(header, "]") + fmt.Sprintf(" legs=%d/%d]", leg, maxLegs)
+		header = strings.TrimSuffix(header, "]") + fmt.Sprintf(" legs=%d/%s]", leg, maxLegs)
 		if bounded && capReasonOf(result) == noCap {
-			outcome += fmt.Sprintf("\nThis was leg %d of %d; the chain is exhausted.", leg, maxLegs)
+			outcome += fmt.Sprintf("\nThis was leg %d of %s; the chain is exhausted.", leg, maxLegs)
 		}
 	}
 
@@ -354,7 +355,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 
 var errLegInterrupted = errors.New("the leg's run was interrupted by a runtime restart")
 
-func (h *subagentHandler) recoverStartedLeg(ctx context.Context, p identity.SubagentRequest, leg, maxLegs int) error {
+func (h *subagentHandler) recoverStartedLeg(ctx context.Context, p identity.SubagentRequest, leg int, maxLegs limits.Ceiling) error {
 	handed, err := h.a.store.HasWorkItem(identity.SubagentWorkKind, fmt.Sprintf("%s#%d", p.SessionID, leg+1))
 	if err != nil {
 		return fmt.Errorf("subagent %s: look for leg %d: %w", p.SessionID, leg+1, err)
@@ -371,7 +372,7 @@ func (h *subagentHandler) recoverStartedLeg(ctx context.Context, p identity.Suba
 	if record == "" {
 		record = "\n(the session recorded nothing of its progress)"
 	}
-	outcome := store.InterruptedLeg(fmt.Sprintf(" — leg %d of %d had begun, and it is not run again: its calls may already have acted. What the session recorded:", leg, maxLegs) + record)
+	outcome := store.InterruptedLeg(fmt.Sprintf(" — leg %d of %s had begun, and it is not run again: its calls may already have acted. What the session recorded:", leg, maxLegs) + record)
 	logsink.WarnCtx(ctx, "subagent.error", "%s: leg %d had begun when the runtime stopped — delivered as external_effect_unknown, not run again", p.SessionID, leg)
 	if deliveryErr := h.a.store.DeliverWorkSession(context.WithoutCancel(ctx), p.SessionID, outcome, store.EvidenceExternalUnknown, ""); deliveryErr != nil {
 		logsink.ErrorCtx(ctx, "subagent.error", "%s: the interrupted leg %d could not be delivered: %v — item completed to prevent trajectory replay", p.SessionID, leg, deliveryErr)
@@ -384,7 +385,7 @@ func (h *subagentHandler) recoverStartedLeg(ctx context.Context, p identity.Suba
 	return nil
 }
 
-func (h *subagentHandler) failBeforeStart(ctx context.Context, w *store.WorkItem, p identity.SubagentRequest, leg, maxLegs int, phase string, cause error) error {
+func (h *subagentHandler) failBeforeStart(ctx context.Context, w *store.WorkItem, p identity.SubagentRequest, leg int, maxLegs limits.Ceiling, phase string, cause error) error {
 	err := fmt.Errorf("subagent %s: %w", phase, cause)
 	last := w.RetryCount+1 >= w.MaxRetries
 	outcome, evidence := store.PreStartFailure(cause.Error()), store.EvidenceNotRun
@@ -392,7 +393,7 @@ func (h *subagentHandler) failBeforeStart(ctx context.Context, w *store.WorkItem
 		if !last {
 			return err
 		}
-		outcome = fmt.Sprintf("partial: UNFINISHED — leg %d of %d could not start (%s), and nothing continues it. The legs before it ran, and their calls may already have acted.", leg, maxLegs, cause.Error())
+		outcome = fmt.Sprintf("partial: UNFINISHED — leg %d of %s could not start (%s), and nothing continues it. The legs before it ran, and their calls may already have acted.", leg, maxLegs, cause.Error())
 		evidence = store.EvidencePartialOrMixed
 	}
 	if deliveryErr := h.a.store.DeliverWorkSession(context.WithoutCancel(ctx), p.SessionID, outcome, evidence, ""); deliveryErr != nil {
@@ -463,9 +464,9 @@ func modelIDOf(result conversation.Result, target runTarget) string {
 	return target.modelID
 }
 
-func continuationPreface(leg, maxLegs int, ws *store.WorkSession) string {
+func continuationPreface(leg int, maxLegs limits.Ceiling, ws *store.WorkSession) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[continuation leg %d of %d] Your previous leg ended at its budget. This is the SAME work session; your record of it:", leg, maxLegs)
+	fmt.Fprintf(&b, "[continuation leg %d of %s] Your previous leg ended at its budget. This is the SAME work session; your record of it:", leg, maxLegs)
 	if ws == nil {
 		b.WriteString("\n(the session could not be read this leg)")
 	} else {
@@ -490,9 +491,9 @@ func sessionRecord(ws *store.WorkSession) string {
 	return ""
 }
 
-func buildSubagentGoal(depth int, goal string, rounds, calls, legs, wallSeconds int) string {
-	if legs < 1 {
-		legs = 1
+func buildSubagentGoal(depth int, goal string, rounds, calls, legs limits.Ceiling, wallSeconds int) string {
+	if !legs.Unlimited && legs.N < 1 {
+		legs = limits.Of(1)
 	}
 
 	return fmt.Sprintf("[sub-agent, depth %d] Your sub-goal: %s\n\n"+
@@ -506,7 +507,7 @@ func buildSubagentGoal(depth int, goal string, rounds, calls, legs, wallSeconds 
 		"- VERDICT first (one line: what you established)\n"+
 		"- EVIDENCE second (file:line, command output, or citation for each claim)\n"+
 		"- OPEN QUESTIONS last (what you could not resolve)\n\n"+
-		"Your budget: %d rounds and %d calls per leg, up to %d leg(s), %d s wall per leg. "+
+		"Your budget: %s rounds and %s calls per leg, up to %s leg(s), %d s wall per leg. "+
 		"Reads first; before your first call that changes anything, `work update steps=` on your session "+
 		"with the count the traced plan implies. At a checkpoint, `work update next_move=` with the exact "+
 		"resume point — a leg that ends at its budget continues from it; a leg that ends without one starts by asking for it.",
@@ -522,6 +523,8 @@ type runTarget struct {
 
 	budgetGuess bool
 
+	limits Limits
+
 	cause string
 }
 
@@ -532,33 +535,41 @@ func (a *App) activeRunTarget(cause string) runTarget {
 	defer a.cfgMu.RUnlock()
 	client := a.llmSwap.Current()
 	_, src := a.currentPromptBudget()
-	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), budgetGuess: src == budgetFallback, cause: cause}
+	var cfg Config
+	if a.cfg != nil {
+		cfg = *a.cfg
+	}
+	return runTarget{client: client, budget: a.composer.MaxTokens(), modelID: client.ModelName(), budgetGuess: src == budgetFallback, cause: cause,
+		limits: limitsFor(cfg, a.currentProvider(), client.ModelName())}
 }
 
-func (a *App) routeIsLocal(role string) bool {
+func (a *App) routeLimits(role string) Limits {
 	cfg := a.configSnapshot()
 	reg, err := a.loadProviders()
-	if err != nil {
-		return false
-	}
-	named := func(name string) bool {
-		for _, e := range reg.Providers {
-			if e.Name == name {
-				return e.Local
+	if role != "" && err == nil {
+		if route, ok := cfg.Agency.Roles[role]; ok {
+			if e := entryNamed(reg, route.Provider); e != nil {
+				model := route.Model
+				if model == "" {
+					model = e.DefaultModel
+				}
+				return limitsFor(cfg, *e, model)
+			}
+		} else if cfg.Agency.PreferLocalForRoles {
+			if locals := localEntries(reg); len(locals) > 0 {
+				return limitsFor(cfg, locals[0], locals[0].DefaultModel)
 			}
 		}
-		return false
 	}
+	return a.residentLimitsFor(cfg)
+}
 
-	if role != "" {
-		if route, ok := cfg.Agency.Roles[role]; ok {
-			return named(route.Provider)
-		}
-		if cfg.Agency.PreferLocalForRoles && len(localEntries(reg)) > 0 {
-			return true
-		}
-	}
-	return named(cfg.LLM.Provider)
+func (a *App) spawnLimitsFor(role string) identity.SpawnLimits {
+	return childLimits(a.routeLimits(role))
+}
+
+func childLimits(l Limits) identity.SpawnLimits {
+	return identity.SpawnLimits{Rounds: l.Value(subRoundsSetting), Calls: l.Value(subCallsSetting), Legs: l.Value(subLegsSetting), WallSeconds: l.N(subWallSetting)}
 }
 
 func (a *App) resolveRunTarget(role string) runTarget {
@@ -573,23 +584,25 @@ func (a *App) resolveRunTarget(role string) runTarget {
 			logsink.Warn("subagent.decision", "role %q: providers unavailable (%v) — using the active model", role, regErr)
 			return a.activeRunTarget("providers-unavailable")
 		}
-		cc, entry, err := a.resolveRouteLLM(cfg.LLM, reg, route.Provider, route.Model)
+		cc, entry, err := a.resolveRouteLLM(cfg, reg, route.Provider, route.Model)
 		if err != nil {
 			logsink.Warn("subagent.decision", "role %q: route %s/%s did not resolve (%v) — using the active model", role, route.Provider, route.Model, err)
 			return a.activeRunTarget("route-down")
 		}
-		budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+		lim := limitsFor(cfg, entry, cc.Model)
+		budget, src := promptBudgetFor(entry, lim.N(promptMaxTokensSetting))
 		logsink.Info("subagent.decision", "role %q routed: provider %q model %q (prompt budget %d)", role, entry.Name, cc.Model, budget)
-		return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, provider: entry.Name, budgetGuess: src == budgetFallback}
+		return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, provider: entry.Name, budgetGuess: src == budgetFallback, limits: lim}
 	}
 
 	if cfg.Agency.PreferLocalForRoles && regErr == nil {
 		if local, ok := a.firstHealthyLocal(reg); ok {
-			cc, entry, err := a.resolveRouteLLM(cfg.LLM, reg, local.Name, "")
+			cc, entry, err := a.resolveRouteLLM(cfg, reg, local.Name, "")
 			if err == nil {
-				budget, src := promptBudgetFor(entry, cfg.Prompt.MaxTokens)
+				lim := limitsFor(cfg, entry, cc.Model)
+				budget, src := promptBudgetFor(entry, lim.N(promptMaxTokensSetting))
 				logsink.Info("subagent.decision", "role %q → local model %q on %q (checkbox; prompt budget %d)", role, cc.Model, entry.Name, budget)
-				return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, provider: entry.Name, budgetGuess: src == budgetFallback}
+				return runTarget{client: a.newLLMClient(cc, budget), budget: budget, modelID: cc.Model, provider: entry.Name, budgetGuess: src == budgetFallback, limits: lim}
 			}
 			logsink.Warn("subagent.decision", "role %q: local entry %q did not resolve (%v) — using the active model", role, local.Name, err)
 		}
@@ -624,8 +637,8 @@ func (a *App) firstHealthyLocal(reg *providerRegistry) (providerEntry, bool) {
 }
 
 func subagentOutcomeHeader(role, modelID, cause string,
-	rounds, roundLimit, toolCalls, callLimit, llmCalls int, tokens string, exhausted bool) string {
-	return fmt.Sprintf("[sub-agent role=%q model=%q fallback=%t cause=%q rounds=%d/%d tool_calls=%d/%d llm_calls=%d tokens=%s exhausted=%t]",
+	rounds int, roundLimit limits.Ceiling, toolCalls int, callLimit limits.Ceiling, llmCalls int, tokens string, exhausted bool) string {
+	return fmt.Sprintf("[sub-agent role=%q model=%q fallback=%t cause=%q rounds=%d/%s tool_calls=%d/%s llm_calls=%d tokens=%s exhausted=%t]",
 		role, modelID, runTarget{cause: cause}.fellBack(), cause, rounds, roundLimit, toolCalls, callLimit, llmCalls, tokens, exhausted)
 }
 

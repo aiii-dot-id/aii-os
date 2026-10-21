@@ -80,10 +80,11 @@ func (g *contextGrant) AdmitOperation(_, _, _ string) error {
 	return nil
 }
 func TestContextSelectionGrantAndSafeAreRecheckedAfterOperationGate(t *testing.T) {
-	for _, kind := range []string{"disabled", "released", "safe", "grant", "owner"} {
+	for _, kind := range []string{"disabled", "safe", "grant", "owner"} {
 		t.Run(kind, func(t *testing.T) {
 			reg := newRegistry(t)
 			ap := auditCommitActivation(t, reg)
+			ap.pending[0].tool.disc.Primary = true // its primary is listed: its context reads
 			gate := &contextGrant{}
 			var safe atomic.Bool
 			reg.SetSafeSource(func() (string, bool) { return "fixture", safe.Load() })
@@ -94,9 +95,6 @@ func TestContextSelectionGrantAndSafeAreRecheckedAfterOperationGate(t *testing.T
 				t.Fatal(e)
 			}
 			t.Cleanup(func() { _ = ap.Deactivate(context.Background()) })
-			if _, e := reg.Offer("audit.declared"); e != nil {
-				t.Fatal(e)
-			}
 			if e := ap.inFlight.acquire(t.Context()); e != nil {
 				t.Fatal(e)
 			}
@@ -116,10 +114,6 @@ func TestContextSelectionGrantAndSafeAreRecheckedAfterOperationGate(t *testing.T
 			switch kind {
 			case "disabled":
 				reg.SetToolEnabled("audit.declared", false)
-			case "released":
-				if _, e := reg.Release("audit.declared"); e != nil {
-					t.Fatal(e)
-				}
 			case "safe":
 				safe.Store(true)
 				want = tools.ReasonSafeSuspended
@@ -190,9 +184,8 @@ func TestContextDispatchedTimeoutRecoversWithoutRetryOrStoreMutation(t *testing.
 		t.Fatal(e)
 	}
 	defer reg.Deregister(hook.Name())
-	if _, e = reg.Offer(ordinary); e != nil {
-		t.Fatal(e)
-	}
+	listed, _ := reg.Get(ordinary)
+	listed.(*operationTool).disc.Primary = true // its primary is listed: its context reads
 	first := ap.SupervisedPid()
 	ctx, cancel := context.WithTimeout(tools.WithContextSelection(tools.WithDispatchOwner(t.Context(), ap)), 250*time.Millisecond)
 	_, e = reg.Execute(ctx, hook.Name(), map[string]any{"query": strings.Repeat("x", 1500), "max_bytes": 4096})

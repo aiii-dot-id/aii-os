@@ -80,8 +80,6 @@ type Event struct {
 	Payload   json.RawMessage
 	Sig       string
 
-	readAsPriorShape bool
-
 	sealed bool
 
 	closing bool
@@ -328,6 +326,8 @@ func NewForBirth(path string) (*Ledger, error) {
 
 var ErrRecordExists = errors.New("birth requires an empty record")
 
+var syncLedgerDir = atomicfile.SyncDir
+
 func openLedger(path string, beforeCleanup func() error) (*Ledger, error) {
 	dir := filepath.Dir(path)
 	l := &Ledger{
@@ -373,15 +373,46 @@ func openLedger(path string, beforeCleanup func() error) (*Ledger, error) {
 		}
 	}
 
+	_, statErr := os.Lstat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
 	f, err := atomicfile.OpenAppendRemovable(path, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open ledger file: %w", err)
 	}
+
+	unmake := func() string {
+		if !created {
+			return ""
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return fmt.Sprintf(" (the empty file it created could not be removed: %v)", rmErr)
+		}
+		return ""
+	}
 	if err := lockLedgerFile(f); err != nil {
 		if closeErr := f.Close(); closeErr != nil {
-			return nil, fmt.Errorf("cannot lock ledger file %q: %w (close after refusal: %v)", path, err, closeErr)
+			return nil, fmt.Errorf("cannot lock ledger file %q: %w (close after refusal: %v)%s", path, err, closeErr, unmake())
 		}
-		return nil, fmt.Errorf("cannot lock ledger file %q: %w", path, err)
+		return nil, fmt.Errorf("cannot lock ledger file %q: %w%s", path, err, unmake())
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			return nil, fmt.Errorf("cannot inspect ledger file %q: %w (close after refusal: %v)%s", path, err, closeErr, unmake())
+		}
+		return nil, fmt.Errorf("cannot inspect ledger file %q: %w%s", path, err, unmake())
+	}
+	if info.Size() == 0 {
+		if err := syncLedgerDir(dir); err != nil {
+
+			left := ""
+			if closeErr := f.Close(); closeErr != nil {
+				left = fmt.Sprintf(" (close after refusal: %v)", closeErr)
+			}
+			left += unmake()
+			return nil, fmt.Errorf("cannot make the new ledger file %q durable in its directory: %w%s", path, err, left)
+		}
 	}
 	if err := l.readChainState(f); err != nil {
 		if closeErr := f.Close(); closeErr != nil {

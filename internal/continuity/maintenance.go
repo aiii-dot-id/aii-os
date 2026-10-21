@@ -114,7 +114,7 @@ func (r *Runtime) runMaintenance(ctx context.Context) {
 
 		if inSafe || !databaseHealthy {
 			dbNote += ", write maintenance skipped"
-		} else if note, err := r.w.Store().HousekeepOptimized(ctx, cfg.Compression); err != nil {
+		} else if note, err := r.w.Store().HousekeepOptimized(ctx, cfg.Compression, cfg.ReplacedPluginMemories); err != nil {
 			dbNote += ", housekeeping failed: " + err.Error()
 			logsink.Warn("maintenance.error", "housekeeping: %v", err)
 		} else {

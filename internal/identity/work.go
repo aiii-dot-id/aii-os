@@ -57,6 +57,7 @@ type workStore interface {
 	UnharvestedDeliveries(limit int) ([]store.WorkSession, error)
 	WorkSessionByID(id string) (*store.WorkSession, error)
 	StartWorkSession(ctx context.Context, id, description string) error
+	SetWorkSessionFamily(ctx context.Context, id, family string) error
 	SetStandingState(text string) error
 	UpdateWorkState(ctx context.Context, sessionID, state string) error
 	UpdateWorkPlan(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error
@@ -133,7 +134,8 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		}
 		role, _ := args["role"].(string)
 
-		wallSeconds := e.spawnWall(role)
+		spawn := e.spawnLimits(role)
+		wallSeconds := spawn.WallSeconds
 		request := SubagentRequest{
 			Goal: goal, Depth: depth + 1, SessionID: wsID, ParentSessionID: parentSession,
 			ThinkingBudget: thinking, Context: ctxScope,
@@ -164,9 +166,9 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		}
 		if queueOn && live >= maxParallel {
 
-			return fmt.Sprintf("Queued sub-agent %s (depth %d): %s — %d ahead of it for %d slot(s) (agency.max_parallel_subagents); it starts when a slot frees. Its outcome returns to your working state (Ring 4) and wakes you to harvest it; record this ID in your plan if it belongs to one. Do not spawn it again; keep doing independent work.", wsID, depth+1, goal, live, maxParallel) + e.spawnBudgetLine(wallSeconds), nil
+			return fmt.Sprintf("Queued sub-agent %s (depth %d): %s — %d ahead of it for %d slot(s) (agency.max_parallel_subagents); it starts when a slot frees. Its outcome returns to your working state (Ring 4) and wakes you to harvest it; record this ID in your plan if it belongs to one. Do not spawn it again; keep doing independent work.", wsID, depth+1, goal, live, maxParallel) + spawnBudgetLine(spawn), nil
 		}
-		return fmt.Sprintf("Spawned sub-agent %s (depth %d): %s — its outcome returns to your working state (Ring 4) and wakes you to harvest it; record this ID in your plan if it belongs to one. Note what deserves to become memory.", wsID, depth+1, goal) + e.spawnBudgetLine(wallSeconds), nil
+		return fmt.Sprintf("Spawned sub-agent %s (depth %d): %s — its outcome returns to your working state (Ring 4) and wakes you to harvest it; record this ID in your plan if it belongs to one. Note what deserves to become memory.", wsID, depth+1, goal) + spawnBudgetLine(spawn), nil
 
 	case "yield":
 
@@ -201,13 +203,27 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if desc == "" {
 			desc, _ = args["_positional"].(string)
 		}
+		family, _ := args["family"].(string)
+		family = strings.TrimSpace(family)
+		if family != "" && !store.FamilySlug(family) {
+			return "", fmt.Errorf("rejected_before_effect (start.family): no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters (e.g. \"deploy-preview\")", family)
+		}
 		wsID := "ws_" + uuid.New().String()
 
 		if err := e.store.StartWorkSession(ctx, wsID, desc); err != nil {
 			return "", err
 		}
-
-		return fmt.Sprintf("Started work session: %s", desc), nil
+		out := fmt.Sprintf("Started work session %s: %s", wsID, desc)
+		if family != "" {
+			if err := e.store.SetWorkSessionFamily(ctx, wsID, family); err != nil {
+				return "", fmt.Errorf("work session %s started, but its family was not recorded: %w", wsID, err)
+			}
+			out = fmt.Sprintf("Started work session %s (family %s): %s", wsID, family, desc)
+		}
+		if e.workStarted != nil {
+			out += e.workStarted(ctx, wsID, family, desc)
+		}
+		return out, nil
 
 	case "update":
 
@@ -244,7 +260,15 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if v, ok := args["decision_needed"].(string); ok {
 			decisionNeeded = &v
 		}
-		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil
+		var family *string
+		if v, ok := args["family"].(string); ok {
+			v = strings.TrimSpace(v)
+			if !store.FamilySlug(v) {
+				return "", fmt.Errorf("rejected_before_effect (update.family): no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", v)
+			}
+			family = &v
+		}
+		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil || family != nil
 
 		for _, k := range []string{"steps", "independent"} {
 			if _, ok := args[k]; ok {
@@ -263,6 +287,11 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 				return "", fmt.Errorf("standing state was updated and persists, but the rest of this call needed a work session and was NOT applied: %w", err)
 			}
 			return "", err
+		}
+		if family != nil {
+			if err := e.store.SetWorkSessionFamily(ctx, wsID, *family); err != nil {
+				return "", err
+			}
 		}
 		if state != nil {
 			if err := e.store.UpdateWorkState(ctx, wsID, *state); err != nil {
@@ -298,7 +327,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			return "Standing state updated.", nil
 		}
 
-		return "Nothing to update — name at least one of state, focus, next_move, plan, or standing.", nil
+		return "Nothing to update — name at least one of state, focus, next_move, plan, family, or standing.", nil
 
 	case "deliver":
 		wsID, err := e.currentWorkSessionID(ctx)
@@ -340,7 +369,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
 				return "", fmt.Errorf("deliver work session: %w", err)
 			}
-			msg := fmt.Sprintf("Delivered (Ring 4), naming commitment %s. If this delivery fulfills it, the completion is yours to write: commit commitment.state_change — a promise kept is identity truth only when YOU complete it.", commitmentID)
+			msg := fmt.Sprintf("%s Naming commitment %s. If this delivery fulfills it, the completion is yours to write: commit commitment.state_change — a promise kept is identity truth only when YOU complete it.", deliveredLine(e.store, wsID), commitmentID)
 			if scope := store.RenderEvidenceScope(evidence); scope != "" {
 				msg += "\nEvidence: " + scope
 			}
@@ -350,7 +379,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
 			return "", fmt.Errorf("deliver work session: %w", err)
 		}
-		msg := "Delivered (Ring 4). If it mattered, note it — work output becomes identity truth only through your own note, or your own completion of a promise it fulfills."
+		msg := deliveredLine(e.store, wsID) + " If it mattered, note it — work output becomes identity truth only through your own note, or your own completion of a promise it fulfills."
 		if scope := store.RenderEvidenceScope(evidence); scope != "" {
 			msg += "\nEvidence: " + scope
 		}
@@ -516,4 +545,11 @@ func (e *Engine) currentWorkSessionID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no active work session — `work start` opens one (description=what the work is), then update and deliver act on it")
 	}
 	return ws.ID, nil
+}
+
+func deliveredLine(st workStore, id string) string {
+	if ws, err := st.WorkSessionByID(id); err == nil && ws != nil && ws.ToolCallsKnown {
+		return fmt.Sprintf("Delivered %s (Ring 4) after %d tool calls.", id, ws.ToolCalls)
+	}
+	return fmt.Sprintf("Delivered %s (Ring 4).", id)
 }

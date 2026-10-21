@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -139,7 +140,7 @@ func TestTimeoutRecoveryHonorsStopsRecordingAndConfiguration(t *testing.T) {
 				a.cfgMu.Unlock()
 			case "bound":
 				a.turn.mu.Lock()
-				a.turn.contChain = continuationsSetting.value(a.configSnapshot())
+				a.turn.contChain = continuationsSetting.value(a.configSnapshot()).N
 				a.turn.mu.Unlock()
 			}
 			a.resumeTimedOutTurn(ctx, e, kept)
@@ -192,7 +193,7 @@ func TestRepeatedTimeoutRecoveryStopsAtConfiguredBound(t *testing.T) {
 	a, _ := dispatchApp(t)
 	defer stopApp(t, a)
 	a.cfgMu.Lock()
-	a.cfg.Agency.MaxTurnContinuations = 1
+	a.cfg.Agency.MaxTurnContinuations = limits.Of(1)
 	a.cfgMu.Unlock()
 	obs := &contScript{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

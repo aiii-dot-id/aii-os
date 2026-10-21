@@ -1,6 +1,16 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
+)
+
+// localWall says a role's spawn is stamped the local wall: its route's
+// limits (routeLimits) give it agency.subagent_wall_seconds_local.
+func localWall(a *App, role string) bool {
+	return a.routeLimits(role).N(subWallSetting) == limits.DefaultSubWallLocal
+}
 
 // The wall's notion of "local" is the entry's own Local flag — the one
 // PreferLocalForRoles already routes by — for a tagged role's route and
@@ -19,14 +29,15 @@ func TestRouteIsLocalReadsTheEntrysOwnDeclaration(t *testing.T) {
 	a.cfg.Agency.Roles = map[string]RoleRoute{"local": {Provider: "Local test provider", Model: "glm"}, "cloud": {Provider: "Claude (Max/Pro)", Model: "claude-opus-5"}}
 	a.cfgMu.Unlock()
 	for role, want := range map[string]bool{"local": true, "cloud": false, "": false, "no-such-role": false} {
-		if got := a.routeIsLocal(role); got != want {
-			t.Fatalf("routeIsLocal(%q) = %v, want %v", role, got, want)
+		if got := localWall(a, role); got != want {
+			t.Fatalf("the local wall for %q = %v, want %v", role, got, want)
 		}
 	}
 	a.cfgMu.Lock()
 	a.cfg.LLM.Provider = "Local test provider"
 	a.cfgMu.Unlock()
-	if !a.routeIsLocal("") {
+	a.adoptRuntime(reg.Providers[0], nil) // the identity is on the local entry
+	if !localWall(a, "") {
 		t.Fatal("an untagged spawn on a local active model must get the local wall")
 	}
 }

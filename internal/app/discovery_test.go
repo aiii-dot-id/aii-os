@@ -365,7 +365,7 @@ func TestTheBootAsksTheProviderForTheWindowItDoesNotDeclare(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.askWindowIfUndeclaredIn(reg, cfg.LLM)
-	_, entry, err := a.resolveLLMConfig(cfg.LLM, reg)
+	_, entry, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestTheWindowIsFoundUnderTheNameTheServerCallsCanonical(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.askWindowIfUndeclaredIn(reg, cfg.LLM)
-	_, entry, err := a.resolveLLMConfig(cfg.LLM, reg)
+	_, entry, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestAnUnlistedModelIsNamedAsUnlisted(t *testing.T) {
 		state: "ok", models: []string{"a", "b"}, meta: map[string]modelMeta{"a": {Context: 1000}, "b": {Context: 1000}},
 		checkedAt: time.Now(), key: probeKey(entry),
 	}}
-	if _, resolved, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
+	if _, resolved, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
 		t.Fatalf("an unlisted name has no window to resolve: %d %v", resolved.ContextLength, err)
 	}
 	joined := lines.String()
@@ -428,7 +428,7 @@ func TestAnUnlistedModelIsNamedAsUnlisted(t *testing.T) {
 	// Silent provider: nothing listed, nothing to say about the list.
 	lines.Reset()
 	a.providers.runtime.provStatus = nil
-	if _, _, err := a.resolveLLMConfig(cfg.LLM, &providerRegistry{Providers: []providerEntry{entry}}); err != nil {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: cfg.LLM}, &providerRegistry{Providers: []providerEntry{entry}}); err != nil {
 		t.Fatal(err)
 	}
 	if joined := lines.String(); strings.Contains(joined, "none is named") {
@@ -450,7 +450,7 @@ func TestAListedModelWithoutAWindowIsNotCalledUnlisted(t *testing.T) {
 		a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {state: "ok", models: listed, meta: map[string]modelMeta{}, checkedAt: time.Now(), key: probeKey(entry)}}
 		llmCfg := cfg.LLM
 		llmCfg.Model = model
-		if _, resolved, err := a.resolveLLMConfig(llmCfg, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
+		if _, resolved, err := a.resolveLLMConfig(Config{LLM: llmCfg}, &providerRegistry{Providers: []providerEntry{entry}}); err != nil || resolved.ContextLength != 0 {
 			t.Fatalf("no window was published, none may be resolved: %d %v", resolved.ContextLength, err)
 		}
 		return lines.String()
@@ -484,7 +484,7 @@ func TestAWindowTheModelsRowGivesIsNotAskedOfTheOperator(t *testing.T) {
 		a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {state: "ok", models: listed, meta: map[string]modelMeta{}, checkedAt: time.Now(), key: probeKey(entry)}}
 		llmCfg := cfg.LLM
 		llmCfg.Model = model
-		_, resolved, err := a.resolveLLMConfig(llmCfg, reg)
+		_, resolved, err := a.resolveLLMConfig(Config{LLM: llmCfg}, reg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -571,7 +571,7 @@ func TestAModelsOwnWindowHoldsTheEntrysWindow(t *testing.T) {
 		t.Helper()
 		llmCfg := cfg.LLM
 		llmCfg.Model = model
-		_, resolved, err := a.resolveLLMConfig(llmCfg, reg)
+		_, resolved, err := a.resolveLLMConfig(Config{LLM: llmCfg}, reg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -607,7 +607,7 @@ func TestAModelsOwnWindowHoldsTheEntrysWindow(t *testing.T) {
 		ModelCapabilities: map[string]modelCapability{"small": {ContextLength: -1}}}
 	llmCfg := cfg.LLM
 	llmCfg.Model = "small"
-	if _, _, err := a.resolveLLMConfig(llmCfg, bad); err == nil || !strings.Contains(err.Error(), "negative context window") {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: llmCfg}, bad); err == nil || !strings.Contains(err.Error(), "negative context window") {
 		t.Fatalf("a negative row window resolved: %v", err)
 	}
 }

@@ -73,12 +73,12 @@ func (s *Store) ForeignKeyCheck() error {
 }
 
 func (s *Store) Housekeep(ctx context.Context) (string, error) {
-	return s.HousekeepOptimized(ctx, CompressionOptimization{})
+	return s.HousekeepOptimized(ctx, CompressionOptimization{}, 0)
 }
 
 type CompressionOptimization = compressvfs.Optimization
 
-func (s *Store) HousekeepOptimized(ctx context.Context, optimization CompressionOptimization) (string, error) {
+func (s *Store) HousekeepOptimized(ctx context.Context, optimization CompressionOptimization, replacedMemories time.Duration) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.readOnly {
@@ -96,6 +96,25 @@ func (s *Store) HousekeepOptimized(ctx context.Context, optimization Compression
 		pruneNote = fmt.Sprintf(", plugin receipts prune FAILED: %v", perr)
 	} else if n > 0 {
 		pruneNote = fmt.Sprintf(", plugin receipts pruned %d", n)
+	}
+
+	if replacedMemories <= 0 {
+		replacedMemories = DefaultPluginMemoryReplacedRetention
+	}
+
+	if ferr := s.frozenErr(); ferr != nil {
+		pruneNote += fmt.Sprintf(", replaced plugin memories not pruned: %v", ferr)
+	} else if n, perr := prunePluginMemoriesReplaced(ctx, conn, time.Now(), replacedMemories, s.frozenErr); perr != nil {
+		pruneNote += fmt.Sprintf(", replaced plugin memories pruned %d and then stopped: %v", n, perr)
+	} else {
+		if n > 0 {
+			pruneNote += fmt.Sprintf(", replaced plugin memories pruned %d", n)
+		}
+		if kept, kerr := pluginMemoriesKeptPastWindow(ctx, conn, time.Now(), replacedMemories); kerr != nil {
+			pruneNote += fmt.Sprintf(", replaced plugin memories kept past their window could not be counted: %v", kerr)
+		} else if kept != "" {
+			pruneNote += ", replaced plugin memories kept past their window, a running activation's corrections stand on them: " + kept
+		}
 	}
 
 	if _, err := conn.ExecContext(ctx, "PRAGMA analysis_limit=400"); err != nil {
@@ -158,4 +177,100 @@ func prunePluginReceipts(ctx context.Context, conn *sql.Conn, now time.Time) (in
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+const DefaultPluginMemoryReplacedRetention = 90 * 24 * time.Hour
+
+const (
+	pluginMemoriesHeld = `WITH RECURSIVE held(id) AS (
+		SELECT overrides FROM plugin_memories WHERE temp = 1 AND overrides IS NOT NULL
+		UNION
+		SELECT superseded_by FROM plugin_memories WHERE temp = 1 AND superseded_by IS NOT NULL
+		UNION
+		SELECT m.superseded_by FROM plugin_memories m JOIN held h ON m.id = h.id WHERE m.superseded_by IS NOT NULL) `
+	pluginMemoriesPast = `temp = 0 AND superseded_by IS NOT NULL AND julianday(updated_at) < julianday(?)`
+)
+
+func prunePluginMemoriesReplaced(ctx context.Context, conn *sql.Conn, now time.Time, window time.Duration, frozen func() error) (int64, error) {
+
+	const next = `SELECT id FROM plugin_memories WHERE ` + pluginMemoriesPast + ` AND id NOT IN (SELECT id FROM held)
+		ORDER BY julianday(updated_at), id LIMIT ?`
+	cutoff := now.Add(-window).UTC().Format(time.RFC3339Nano)
+	var total int64
+	for {
+		if frozen != nil {
+			if err := frozen(); err != nil {
+				return total, err
+			}
+		}
+		n, err := prunePluginMemoryBatch(ctx, conn, pluginMemoriesHeld+next, cutoff)
+		total += n
+		if err != nil || n < int64(pluginMemoryPruneBatch) {
+			return total, err
+		}
+	}
+}
+
+var pluginMemoryPruneBatch = 500
+
+func prunePluginMemoryBatch(ctx context.Context, conn *sql.Conn, next, cutoff string) (int64, error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, next, cutoff, pluginMemoryPruneBatch)
+	if err != nil {
+		return 0, err
+	}
+	var ids []any
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, tx.Commit()
+	}
+	in := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	for _, table := range []string{"memory_vectors", "memory_access"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE store = 'plugin_memories' AND id IN (`+in+`)`, ids...); err != nil {
+			return 0, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM plugin_memories WHERE id IN (`+in+`)`, ids...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, tx.Commit()
+}
+
+func pluginMemoriesKeptPastWindow(ctx context.Context, conn *sql.Conn, now time.Time, window time.Duration) (string, error) {
+	rows, err := conn.QueryContext(ctx, `SELECT plugin_id, COUNT(*) FROM plugin_memories WHERE `+pluginMemoriesPast+`
+		GROUP BY plugin_id ORDER BY plugin_id`, now.Add(-window).UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var kept []string
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return "", err
+		}
+		kept = append(kept, fmt.Sprintf("%s %d", id, n))
+	}
+	return strings.Join(kept, ", "), rows.Err()
 }

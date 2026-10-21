@@ -3,9 +3,11 @@ package conversation
 import (
 	"context"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -43,7 +45,7 @@ func runCheckpointTurn(t *testing.T, toolRounds, maxIter int, predicted func() i
 	script = append(script, textResp("done"), textResp("done"))
 	client := &captureLLM{script: script}
 	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil,
-		Config{MaxIterations: maxIter, PredictedThisTurn: budgetAtStart(predicted), Checkpoint: checkpoint})
+		testBounds(Config{MaxIterations: limits.Of(maxIter), PredictedThisTurn: budgetAtStart(predicted), Checkpoint: checkpoint}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +55,7 @@ func runCheckpointTurn(t *testing.T, toolRounds, maxIter int, predicted func() i
 
 func TestTheCheckpointIsTheOperators(t *testing.T) {
 	undeclared := func() int { return 0 }
-	client, res := runCheckpointTurn(t, 6, 60, undeclared, Checkpoint{Calls: 5, GraceRounds: 1})
+	client, res := runCheckpointTurn(t, 6, 60, undeclared, Checkpoint{Calls: limits.Of(5), GraceRounds: 1})
 	if !res.ContinuedAtCap {
 		t.Fatal("a turn past the operator's floor did not flag ContinuedAtCap")
 	}
@@ -68,7 +70,7 @@ func TestTheCheckpointIsTheOperators(t *testing.T) {
 
 	// Raised past what the turn spends, there is no checkpoint at all: the
 	// 40 calls that ended at 32 run to their natural end.
-	client, res = runCheckpointTurn(t, 40, 60, undeclared, Checkpoint{Calls: 1000})
+	client, res = runCheckpointTurn(t, 40, 60, undeclared, Checkpoint{Calls: limits.Of(1000)})
 	if res.ContinuedAtCap || checkpointCount(client) != 0 || len(client.seen) != 41 {
 		t.Errorf("a floor of 1000 still checkpointed a 40-call turn: %d requests, %d asks, capped=%v",
 			len(client.seen), checkpointCount(client), res.ContinuedAtCap)
@@ -76,7 +78,7 @@ func TestTheCheckpointIsTheOperators(t *testing.T) {
 
 	// A declared turn keeps its own rule, twice the estimate, and takes the
 	// operator's grace: 3 declared arms at call 6, grace 2 -> 8 + final.
-	client, res = runCheckpointTurn(t, 8, 60, func() int { return 3 }, Checkpoint{Calls: 1000, GraceRounds: 2})
+	client, res = runCheckpointTurn(t, 8, 60, func() int { return 3 }, Checkpoint{Calls: limits.Of(1000), GraceRounds: 2})
 	if got := len(client.seen); got != 9 || !res.ContinuedAtCap {
 		t.Errorf("a declared turn took %d requests, capped=%v; want 9 and capped (twice its 3, then a grace of 2)", got, res.ContinuedAtCap)
 	}
@@ -93,7 +95,7 @@ func TestTheCheckpointIsTheOperators(t *testing.T) {
 // largest int is no checkpoint at all, never a negative one that fires at
 // once.
 func TestTheSlackIsTheOperators(t *testing.T) {
-	client, res := runCheckpointTurn(t, 11, 60, func() int { return 3 }, Checkpoint{Calls: 1000, GraceRounds: 2, Slack: 3})
+	client, res := runCheckpointTurn(t, 11, 60, func() int { return 3 }, Checkpoint{Calls: limits.Of(1000), GraceRounds: 2, Slack: 3})
 	if got := len(client.seen); got != 12 || !res.ContinuedAtCap {
 		t.Errorf("a turn that declared 3 under a slack of 3 took %d requests, capped=%v; want 12 and capped (three times its 3, then a grace of 2)", got, res.ContinuedAtCap)
 	}
@@ -107,21 +109,17 @@ func TestTheSlackIsTheOperators(t *testing.T) {
 	}
 }
 
-// A number that is not positive is that number's default: zero in the
-// operator's file means "take the default", for each of the two apart.
-func TestACheckpointOfZeroIsTheDefault(t *testing.T) {
-	for name, checkpoint := range map[string]Checkpoint{"zero": {}, "negative": {Calls: -1, GraceRounds: -1}} {
-		client, res := runCheckpointTurn(t, 36, 60, func() int { return 0 }, checkpoint)
-		if !res.ContinuedAtCap || len(client.seen) != 37 {
-			t.Errorf("%s: %d requests, capped=%v; want the default floor of %d and grace of %d (37 requests, capped)",
-				name, len(client.seen), res.ContinuedAtCap, DefaultCheckpointCalls, DefaultCheckpointGraceRounds)
-		}
+// NO CHECKPOINT FOR A TURN THAT DECLARED NOTHING when the operator lifts
+// agency.turn_checkpoint_calls: the turn runs to its round limit, and a
+// declared estimate still buys its slack times the estimate.
+func TestAnUnlimitedCheckpointHoldsOnlyADeclaredTurn(t *testing.T) {
+	client, res := runCheckpointTurn(t, 40, 41, func() int { return 0 }, Checkpoint{Calls: limits.Unlimited})
+	if res.ContinuedAtCap || checkpointCount(client) != 0 || len(client.seen) != 41 {
+		t.Errorf("an undeclared turn under no checkpoint was checkpointed: %d requests, %d asks, capped=%v", len(client.seen), checkpointCount(client), res.ContinuedAtCap)
 	}
-	if got := (Checkpoint{Calls: 7}).InForce(); got != (Checkpoint{Calls: 7, GraceRounds: DefaultCheckpointGraceRounds, Slack: DefaultCheckpointSlack}) {
-		t.Errorf("a floor of 7 with no grace named is %+v in force", got)
-	}
-	if DefaultCheckpointCalls != 32 || DefaultCheckpointGraceRounds != 4 {
-		t.Errorf("the defaults are %d and %d; the loop carried 32 and 4", DefaultCheckpointCalls, DefaultCheckpointGraceRounds)
+	client, res = runCheckpointTurn(t, 10, 60, func() int { return 3 }, Checkpoint{Calls: limits.Unlimited})
+	if !res.ContinuedAtCap || checkpointCount(client) != 1 {
+		t.Errorf("a declared turn under no undeclared checkpoint was not held to twice its estimate: %d requests, capped=%v", len(client.seen), res.ContinuedAtCap)
 	}
 }
 
@@ -132,14 +130,14 @@ func TestACheckpointOfZeroIsTheDefault(t *testing.T) {
 // every round.
 func TestAGraceThatDoesNotFitIsNoCheckpoint(t *testing.T) {
 	for _, grace := range []int{7, 8, 1 << 62, int(^uint(0) >> 1)} {
-		client, res := runCheckpointTurn(t, 8, 8, func() int { return 0 }, Checkpoint{Calls: 1, GraceRounds: grace})
+		client, res := runCheckpointTurn(t, 8, 8, func() int { return 0 }, Checkpoint{Calls: limits.Of(1), GraceRounds: grace})
 		if res.ContinuedAtCap || !res.ExhaustedBudget || checkpointCount(client) != 0 {
 			t.Errorf("grace %d beside 8 rounds: capped=%v exhausted=%v asks=%d; want the round limit's ending and no ask",
 				grace, res.ContinuedAtCap, res.ExhaustedBudget, checkpointCount(client))
 		}
 	}
 	// One below that fits in the first round and no later: armed there.
-	client, res := runCheckpointTurn(t, 7, 8, func() int { return 0 }, Checkpoint{Calls: 1, GraceRounds: 6})
+	client, res := runCheckpointTurn(t, 7, 8, func() int { return 0 }, Checkpoint{Calls: limits.Of(1), GraceRounds: 6})
 	if !res.ContinuedAtCap || checkpointCount(client) != 1 {
 		t.Errorf("grace 6 beside 8 rounds: capped=%v asks=%d; want one ask and a capped ending", res.ContinuedAtCap, checkpointCount(client))
 	}
@@ -155,7 +153,10 @@ type resetTools struct {
 
 func (r *resetTools) Execute(ctx context.Context, call llm.ToolCall) Observation {
 	if len(r.calls) == 2 {
-		r.loop.SetTurnBounds(60, 0, r.to)
+		next := testBounds(Config{MaxIterations: limits.Of(60), Checkpoint: r.to})
+		if err := r.loop.SetTurnBounds(Bounds{Rounds: next.MaxIterations, TurnTokens: next.TurnTokenBudget, Calls: next.MaxToolCalls, Checkpoint: next.Checkpoint, ToolResultChars: next.MaxToolResultChars}); err != nil {
+			panic(err) // the test's own bounds: every one is named
+		}
 	}
 	return r.fakeTools.Execute(ctx, call)
 }
@@ -176,9 +177,9 @@ func TestATurnIsHeldToTheCheckpointItsToolListStates(t *testing.T) {
 	}
 	first, second := script(10), script(3)
 	defs := &fakeDefs{}
-	tools := &resetTools{fakeTools: fakeTools{results: map[string]string{"bash": "ok"}}, to: Checkpoint{Calls: 2, GraceRounds: 1}}
+	tools := &resetTools{fakeTools: fakeTools{results: map[string]string{"bash": "ok"}}, to: Checkpoint{Calls: limits.Of(2), GraceRounds: 1}}
 	loop := New(first, tools, defs, nil, nil,
-		Config{MaxIterations: 60, PredictedThisTurn: func() (int, int) { return 0, 0 }, Checkpoint: Checkpoint{Calls: 1000, GraceRounds: 4}})
+		testBounds(Config{MaxIterations: limits.Of(60), PredictedThisTurn: func() (int, int) { return 0, 0 }, Checkpoint: Checkpoint{Calls: limits.Of(1000), GraceRounds: 4}}))
 	tools.loop = loop
 	run := func() Result {
 		res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
@@ -198,21 +199,24 @@ func TestATurnIsHeldToTheCheckpointItsToolListStates(t *testing.T) {
 	if res := run(); !res.ContinuedAtCap || len(second.seen) != 4 {
 		t.Errorf("the next turn did not take the changed checkpoint: %d requests, capped=%v; want 4 and capped", len(second.seen), res.ContinuedAtCap)
 	}
-	want := []Checkpoint{{Calls: 1000, GraceRounds: 4, Slack: DefaultCheckpointSlack}, {Calls: 2, GraceRounds: 1, Slack: DefaultCheckpointSlack}}
-	if len(defs.handed) != 2 || defs.handed[0] != want[0] || defs.handed[1] != want[1] {
+	want := []Checkpoint{{Calls: limits.Of(1000), GraceRounds: 4, Slack: limits.DefaultSlack}, {Calls: limits.Of(2), GraceRounds: 1, Slack: limits.DefaultSlack}}
+	// The loop reads the list before each request (refreshDefs); every read
+	// of a turn is handed the pair that turn began with.
+	if got := slices.Compact(slices.Clone(defs.handed)); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("each turn's tool list was handed %+v; want the pair that turn was held to, %+v", defs.handed, want)
 	}
 }
 
-// With no pair named the definer is handed the defaults, never a zero to
-// write into a sentence.
+// The definer is handed the checkpoint the turn is held to, never a zero to
+// write into a sentence: here the numbers the tests name for a loop given
+// none (testBounds), which are the code defaults.
 func TestTheToolListIsHandedTheDefaultsWhereNoneIsNamed(t *testing.T) {
 	defs := &fakeDefs{}
-	loop := New(&captureLLM{script: []llm.Response{textResp("done")}}, &fakeTools{}, defs, nil, nil, Config{})
+	loop := New(&captureLLM{script: []llm.Response{textResp("done")}}, &fakeTools{}, defs, nil, nil, testBounds(Config{}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
-	if want := (Checkpoint{Calls: DefaultCheckpointCalls, GraceRounds: DefaultCheckpointGraceRounds, Slack: DefaultCheckpointSlack}); len(defs.handed) != 1 || defs.handed[0] != want {
+	if want := (Checkpoint{Calls: limits.Of(limits.DefaultCheckpointCalls), GraceRounds: limits.DefaultGraceRounds, Slack: limits.DefaultSlack}); len(defs.handed) != 1 || defs.handed[0] != want {
 		t.Errorf("the tool list was handed %+v; want %+v", defs.handed, want)
 	}
 }

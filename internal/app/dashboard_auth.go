@@ -277,6 +277,7 @@ func (a *App) newDashboardToken(require bool, persist func(*Config) (bool, error
 		return fmt.Errorf("the access token was not %s: %w", act, persistErr)
 	}
 	*a.cfg = candidate
+	a.reloads.ownSave()
 	if err := a.installDashboardToken(token); err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -40,7 +41,7 @@ func TestFailedSubagentRunIsDeliveredOnceAndNeverRetried(t *testing.T) {
 	cfg := &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2, SubagentWallSeconds: 5},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2), SubagentWallSeconds: 5},
 	}
 	a := New(cfg)
 	a.store = st
@@ -152,7 +153,7 @@ func TestWorkStatusNamesDeliveredUnharvestedWork(t *testing.T) {
 	a := New(&Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2)},
 	})
 	a.store = st
 	a.toolReg = reg
@@ -211,7 +212,7 @@ func TestWorkYieldSetsEndTurnAtTheExecutorSeam(t *testing.T) {
 	a := New(&Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2)},
 	})
 	a.store = st
 	a.toolReg = reg
@@ -273,7 +274,7 @@ func TestSubagentCannotYieldTheTurn(t *testing.T) {
 	a := New(&Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2)},
 	})
 	a.store = st
 	a.toolReg = reg
@@ -325,7 +326,7 @@ func TestAFailureBeforeStartDeliversTheMarker(t *testing.T) {
 	ended, cancel := context.WithCancel(t.Context())
 	cancel()
 	retried := &store.WorkItem{RetryCount: 0, MaxRetries: 3} // an attempt the queue follows with another
-	if err := h.failBeforeStart(ended, retried, identity.SubagentRequest{SessionID: "ws_pre"}, 1, 4, "compose", errors.New("blew up")); err == nil || err.Error() != "subagent compose: blew up" {
+	if err := h.failBeforeStart(ended, retried, identity.SubagentRequest{SessionID: "ws_pre"}, 1, limits.Of(4), "compose", errors.New("blew up")); err == nil || err.Error() != "subagent compose: blew up" {
 		t.Fatalf("failure = %v, want the phase and its cause alone", err)
 	}
 	ws, err := st.WorkSessionByID("ws_pre")
@@ -336,7 +337,7 @@ func TestAFailureBeforeStartDeliversTheMarker(t *testing.T) {
 	if err := st.DeliverWorkSession(t.Context(), "ws_real", "served: real", store.EvidenceWorkerReportOnly, ""); err != nil {
 		t.Fatal(err)
 	}
-	err = h.failBeforeStart(t.Context(), retried, identity.SubagentRequest{SessionID: "ws_real"}, 1, 4, "request estimate", errors.New("no estimate"))
+	err = h.failBeforeStart(t.Context(), retried, identity.SubagentRequest{SessionID: "ws_real"}, 1, limits.Of(4), "request estimate", errors.New("no estimate"))
 	if err == nil || !strings.HasPrefix(err.Error(), "subagent request estimate: no estimate\n") || !strings.Contains(err.Error(), "record subagent start failure: delivery refused") {
 		t.Fatalf("a refused delivery is not joined to the failure: %v", err)
 	}
@@ -407,7 +408,7 @@ func TestTheLastFailureBeforeStartClosesTheChild(t *testing.T) {
 				return a.turn.askFleetSpent
 			}
 
-			if err := h.failBeforeStart(t.Context(), &store.WorkItem{RetryCount: 1, MaxRetries: 3}, p, c.leg, 4, "compose", errors.New("blew up")); err == nil {
+			if err := h.failBeforeStart(t.Context(), &store.WorkItem{RetryCount: 1, MaxRetries: 3}, p, c.leg, limits.Of(4), "compose", errors.New("blew up")); err == nil {
 				t.Fatal("a failure before start is returned, so the queue retries the item")
 			}
 			if ws, err := st.WorkSessionByID(id); err != nil || ws == nil || ws.Status != c.betweenStatus || ws.Result != c.between {
@@ -417,7 +418,7 @@ func TestTheLastFailureBeforeStartClosesTheChild(t *testing.T) {
 				t.Fatalf("the child was closed while the queue still held an attempt: notices=%d fleet spent=%v", notices(), fleetSpent())
 			}
 
-			err = h.failBeforeStart(t.Context(), &store.WorkItem{RetryCount: 2, MaxRetries: 3}, p, c.leg, 4, "compose", errors.New("blew up"))
+			err = h.failBeforeStart(t.Context(), &store.WorkItem{RetryCount: 2, MaxRetries: 3}, p, c.leg, limits.Of(4), "compose", errors.New("blew up"))
 			if err == nil || err.Error() != "subagent compose: blew up" {
 				t.Fatalf("the last failure is still returned, for the queue's own record: %v", err)
 			}
@@ -456,7 +457,7 @@ func (unreadableIdentity) PromptIdentity() (storerows.PromptIdentity, error) {
 // number. The model is never called.
 func TestALaterLegThatCannotStartIsClosedThroughTheQueue(t *testing.T) {
 	srv, n := deliveringChild(t)
-	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: 6, SubagentMaxToolRounds: 6, SubagentMaxToolCalls: 64, SubagentMaxLegs: 3, SubagentWallSeconds: 5})
+	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(6), SubagentMaxToolRounds: limits.Of(6), SubagentMaxToolCalls: limits.Of(64), SubagentMaxLegs: limits.Of(3), SubagentWallSeconds: 5})
 	a.composer.SetIdentitySource(unreadableIdentity{})
 	const id, goal = "ws_nocompose", "count the beans with no prompt"
 	if err := st.StartWorkSession(t.Context(), id, store.SubagentDescription(goal)); err != nil {

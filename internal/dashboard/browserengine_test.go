@@ -782,7 +782,7 @@ export function wake() {}
 		"/views/work.js":     stubModule("renderWorkPill"),
 		"/views/memory.js":   stubModule("renderMemory"),
 		"/views/identity.js": stubModule("renderIdentity"),
-		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction"),
+		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction", "applyPluginStored"),
 		"/views/record.js":   stubModule("renderRecord"),
 		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptDashboardToken", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
 	}

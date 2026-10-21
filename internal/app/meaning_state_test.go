@@ -78,7 +78,7 @@ func TestTheMeaningCardReadsSourceBasisFloorCoverageAndTheLastPass(t *testing.T)
 	if off.Source != "" || off.Unavailable == "" || off.Why != meaningOffNoSource || off.Basis != "" || off.Coverage != nil || off.LastPass != nil {
 		t.Fatalf("with no source the card must say off and why, and nothing more: %+v", off)
 	}
-	if _, _, reason, _ := f.VectorCoverage(ctx); reason != off.Unavailable {
+	if _, _, reason, _ := f.HeldCoverage(ctx); reason != off.Unavailable {
 		t.Fatalf("the card's reason %q is not the one the measure read gives %q", off.Unavailable, reason)
 	}
 

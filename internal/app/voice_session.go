@@ -50,10 +50,12 @@ func (a *App) voiceHandle(id string) *voiceHandle {
 type inflightSynthesis struct {
 	id  string
 	rev uint64
+
+	trace *voiceTurnTrace
 }
 
-func (h *voiceHandle) setInflight(id string, rev uint64) {
-	h.inflight.Store(inflightSynthesis{id: id, rev: rev})
+func (h *voiceHandle) setInflight(id string, rev uint64, trace *voiceTurnTrace) {
+	h.inflight.Store(inflightSynthesis{id: id, rev: rev, trace: trace})
 	h.replyAdmitted(id)
 }
 
@@ -288,6 +290,7 @@ func (h *voiceHandle) PlaybackReport(ctx context.Context, r dashboard.PlaybackRe
 		return nil
 	}
 	if synth != "" {
+		h.traceOf(synth).end("the page's terminal receipt for its stream came before any frame reached the sink")
 		h.detachInflight(synth)
 
 		h.replyOver(synth)
@@ -305,7 +308,10 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 		return replySuperseded, ""
 	}
 	var h *voiceHandle
+
+	trace := voiceTraceFrom(ctx)
 	report := func(why string, superseded bool) {
+		trace.end("the reply was refused at admission: " + why)
 		a.voiceStaleReplies.Add(1)
 		logsink.Info("voice.refusal", "reply for session %s refused at admission: %s", sessionID, why)
 		a.fanVoiceEvent(dashboard.VoiceEvent{SessionID: sessionID, Type: "reply_refused", Reason: why, Superseded: superseded})
@@ -321,6 +327,7 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 		return replySuperseded, ""
 	}
 	textOnly := func() replyVerdict {
+		trace.end(replyNotSpokenOutcome)
 		h.replyOutcome.Store(replyNotSpokenOutcome)
 		if a.voiceReplySink != nil {
 			a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: sessionID, Route: "plugin", TextOnly: true}, reply)
@@ -369,7 +376,8 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 	await, err := h.v.SynthesizeForEnqueue(ectx, h.id, synthID, reply)
 	ecancel()
 	if err == nil {
-		h.setInflight(synthID, admittedUnder.Revision)
+		trace.stamp(stageEnqueued)
+		h.setInflight(synthID, admittedUnder.Revision, trace)
 	}
 	h.admit.Unlock()
 	if err != nil {
@@ -397,6 +405,7 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 		}
 		return replySuperseded, ""
 	}
+	trace.stamp(stageAcknowledged)
 
 	if h.gen.Load() != gen || h.closing.Load() || ctx.Err() != nil {
 		if ferr := h.fenceBounded(synthID, "superseded at admission"); ferr != nil {
@@ -449,6 +458,7 @@ func (a *App) speakThrough(ctx context.Context, b *voiceBinding, reply string, r
 			a.voiceReplySink(dashboard.VoiceReplyRef{SessionID: b.session, Route: "plugin", TextOnly: true}, reply)
 		}
 		a.noteReplyOutcome(b.session, replyNotSpokenOutcome)
+		b.trace.end(replyNotSpokenOutcome)
 		return true
 	}
 	route, id := "browser", ""
@@ -630,6 +640,8 @@ func (h *voiceHandle) fence(ctx context.Context, synthID, cause string) error {
 		case current != nil:
 			h.replyOver(current.id)
 		}
+
+		h.traceOf(synthID).end("its synthesis was fenced before any frame reached the sink: " + cause)
 	}
 	return err
 }
@@ -650,6 +662,7 @@ func (h *voiceHandle) fenceEcho(f voiceFrame) bool {
 }
 
 func (a *App) handleHeard(ctx context.Context, heard heardUtterance) {
+	heard.trace.stamp(stageTurnStart)
 
 	if heard.Answer {
 		if listen, _, _ := a.voiceMode(); listen == listenMeeting {
@@ -670,10 +683,14 @@ func (a *App) handleHeard(ctx context.Context, heard heardUtterance) {
 		}
 		logsink.Warn("voice.error", "the engine's transcript %s: %v", what, err)
 		a.noteReplyOutcome(heard.SessionID, outcome+err.Error())
+
+		heard.trace.settle("the turn failed: the transcript " + what)
 	case strings.TrimSpace(heard.Text) == "":
 		a.noteReplyOutcome(heard.SessionID, "empty transcript, no reply")
+		heard.trace.end("empty transcript, no reply")
 	case !heard.Answer:
 		a.noteReplyOutcome(heard.SessionID, "recorded (meeting), no reply")
+		heard.trace.end("recorded (meeting), no reply")
 	}
 }
 
@@ -761,6 +778,16 @@ func (a *App) voiceObserved(ev voiceFrame) {
 		}
 	case pluginhost.EventInputFinished:
 		a.voiceInputFinished(ev.SessionID)
+	case pluginhost.EventSynthesisStart, pluginhost.EventSynthesisCancelled:
+
+		if h := a.voiceHandle(ev.SessionID); h != nil {
+			t := h.traceOf(ev.body.SynthesisID)
+			if ev.Type == pluginhost.EventSynthesisStart {
+				t.stamp(stageSynthesisStart)
+			} else {
+				t.end("the engine cancelled its synthesis before any frame reached the sink")
+			}
+		}
 	}
 }
 
@@ -826,6 +853,11 @@ func (a *App) OpenVoiceSession(ctx context.Context, inputID, outputID, mode stri
 	if err != nil {
 		return nil, err
 	}
+
+	b.Sink = &firstFrameSink{Sink: b.Sink, wrote: func(fr audio.Frame, at time.Time) {
+
+		a.runBackground(func() { a.voiceFrameWritten(id, fr, at) })
+	}}
 	if b.HasInput() {
 		mode = a.voiceOpenMode(id, mode)
 	} else {
@@ -1087,6 +1119,7 @@ func (a *App) voiceSpeakerCarried() string {
 func (a *App) voiceSessionEnded(h *voiceHandle) {
 	h.supersede()
 	h.closing.Store(true)
+	h.loadInflight().trace.end("the session ended before any frame of its synthesis reached the sink")
 	a.withholdHeld(h, "the session ended before the speaker was decided")
 	h.markDrained()
 	a.voiceSessions.Delete(h.id)
@@ -1400,6 +1433,8 @@ func (a *App) takeFinal(s *voiceStep) {
 
 	heard := heardUtterance{Source: s.source(), Text: body.Text, Speaker: body.Speaker, Answer: answer, SessionID: ev.SessionID, Sequence: ev.Sequence, Gen: a.voiceGen(ev.SessionID), Operator: true}
 	heard.Recognized, heard.Corrections = ev.corrected()
+
+	heard.trace = newVoiceTurnTrace(ev.SessionID, ev.Sequence, stageFinal)
 	if s.hold {
 		a.holdForSpeaker(s, heard)
 		return
@@ -1430,6 +1465,7 @@ func (a *App) holdForSpeaker(s *voiceStep, heard heardUtterance) {
 }
 
 func (a *App) answerFinal(s *voiceStep, heard heardUtterance) {
+	heard.trace.stamp(stageReleased)
 	h := a.voiceHandle(s.ev.SessionID)
 	if h == nil {
 		a.startHeard(heard)

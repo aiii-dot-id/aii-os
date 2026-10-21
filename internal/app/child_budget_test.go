@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 func TestChildRoundCeilingCannotExceedTheOperatorsCeiling(t *testing.T) {
@@ -21,14 +23,14 @@ func TestChildRoundCeilingCannotExceedTheOperatorsCeiling(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := &Config{}
-			cfg.Agency.MaxToolRounds = c.maxRounds
-			cfg.Agency.SubagentMaxToolRounds = c.child
+			cfg.Agency.MaxToolRounds = limits.Of(c.maxRounds)
+			cfg.Agency.SubagentMaxToolRounds = limits.Of(c.child)
 			applyDefaults(cfg)
-			if got := cfg.Agency.SubagentMaxToolRounds; got != c.wantChild {
-				t.Errorf("child ceiling = %d, want %d (conversation ceiling %d)", got, c.wantChild, cfg.Agency.MaxToolRounds)
+			if got := cfg.Agency.SubagentMaxToolRounds; got != limits.Of(c.wantChild) {
+				t.Errorf("child ceiling = %s, want %d (conversation ceiling %s)", got, c.wantChild, cfg.Agency.MaxToolRounds)
 			}
-			if cfg.Agency.SubagentMaxToolRounds > cfg.Agency.MaxToolRounds {
-				t.Errorf("child ceiling %d exceeds the operator's %d", cfg.Agency.SubagentMaxToolRounds, cfg.Agency.MaxToolRounds)
+			if cfg.Agency.SubagentMaxToolRounds.Above(cfg.Agency.MaxToolRounds) {
+				t.Errorf("child ceiling %s exceeds the operator's %s", cfg.Agency.SubagentMaxToolRounds, cfg.Agency.MaxToolRounds)
 			}
 		})
 	}
@@ -49,11 +51,11 @@ func TestAnExplicitCallCeilingIsUsedExactlyAsWritten(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := &Config{}
-			cfg.Agency.SubagentMaxToolRounds = c.rounds
-			cfg.Agency.SubagentMaxToolCalls = c.calls
+			cfg.Agency.SubagentMaxToolRounds = limits.Of(c.rounds)
+			cfg.Agency.SubagentMaxToolCalls = limits.Of(c.calls)
 			applyDefaults(cfg)
-			if got := cfg.Agency.SubagentMaxToolCalls; got != c.wantCalls {
-				t.Errorf("call ceiling = %d, want %d (round ceiling %d) — an explicit ceiling must never be raised",
+			if got := cfg.Agency.SubagentMaxToolCalls; got != limits.Of(c.wantCalls) {
+				t.Errorf("call ceiling = %s, want %d (round ceiling %s) — an explicit ceiling must never be raised",
 					got, c.wantCalls, cfg.Agency.SubagentMaxToolRounds)
 			}
 		})
@@ -92,7 +94,7 @@ func TestANegativeCallCeilingIsRefusedAtLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agency.SubagentMaxToolCalls != 3 {
-		t.Fatalf("an explicit call ceiling of 3 must survive the load, got %d", cfg.Agency.SubagentMaxToolCalls)
+	if cfg.Agency.SubagentMaxToolCalls != limits.Of(3) {
+		t.Fatalf("an explicit call ceiling of 3 must survive the load, got %s", cfg.Agency.SubagentMaxToolCalls)
 	}
 }

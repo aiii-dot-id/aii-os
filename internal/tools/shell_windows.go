@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -140,6 +141,11 @@ func (t *shellTree) close() {
 		_ = windows.CloseHandle(job)
 	}
 }
+
+type leftJobs struct{}
+
+func (*leftJobs) keep(*exec.Cmd) bool            { return false }
+func (*leftJobs) end(time.Duration) (int, error) { return 0, nil }
 
 func normalizeShellOutput(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))

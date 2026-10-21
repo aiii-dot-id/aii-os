@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -82,7 +83,7 @@ func requestLoop(c *requestClient, tools *fakeTools, names ...string) *Loop {
 	for _, n := range names {
 		defs = append(defs, requestDef(n))
 	}
-	return New(c, tools, &fakeDefs{defs: defs}, nil, nil, Config{ContextBudgetTokens: 4000, MaxIterations: 5})
+	return New(c, tools, &fakeDefs{defs: defs}, nil, nil, testBounds(Config{ContextBudgetTokens: 4000, MaxIterations: limits.Of(5)}))
 }
 
 func TestBeforeFirstCallNilPreservesAnOrdinaryTurn(t *testing.T) {
@@ -102,8 +103,8 @@ func TestBeforeFirstCallRunsOncePerTurnNotPerRetryRoundOrClosing(t *testing.T) {
 	tools := &fakeTools{results: map[string]string{"read": "read result"}}
 	count := 0
 	var loop *Loop
-	loop = New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read"), requestDef("grep")}}, nil, nil, Config{
-		ContextBudgetTokens: 4000, MaxIterations: 2,
+	loop = New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read"), requestDef("grep")}}, nil, nil, testBounds(Config{
+		ContextBudgetTokens: 4000, MaxIterations: limits.Of(2),
 		BeforeFirstCall: func() error {
 			count++
 			// A callback may call an ordinary loop setter: the config lock
@@ -111,7 +112,7 @@ func TestBeforeFirstCallRunsOncePerTurnNotPerRetryRoundOrClosing(t *testing.T) {
 			loop.SetContextBudgetFallback(false)
 			return nil
 		},
-	})
+	}))
 	c.beforeChat = func() {
 		t.Helper()
 		want := 1
@@ -137,10 +138,10 @@ func TestBeforeFirstCallFailurePreservesItsCauseAndStartsNothing(t *testing.T) {
 	tools := &fakeTools{}
 	cause := errors.New("durable start refused")
 	count := 0
-	loop := New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read")}}, nil, nil, Config{
+	loop := New(c, tools, &fakeDefs{defs: []llm.ToolDefinition{requestDef("read")}}, nil, nil, testBounds(Config{
 		ContextBudgetTokens: 4000,
 		BeforeFirstCall:     func() error { count++; return cause },
-	})
+	}))
 	result, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "look"}})
 	if !errors.Is(err, cause) || count != 1 || len(c.options) != 0 || len(tools.calls) != 0 || result.Usage.Calls != 0 {
 		t.Fatalf("start refusal lost its cause or dispatched work: %+v %v callback=%d calls=%d tools=%v", result, err, count, len(c.options), tools.calls)
@@ -157,7 +158,7 @@ func TestBeforeFirstCallUsesTheFinalWithheldToolRequestBoundary(t *testing.T) {
 	}
 	const tail = "CRITERION_TAIL_界"
 	history := []llm.Message{{Role: "user", Content: "Preserve this complete work contract.\n" + tail}}
-	probe := New(&requestClient{withheld: withheld}, &fakeTools{}, &fakeDefs{defs: defs}, nil, nil, Config{ContextBudgetTokens: 100000})
+	probe := New(&requestClient{withheld: withheld}, &fakeTools{}, &fakeDefs{defs: defs}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	turn, err := probe.newTurn(t.Context(), llm.Message{Content: "system"}, history, 0, "")
 	if err != nil {
 		t.Fatal(err)
@@ -190,10 +191,10 @@ func TestBeforeFirstCallUsesTheFinalWithheldToolRequestBoundary(t *testing.T) {
 			c := &requestClient{withheld: withheld, answers: []llm.Response{textResp("done")}}
 			tools := &fakeTools{}
 			count := 0
-			loop := New(c, tools, &fakeDefs{defs: defs}, nil, nil, Config{
+			loop := New(c, tools, &fakeDefs{defs: defs}, nil, nil, testBounds(Config{
 				ContextBudgetTokens: tc.budget,
 				BeforeFirstCall:     func() error { count++; return nil },
-			})
+			}))
 			c.beforeChat = func() {
 				if count != 1 {
 					t.Fatal("first provider dispatch preceded its start callback")
@@ -382,7 +383,7 @@ func TestACallOutsideTheRequestsToolsIsRecordedWithItsOwnCode(t *testing.T) {
 	c := &requestClient{answers: []llm.Response{resp("", toolCall("c1", "shell", `{}`)), textResp("done")}}
 	rec := &doneRecorder{}
 	defs := &fakeDefs{defs: []llm.ToolDefinition{requestDef("read"), requestDef("shell")}}
-	loop := New(c, &fakeTools{}, defs, rec, nil, Config{ContextBudgetTokens: 4000, MaxIterations: 5})
+	loop := New(c, &fakeTools{}, defs, rec, nil, testBounds(Config{ContextBudgetTokens: 4000, MaxIterations: limits.Of(5)}))
 	if _, err := loop.Run(requestContext(t, RequestOptions{AllowedTools: &allowed}), "system", []llm.Message{{Role: "user", Content: "list it"}}); err != nil {
 		t.Fatal(err)
 	}

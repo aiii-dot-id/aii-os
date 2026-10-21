@@ -46,6 +46,7 @@ run(async (assert) => {
   assert(text.includes('it was measured for none'), 'the floor is not left to read as a measurement of this model: ' + text);
   assert(text.includes('experiences 2 of 5 hold a vector') && text.includes('beliefs 1 of 1 hold a vector'), 'each store has its coverage: ' + text);
   assert(text.includes('3 waiting for the backfill'), 'what waits is counted across the stores: ' + text);
+  assert(text.includes('3 waiting for the backfill\'s next pass. A row whose text has changed since the last pass is read by its words'), 'a record still waiting says what a held vector is not, too: ' + text);
   assert(text.includes('2 embedded, then stopped: the endpoint said <i>no</i>.') && !card().querySelector('i'), 'the last pass says why it stopped, as text: ' + text);
   assert(!text.includes('Off:'), 'on is not also off');
 
@@ -59,6 +60,7 @@ run(async (assert) => {
     coverage: [{ store: 'experiences', rows: 5, embedded: 5 }] } };
   renderMemory();
   assert(card().textContent.includes('Every row in scope holds a vector') && !card().textContent.includes('waiting for the backfill'), 'a complete record says so: ' + card().textContent);
+  assert(card().textContent.includes('A row whose text has changed since the last pass is read by its words until the next pass makes its vector again'), 'a complete record says what a held vector is not: ' + card().textContent);
   assert(!card().textContent.includes('Last pass'), 'no pass since this start draws no pass line');
 
   const choice = () => document.getElementById('mem-source');

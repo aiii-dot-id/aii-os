@@ -680,6 +680,9 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 .store-skip { font-size:11.5px; color:var(--faint); padding:4px 0; border-top:1px solid var(--line); }
 .store-skip b { color:var(--txt); }
 .plugin-detail { margin:4px 0 10px; }
+.plugin-ops { margin:4px 0 10px; }
+.plugin-op { font-size:12.5px; padding:5px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; }
+.plugin-op .author-words { white-space:pre-wrap; max-width:none; padding:2px 0 0; }
 .grants { margin:4px 0 10px; }
 .grant-row { display:flex; align-items:flex-start; gap:8px; margin:6px 0; font-size:12.5px; cursor:pointer; }
 .grant-row input { margin-top:3px; }

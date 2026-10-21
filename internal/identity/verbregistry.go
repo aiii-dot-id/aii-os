@@ -9,6 +9,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -137,6 +138,7 @@ func init() {
 				"description":       str("(start) what this work session is; (project.create/project.update) what the project is"),
 				"state":             str("(update) current working state — Ring 4, ephemeral. Does not close the session; use deliver to finish."),
 				"focus":             str("(update, optional) one line: what this session is about right now; (project.update) what you are doing in that project right now — re-seeds your working state when it is selected again"),
+				"family":            str("(start, update; optional) the kind of work, a short slug such as deploy-preview: attempts of one kind are compared, so name the same kind the same way; (measure) read that kind's attempts, outcomes, grades and calls, and the shortest served attempt's calls in order"),
 				"next_move":         str("(update, optional) one line: the recoverable next step if this session is interrupted"),
 				"standing":          str("(update, optional) what you are doing that outlives any one session — a wait you are holding, a contract for that wait, where you are between things. Needs NO work session and belongs to no project; it re-renders every turn until you re-author it. Empty clears it."),
 				"plan":              str("(update, optional) freeform markdown you author; subgoal lines may cite spawn session IDs (spawn returns them). You author this; the substrate renders it verbatim and never interprets it"),
@@ -145,7 +147,7 @@ func init() {
 				"decision_needed":   str("(update, optional) an operator decision owed before you act - what you need and why. It opens a card on your operator's page; their answer arrives as an operator turn marked [ask <id>]. Set it to the empty string when the decision no longer applies"),
 				"choices":           strArray("(update, optional, with decision_needed) two to six short options your operator picks from; the pick arrives as an operator turn marked [ask <id>]"),
 				"connector":         str("(update, optional, with decision_needed) what you need connected - a plugin id, or the kind (email, calendar, telegram, a device on the network); your operator is pointed at the Plugins page and their answer arrives as an operator turn"),
-				"steps":             integer(stepsDescription(conversation.Checkpoint{}.InForce())),
+				"steps":             integer(stepsDescription(defaultCheckpoint())),
 				"independent":       integer("(update, optional) how many of your remaining steps are independent of each other — steps that could run as spawned sub-agents concurrently. Declared, not parsed from your plan prose; recorded with the turn's measure. Nothing asks you for it and nothing acts on it: spawning them is your call"),
 				"result":            str("(deliver) closes the active session with the outcome: one line beginning served:, partial: or unserved: — your verdict on whether the intention was served — then what happened"),
 				"evidence":          strEnum("(deliver, optional) choose one effect/evidence class here; explanatory text belongs in evidence_readback. The class field belongs to project.evidence. Omit and the boundary defaults honestly: a worker seat is worker_report_only, never proof the task landed. locally_verified / host_receipted need evidence_readback and the primary seat.", store.EvidenceWorkerReportOnly, store.EvidenceCompletedLocally, store.EvidencePartialOrMixed, store.EvidenceExternalUnknown, store.EvidenceNotRun, store.EvidenceRejectedNoEffect, store.EvidenceLocallyVerified, store.EvidenceHostReceipted),
@@ -227,14 +229,14 @@ func init() {
 				"new_id":                str("(belief.supersede) the replacing belief id"),
 			}, "variant")},
 		{Name: "tools",
-			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you: brief them by family, search by need, show one, offer it into your callable set (eight active seats; choices persist across restarts; show reports current availability), release it.",
+			Description: "Discovery — your organs first, then your sandbox tools, at chosen depth; and the plugin operations installed beside you: brief them by family, search by need, show one, call one. Primary operations are in your tool list; action=call runs any other.",
 			Handler:     (*Engine).verbTools,
 			Params: obj(map[string]any{
 				"depth":  integer("1 = names, 2 = +descriptions, 3 = full detail (progressive disclosure)"),
-				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | offer (name: one operation, or plugin: its primary operations; selection saved for later turns, subject to current availability) | release (name)"),
+				"action": str("organs (default: organs, sandbox tools, and the plugin brief) | brief (plugin operations by family and count) | search (query: names and one-liners) | show (name: one operation's arguments, receipt rule and release) | call (name, args: run a plugin operation that is not in your tool list)"),
 				"query":  str("(search) what you need, in your own words"),
-				"name":   str("(show, offer, release) the operation id as your prompt or the brief names it, or its tool name"),
-				"plugin": str("(offer only, instead of name) exact installed plugin id; offer its declared primary operations together within the eight-seat limit"),
+				"name":   str("(show, call) the operation id as your prompt or the brief names it, or its tool name"),
+				"args":   objArg("(call) the operation's arguments, as tools action=show gives them"),
 			})},
 	}
 
@@ -269,8 +271,30 @@ func stepsDescription(turn conversation.Checkpoint) string {
 	if turn.GraceRounds == 1 {
 		rounds = "round"
 	}
-	return fmt.Sprintf("(update, optional) how many tool calls you expect the rest of this turn to take. It is your budget: the turn checkpoints at %sthis many calls (with none declared, at %d), gives you %s more %s to say where it stands, and the work continues in a fresh turn while its session is active. A later declaration revises it. Stated BEFORE the work, compared against what it took, and reported back to you in your rhythm line",
-		timesWord(turn.Slack), turn.Calls, countWord(turn.GraceRounds), rounds)
+	undeclared := fmt.Sprintf("at %d", turn.Calls.N)
+	if turn.Calls.Unlimited {
+		undeclared = noCheckpointWords
+	}
+	return fmt.Sprintf("(update, optional) how many tool calls you expect the rest of this turn to take. It is your budget: the turn checkpoints at %sthis many calls (with none declared, %s), gives you %s more %s to say where it stands, and the work continues in a fresh turn while its session is active. A later declaration revises it. Stated BEFORE the work, compared against what it took, and reported back to you in your rhythm line",
+		timesWord(turn.Slack), undeclared, countWord(turn.GraceRounds), rounds)
+}
+
+const noCheckpointWords = "there is no checkpoint"
+
+func defaultCheckpoint() conversation.Checkpoint {
+	return conversation.Checkpoint{Calls: limits.Of(limits.DefaultCheckpointCalls), GraceRounds: limits.DefaultGraceRounds, Slack: limits.DefaultSlack}
+}
+
+func orDefault(turn conversation.Checkpoint) conversation.Checkpoint {
+	d := defaultCheckpoint()
+	turn.Calls = turn.Calls.Or(d.Calls)
+	if turn.GraceRounds <= 0 {
+		turn.GraceRounds = d.GraceRounds
+	}
+	if turn.Slack <= 0 {
+		turn.Slack = d.Slack
+	}
+	return turn
 }
 
 func timesWord(n int) string {
@@ -299,7 +323,7 @@ func VerbsAt(turn conversation.Checkpoint) []Verb {
 		}
 		params := maps.Clone(v.Params)
 		props := maps.Clone(params["properties"].(map[string]any))
-		props["steps"] = integer(stepsDescription(turn.InForce()))
+		props["steps"] = integer(stepsDescription(orDefault(turn)))
 		params["properties"] = props
 		verbs[i].Params = params
 	}

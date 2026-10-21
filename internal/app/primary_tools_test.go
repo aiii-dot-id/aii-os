@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
@@ -44,47 +43,11 @@ func primarySchemaApp(t *testing.T) (*App, primarySchemaTool) {
 	return &App{toolReg: reg}, p
 }
 
-func TestPrimaryPluginActionUsesTheSameExplicitOffer(t *testing.T) {
-	a, p := primarySchemaApp(t)
-	h := &dashboard.WSHandler{}
-	a.wirePluginHooks(h)
-	if len(a.toolReg.Offered()) != 0 {
-		t.Fatal("registering a primary operation offered it")
-	}
-	if err := h.PluginAct(dashboard.PluginAction{Action: "offer", ID: "org.example.notes"}); err != nil {
-		t.Fatal(err)
-	}
-	got := a.toolReg.Offered()
-	if len(got) != 1 || got[0] != p.name {
-		t.Fatalf("plugin action selected %v", got)
-	}
-	if err := h.PluginAct(dashboard.PluginAction{Action: "release", ID: "org.example.notes"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, def := range a.buildToolDefinitions() {
-		if def.Function.Name == p.name {
-			t.Fatal("released tool remained in next provider tool array")
-		}
-	}
-	if err := h.PluginAct(dashboard.PluginAction{Action: "release", ID: "notes"}); err == nil {
-		t.Fatal("release inferred plugin from alias")
-	}
-	if err := h.PluginAct(dashboard.PluginAction{Action: "offer", ID: "notes"}); err == nil || len(a.toolReg.Offered()) != 0 {
-		t.Fatal("family alias selected a plugin")
-	}
-	a.toolReg.SetToolEnabled(p.name, false)
-	if err := h.PluginAct(dashboard.PluginAction{Action: "offer", ID: "org.example.notes"}); err == nil {
-		t.Fatal("UI selection bypassed operator disable")
-	}
-}
-
-// Capture the real dialect clients' HTTP bodies from the app's actual offered
-// definitions. This proves wire shape, not acceptance by a paid endpoint.
+// Capture the real dialect clients' HTTP bodies from the app's actual
+// definitions, in which a registered primary operation is listed with no
+// call by anyone. This proves wire shape, not acceptance by a paid endpoint.
 func TestPrimaryPluginSchemasReachEveryProviderDialect(t *testing.T) {
 	a, p := primarySchemaApp(t)
-	if _, err := a.toolReg.OfferPrimary("org.example.notes"); err != nil {
-		t.Fatal(err)
-	}
 	defs := a.buildToolDefinitions()
 	found := false
 	for _, d := range defs {

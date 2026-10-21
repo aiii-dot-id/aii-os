@@ -159,12 +159,12 @@ func TestRegisterNeverReplacesAName(t *testing.T) {
 		t.Errorf("the builtins changed from %v to %v", builtins, got)
 	}
 	// Still the plugin's, so both gates still ask about it.
-	if st, code, _, ok := r.State("pl_p_x"); !ok || st != StateInspectOnly || code != ReasonInspectOnly {
-		t.Errorf("the operation left the offer gate: state %q code %q plugin %v", st, code, ok)
+	if code, _, ok := r.Unavailable("pl_p_x"); !ok || code != "" {
+		t.Errorf("the operation left the host's listing gate: code %q plugin %v", code, ok)
 	}
 	safe = true
-	if st, code, _, ok := r.State("pl_p_x"); !ok || st != StateHidden || code != ReasonSafeSuspended {
-		t.Errorf("the operation left SAFE's origin gate: state %q code %q plugin %v", st, code, ok)
+	if code, _, ok := r.Unavailable("pl_p_x"); !ok || code != ReasonSafeSuspended {
+		t.Errorf("the operation left SAFE's origin gate: code %q plugin %v", code, ok)
 	}
 
 	if res, err := r.Execute(context.Background(), "pl_p_x", nil); err != nil || res.ReasonCode != ReasonSafeSuspended || res.Output != "" {
@@ -200,7 +200,7 @@ func TestRegistryLiveRegistrationRace(t *testing.T) {
 				return
 			default:
 			}
-			r.ToolDefinitions()
+			r.ToolDefinitions(1 << 10)
 			r.Discover(2)
 			r.ToolStates()
 			r.Execute(context.Background(), "ext_0", nil)

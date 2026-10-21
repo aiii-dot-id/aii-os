@@ -21,11 +21,11 @@ internal/app TestSelectionProbeFailureAndDeadline windows
 internal/app TestWordsWaitingBehindAPassKeepTheirSpeakerWhenTheirSessionEnds linux darwin windows
 internal/pluginhost TestDescriptorProofCannotBorrowTheServingBroker linux darwin windows
 
-internal/tools TestFailedStandingWritesPreserveTheChoice linux darwin windows
-internal/tools TestDormantChoicesDoNotSpendActiveOfferCapacity linux darwin windows
-internal/tools TestPluginReleasePreservesOtherAndAbsentChoices linux darwin windows
-internal/tools TestWaitingChoiceTakesFreedActiveSpaceInStandingOrder linux darwin windows
-internal/app TestUnreadableStandingChoicesRefuseChangesWithoutOverwriting linux darwin windows
+internal/tools TestPrimaryOperationsAreListedWithoutAnyCall linux darwin windows
+internal/tools TestAHiddenPrimaryIsNeitherListedNorCallable linux darwin windows
+internal/app TestTheDyadIsCallableInTheFirstResponseOfATurn linux darwin windows
+internal/app TestANonPrimaryIsReachedThroughTheCallRoute linux darwin windows
+internal/app TestACatalogInstallGrantsWhatThePackageAsksOfTheIdentitysRecords linux darwin windows
 
 # An authored child contract is delivered whole or refused before the leg starts;
 # actual first-request fitting (including withheld-tool text) owns that boundary.

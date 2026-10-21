@@ -1135,3 +1135,17 @@ func (b *Binding) fsDelete(reply replyFn, osRoot *os.Root, root resolvedRoot, re
 }
 
 func EnvelopeOnly(capability string) bool { return capability == capFSPrivate }
+
+func InstallGrant(capability string) string {
+	switch capability {
+	case capRing4KV:
+		return "kv"
+	case capRing4Memory:
+		return "memory"
+	case capInteractionRead:
+		return "interactions"
+	case capModelEmbeddings:
+		return "embeddings"
+	}
+	return ""
+}

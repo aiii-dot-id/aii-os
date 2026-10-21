@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
@@ -17,6 +18,8 @@ type ShellTool struct {
 	sandbox string
 
 	wall func() (shellWall, error)
+
+	left leftJobs
 }
 
 type shellWall struct {
@@ -30,6 +33,8 @@ const ReasonShellWallUnavailable = "SHELL_WALL_UNAVAILABLE"
 func shellWallUnavailable(cause error) string {
 	return "the shell did not run: on this system it runs only behind the operating system's wall, and the wall could not be built: " + cause.Error()
 }
+
+const shellLeftJob = "the command left a job running"
 
 var errShellCeiling = errors.New("the shell's ceiling was reached")
 
@@ -88,7 +93,9 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 
 	tree := &shellTree{}
 	prepareTree(cmd)
-	cmd.Cancel = func() error { return tree.kill(cmd) }
+
+	var killed atomic.Bool
+	cmd.Cancel = func() error { killed.Store(true); return tree.kill(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = dir
 	cmd.Env = shellEnv(t.sandbox)
@@ -134,6 +141,10 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 
 			result.Error = err.Error() + fmt.Sprintf(" [sandbox=%q]", t.sandbox)
 		}
+	}
+
+	if !killed.Load() && t.left.keep(cmd) {
+		result.Output = withStatus(result.Output, shellLeftJob)
 	}
 
 	if !result.Interrupted && result.Error == "" && cmd.ProcessState != nil {

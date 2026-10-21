@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 func TestSpawnResultStatesTheBudget(t *testing.T) {
@@ -16,7 +18,9 @@ func TestSpawnResultStatesTheBudget(t *testing.T) {
 	if strings.Contains(out, "Its budget:") {
 		t.Fatalf("no budget stated yet, none should be quoted: %s", out)
 	}
-	engine.SetSpawnBudget(30, 64, 4)
+	engine.routeLimits = func(string) SpawnLimits {
+		return SpawnLimits{Rounds: limits.Of(30), Calls: limits.Of(64), Legs: limits.Of(4), WallSeconds: 600}
+	}
 	out, err = engine.ExecuteAction(context.Background(), "verb", "work", map[string]any{"action": "spawn", "goal": "size me too"})
 	if err != nil {
 		t.Fatal(err)

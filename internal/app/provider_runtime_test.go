@@ -104,7 +104,7 @@ func TestAnActivationPublishesTheProviderAndItsClientAsOne(t *testing.T) {
 		"Second": llm.New(&llm.ClientConfig{Endpoint: "https://second.invalid", Model: "m"}),
 	}
 	a.llmSwap = newSwappableLLM(clients["First"])
-	a.activateLLMRuntime(clients["First"], providerEntry{Name: "First", EmbeddingsModel: "first-embed"}, 0)
+	a.activateLLMRuntime(clients["First"], providerEntry{Name: "First", EmbeddingsModel: "first-embed"}, Config{Prompt: PromptConfig{MaxTokens: 0}})
 	if entry, client := a.activeRuntime(); entry.Name != "First" || client != clients["First"] || a.llmSwap.Current() != clients["First"] {
 		t.Fatalf("after an activation the provider recorded is %q with its own client: %v", entry.Name, client == clients["First"])
 	}
@@ -137,7 +137,7 @@ func TestAnActivationPublishesTheProviderAndItsClientAsOne(t *testing.T) {
 		if i%2 == 1 {
 			name = "First"
 		}
-		a.activateLLMRuntime(clients[name], providerEntry{Name: name, EmbeddingsModel: name + "-embed"}, 0)
+		a.activateLLMRuntime(clients[name], providerEntry{Name: name, EmbeddingsModel: name + "-embed"}, Config{Prompt: PromptConfig{MaxTokens: 0}})
 	}
 	close(stop)
 	readers.Wait()

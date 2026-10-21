@@ -156,10 +156,7 @@ func TestADisabledBuiltinIsWithheldFromTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	const offered = "pl_org_example_docs_read"
-	if err := a.toolReg.RegisterDynamic(&fakeOp{name: offered, out: `{}`}, "org.example.docs"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.toolReg.Offer(offered); err != nil {
+	if err := a.toolReg.RegisterDynamic(&primaryOp{fakeOp{name: offered, out: `{}`}}, "org.example.docs"); err != nil {
 		t.Fatal(err)
 	}
 

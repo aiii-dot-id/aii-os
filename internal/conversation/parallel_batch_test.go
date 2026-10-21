@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
 
@@ -50,7 +51,7 @@ func TestReadOnlyBatchRunsConcurrently(t *testing.T) {
 		resp("", toolCall("1", "read_a", `{}`), toolCall("2", "read_b", `{}`)),
 		textResp("done"),
 	}}
-	loop := New(client, ex, &fakeDefs{}, nil, nil, Config{MaxIterations: 8})
+	loop := New(client, ex, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(8)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestUnsafeCallsNeverOverlap(t *testing.T) {
 		resp("", toolCall("1", "write_a", `{}`), toolCall("2", "write_b", `{}`)),
 		textResp("done"),
 	}}
-	loop := New(client, ex, &fakeDefs{}, nil, nil, Config{MaxIterations: 8})
+	loop := New(client, ex, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(8)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestPlainExecutorStaysSerial(t *testing.T) {
 		resp("", toolCall("1", "read", `{}`), toolCall("2", "read", `{}`)),
 		textResp("done"),
 	}}
-	loop := New(client, ft, &fakeDefs{}, nil, nil, Config{MaxIterations: 3})
+	loop := New(client, ft, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestMixedBatchExecutesSeriallyInArrivalOrder(t *testing.T) {
 		resp("", toolCall("1", "write_a", `{}`), toolCall("2", "read_b", `{}`), toolCall("3", "read_c", `{}`)),
 		textResp("done"),
 	}}
-	loop := New(client, ex, &fakeDefs{}, nil, nil, Config{MaxIterations: 8})
+	loop := New(client, ex, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(8)}))
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
 		t.Fatal(err)
 	}

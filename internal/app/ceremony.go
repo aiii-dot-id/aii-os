@@ -305,7 +305,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 	if terr != nil {
 		return "", terr
 	}
-	bootConfig.MaxInputTokens, _ = promptBudgetFor(bentry, bootCfg.Prompt.MaxTokens)
+	bootConfig.MaxInputTokens, _ = promptBudgetFor(bentry, promptCeilingFor(bootCfg, bentry, req.Model))
 	bootClient := llm.New(&bootConfig)
 	bootResp, err := bootClient.Chat(ctx, []llm.Message{{Role: "system", Content: a.bootstrapText}}, llm.ChatOptions{})
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -14,7 +15,7 @@ import (
 // mechanical lineage trail a closing project leaves in its directory.
 
 func TestSubagentFrameCarriesDispatchSpecification(t *testing.T) {
-	msg := buildSubagentGoal(2, "survey the store layer", 12, 64, 1, 600)
+	msg := buildSubagentGoal(2, "survey the store layer", limits.Of(12), limits.Of(64), limits.Of(1), 600)
 	// CS-5 dispatch specification: objective framing, output format,
 	// scope boundary — the three things a sub-agent needs (spec ref 1).
 	for _, want := range []string{

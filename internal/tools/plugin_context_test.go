@@ -20,43 +20,33 @@ func (p *contextOp) Execute(ctx context.Context, args map[string]any) (Result, e
 	}
 	return Result{Output: `{"text":"x","detail_route":"search"}`}, nil
 }
+
+// A plugin's context provider reads while its plugin's primary operations
+// are in the identity's tool list: none, or one the operator disabled, and
+// it does not; the dispatch check asks again after the gate.
 func TestContextSelectionAndDispatchRecheck(t *testing.T) {
 	r := NewRegistry(t.TempDir(), nil, Timeouts{})
-	names := registerPlugin(t, r, "org.example.context", "search", "detail")
+	registerPlugin(t, r, "org.example.context", "detail")
 	hook := &contextOp{ownedHostOp: ownedHostOp{namedTool{"pl_context_hook"}, new(int)}}
 	if err := r.RegisterHostOp(hook, "org.example.context"); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.ContextProviders()) != 0 {
-		t.Fatal("unselected context")
+		t.Fatal("a plugin with no primary operation reads context")
 	}
-	if _, err := r.Offer(names[0]); err != nil {
-		t.Fatal(err)
-	}
+	names := registerPrimary(t, r, "org.example.context", "search", "store")
 	if len(r.ContextProviders()) != 1 {
-		t.Fatal("selected context absent")
+		t.Fatal("a plugin whose primaries are listed must read context")
 	}
 	r.SetToolEnabled(names[0], false)
 	if len(r.ContextProviders()) != 0 {
-		t.Fatal("disabled selection admitted")
+		t.Fatal("a plugin with a disabled primary read context")
 	}
 	r.SetToolEnabled(names[0], true)
-	if _, err := r.Offer(names[1]); err != nil {
-		t.Fatal(err)
-	}
-	r.regMu.Lock()
-	delete(r.offered, names[1])
-	r.regMu.Unlock()
-	if len(r.ContextProviders()) != 0 {
-		t.Fatal("withheld selection admitted")
-	}
-	r.regMu.Lock()
-	r.offered[names[1]] = true
-	r.regMu.Unlock()
 	hook.before = func() { r.SetToolEnabled(names[0], false) }
 	_, err := r.Execute(WithContextSelection(WithDispatchOwner(t.Context(), hook.owner)), hook.Name(), nil)
 	if err == nil {
-		t.Fatal("selection change after gate not checked")
+		t.Fatal("a change after the gate was not checked")
 	}
 }
 
@@ -67,10 +57,7 @@ func (*contextMissingArgument) Parameters() map[string]any {
 }
 func TestAutomaticContextSchemaRefusalIsNotModelMalformedCount(t *testing.T) {
 	r := NewRegistry(t.TempDir(), nil, Timeouts{})
-	names := registerPlugin(t, r, "org.example.context", "search")
-	if _, e := r.Offer(names[0]); e != nil {
-		t.Fatal(e)
-	}
+	registerPrimary(t, r, "org.example.context", "search")
 	hook := &contextMissingArgument{contextOp{ownedHostOp: ownedHostOp{namedTool{"pl_context_hook"}, new(int)}}}
 	if e := r.RegisterHostOp(hook, "org.example.context"); e != nil {
 		t.Fatal(e)

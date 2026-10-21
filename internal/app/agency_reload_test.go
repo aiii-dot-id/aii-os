@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -22,10 +23,9 @@ import (
 // heldAgency is what the running identity holds of the agency config,
 // read by reflection as enginePorts reads the engine's ports.
 type heldAgency struct {
-	Depth, Parallel, Mints, Wall, LocalWall int64
-	QueueOff                                bool
-	Rounds, Calls, Legs                     int64
-	TurnRounds, TurnTokens                  int64
+	Depth, Parallel, Mints, Wall      int64
+	QueueOff                          bool
+	TurnRounds, TurnTokens, TurnCalls limits.Ceiling
 }
 
 func agencyHeld(a *App) heldAgency {
@@ -35,12 +35,15 @@ func agencyHeld(a *App) heldAgency {
 	e := reflect.ValueOf(a.engine).Elem()
 	l := reflect.ValueOf(a.conv).Elem().FieldByName("cfg")
 	n := func(v reflect.Value, name string) int64 { return v.FieldByName(name).Int() }
+	c := func(v reflect.Value, name string) limits.Ceiling {
+		f := v.FieldByName(name)
+		return limits.Ceiling{N: int(f.FieldByName("N").Int()), Unlimited: f.FieldByName("Unlimited").Bool()}
+	}
 	return heldAgency{
 		Depth: n(e, "maxSubagentDepth"), Parallel: n(e, "maxParallelSubagents"), Mints: n(e, "maxSubagentMints"),
-		Wall: n(e, "subagentWallSeconds"), LocalWall: n(e, "subagentWallSecondsLocal"),
-		QueueOff: e.FieldByName("spawnQueueOff").Bool(),
-		Rounds:   n(e, "spawnRounds"), Calls: n(e, "spawnCalls"), Legs: n(e, "spawnLegs"),
-		TurnRounds: n(l, "MaxIterations"), TurnTokens: n(l, "TurnTokenBudget"),
+		Wall:       n(e, "subagentWallSeconds"),
+		QueueOff:   e.FieldByName("spawnQueueOff").Bool(),
+		TurnRounds: c(l, "MaxIterations"), TurnTokens: c(l, "TurnTokenBudget"), TurnCalls: c(l, "MaxToolCalls"),
 	}
 }
 
@@ -48,10 +51,9 @@ func agencyHeld(a *App) heldAgency {
 func heldFrom(ag AgencyConfig) heldAgency {
 	return heldAgency{
 		Depth: int64(ag.MaxSubagentDepth), Parallel: int64(ag.MaxParallelSubagents), Mints: int64(ag.SubagentMaxMints),
-		Wall: int64(ag.SubagentWallSeconds), LocalWall: int64(ag.SubagentWallSecondsLocal),
-		QueueOff: !agencyOn(ag.SpawnQueue),
-		Rounds:   int64(ag.SubagentMaxToolRounds), Calls: int64(ag.SubagentMaxToolCalls), Legs: int64(ag.SubagentMaxLegs),
-		TurnRounds: int64(ag.MaxToolRounds), TurnTokens: int64(ag.TurnTokenBudget),
+		Wall:       int64(ag.SubagentWallSeconds),
+		QueueOff:   !agencyOn(ag.SpawnQueue),
+		TurnRounds: ag.MaxToolRounds, TurnTokens: ag.TurnTokenBudget, TurnCalls: maxToolCallsSetting.value(Config{Agency: ag}),
 	}
 }
 
@@ -163,18 +165,26 @@ func TestAReloadAppliesTheAgencyConfigABootApplies(t *testing.T) {
 		ag.SubagentMaxMints = 9
 		ag.SubagentWallSeconds = 700
 		ag.SubagentWallSecondsLocal = 900
-		ag.SubagentMaxToolRounds = 11
-		ag.SubagentMaxToolCalls = 33
-		ag.SubagentMaxLegs = 2
-		ag.MaxToolRounds = 20
-		ag.TurnTokenBudget = 400_000
+		ag.SubagentMaxToolRounds = limits.Of(11)
+		ag.SubagentMaxToolCalls = limits.Of(33)
+		ag.SubagentMaxLegs = limits.Of(2)
+		ag.MaxToolRounds = limits.Of(20)
+		ag.TurnTokenBudget = limits.Of(400_000)
 		ag.RhythmSeconds = 900
 		ag.TurnContinuation = &off
 		ag.YieldAnswer = &on
 	})
-	want := heldAgency{Depth: 2, Parallel: 2, Mints: 9, Wall: 700, LocalWall: 900, Rounds: 11, Calls: 33, Legs: 2, TurnRounds: 20, TurnTokens: 400_000}
+	want := heldAgency{Depth: 2, Parallel: 2, Mints: 9, Wall: 700, TurnRounds: limits.Of(20), TurnTokens: limits.Of(400_000), TurnCalls: limits.Unlimited}
 	if got := agencyHeld(app); got != want {
 		t.Errorf("after the reload the identity holds %+v, want %+v", got, want)
+	}
+	// A spawn's budget and wall are its route's, asked at each spawn: an
+	// untagged one is the identity's own model's.
+	if got, want := app.spawnLimitsFor(""), (identity.SpawnLimits{Rounds: limits.Of(11), Calls: limits.Of(33), Legs: limits.Of(2), WallSeconds: 700}); got != want {
+		t.Errorf("after the reload a spawn is stated %+v, want %+v", got, want)
+	}
+	if got := subWallLocalSetting.n(app.configSnapshot()); got != 900 {
+		t.Errorf("after the reload the local wall is %d, want 900", got)
 	}
 	if n := claimSubagents(t, app.store); n != 1 {
 		t.Errorf("max_parallel_subagents raised to 2: the store admitted %d more claims, want 1", n)
@@ -262,7 +272,7 @@ func TestSafeTakesNoAgencyFromAReload(t *testing.T) {
 		if got := agencyHeld(a); got != held {
 			t.Fatalf("a reload moved SAFE's agency: %+v -> %+v", held, got)
 		}
-		if held.Depth != 0 || held.Parallel != 0 || held.Rounds != 0 {
+		if held.Depth != 0 || held.Parallel != 0 {
 			t.Fatalf("SAFE's engine holds agency it was never given: %+v", held)
 		}
 		spawn(t, a)
@@ -297,9 +307,9 @@ func TestAReloadStatesTheAgencyKeysABootAloneTakes(t *testing.T) {
 	}
 	for name, edit := range map[string]func(*AgencyConfig){
 		"spawn_queue":       func(ag *AgencyConfig) { off := false; ag.SpawnQueue = &off },
-		"subagent_max_legs": func(ag *AgencyConfig) { ag.SubagentMaxLegs++ },
-		"max_tool_rounds":   func(ag *AgencyConfig) { ag.MaxToolRounds++ },
-		"turn_token_budget": func(ag *AgencyConfig) { ag.TurnTokenBudget++ },
+		"subagent_max_legs": func(ag *AgencyConfig) { ag.SubagentMaxLegs.N++ },
+		"max_tool_rounds":   func(ag *AgencyConfig) { ag.MaxToolRounds.N++ },
+		"turn_token_budget": func(ag *AgencyConfig) { ag.TurnTokenBudget.N++ },
 		"rhythm_seconds":    func(ag *AgencyConfig) { ag.RhythmSeconds++ },
 		"outcome_window":    func(ag *AgencyConfig) { ag.OutcomeWindow += 64 },
 		"turn_continuation": func(ag *AgencyConfig) { off := false; ag.TurnContinuation = &off },

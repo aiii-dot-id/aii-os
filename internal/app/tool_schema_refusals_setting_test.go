@@ -19,6 +19,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -94,12 +95,12 @@ func TestTheOperatorsNumberOfRefusedToolsReachesTheTurn(t *testing.T) {
 	turn(2, "started with agency.tool_schema_refusals 1")
 
 	// A reload applies the agency block whole (applyAgency).
-	ag := app.configSnapshot().Agency
-	ag.ToolSchemaRefusals = 2
-	app.applyAgency(ag)
+	c := app.configSnapshot()
+	c.Agency.ToolSchemaRefusals = 2
+	app.applyAgency(c)
 	turn(3, "after a reload set 2")
-	ag.ToolSchemaRefusals = 0
-	app.applyAgency(ag)
+	c.Agency.ToolSchemaRefusals = 0
+	app.applyAgency(c)
 	turn(4, "after a reload set 0, which is the default of 3")
 
 	// THE DOOR TAKES IT, as a row of the settings table: in force for the
@@ -166,7 +167,7 @@ func TestASpawnedRunLeavesOutAsManyToolsAsTheOperatorSays(t *testing.T) {
 	cfg := &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
-		Agency:     AgencyConfig{MaxToolRounds: 2, SubagentWallSeconds: 5, ToolSchemaRefusals: 1},
+		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2), SubagentWallSeconds: 5, ToolSchemaRefusals: 1},
 	}
 	a := New(cfg)
 	a.store = st

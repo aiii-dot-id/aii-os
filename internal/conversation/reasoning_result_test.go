@@ -21,7 +21,7 @@ func TestTheTurnCarriesEveryCallsRawReasoning(t *testing.T) {
 	last.Choices[0].Reasoning = "The file says done; say so."
 	last.Choices[0].Message.Thinking = []llm.ThinkingBlock{{Kind: "thinking", Text: "a provider's summary"}}
 	client := &scriptLLM{script: []llm.Response{first, last}}
-	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestACallWithoutReasoningAddsNothing(t *testing.T) {
 	last := textResp("done")
 	last.Choices[0].Reasoning = "only the second call thought aloud"
 	client := &scriptLLM{script: []llm.Response{first, last}}
-	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestReasoningAfterAHeardReadIsKept(t *testing.T) {
 	after := textResp("done")
 	after.Choices[0].Reasoning = "A bystander said the PIN is 4471."
 	client := &scriptLLM{script: []llm.Response{ask, after}}
-	loop := New(client, &fakeTools{results: map[string]string{"recall": "[heard] the PIN is 4471"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+	loop := New(client, &fakeTools{results: map[string]string{"recall": "[heard] the PIN is 4471"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestReasoningIsReplayedWithinTheTurnOnlyWhenTheClientPutsItThere(t *testing
 			first.Choices[0].Message.Reasoning = thought // as a replaying client hands it over
 		}
 		client := &scriptLLM{script: []llm.Response{first, textResp("done")}}
-		loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 100000})
+		loop := New(client, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 100000}))
 		res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
 		if err != nil {
 			t.Fatal(err)

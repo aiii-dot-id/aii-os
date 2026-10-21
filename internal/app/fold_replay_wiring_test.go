@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
@@ -17,9 +18,9 @@ func TestAFoldedReadIsRecoverableOnADefaultConfiguration(t *testing.T) {
 		call.ID, call.Type = "call1", "function"
 		call.Function.Name, call.Function.Arguments = name, args
 		c := &reviewFoldClient{call: call}
-		loop := conversation.New(c, reviewFoldTools{}, reviewFoldTools{}, nil, nil, conversation.Config{
-			MaxIterations: 4, ContextBudgetTokens: 1400, ReplaySafe: replaySafeHook(reg),
-		})
+		loop := conversation.New(c, reviewFoldTools{}, reviewFoldTools{}, nil, nil, testLoop(conversation.Config{
+			MaxIterations: limits.Of(4), ContextBudgetTokens: 1400, ReplaySafe: replaySafeHook(reg),
+		}))
 		if _, err := loop.Run(context.Background(), "review", []llm.Message{{Role: "user", Content: "continue"}}); err != nil {
 			t.Fatal(err)
 		}

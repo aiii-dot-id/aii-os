@@ -139,7 +139,7 @@ func TestASaveKeepsTheStoredRoleUnlessItDeclaresChat(t *testing.T) {
 	if e := entryNamed(reg, "Mistral"); e == nil || !e.Default || e.Chat == nil || !*e.Chat || !chatProvider(*e) {
 		t.Fatalf("the entry a birth adopted is not declared chat: %+v", e)
 	}
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "Mistral"}, reg); err != nil {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "Mistral"}}, reg); err != nil {
 		t.Fatalf("the born substrate does not resolve: %v", err)
 	}
 }
@@ -155,13 +155,13 @@ func TestASpeechOnlyEntryIsNeverTheSubstrate(t *testing.T) {
 		{Name: "OpenAI", APIType: "openai", URL: "https://api.openai.com/v1", Speech: &speechBlock{}},
 	}}
 	a := newVoiceApp(t)
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "voice"}, reg); err == nil || !strings.Contains(err.Error(), `"voice" serves speech only`) {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "voice"}}, reg); err == nil || !strings.Contains(err.Error(), `"voice" serves speech only`) {
 		t.Fatalf("a speech-only entry with a default_model resolved as the substrate: %v", err)
 	}
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "chat"}, reg); err != nil {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "chat"}}, reg); err != nil {
 		t.Fatalf("the chat provider did not resolve: %v", err)
 	}
-	if _, _, err := a.resolveLLMConfig(LLMConfig{Provider: "OpenAI", Model: "gpt"}, reg); err != nil {
+	if _, _, err := a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: "OpenAI", Model: "gpt"}}, reg); err != nil {
 		t.Fatalf("a shipped chat vendor with a lent speech block and no models did not resolve: %v", err)
 	}
 	path := filepath.Join(filepath.Dir(a.cfg.SourcePath), "providers.json")

@@ -277,7 +277,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	budgetGuess := false
 	if rerr == nil {
 		a.adoptRuntime(llmEntry, nil)
-		promptBudget = a.rememberPromptBudget(llmEntry, promptBudget)
+		promptBudget = a.rememberPromptBudget(llmEntry, promptCeilingFor(cfg, llmEntry, cc.Model))
 		_, src := a.currentPromptBudget()
 		budgetGuess = src == budgetFallback
 	}
@@ -305,10 +305,18 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.loadRing5()
 
 	a.safeTools = &safeToolRecord{}
+
+	safeLimits := limitsFor(cfg, llmEntry, cc.Model)
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
 		a.safeTools, appEmitter{a: a}, conversation.Config{
-			MaxIterations:         cfg.Agency.MaxToolRounds,
-			MaxToolResultChars:    cfg.Prompt.MaxToolResultChars,
+
+			MaxIterations:         safeLimits.Value(maxToolRoundsSetting),
+			TurnTokenBudget:       safeLimits.Value(turnTokenBudgetSetting),
+			MaxToolCalls:          safeLimits.Value(maxToolCallsSetting),
+			WrapUpAtCallLimit:     true,
+			Checkpoint:            safeLimits.cfg.Agency.checkpoint(),
+			ToolSchemaRefusals:    toolSchemaRefusalsSetting.n(cfg),
+			MaxToolResultChars:    safeLimits.N(toolResultCharsSetting),
 			ContextBudgetTokens:   promptBudget,
 			ContextBudgetFallback: budgetGuess,
 			ThinkingBudget:        llmEntry.ThinkingBudget,
@@ -346,7 +354,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 		AskProposer:  nil,
 		WorkWake:     nil,
 		YieldGate:    nil,
-		RouteIsLocal: nil,
+		RouteLimits:  nil,
 	}))
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)
 

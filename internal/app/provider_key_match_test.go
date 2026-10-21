@@ -145,7 +145,7 @@ func TestAProbeOfEveryVendorSendsTheGlobalKeyOnlyToItsOwn(t *testing.T) {
 	}
 
 	for _, other := range []string{"Anthropic", "OpenRouter"} {
-		cc, _, err := a.resolveRouteLLM(a.configSnapshot().LLM, reg, other, "")
+		cc, _, err := a.resolveRouteLLM(a.configSnapshot(), reg, other, "")
 		if err != nil || cc.APIKey != "" {
 			t.Errorf("a role routed to %s resolved the key %q (%v); it is not that provider's", other, cc.APIKey, err)
 		}
@@ -173,7 +173,7 @@ func TestAProbeOfEveryVendorSendsTheGlobalKeyOnlyToItsOwn(t *testing.T) {
 		if e.Name == "OpenAI" {
 			continue
 		}
-		if cc, _, err := b.resolveRouteLLM(b.configSnapshot().LLM, reg, e.Name, ""); err != nil || cc.APIKey != "" {
+		if cc, _, err := b.resolveRouteLLM(b.configSnapshot(), reg, e.Name, ""); err != nil || cc.APIKey != "" {
 			t.Errorf("a role routed to %s resolved %q (%v) from the selected provider's variable", e.Name, cc.APIKey, err)
 		}
 		if cc, err := b.clientConfigForEntry(reg.eff, e, b.configSnapshot().LLM, "m-1", ""); err != nil || cc.APIKey != "" {

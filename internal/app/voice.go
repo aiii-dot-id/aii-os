@@ -53,6 +53,8 @@ type heardUtterance struct {
 	admitted func()
 
 	words *spokenWords
+
+	trace *voiceTurnTrace
 }
 
 type voiceObserver struct{ a *App }
@@ -176,6 +178,7 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 	if listen, _, _ := a.voiceMode(); listen == listenMeeting {
 
 		a.noteReplyOutcome(o.SessionID, "recorded (meeting), no reply")
+		o.trace.end("recorded (meeting), no reply: a meeting began while the words waited")
 		if binding != nil {
 			binding.release("recorded as the room's: a meeting began while the words waited")
 		}
@@ -191,6 +194,10 @@ func (a *App) observeOperatorVoice(ctx context.Context, text string, o heardUtte
 		o.admitted()
 	}
 	reply, err := voiceWake(a, ctx, roleOperator, marked)
+	if err != nil && strings.TrimSpace(reply) == "" {
+
+		o.trace.end("the turn failed with no reply")
+	}
 
 	a.settleVoice(ctx, reply)
 	if !a.voiceReplyShown.Swap(false) && a.dashboard != nil && strings.TrimSpace(reply) != "" {
@@ -224,7 +231,7 @@ func (a *App) voiceBindingFor(o heardUtterance) *voiceBinding {
 	if o.SessionID == "" {
 		return nil
 	}
-	b := &voiceBinding{session: o.SessionID, gen: o.Gen, seq: o.Sequence, text: o.Text, recognized: o.Recognized, corrections: o.Corrections, words: o.words}
+	b := &voiceBinding{session: o.SessionID, gen: o.Gen, seq: o.Sequence, text: o.Text, recognized: o.Recognized, corrections: o.Corrections, words: o.words, trace: o.trace}
 	h := a.voiceHandle(o.SessionID)
 	if h == nil {
 		return b

@@ -3,6 +3,7 @@ package conversation
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"net/http"
 	"net/http/httptest"
@@ -64,7 +65,7 @@ func TestCacheBadTotalCannotBypassTokenFence(t *testing.T) {
 			client := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "openai", Model: "fixture", Retries: -1, TimeoutSeconds: 2})
 			ft := &fakeTools{results: map[string]string{"read": "ok"}}
 			defs := &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "read"}}}}
-			loop := New(client, ft, defs, nil, nil, Config{MaxIterations: 3, ContextBudgetTokens: 100000, TurnTokenBudget: 1500})
+			loop := New(client, ft, defs, nil, nil, testBounds(Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 100000, TurnTokenBudget: limits.Of(1500)}))
 			result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: tc.ask}})
 			if err != nil {
 				t.Fatalf("a turn was refused for its provider's token counts: %v", err)
@@ -108,7 +109,7 @@ func TestCacheWrapUpDisclosesProviderStop(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: tc.provider, Model: "fixture", Retries: -1, TimeoutSeconds: 2})
-			loop := New(c, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "read"}}}}, nil, nil, Config{MaxIterations: 1, ContextBudgetTokens: 100000})
+			loop := New(c, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "read"}}}}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1), ContextBudgetTokens: 100000}))
 			result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
 				return
@@ -157,7 +158,7 @@ func TestAReplyTheOutputLimitCutInsideItsOnlyCallEndsAsTheDeclaredCut(t *testing
 			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Provider: "anthropic", Model: "fixture", Retries: -1, TimeoutSeconds: 2})
 			ft := &fakeTools{results: map[string]string{"write": "ok"}}
 			defs := &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "write"}}}}
-			loop := New(c, ft, defs, nil, nil, Config{MaxIterations: 4, ContextBudgetTokens: 100000})
+			loop := New(c, ft, defs, nil, nil, testBounds(Config{MaxIterations: limits.Of(4), ContextBudgetTokens: 100000}))
 			result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "write the file"}})
 			if err != nil {
 				t.Fatalf("a reply cut inside its only call failed the turn: %v (the identity is told %q)", err, result.Interrupted)
@@ -175,7 +176,7 @@ func TestAReplyTheOutputLimitCutInsideItsOnlyCallEndsAsTheDeclaredCut(t *testing
 	}
 
 	empty := &scriptLLM{script: []llm.Response{textResp("")}}
-	if _, err := New(empty, &fakeTools{}, &fakeDefs{}, nil, nil, Config{ContextBudgetTokens: 1000}).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}}); err == nil {
+	if _, err := New(empty, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{ContextBudgetTokens: 1000})).Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "go"}}); err == nil {
 		t.Fatal("a reply with no text, no call and no cut was taken for an answer")
 	}
 }

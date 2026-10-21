@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -294,10 +295,10 @@ func TestAContextFilledTurnContinuesLikeACappedOne(t *testing.T) {
 		resp("", toolCall("c1", "bash", "{}")),
 		textResp("what I have"),
 	}}
-	loop := New(client, &fakeTools{results: map[string]string{"bash": small}}, defs, nil, nil, Config{
+	loop := New(client, &fakeTools{results: map[string]string{"bash": small}}, defs, nil, nil, testBounds(Config{
 		ContextBudgetTokens: 1000,
-		MaxIterations:       6,
-	})
+		MaxIterations:       limits.Of(6),
+	}))
 	res, err := loop.Run(context.Background(), system, []llm.Message{{Role: "user", Content: "go"}})
 	if err != nil {
 		t.Fatal(err)

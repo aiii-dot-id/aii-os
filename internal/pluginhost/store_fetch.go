@@ -114,11 +114,33 @@ func fetchVerified(ctx context.Context, pluginID, what, url, partial string, siz
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
+		if err := syncDownload(partial); err != nil {
+			return fmt.Errorf("make %s durable before it takes its name: %w", what, err)
+		}
 		if logf != nil {
 			logf("plugin %s: %s verified (%d bytes)", pluginID, what, got)
 		}
 		return nil
 	}
+}
+
+var syncDownload = func(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if errors.Is(err, fs.ErrPermission) {
+		if cerr := os.Chmod(path, 0o600); cerr != nil {
+			return err
+		}
+		f, err = os.OpenFile(path, os.O_WRONLY, 0)
+	}
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func discardPartial(partial, what string) error {

@@ -71,60 +71,14 @@ func TestSchemaUpgradeOperatorSnapshot(t *testing.T) {
 		if _, exists := store.Catalog[table]; !exists {
 			t.Fatalf("snapshot includes converted predecessor %s; use its historical fixture proof", table)
 		}
-		columns, prior := snapshotTableDigest(t, old.DB(), table, nil, expectedSnapshotConversion(table))
+		columns, prior := snapshotTableDigest(t, old.DB(), table, nil)
 		_, after := snapshotTableDigest(t, current.DB(), table, columns)
 		if prior != after {
 			t.Errorf("recorded runtime values changed in %s", table)
 		}
 		checked++
 	}
-	t.Logf("verified signed snapshot through seq %d; runtime values preserved across %d tables, including checked representation conversions; source unchanged", receipt.LastSeq, checked)
-}
-
-// Test oracle, not a migration registry: only the independently specified
-// names-to-seats conversion is normalized here. Every other cell, including
-// this row's key/timestamp and all other runtime_meta rows, stays byte-typed.
-// Current and unrecognized JSON stays exact, just as opening promises.
-func expectedSnapshotConversion(table string) func([]string, []any) error {
-	if table != "runtime_meta" {
-		return nil
-	}
-	return func(columns []string, values []any) error {
-		key, value := -1, -1
-		for i, name := range columns {
-			switch name {
-			case "key":
-				key = i
-			case "value":
-				value = i
-			}
-		}
-		if key < 0 || value < 0 || values[key] != "tools.standing_offer" {
-			return nil
-		}
-		raw, ok := values[value].(string)
-		if !ok || raw == "" {
-			return nil
-		}
-		var current []store.StandingSeat
-		if json.Unmarshal([]byte(raw), &current) == nil {
-			return nil
-		}
-		var names []string
-		if json.Unmarshal([]byte(raw), &names) != nil {
-			return nil
-		}
-		seats := make([]store.StandingSeat, len(names))
-		for i, name := range names {
-			seats[i].Name = name // missing fingerprints are never inferred
-		}
-		encoded, err := json.Marshal(seats)
-		if err != nil {
-			return err
-		}
-		values[value] = string(encoded)
-		return nil
-	}
+	t.Logf("verified signed snapshot through seq %d; runtime values preserved across %d tables; source unchanged", receipt.LastSeq, checked)
 }
 
 func snapshotFileHashes(t *testing.T, dir string) map[string][32]byte {
@@ -156,7 +110,7 @@ func snapshotFileHashes(t *testing.T, dir string) map[string][32]byte {
 	return out
 }
 
-func snapshotTableDigest(t *testing.T, db *sql.DB, table string, columns []string, normalize ...func([]string, []any) error) ([]string, [32]byte) {
+func snapshotTableDigest(t *testing.T, db *sql.DB, table string, columns []string) ([]string, [32]byte) {
 	t.Helper()
 	quote := func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 	if columns == nil {
@@ -187,11 +141,6 @@ func snapshotTableDigest(t *testing.T, db *sql.DB, table string, columns []strin
 	for rows.Next() {
 		if err := rows.Scan(into...); err != nil {
 			t.Fatal(err)
-		}
-		if len(normalize) != 0 && normalize[0] != nil {
-			if err := normalize[0](columns, values); err != nil {
-				t.Fatal(err)
-			}
 		}
 		h := sha256.New()
 		for _, value := range values {
@@ -237,7 +186,12 @@ func TestSnapshotRuntimeDigestChecksValuesAndTypesNotJustCounts(t *testing.T) {
 	}
 }
 
-func TestSnapshotProofChecksOnlyTheDeclaredStandingOfferConversion(t *testing.T) {
+// A RETIRED ROW IS CARRIED AS WRITTEN. The standing offer (retired:
+// a request's tool list is derived, never chosen) left a
+// runtime_meta row in every identity that offered an operation. Opening
+// neither reads nor rewrites it, in either of the forms it was written in,
+// so the snapshot proof needs no conversion oracle.
+func TestARetiredStandingOfferRowIsCarriedAsWritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "before.db")
 	st, err := store.NewForTest(path)
 	if err != nil {
@@ -248,11 +202,7 @@ func TestSnapshotProofChecksOnlyTheDeclaredStandingOfferConversion(t *testing.T)
 ('other-owner','keep exactly','other-time')`); err != nil {
 		t.Fatal(err)
 	}
-	cols, expected := snapshotTableDigest(t, st.DB(), "runtime_meta", nil, expectedSnapshotConversion("runtime_meta"))
-	_, rawBefore := snapshotTableDigest(t, st.DB(), "runtime_meta", cols)
-	if rawBefore == expected {
-		t.Fatal("fixture did not require a representation conversion")
-	}
+	cols, before := snapshotTableDigest(t, st.DB(), "runtime_meta", nil)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -261,39 +211,7 @@ func TestSnapshotProofChecksOnlyTheDeclaredStandingOfferConversion(t *testing.T)
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_, actual := snapshotTableDigest(t, st.DB(), "runtime_meta", cols)
-	if expected != actual {
-		t.Fatal("qualification rejected the real approved conversion")
-	}
-	for _, change := range []string{
-		`UPDATE runtime_meta SET value='lost' WHERE key='other-owner'`,
-		`UPDATE runtime_meta SET updated_at='invented time' WHERE key='tools.standing_offer'`,
-		`UPDATE runtime_meta SET value='[{"name":"first","print":"invented"}]' WHERE key='tools.standing_offer'`,
-	} {
-		tx, err := st.DB().Begin()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(change); err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		_, changed := snapshotTableDigest(t, st.DB(), "runtime_meta", cols)
-		if changed == actual {
-			t.Fatalf("qualification ignored a change outside the allowed mapping: %s", change)
-		}
-		actual = changed
-	}
-}
-
-func TestSnapshotConversionOraclePreservesCurrentAndUnknownValues(t *testing.T) {
-	for _, value := range []any{` [ ] `, `null`, `[{"name":"kept","print":"known","future":1}]`, `["unfinished"`, `{"unknown":true}`, []byte(`["blob is not text"]`)} {
-		row := []any{"tools.standing_offer", value, "original choice time"}
-		before := append([]any(nil), row...)
-		if err := expectedSnapshotConversion("runtime_meta")([]string{"key", "value", "updated_at"}, row); err != nil || !reflect.DeepEqual(before, row) {
-			t.Fatalf("current, unknown or differently typed bytes changed: %v %v", row, err)
-		}
+	if _, after := snapshotTableDigest(t, st.DB(), "runtime_meta", cols); after != before {
+		t.Fatal("opening changed a retired runtime row")
 	}
 }

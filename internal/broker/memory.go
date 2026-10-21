@@ -55,6 +55,16 @@ func (c Config) maxMemories() int {
 	return DefaultMaxMemories
 }
 
+func (c Config) replacedMemoryDays() int {
+	window := store.DefaultPluginMemoryReplacedRetention
+	if c.ReplacedMemoryWindow != nil {
+		if w := c.ReplacedMemoryWindow(); w > 0 {
+			window = w
+		}
+	}
+	return int(window / (24 * time.Hour))
+}
+
 func (b *Binding) dispatchMemory(ctx context.Context, p invokeParams, g Grant) ([]byte, error) {
 	if !b.envelopeHas(capRing4Memory) {
 		return errorReply(rpcForbidden,
@@ -193,7 +203,8 @@ func (b *Binding) addMemory(p invokeParams, st *store.Store, note store.PluginMe
 	}
 	if errors.Is(err, store.ErrPluginMemoryQuota) {
 		r, e := b.resultReply(p.Operation, p.PluginOperation, "", outcome{
-			status: statusFailed, reason: reasonMemoryQuotaExceeded, transportOK: true, detail: err.Error()})
+			status: statusFailed, reason: reasonMemoryQuotaExceeded, transportOK: true,
+			detail: memoryQuotaDetail(err, b.host.cfg.replacedMemoryDays())})
 		return "", r, e
 	}
 	if errors.Is(err, store.ErrPluginMemoryNotFound) {
@@ -205,6 +216,31 @@ func (b *Binding) addMemory(p invokeParams, st *store.Store, note store.PluginMe
 		return "", nil, fmt.Errorf("broker: memory.remember: %w", err)
 	}
 	return id, nil, nil
+}
+
+func memoryQuotaDetail(err error, days int) string {
+	detail := err.Error()
+	var held *store.PluginMemoryQuotaError
+	if errors.As(err, &held) {
+		var leaves []string
+		switch {
+		case held.ReplacedKept == 1:
+			leaves = append(leaves, fmt.Sprintf("1 replaced memory is removed on its own, %d days after it was replaced (plugins.runtime.replaced_memory_days)", days))
+		case held.ReplacedKept > 1:
+			leaves = append(leaves, fmt.Sprintf("%d replaced memories are removed on their own, each %d days after it was replaced (plugins.runtime.replaced_memory_days)", held.ReplacedKept, days))
+		}
+		switch {
+		case held.Temporary == 1:
+			leaves = append(leaves, "1 is this activation's temporary memory and ends with it")
+		case held.Temporary > 1:
+			leaves = append(leaves, fmt.Sprintf("%d are this activation's temporary memories and end with it", held.Temporary))
+		}
+		if len(leaves) == 0 {
+			leaves = append(leaves, "none of them leaves on its own")
+		}
+		detail += "; " + strings.Join(leaves, "; ")
+	}
+	return detail + "; a plugin cannot remove a memory: the operator can raise the ceiling (plugins.runtime.max_memories in the config file) or remove what this plugin stored (the Plugins page, STORED BY PLUGINS)"
 }
 
 func (b *Binding) memoryRemembered(ctx context.Context, p invokeParams, id, outcomeWord, of string) ([]byte, error) {

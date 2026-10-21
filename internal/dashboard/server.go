@@ -731,6 +731,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case "plugin_setting_choices":
 			s.handleSettingChoices(ctx, conn, s.currentHandler(), msg)
 			continue
+		case "plugin_stored":
+			s.handlePluginStored(ctx, conn, s.currentHandler(), msg, cl.secretsOK)
+			continue
 		case "effort_set":
 			s.wsEffortSet(ctx, conn, msg)
 

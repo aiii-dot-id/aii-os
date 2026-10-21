@@ -104,6 +104,152 @@ func TestAMemoryWhoseTextChangesIsHeldToItsNewTextAndEmbeddedAgain(t *testing.T)
 	}
 }
 
+// storeCoverage is one store's line of a coverage read.
+func storeCoverage(t *testing.T, cov []Coverage, name string) Coverage {
+	t.Helper()
+	for _, c := range cov {
+		if c.Store == name {
+			return c
+		}
+	}
+	t.Fatalf("the coverage names no %s", name)
+	return Coverage{}
+}
+
+// "COMPLETE" IS SAID OF VECTORS RECALL CAN USE. Coverage counted a row as
+// embedded while a vector of its id was in the table, and never read the
+// hash that vector carries. A belief whose text changed after a pass was
+// one row holding one vector, and the measure read said the layer was
+// complete, while recall held the vector to the text and left the belief
+// to its words until the next pass.
+//
+// Here three rows are embedded and the belief's text is changed. Before any
+// pass, the coverage the measure read is written from does not count the
+// belief as holding a vector: one row awaits the backfill, in the words
+// that read has always used. The read has changed nothing: the vector of
+// the old text is still in the table, the source was asked for nothing,
+// and no row of access or of decision was written. The count by id still
+// says what it said, since the Memory view's card reads that one. After
+// the next pass both say complete.
+func TestUsableCoverageLeavesOutAVectorOfTextItsRowNoLongerHolds(t *testing.T) {
+	f, fe, _ := meaningStore(t)
+	ctx := context.Background()
+	if rep, err := f.Backfill(ctx, 0); err != nil || rep.Embedded != 3 {
+		t.Fatalf("rig: the three rows are embedded: %+v %v", rep, err)
+	}
+	read := func(coverage func(context.Context) (string, []Coverage, string, error)) (Coverage, string) {
+		t.Helper()
+		basis, cov, unavailable, err := coverage(ctx)
+		if err != nil || unavailable != "" {
+			t.Fatalf("coverage: %v %q", err, unavailable)
+		}
+		return storeCoverage(t, cov, "beliefs"), RenderCoverage(basis, cov, unavailable)
+	}
+	const complete, oneWaits = ", complete (vectors held / rows in scope): ", ", 1 rows awaiting the backfill (vectors held / rows in scope): "
+	if b, line := read(f.UsableCoverage); b.Rows != 1 || b.Embedded != 1 || !strings.Contains(line, complete) {
+		t.Fatalf("rig: after a pass over an unchanged record every vector is usable: %+v: %s", b, line)
+	}
+
+	beliefs, _ := Lookup("beliefs")
+	madeFrom := shaOfRow(t, f.st, beliefs, "b1")
+	if _, err := f.st.DB().Exec(`UPDATE beliefs SET statement = 'The ship keeps its own counsel' WHERE id = 'b1'`); err != nil {
+		t.Fatal(err)
+	}
+	written := func() (n [3]int64) {
+		t.Helper()
+		for i, table := range []string{"memory_vectors", "memory_access", "memory_decisions"} {
+			if err := f.st.DB().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return n
+	}
+	before, calls := written(), fe.calls
+
+	b, line := read(f.UsableCoverage)
+	if b.Rows != 1 || b.Embedded != 0 {
+		t.Fatalf("a belief whose text changed since its vector was made is counted as holding one: %+v", b)
+	}
+	if strings.Contains(line, "complete") || !strings.Contains(line, oneWaits) || !strings.Contains(line, "experiences 2/2") || !strings.Contains(line, "beliefs 0/1") {
+		t.Fatalf("the measure read must say one row awaits the backfill, and which store: %s", line)
+	}
+
+	// The read is a read.
+	var still string
+	if err := f.st.DB().QueryRow(`SELECT content_sha FROM memory_vectors WHERE store = 'beliefs' AND id = 'b1'`).Scan(&still); err != nil || still != madeFrom {
+		t.Fatalf("the vector of the old text must still be in the table, untouched: %q, was %q (%v)", still, madeFrom, err)
+	}
+	if after := written(); after != before || fe.calls != calls {
+		t.Fatalf("reading the coverage wrote something or asked the source: vectors, access, decisions %v to %v, calls %d to %d", before, after, calls, fe.calls)
+	}
+
+	// The count by id is the same count it was.
+	if b, line := read(f.HeldCoverage); b.Rows != 1 || b.Embedded != 1 || !strings.Contains(line, complete) {
+		t.Fatalf("the count by id reads no text and still counts the vector: %+v: %s", b, line)
+	}
+
+	if rep, err := f.Backfill(ctx, 0); err != nil || rep.Stale != 1 || rep.Embedded != 1 {
+		t.Fatalf("the pass drops the one vector and makes it again: %+v %v", rep, err)
+	}
+	if b, line := read(f.UsableCoverage); b.Rows != 1 || b.Embedded != 1 || !strings.Contains(line, complete) {
+		t.Fatalf("after the pass the layer is complete again: %+v: %s", b, line)
+	}
+}
+
+// THE USABLE COUNT IS BOUNDED AS THE COUNT BY ID IS. Under a provider's
+// window of 50, sixty turns are embedded as far as the window reaches and
+// ten more arrive: 40 of the 50 in the window hold a vector and 10 of the
+// 20 older keep theirs, by either count. Then one turn inside the window
+// and one older than it are rewritten. The usable count leaves out both,
+// each on its own side of the window, and the count by id neither. The
+// next pass makes the one inside again and drops the older one's for
+// good, a row the window gives no new vector, and the two counts agree.
+func TestUsableCoverageKeepsAProvidersWindow(t *testing.T) {
+	s := newStore(t)
+	seedTurns(t, s, 60)
+	f := New(s)
+	f.SetEmbedder(&fakeEmbedder{basis: "provider/v1"})
+	f.SetConversationWindow(50)
+	if c := dialogueCoverage(t, f); c.Rows != 50 || c.Embedded != 50 {
+		t.Fatalf("rig: %+v", c)
+	}
+	seedTurns(t, s, 10)
+	ctx := context.Background()
+	read := func(coverage func(context.Context) (string, []Coverage, string, error)) Coverage {
+		t.Helper()
+		_, cov, _, err := coverage(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return storeCoverage(t, cov, "conversations")
+	}
+	unchanged := Coverage{Store: "conversations", Rows: 50, Embedded: 40, Beyond: 20, BeyondEmbedded: 10}
+	if held, usable := read(f.HeldCoverage), read(f.UsableCoverage); held != unchanged || usable != unchanged {
+		t.Fatalf("while no text has changed the two counts are one: by id %+v, usable %+v, want %+v", held, usable, unchanged)
+	}
+
+	// Turns 11 to 60 hold a vector; the window is now turns 21 to 70.
+	if res, err := s.DB().Exec(`UPDATE conversations SET content = 'a lantern in the window' WHERE turn_seq IN (15, 30)`); err != nil {
+		t.Fatal(err)
+	} else if n, _ := res.RowsAffected(); n != 2 {
+		t.Fatalf("rig: %d turns rewritten, want 2", n)
+	}
+	if held := read(f.HeldCoverage); held != unchanged {
+		t.Fatalf("the count by id reads no text: %+v, want %+v", held, unchanged)
+	}
+	if usable, want := read(f.UsableCoverage), (Coverage{Store: "conversations", Rows: 50, Embedded: 39, Beyond: 20, BeyondEmbedded: 9}); usable != want {
+		t.Fatalf("one stale vector inside the window and one beyond it: %+v, want %+v", usable, want)
+	}
+
+	after := Coverage{Store: "conversations", Rows: 50, Embedded: 50, Beyond: 20, BeyondEmbedded: 9}
+	if held := dialogueCoverage(t, f); held != after {
+		t.Fatalf("after the pass, by id: %+v, want %+v", held, after)
+	}
+	if usable := read(f.UsableCoverage); usable != after {
+		t.Fatalf("after the pass, usable: %+v, want %+v", usable, after)
+	}
+}
+
 func TestAFreshMeaningMatchIsNotHiddenBehindStaleVectors(t *testing.T) {
 	s := newStore(t)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)

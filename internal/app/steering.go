@@ -121,6 +121,8 @@ type voiceBinding struct {
 	corrections int64
 
 	words *spokenWords
+
+	trace *voiceTurnTrace
 }
 
 func (b *voiceBinding) ref() string {
@@ -199,6 +201,7 @@ func (a *App) recordRoom(room []steerEntry) {
 	for _, e := range room {
 
 		a.noteReplyOutcome(e.voice.session, "recorded (meeting), no reply")
+		e.voice.trace.end("recorded (meeting), no reply: a meeting began while the words waited for the turn")
 		e.voice.release("recorded as the room's: a meeting began while the words waited for the turn")
 		if err := a.recordRoomWords(a.arrivalCtx(e), strings.TrimPrefix(e.content, voiceMarker), e.voice); err != nil {
 			logsink.Warn("steering.error", "the room's words were not recorded: %v", err)
@@ -365,6 +368,7 @@ func (a *App) holdVoice(b *voiceBinding) {
 func releaseVoice(entries []steerEntry, why string) {
 	for _, e := range entries {
 		if e.voice != nil {
+			e.voice.trace.end("no turn took the words: " + why)
 			e.voice.release(why)
 		}
 	}
@@ -393,6 +397,8 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 		} else {
 			return
 		}
+
+		held[0].trace = newVoiceTurnTrace(held[0].session, 0, stageReply)
 	}
 	latest := map[string]*voiceBinding{}
 	for _, b := range held {
@@ -402,8 +408,11 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 	quietSession := ""
 	var refused *voiceBinding
 	for _, b := range held {
+
+		b.trace.stamp(stageReply)
+		unspoken := "a later utterance of the same turn carries the reply"
 		if latest[b.session] == b && strings.TrimSpace(reply) != "" {
-			switch speak(ctx, b, reply) {
+			switch speak(withVoiceTrace(ctx, b.trace), b, reply) {
 			case replyAdmitted:
 				b.spoken = true
 				shown = true
@@ -412,9 +421,13 @@ func (a *App) settleVoice(ctx context.Context, reply string) {
 			default:
 				quietSession = b.session
 			}
+			unspoken = "no synthesis was enqueued on an engine for this reply"
 		} else if strings.TrimSpace(reply) == "" {
 			a.noteReplyOutcome(b.session, "the turn answered with silence")
+			unspoken = "the turn ended with no reply to speak"
 		}
+
+		b.trace.settle(unspoken)
 		b.release("settled")
 
 		a.retirePendingObservation(b)

@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory"
@@ -12,9 +13,23 @@ import (
 type measureStore interface {
 	Measure(window time.Duration) (store.MeasurementReadout, error)
 	GraphAudit() (store.GraphAudit, error)
+	FamilyAttempts(family string, limit int) (store.FamilyRecord, error)
 }
 
 func (e *Engine) verbMeasure(ctx context.Context, args map[string]any) (string, error) {
+
+	if family, ok := args["family"].(string); ok && strings.TrimSpace(family) != "" {
+		family = strings.TrimSpace(family)
+		limit := 20
+		if n, ok := numArg(args["limit"]); ok && n > 0 {
+			limit = int(n)
+		}
+		r, err := e.store.FamilyAttempts(family, limit)
+		if err != nil {
+			return "", fmt.Errorf("measure family: %w", err)
+		}
+		return store.RenderFamily(r, "playbooks/"+family+"/SKILL.md in your home"), nil
+	}
 	window := 48 * time.Hour
 	if h, ok := numArg(args["hours"]); ok && h > 0 {
 		window = time.Duration(h) * time.Hour
@@ -32,7 +47,7 @@ func (e *Engine) verbMeasure(ctx context.Context, args map[string]any) (string, 
 		out += "\n" + store.RenderGraphAudit(audit)
 	}
 
-	basis, cov, unavailable, err := e.instruments.VectorCoverage(ctx)
+	basis, cov, unavailable, err := e.instruments.UsableCoverage(ctx)
 	if err != nil {
 		return out + "\nMeaning layer: coverage unreadable — " + err.Error(), nil
 	}

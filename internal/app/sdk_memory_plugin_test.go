@@ -69,7 +69,6 @@ func TestSDKMemoryPlugin(t *testing.T) {
 	})
 	h := startCompatHost(t, b, "T1")
 	h.grant(t, "kv", "memory")
-	h.offer(t, "store", "search")
 	invoke := func(t *testing.T, task, op string, args map[string]any) conversation.Observation {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)

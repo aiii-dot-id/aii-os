@@ -204,7 +204,7 @@ func TestAClientResolvedBeforeASignInIsStillMarkedWhenItIsAdopted(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		cc, entry, err := f.a.resolveLLMConfig(LLMConfig{Provider: f.name, Model: "gpt-fixture"}, reg)
+		cc, entry, err := f.a.resolveLLMConfig(Config{LLM: LLMConfig{Provider: f.name, Model: "gpt-fixture"}}, reg)
 		if err != nil {
 			t.Fatal(err)
 		}

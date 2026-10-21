@@ -36,21 +36,17 @@ func (r *Registry) contextEligibleLocked(name string) bool {
 	if plugin == "" || plugin == "builtin" || !r.hostOnly[name] || !r.ToolEnabled(name) {
 		return false
 	}
-	selected := false
-	for n := range r.tools {
-		if r.sources[n] != plugin || r.hostOnly[n] {
+	primaries := 0
+	for n, t := range r.tools {
+		if r.sources[n] != plugin || r.hostOnly[n] || !discoveryOf(n, t, plugin).Primary {
 			continue
 		}
-		_, standing := r.seatIndexLocked(n)
-		if !standing && !r.offered[n] {
-			continue
-		}
-		if !r.offered[n] || !r.ToolEnabled(n) || !r.seatMatchesLocked(n) {
+		if !r.ToolEnabled(n) {
 			return false
 		}
-		selected = true
+		primaries++
 	}
-	return selected
+	return primaries > 0
 }
 
 type contextSelectionKey struct{}

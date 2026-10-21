@@ -304,3 +304,67 @@ func TestMemoryCeilingsAndSAFE(t *testing.T) {
 		t.Fatalf("a plugin's own record stays readable under SAFE: %+v", r)
 	}
 }
+
+// THE CEILING AND THE WINDOW ARE THE OPERATOR'S, AND A REFUSAL NAMES ONLY
+// WAYS OUT THAT EXIST. The ceiling was 10,000 in the code and the window
+// 90 days; a host told nothing has both. A plugin has two verbs and
+// neither removes a memory, so a refusal at the ceiling says what is held,
+// which of it leaves on its own and when, and that the ways out are the
+// operator's: raise the ceiling, or remove what the plugin stored. A
+// record full of current memories is told that nothing leaves on its own
+// (it was told a replaced memory would go in 90 days, with none replaced).
+// The window is asked at the refusal, so one changed while the broker
+// runs is the one said. A temporary activation is told which of its rows
+// end with it.
+func TestThePluginMemoryCeilingAndWindowAreTheOperators(t *testing.T) {
+	if got := (Config{}).maxMemories(); got != 10000 {
+		t.Fatalf("a host told no ceiling holds a plugin to %d memories; it was 10000 in the code", got)
+	}
+	if got := (Config{}).replacedMemoryDays(); got != 90 {
+		t.Fatalf("a host told no window says %d days; it was 90 in the code", got)
+	}
+	const operators = "a plugin cannot remove a memory: the operator can raise the ceiling (plugins.runtime.max_memories in the config file) or remove what this plugin stored (the Plugins page, STORED BY PLUGINS)"
+	days := 30
+	_, b := memHost(t, Config{MaxMemories: 3, ReplacedMemoryWindow: func() time.Duration { return time.Duration(days) * 24 * time.Hour }})
+	refused := func(args string) string {
+		t.Helper()
+		m := dispatch(t, b, memParams("memory.remember", args))
+		rec := wantResult(t, m, statusFailed, reasonMemoryQuotaExceeded)
+		var detail string
+		_ = json.Unmarshal(rec["detail"], &detail)
+		return detail
+	}
+	one := remember(t, b, `{"text":"one distinct thing"}`)
+	remember(t, b, `{"text":"a second, unrelated"}`)
+	remember(t, b, `{"text":"harbour lights at dusk"}`)
+
+	// Full of current memories: nothing leaves on its own, and a
+	// correction is refused like any other row.
+	for _, args := range []string{`{"text":"a fourth, refused"}`, `{"text":"one thing corrected","supersedes":"` + one.ID + `"}`} {
+		if detail, want := refused(args), "plugin memory quota exceeded: 3 memories held at the 3-memory ceiling, 3 current and 0 replaced; none of them leaves on its own; "+operators; detail != want {
+			t.Fatalf("a record full of current memories is refused as\n%q\nwant\n%q", detail, want)
+		}
+	}
+
+	// With a replaced memory held, the window is said, as it stands now.
+	_, b = memHost(t, Config{MaxMemories: 3, ReplacedMemoryWindow: func() time.Duration { return time.Duration(days) * 24 * time.Hour }})
+	one = remember(t, b, `{"text":"one distinct thing"}`)
+	remember(t, b, `{"text":"a second, unrelated"}`)
+	remember(t, b, `{"text":"one thing corrected","supersedes":"`+one.ID+`"}`)
+	if detail, want := refused(`{"text":"harbour lights at dusk"}`), "plugin memory quota exceeded: 3 memories held at the 3-memory ceiling, 2 current and 1 replaced; 1 replaced memory is removed on its own, 30 days after it was replaced (plugins.runtime.replaced_memory_days); "+operators; detail != want {
+		t.Fatalf("with one replaced memory held the refusal is\n%q\nwant\n%q", detail, want)
+	}
+	days = 7
+	if detail := refused(`{"text":"harbour lights at dusk"}`); !strings.Contains(detail, "7 days after it was replaced") {
+		t.Fatalf("the window changed while the broker ran and the refusal says the old one: %q", detail)
+	}
+
+	// A temporary activation: its own rows end with it, and that is said
+	// of those rows and no others.
+	h, _ := memHost(t, Config{MaxMemories: 1, Grants: map[string]Grant{"t0": {Memory: true}}})
+	b = h.Bind("t0", packagefmt.TierT0, []string{"ring4.memory"})
+	remember(t, b, `{"text":"an uncertified plugin's note"}`)
+	if detail, want := refused(`{"text":"another, with no room"}`), "plugin memory quota exceeded: 1 memories held at the 1-memory ceiling, 1 current and 0 replaced; 1 is this activation's temporary memory and ends with it; "+operators; detail != want {
+		t.Fatalf("a temporary record's refusal is\n%q\nwant\n%q", detail, want)
+	}
+}

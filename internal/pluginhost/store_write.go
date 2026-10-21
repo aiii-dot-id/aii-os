@@ -294,6 +294,10 @@ func copyOrClone(ctx context.Context, src, dst string, size int64) (string, stri
 		if err == nil && n != size {
 			err = fmt.Errorf("the clone holds %d bytes, not %d", n, size)
 		}
+
+		if err == nil {
+			err = syncDownload(dst)
+		}
 		return sum, "cloned", err
 	}
 	in, err := os.Open(src)
@@ -376,43 +380,16 @@ func ensureStoreRoot(ctx context.Context, w *plugstore.Writer, key string, r Roo
 		return &RuntimeMissingError{PluginID: "root " + key, Cause: fmt.Errorf("its carrier %s in %s does not read: %w", r.Member, r.Package, err)}
 	}
 	entry := entrypointSpec{Name: r.Name, Bytes: carrier, Digest: r.Digest}
-	archive, err := ensureStoreArchive(ctx, w, d, fetch, adopt, logf)
+	archive, partial, rep, err := extractStoreArchive(ctx, w, key, r, fetch, adopt, logf)
+	if errors.Is(err, errArchiveDamaged) {
+
+		sayTo(logf, "plugin store: the cached runtime archive for root %s was no longer the declared bytes and was removed; bringing it again", key)
+		archive, partial, rep, err = extractStoreArchive(ctx, w, key, r, fetch, adopt, logf)
+	}
 	if err != nil {
 		return err
-	}
-	partial, err := os.MkdirTemp(filepath.Dir(root), key+".partial-")
-	if err != nil {
-		return fmt.Errorf("the plugin store: root %s: %w", key, err)
 	}
 	abandon := func() { _ = os.RemoveAll(partial) }
-	f, err := os.Open(archive)
-	if err != nil {
-		abandon()
-		return err
-	}
-	rep, verified, xerr := extractRuntimeArchive(ctx, f, d, r.Limits, partial)
-	closeErr := f.Close()
-	if cancelled := ctx.Err(); cancelled != nil {
-		return errors.Join(cancelled, os.RemoveAll(partial))
-	}
-	if xerr != nil || closeErr != nil {
-		abandon()
-		own := verified && closeErr == nil && ownBound(xerr, r.Limits)
-		declared := verified && closeErr == nil && (runtimeContentError(xerr) || own)
-		if declared {
-			_ = os.Remove(archive)
-		}
-		detail := ceilingNamed("the runtime archive was refused", xerr)
-		if own {
-			detail = "the runtime archive holds more than its declaration says"
-		}
-		return &RuntimeError{PluginID: "root " + key, Detail: detail, Cause: errors.Join(xerr, closeErr), Declared: declared}
-	}
-	if rep.Files != d.Files || rep.InstalledBytes != d.InstalledBytes {
-		abandon()
-		_ = os.Remove(archive)
-		return &RuntimeError{PluginID: "root " + key, Detail: fmt.Sprintf("the archive holds %d files / %d bytes, the declaration says %d / %d", rep.Files, rep.InstalledBytes, d.Files, d.InstalledBytes), Declared: true}
-	}
 	inv, perr := packagefmt.ParseInventory(rep.InventoryRaw, runtimeLimits(*d, r.Limits))
 	if perr != nil {
 		abandon()
@@ -455,6 +432,53 @@ func ensureStoreRoot(ctx context.Context, w *plugstore.Writer, key string, r Roo
 	}
 	sayTo(logf, "plugin store: root %s published — %d files, %d bytes, verified against the pinned inventory", key, rep.Files, rep.InstalledBytes)
 	return nil
+}
+
+func extractStoreArchive(ctx context.Context, w *plugstore.Writer, key string, r RootWork, fetch ModelFetcher, adopt Adoption, logf func(string, ...any)) (archive, partial string, rep *packagefmt.TreeReport, err error) {
+	d := &r.Runtime
+	archive, err = ensureStoreArchive(ctx, w, d, fetch, adopt, logf)
+	if err != nil {
+		return "", "", nil, err
+	}
+	root, _ := w.Root(key)
+	partial, err = os.MkdirTemp(filepath.Dir(root), key+".partial-")
+	if err != nil {
+		return "", "", nil, fmt.Errorf("the plugin store: root %s: %w", key, err)
+	}
+	abandon := func() { _ = os.RemoveAll(partial) }
+	f, err := os.Open(archive)
+	if err != nil {
+		abandon()
+		return "", "", nil, err
+	}
+	rep, verified, xerr := extractRuntimeArchive(ctx, f, d, r.Limits, partial)
+	closeErr := f.Close()
+	if cancelled := ctx.Err(); cancelled != nil {
+		return "", "", nil, errors.Join(cancelled, os.RemoveAll(partial))
+	}
+	if xerr != nil || closeErr != nil {
+		abandon()
+		if closeErr == nil && errors.Is(xerr, errArchiveDamaged) {
+			_ = os.Remove(archive)
+			return "", "", nil, &RuntimeMissingError{PluginID: "root " + key, Cause: xerr}
+		}
+		own := verified && closeErr == nil && ownBound(xerr, r.Limits)
+		declared := verified && closeErr == nil && (runtimeContentError(xerr) || own)
+		if declared {
+			_ = os.Remove(archive)
+		}
+		detail := ceilingNamed("the runtime archive was refused", xerr)
+		if own {
+			detail = "the runtime archive holds more than its declaration says"
+		}
+		return "", "", nil, &RuntimeError{PluginID: "root " + key, Detail: detail, Cause: errors.Join(xerr, closeErr), Declared: declared}
+	}
+	if rep.Files != d.Files || rep.InstalledBytes != d.InstalledBytes {
+		abandon()
+		_ = os.Remove(archive)
+		return "", "", nil, &RuntimeError{PluginID: "root " + key, Detail: fmt.Sprintf("the archive holds %d files / %d bytes, the declaration says %d / %d", rep.Files, rep.InstalledBytes, d.Files, d.InstalledBytes), Declared: true}
+	}
+	return archive, partial, rep, nil
 }
 
 var ErrRepairWaits = errors.New("an activation holds what the repair would replace; it is repaired once none does")

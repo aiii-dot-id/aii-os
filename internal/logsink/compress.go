@@ -11,13 +11,18 @@ import (
 )
 
 func (s *Sink) CompressOlder() (int, int, error) {
+	compressed, removed, _, err := s.compressAndPrune()
+	return compressed, removed, err
+}
+
+func (s *Sink) compressAndPrune() (int, int, totalEviction, error) {
 	days := s.cfg.compressDays()
 	compressed := 0
 	if days > 0 {
 		cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 		names, err := s.rotated()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, totalEviction{}, err
 		}
 		for _, n := range names {
 			if strings.HasSuffix(n, gzipExt) {
@@ -30,14 +35,14 @@ func (s *Sink) CompressOlder() (int, int, error) {
 			}
 			if fi.ModTime().Before(cutoff) {
 				if err := gzipFile(src, src+gzipExt); err != nil {
-					return compressed, 0, err
+					return compressed, 0, totalEviction{}, err
 				}
 				compressed++
 			}
 		}
 	}
-	removed, err := s.Prune()
-	return compressed, removed, err
+	removed, cut, err := s.prune()
+	return compressed, removed, cut, err
 }
 
 func gzipFile(src, dst string) error {
