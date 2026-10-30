@@ -35,3 +35,6 @@ export function b64(buf) {
 }
 
 export const loadingCard = what => '<div class="card"><div class="empty">loading ' + what + '…</div></div>';
+
+export const cardHead = (label, tip) =>
+  '<h3 title="' + String(tip).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' + label + '</h3>';

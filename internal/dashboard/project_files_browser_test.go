@@ -13,11 +13,11 @@ const projectFilesOpenPage = `<!doctype html>
 <span id="pill-proj"></span>
 <div id="crumb"></div><div id="toast"></div><div id="firstboot"></div><div id="composer-wrap"></div>
 <script type="module">
-import { assert, run } from './__harness.js';
+import { assert, run, until } from './__harness.js';
 import { S } from './state.js';
 import { renderProjects } from './views/projects.js';
 
-run(() => {
+run(async () => {
   S.view = 'projects';
   S.projects = [
     { id: 'proj-x', name: 'Proj X', state: 'open', dir: '/tmp/proj-x',
@@ -78,9 +78,13 @@ run(() => {
   assert(document.getElementById('fv-body').textContent === 'hello-body',
     'viewer body missing fetched text');
 
+  // IMAGE BRANCH — image types render an img, never innerHTML'd text,
+  // drawn once the address that carries its ticket is in hand.
   const rows2 = document.querySelectorAll('#proj-space .fl-file');
   rows2[1].onclick();
+  await until(() => document.querySelector('#file-viewer img'));
   assert(document.querySelector('#file-viewer img'), 'image type must render an img element');
+  assert(asked.includes('/auth/ticket'), 'the picture was drawn without asking for its ticket: ' + asked.join(','));
 
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   assert(!document.getElementById('file-viewer'), 'Escape did not close the viewer');

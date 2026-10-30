@@ -63,14 +63,13 @@ func verbHome(t *testing.T) (root string, env []string) {
 	return root, os.Environ()
 }
 
-// checkAnswers runs each case in order — later cases see what earlier ones
-// made — and compares every byte.
 func checkAnswers(t *testing.T, bin, dir string, env []string, root string, cases []verbAnswer) {
 	t.Helper()
 	for _, c := range cases {
 		code, stdout, stderr := runVerb(t, bin, dir, env, c.args...)
-		wantOut := strings.ReplaceAll(c.stdout, "{root}", root)
-		wantErr := strings.ReplaceAll(c.stderr, "{root}", root)
+		port := strconv.Itoa(install.ConfiguredPort(filepath.Join(root, install.SlotName(0)), 0))
+		wantOut := strings.ReplaceAll(strings.ReplaceAll(c.stdout, "{root}", root), "{port}", port)
+		wantErr := strings.ReplaceAll(strings.ReplaceAll(c.stderr, "{root}", root), "{port}", port)
 		if code != c.code || stdout != wantOut || stderr != wantErr {
 			t.Errorf("aii %s:\n exit %d, want %d\n stdout %q\n   want %q\n stderr %q\n   want %q",
 				strings.Join(c.args, " "), code, c.code, stdout, wantOut, stderr, wantErr)
@@ -146,10 +145,10 @@ func TestTheVerbsAnswerByteForByte(t *testing.T) {
 		{args: []string{"dashboard-token"}, code: 1, stderr: cfgMissing("dashboard-token")},
 		{args: []string{"dashboard-port"}, code: 2, stderr: dashboardPortUsage},
 		{args: []string{"dashboard-link"}, code: 1, stderr: cfgMissing("dashboard-link")},
-		{args: []string{"init", "--no-start"}, stdout: "Created " + first + " (dashboard port " + strconv.Itoa(install.Port(0)) + ")\n\nStart it with:\n  " + install.StartCommand(install.SlotName(0), first) + "\n" +
+		{args: []string{"init", "--no-start"}, stdout: "Created " + first + " (dashboard port {port})\n\nStart it with:\n  " + install.StartCommand(install.SlotName(0), first) + "\n" +
 			"\nOnce it runs, the dashboard asks for its access token, once in each browser; that browser then stays signed in.\n" + tokenLines(first)},
-		{args: []string{"slots"}, stdout: "  identity-0   port " + strconv.Itoa(install.Port(0)) + "  (unnamed — not yet born)\n"},
-		{args: []string{"slots", "extra"}, stdout: "  identity-0   port " + strconv.Itoa(install.Port(0)) + "  (unnamed — not yet born)\n"},
+		{args: []string{"slots"}, stdout: "  identity-0   port {port}  (unnamed — not yet born)\n"},
+		{args: []string{"slots", "extra"}, stdout: "  identity-0   port {port}  (unnamed — not yet born)\n"},
 	}
 	if runtime.GOOS != "windows" {
 		cases = append(cases, verbAnswer{args: []string{"_hardware-vulkan"}, code: 2,

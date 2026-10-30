@@ -14,6 +14,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/identity"
 )
 
 // readBack is a configuration state read at a dotted key, as the Settings
@@ -45,20 +46,27 @@ var cognitionDefaults = map[string]int{
 	"cognition.consolidate_batch":             30,
 	"cognition.consolidate_max_ops":           32,
 	"agency.outcome_window":                   512,
+	"agency.tool_outcome_min":                 3,
+	"agency.tool_outcome_window":              48,
+	"prompt.work_card_beliefs":                3,
 	"cognition.self_model_every_minutes":      250,
 	"cognition.identity_review_every_minutes": 500,
 	"cognition.self_model_evidence_rows":      8,
 	"cognition.self_model_spoken_rows":        8,
 	"prompt.self_model_max_tokens":            2000,
+	"prompt.ring2_evidence_max_chars":         240,
+	"prompt.charter_max_tokens":               2000,
 	"prompt.ring3_max_chars":                  8000,
 	"prompt.surfacing_max_chars":              2400,
 	"prompt.dream_conversation_max_chars":     12000,
 	"prompt.tensions_max_chars":               4000,
 	"prompt.brief_max_chars":                  1200,
+	"prompt.operator_beliefs_max_chars":       2400,
 	"prompt.alarm_firings":                    20,
 	"prompt.excerpt_chars":                    240,
 	"prompt.ring3_recent_experiences":         5,
 	"agency.turn_token_budget":                600000,
+	"agency.turn_seconds_local":               2700,
 	"agency.tool_schema_refusals":             3,
 	"agency.turn_checkpoint_calls":            32,
 	"agency.turn_checkpoint_grace_rounds":     4,
@@ -67,6 +75,19 @@ var cognitionDefaults = map[string]int{
 	"agency.continuation_wall_seconds":        2700,
 	"agency.alarm_wall_seconds":               900,
 	"agency.harvest_wall_seconds":             900,
+	// Bounds as settings: the numbers the code carried, and the standing
+	// state's, which had none (provisional; its one place is the constant).
+	"agency.work_line_max_chars": 1000,
+	"prompt.standing_max_chars":  identity.DefaultStandingMaxChars,
+	"prompt.playbook_max_bytes":  2000,
+	"record.tool_result_runes":   4000,
+	"plugins.context_providers":  2,
+	"plugins.context_timeout_ms": 250,
+	// How a plugin's child is kept: the numbers the plugin host carried.
+	"plugins.runtime.stop_ms":            5000,
+	"plugins.runtime.hand_over_ms":       30000,
+	"plugins.runtime.session_control_ms": 5000,
+	"plugins.runtime.restart_attempts":   5,
 }
 
 func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOutsideItsBounds(t *testing.T) {
@@ -124,15 +145,14 @@ func TestEachCognitionSettingRoundTripsFromTheFileThroughTheDoorAndIsRefusedOuts
 
 	// config.json → read-back: a value of each, as an operator writes it.
 	written := map[string]int{}
-	file := map[string]map[string]any{"prompt": {"recent_turns": 20}, "agency": {}, "cognition": {"morning_brief_at": "06:45"}}
+	file := map[string]any{"prompt": map[string]any{"recent_turns": 20}, "cognition": map[string]any{"morning_brief_at": "06:45"}}
 	for key, def := range cognitionDefaults {
 		v := def + 1
 		if key == "cognition.consolidate_spacing_seconds" {
 			v = 2400 // longer than the cadence written beside it
 		}
 		written[key] = v
-		parts := strings.SplitN(key, ".", 2)
-		file[parts[0]][parts[1]] = v
+		setDotted(file, key, v)
 	}
 	raw, _ := json.Marshal(file)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
@@ -316,6 +336,8 @@ func TestTheRhythmsSettingsApplyAtOnceOnALiveIdentity(t *testing.T) {
 	if _, err := a.applyConfigChange(map[string]any{
 		"cognition.consolidate_spacing_seconds": float64(2400),
 		"prompt.self_model_max_tokens":          float64(1500),
+		"prompt.ring2_evidence_max_chars":       float64(120),
+		"prompt.charter_max_tokens":             float64(900),
 		"cognition.self_model_every_minutes":    float64(100),
 		briefAtKey:                              "off",
 	}); err != nil {
@@ -326,6 +348,12 @@ func TestTheRhythmsSettingsApplyAtOnceOnALiveIdentity(t *testing.T) {
 	}
 	if got := a.store.SelfModelMaxTokens(); got != 1500 {
 		t.Errorf("the portrait's budget in force is %d; the door set 1500", got)
+	}
+	if got := a.store.CharterMaxTokens(); got != 900 {
+		t.Errorf("the charter's budget in force is %d; the door set 900", got)
+	}
+	if identity, err := a.store.PromptIdentity(); err != nil || identity.Ring2EvidenceChars != 120 || identity.CharterMaxTokens != 900 {
+		t.Errorf("the next prompt prints %d characters of each Ring 2 source and says a charter budget of %d (%v); the door set 120 and 900", identity.Ring2EvidenceChars, identity.CharterMaxTokens, err)
 	}
 	if _, every, _ := alarm("life", cognitive.ReflectSelfModelAlarm); every != 20 {
 		t.Errorf("the portrait's alarm repeats every %d pulses; 100 lived minutes at a 300-second pulse is 20", every)

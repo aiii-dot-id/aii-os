@@ -96,7 +96,7 @@ export function wake() {}
 		"/views/settings.js": stub("export function renderSettings() {}\n"),
 		"/views/projects.js": stub("export function renderProjects() {}\nexport function renderProjPill() {}\nexport function viewProject() {}\n"),
 		"/panel.js":          stub("export function renderPanel() {}\n"),
-		"/overlay.js":        stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\n"),
+		"/overlay.js":        stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\nexport function reloadForTheOverlay() {}\n"),
 		"/theme.js":          stub("export function onTheme() {}\n"),
 		"/presence.js":       stub("export function renderPresence() {}\nexport function setThinking() {}\n"),
 	})

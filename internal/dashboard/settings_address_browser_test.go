@@ -111,7 +111,7 @@ export function wake() {}
 		"/views/settings.js": stub("import { S } from '../state.js';\nS.settingsSection = n => { (window.__sec ||= []).push(n); return true; };\nS.settingsAddress = () => '#/settings/' + (window.__sec?.at(-1) || 'substrate');\nS.requestSettingsSection = () => { window.__sectionRequests = (window.__sectionRequests || 0) + 1; };\nexport function renderSettings() { window.__renders = (window.__renders || 0) + 1; }\n"),
 		"/views/projects.js": stub("export function renderProjects() {}\nexport function renderProjPill() {}\nexport function viewProject() {}\n"),
 		"/panel.js":          stub("export function renderPanel() {}\n"),
-		"/overlay.js":        stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\n"),
+		"/overlay.js":        stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\nexport function reloadForTheOverlay() {}\n"),
 		"/theme.js":          stub("export function onTheme() {}\n"),
 		"/presence.js":       stub("export function renderPresence() {}\nexport function setThinking() {}\n"),
 	})

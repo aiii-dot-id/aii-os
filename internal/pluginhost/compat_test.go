@@ -152,7 +152,12 @@ func TestAnActivationOutsideTheHostWindowRefusesBeforeAnyMaterial(t *testing.T) 
 	// happens next, it is not the window.
 	inside := windowedPackage(t, "org.example.inside", role, nil, map[string]any{
 		"aiios_min_version": "0.1.0", "aiios_max_exclusive_version": "9.0.0"})
-	_, err = Activate(ctx, inside, newRegistry(t), supervisedOpts(Options{Roots: roots, HostVersion: "0.1.6"}))
+	ap, err := Activate(ctx, inside, newRegistry(t), supervisedOpts(Options{Roots: roots, HostVersion: "0.1.6"}))
+	if err == nil {
+		// Activated, it is stopped with the test: its native child outlived
+		// the test and held what its parent held open (2026-10-28).
+		defer func() { _ = ap.Deactivate(context.Background()) }()
+	}
 	if errors.As(err, &hv) {
 		t.Fatalf("a host inside the window was refused by it: %v", hv)
 	}

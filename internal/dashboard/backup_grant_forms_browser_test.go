@@ -81,13 +81,13 @@ run(() => {
   assert(document.getElementById('settings-stack').textContent.includes('/another-client'),'draft hid current grants');
   const el=id=>document.getElementById(id);
   el('sbx-grant').click(); const added=frames.at(-1);
-  assert(added.roots.join('|')==='/existing|/another-client|/my/project','grant omitted current roots');
+  assert(added.type==='sandbox_add' && added.root==='/my/project' && !('roots' in added),'A GRANT SENT THE PAGE\'S OWN LIST: an older page puts back a root another page removed');
   assert(el('sbx-grant').disabled,'pending grant not disabled');
   input.value='/newer/project';
   assert(!sandbox.acceptSandbox('another-client'),'foreign grant reply accepted');
-  S.sandbox.extra_roots=added.roots; assert(sandbox.acceptSandbox(added.request_id),'grant reply not claimed'); renderSettings();
+  S.sandbox.extra_roots=S.sandbox.extra_roots.concat([added.root]); assert(sandbox.acceptSandbox(added.request_id),'grant reply not claimed'); renderSettings();
   assert(input.value==='/newer/project','older grant erased newer input');
-  el('sbx-grant').click(); const newer=frames.at(-1); S.sandbox.extra_roots=newer.roots;
+  el('sbx-grant').click(); const newer=frames.at(-1); S.sandbox.extra_roots=S.sandbox.extra_roots.concat([newer.root]);
   sandbox.acceptSandbox(newer.request_id); renderSettings();
   assert(input.value==='','confirmed grant input not cleared');
   input.value='/refused'; el('sbx-grant').click(); sandbox.rejectSandbox(frames.at(-1).request_id,'fixture root refusal');
@@ -98,7 +98,7 @@ run(() => {
   setConnected(false); const before=frames.length; el('sbx-grant').click();
   assert(frames.length===before && !el('sbx-grant').disabled && input.value==='/refused','offline grant stuck or lost draft');
   setConnected(true); document.querySelector('[data-rmroot]').click(); const removed=frames.at(-1);
-  assert(removed.roots.length===newer.roots.length-1,'remove did not submit current list');
+  assert(removed.type==='sandbox_remove' && removed.root==='/existing' && !('roots' in removed),'a removal did not name the one root it removes');
   sandbox.acceptSandbox(removed.request_id); renderSettings();
   assert(input.value==='/refused','removal consumed unrelated add draft');
 });

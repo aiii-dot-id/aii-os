@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net"
 
 	"github.com/aiii-dot-id/aii-os/internal/install"
 )
@@ -16,7 +15,7 @@ var errPortKept = errors.New("the dashboard port was kept")
 
 func movePort(root, slotDir string, port int, ask asker, write func(port int) error, free func(port int) bool) (int, error) {
 	const held = "is already in use by another program, and this identity is not running"
-	next, err := install.NextFreePort(root, port, free)
+	next, err := install.NextFreePort(root, port, install.ConfiguredPortSearchSpan(slotDir), free)
 	if err != nil {
 		return 0, fmt.Errorf("port %d %s; %v. Close the program using port %d and open AII OS again.", port, held, err, port)
 	}
@@ -35,16 +34,4 @@ func movePort(root, slotDir string, port int, ask asker, write func(port int) er
 		return 0, fmt.Errorf("port %d %s, and moving the dashboard to port %d failed, so nothing was started: %w", port, held, next, err)
 	}
 	return next, nil
-}
-
-func portFree(port int) bool {
-	if serving(port) {
-		return false
-	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return false
-	}
-	ln.Close()
-	return true
 }

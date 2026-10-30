@@ -27,7 +27,7 @@ func TestACallWithNoExecutorEndsTheTurn(t *testing.T) {
 	if len(em.emitted) != 1 || em.emitted[0] != "tool_call:bash" {
 		t.Fatalf("emitted = %v, want the call announced before the refusal", em.emitted)
 	}
-	if client.calls != 1 || res.ToolCallsUsed != 1 || res.Spoken != "looking" {
+	if client.calls != 1 || res.ToolCallsUsed != 1 || res.Said() != "looking" {
 		t.Fatalf("calls %d, result %+v", client.calls, res)
 	}
 }
@@ -130,8 +130,8 @@ func TestAYieldInAParallelBatchEndsTheTurn(t *testing.T) {
 	if !res.Yielded || len(client.seen) != 2 {
 		t.Fatalf("yielded %v after %d calls", res.Yielded, len(client.seen))
 	}
-	if !strings.Contains(res.Spoken, "standing by\n\nBest current answer: X holds\n\n[Turn yielded after 2 tool calls") {
-		t.Fatalf("spoken = %q", res.Spoken)
+	if !strings.Contains(res.Said(), "standing by\n\nBest current answer: X holds\n\n[Turn yielded after 2 tool calls") {
+		t.Fatalf("spoken = %q", res.Said())
 	}
 	if !strings.Contains(joined(client.seen[1]), "You yielded this turn") {
 		t.Fatal("the closing call was not told the turn yielded")

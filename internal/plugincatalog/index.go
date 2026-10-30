@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,8 @@ type CatalogPackage struct {
 
 	OSMinVersion string `json:"os_min_version,omitempty"`
 }
+
+func (p CatalogPackage) Portable() bool { return p.Platform == "*" && p.Arch == "*" }
 
 var systemNames = map[string]string{"macos": "macOS", "windows": "Windows", "linux": "Linux"}
 
@@ -102,7 +105,61 @@ type CatalogEntry struct {
 	AiiosMaxExclusiveVersion string `json:"aiios_max_exclusive_version,omitempty"`
 }
 
-const DefaultCatalogURL = "https://raw.githubusercontent.com/aiii-dot-id/plugin-catalog/main/aiios-plugins.md"
+const (
+	LegacyLine = "0.1"
+
+	catalogHome = "https://raw.githubusercontent.com/aiii-dot-id/plugin-catalog/main/"
+	catalogStem = "aiios-plugins"
+)
+
+func HostLine(v string) string {
+	v = trimV(v)
+	if !version.Valid(v) {
+		return ""
+	}
+	parts := strings.SplitN(v, ".", 3)
+	return parts[0] + "." + parts[1]
+}
+
+func OwnLine() string { return lineOrLegacy(HostLine(version.Authored())) }
+
+func lineOrLegacy(line string) string {
+	if line == "" {
+		return LegacyLine
+	}
+	return line
+}
+
+func CatalogFileFor(line string) string {
+	if line = lineOrLegacy(line); line == LegacyLine {
+		return CatalogFile
+	}
+	return catalogStem + "-" + line + ".md"
+}
+
+func LineOfCatalogFile(name string) (string, bool) {
+	if name == CatalogFile {
+		return LegacyLine, true
+	}
+	line, ok := strings.CutPrefix(name, catalogStem+"-")
+	if !ok {
+		return "", false
+	}
+	line, ok = strings.CutSuffix(line, ".md")
+	if !ok || HostLine(line+".0") != line || line == LegacyLine {
+		return "", false
+	}
+	return line, true
+}
+
+func LineURL(url, line string) string {
+	if i := strings.LastIndexByte(url, '/'); i >= 0 {
+		return url[:i+1] + CatalogFileFor(line)
+	}
+	return CatalogFileFor(line)
+}
+
+var DefaultCatalogURL = catalogHome + CatalogFileFor(OwnLine())
 
 type Index struct {
 	Version   int            `json:"catalog_version"`
@@ -110,32 +167,123 @@ type Index struct {
 	Plugins   []CatalogEntry `json:"plugins"`
 
 	MustUnderstand []string `json:"must_understand,omitempty"`
+
+	Announced Announcement `json:"-"`
+}
+
+type Announcement struct {
+	Release string
+	At      string
+
+	StatusEpochs map[string]int64
 }
 
 var catalogFeatures = map[string]bool{
 
 	"compat": true,
+
+	"host_line": true,
 }
 
 type catalogSig struct {
 	CatalogVersion int    `json:"catalog_version"`
 	Generated      string `json:"generated"`
 	CatalogSHA256  string `json:"catalog_sha256"`
+
+	HostRelease  string           `json:"host_release,omitempty"`
+	StatusEpochs map[string]int64 `json:"status_epochs,omitempty"`
+
+	HostLine string `json:"host_line,omitempty"`
 }
 
+func (s catalogSig) bindsLine(line string) error {
+	line = lineOrLegacy(line)
+	switch {
+	case s.HostLine != "" && s.HostLine != line:
+		return fmt.Errorf(catalogOtherLine, s.HostLine, line)
+	case s.HostLine == "" && line != LegacyLine:
+		return fmt.Errorf(catalogNoLine, line)
+	}
+	return nil
+}
+
+const (
+	catalogOtherLine = "catalog: this index is signed for AII OS %s hosts, and this host is AII OS %s: each line reads its own catalog file — refused"
+	catalogNoLine    = "catalog: this index's signature names no host line, and an AII OS %s host reads only an index signed for its line — refused"
+)
+
+func (s catalogSig) announcement() (Announcement, error) {
+	a := Announcement{Release: s.HostRelease, StatusEpochs: s.StatusEpochs}
+	if a.Release == "" && len(a.StatusEpochs) == 0 {
+		return Announcement{}, nil
+	}
+	if a.Release != "" && !version.Valid(a.Release) {
+		return Announcement{}, fmt.Errorf("catalog: the signed host_release %q is not a version", a.Release)
+	}
+	if _, err := time.Parse(time.RFC3339, s.Generated); err != nil {
+		return Announcement{}, fmt.Errorf("catalog: the signed payload announces a release and its generated %q is not an RFC 3339 time", s.Generated)
+	}
+	for root, epoch := range a.StatusEpochs {
+		if epoch < 1 {
+			return Announcement{}, fmt.Errorf("catalog: the signed status_epochs names epoch %d for %s; an epoch is at least 1", epoch, root)
+		}
+	}
+	a.At = s.Generated
+	return a, nil
+}
+
+func SignedPayload(md []byte, hostRelease, generated string, statusEpochs map[string]int64) ([]byte, error) {
+	block, err := catalogBlock(md)
+	if err != nil {
+		return nil, err
+	}
+	var cat Index
+	if err := json.Unmarshal([]byte(block), &cat); err != nil {
+		return nil, fmt.Errorf("catalog: index block malformed: %w", err)
+	}
+	if err := cat.validate(); err != nil {
+		return nil, err
+	}
+	if hostRelease == "" {
+		return nil, fmt.Errorf("catalog: an announcement names the newest release (host_release)")
+	}
+
+	line := HostLine(hostRelease)
+	if line != LegacyLine && line != "" && !slices.Contains(cat.MustUnderstand, "host_line") {
+		return nil, fmt.Errorf("catalog: an index for AII OS %s names host_line in must_understand, so a host of an earlier line pointed at it refuses it whole", line)
+	}
+	sig := catalogSig{CatalogVersion: cat.Version, Generated: generated, CatalogSHA256: sigenvelope.SHA256Prefixed(md),
+		HostRelease: hostRelease, StatusEpochs: statusEpochs, HostLine: line}
+	if _, err := sig.announcement(); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(sig, "", "  ")
+}
+
+func PublishedBeside(catalogPath, name string) string { return catalogPath + "." + name }
+
 func LoadCatalog(dir string, platformRoot *sigenvelope.PublicKeyEnvelope) (*Index, error) {
-	mdBytes, err := atomicfile.ReadFile(filepath.Join(dir, CatalogFile))
+	return LoadCatalogForLine(dir, platformRoot, OwnLine())
+}
+
+func LoadCatalogForLine(dir string, platformRoot *sigenvelope.PublicKeyEnvelope, line string) (*Index, error) {
+	name := CatalogFileFor(line)
+	mdBytes, err := atomicfile.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	sigBytes, err := atomicfile.ReadFile(filepath.Join(dir, CatalogSigFile))
+	sigBytes, err := atomicfile.ReadFile(filepath.Join(dir, name+".sig"))
 	if err != nil {
-		return nil, fmt.Errorf("catalog: %s: %w", CatalogSigFile, err)
+		return nil, fmt.Errorf("catalog: %s.sig: %w", name, err)
 	}
-	return ParseCatalog(mdBytes, sigBytes, platformRoot)
+	return ParseCatalogForLine(mdBytes, sigBytes, platformRoot, line)
 }
 
 func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyEnvelope) (*Index, error) {
+	return ParseCatalogForLine(mdBytes, sigBytes, platformRoot, OwnLine())
+}
+
+func ParseCatalogForLine(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyEnvelope, line string) (*Index, error) {
 	if platformRoot == nil {
 		return nil, fmt.Errorf("catalog: no platform_release root is pinned — the catalog cannot be verified (unverifiable is not unsigned)")
 	}
@@ -148,7 +296,14 @@ func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyE
 		return nil, fmt.Errorf("catalog: signed payload malformed: %w", err)
 	}
 	if got := sigenvelope.SHA256Prefixed(mdBytes); got != sig.CatalogSHA256 {
-		return nil, fmt.Errorf("catalog: the signature does not cover this file (%s declares %s, file hashes to %s) — refused", CatalogSigFile, sig.CatalogSHA256, got)
+		return nil, fmt.Errorf("catalog: the signature does not cover this file (%s declares %s, file hashes to %s) — refused", CatalogFileFor(line)+".sig", sig.CatalogSHA256, got)
+	}
+	if err := sig.bindsLine(line); err != nil {
+		return nil, err
+	}
+	announced, err := sig.announcement()
+	if err != nil {
+		return nil, err
 	}
 	block, err := catalogBlock(mdBytes)
 	if err != nil {
@@ -181,6 +336,7 @@ func ParseCatalog(mdBytes, sigBytes []byte, platformRoot *sigenvelope.PublicKeyE
 	if err := cat.validate(); err != nil {
 		return nil, err
 	}
+	cat.Announced = announced
 	return &cat, nil
 }
 
@@ -310,7 +466,7 @@ func (c *Index) SelectForHost(id, platform, arch, hostVersion string) (*CatalogE
 			if p.Platform == platform && p.Arch == arch {
 				return e, p, nil
 			}
-			if p.Platform == "*" && p.Arch == "*" {
+			if p.Portable() {
 				portable = p
 			}
 		}
@@ -369,4 +525,44 @@ func versionFields(v string) (fields []int, pre bool, ok bool) {
 		fields = append(fields, n)
 	}
 	return fields, pre, true
+}
+
+type Stranded struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	Reason  string `json:"reason"`
+}
+
+const (
+	strandedNotCarried = "the AII OS %s catalog does not carry it"
+	strandedNoBuild    = "the AII OS %s catalog has no build of it for %s/%s"
+	strandedWindow     = "the AII OS %s catalog's %s %s"
+)
+
+func (c *Index) StrandedBy(installed map[string]string, offered, platform, arch string) []Stranded {
+	line := lineOrLegacy(HostLine(offered))
+	ids := make([]string, 0, len(installed))
+	for id := range installed {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var out []Stranded
+	for _, id := range ids {
+		reason := ""
+		e, pkg, _ := c.SelectForHost(id, platform, arch, offered)
+		switch {
+		case e == nil:
+			reason = fmt.Sprintf(strandedNotCarried, line)
+		case pkg == nil:
+			if ok, why := e.SupportedBy(offered); !ok {
+				reason = fmt.Sprintf(strandedWindow, line, e.Version, why)
+			} else {
+				reason = fmt.Sprintf(strandedNoBuild, line, platform, arch)
+			}
+		}
+		if reason != "" {
+			out = append(out, Stranded{ID: id, Version: installed[id], Reason: reason})
+		}
+	}
+	return out
 }

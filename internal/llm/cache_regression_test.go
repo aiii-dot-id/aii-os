@@ -173,3 +173,25 @@ func TestCacheAnthropicHistoryBoundaryIsMarked(t *testing.T) {
 		t.Fatalf("sent %d cache breakpoints with a history boundary among four system messages; maximum 4", n)
 	}
 }
+
+func TestAResponsesUsageThatReportsNoWritesShowsNone(t *testing.T) {
+	read := func(usage string) Usage {
+		t.Helper()
+		s := "data: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":` + usage + `}}` + "\n\n"
+		resp, err := readResponsesStream(strings.NewReader(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Usage
+	}
+	u := read(`{"input_tokens":9152,"input_tokens_details":{"cached_tokens":0},"output_tokens":33,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":9185}`)
+	if !u.Reported || u.PromptTokens != 9152 || !u.CacheReadReported || u.CachedPromptTokens != 0 {
+		t.Fatalf("rig: the usage did not read: %+v", u)
+	}
+	if u.CacheWriteTokens != 0 || u.CacheWriteReported {
+		t.Fatalf("a Responses usage that reports no writes reads as %d written (reported %t)", u.CacheWriteTokens, u.CacheWriteReported)
+	}
+	if w := read(`{"input_tokens":9152,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":9149},"output_tokens":33,"total_tokens":9185}`); w.CacheWriteTokens != 9149 || !w.CacheWriteReported {
+		t.Fatalf("a write count the vendor names was not taken at its word: %+v", w)
+	}
+}

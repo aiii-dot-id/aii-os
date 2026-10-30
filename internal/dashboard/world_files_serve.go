@@ -38,6 +38,7 @@ var drawnTypes = func() map[string]string {
 var DefaultFileTypes = []string{
 	".pdf", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf",
 	".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".log",
+	".wav", ".mp3", ".ogg", ".mp4", ".webm",
 }
 
 func (s *Server) filePolicy() FilePolicy {

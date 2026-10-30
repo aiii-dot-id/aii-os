@@ -6,9 +6,26 @@ type PromptIdentity struct {
 	Charter                 string
 	OperatorName            string
 	HasOperatorRelationship bool
-	Ring2                   []Ring2Belief
-	SelfModel               *SelfModelSynthesis
-	Priorities              []string
+
+	AboutOperator []OperatorBelief
+	Ring2         []Ring2Belief
+
+	Ring2EvidenceChars int
+
+	CharterMaxTokens int
+	SelfModel        *SelfModelSynthesis
+	Priorities       []string
+}
+
+type AboutOperator struct {
+	RelationshipID string
+	Name           string
+	Beliefs        []OperatorBelief
+}
+
+type OperatorBelief struct {
+	ID        string
+	Statement string
 }
 
 type Ring2Belief struct {
@@ -22,6 +39,7 @@ type Ring2Evidence struct {
 	EdgeType   string
 	Content    string
 	Provenance string
+	Kind       string
 }
 
 type SelfModelSynthesis struct {

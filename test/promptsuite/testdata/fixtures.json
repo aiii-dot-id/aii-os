@@ -1,0 +1,130 @@
+[
+  {
+    "key": "memory-keeps",
+    "role": "memory",
+    "id": "id.aiii.memory",
+    "version": "1.0.0",
+    "interface": "memory.lessons",
+    "operations": [
+      {
+        "id": "store",
+        "summary": "Keep a lesson for later attempts: what worked, what failed, and why.",
+        "primary": true,
+        "input": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The lesson, in your own words"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      {
+        "id": "search",
+        "summary": "Find lessons kept from earlier attempts that match what you are about to do.",
+        "primary": true,
+        "input": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What you are about to do"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "answer": {
+      "stored": true,
+      "memories": [
+        {
+          "text": "To find which file under notes/ mentions a phrase: one grep with literal=true over notes/ answers it in one call; reading the files one by one took ten.",
+          "kept": "2026-10-01"
+        }
+      ]
+    }
+  },
+  {
+    "key": "memory-refuses",
+    "role": "memory",
+    "id": "id.aiii.memory",
+    "version": "1.0.0",
+    "interface": "memory.lessons",
+    "operations": [
+      {
+        "id": "store",
+        "summary": "Keep a lesson for later attempts: what worked, what failed, and why.",
+        "primary": true,
+        "input": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The lesson, in your own words"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      {
+        "id": "search",
+        "summary": "Find lessons kept from earlier attempts that match what you are about to do.",
+        "primary": true,
+        "input": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What you are about to do"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "answer": {
+      "stored": false,
+      "refused": true,
+      "reasonCode": "OPERATION_ARGUMENT_INVALID",
+      "memories": []
+    }
+  },
+  {
+    "key": "planning",
+    "role": "planning",
+    "id": "id.aiii.planning",
+    "version": "1.0.0",
+    "interface": "planning.review",
+    "operations": [
+      {
+        "id": "review",
+        "summary": "Review earlier attempts of a kind of work before starting it, and get the plan that served best.",
+        "primary": true,
+        "input": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "The kind of work about to start"
+            }
+          }
+        }
+      }
+    ],
+    "answer": {
+      "review": "This kind of work was done before: finding which file under notes/ mentions a phrase. The attempt that served best made one grep with literal=true over notes/, then answered.",
+      "attempts": 3
+    }
+  }
+]

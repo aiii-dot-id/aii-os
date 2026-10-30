@@ -27,6 +27,8 @@ type CertificateManager interface {
 	Certificate() *tls.Certificate
 	State() certs.State
 	DaysLeft() float64
+
+	OrderOwed() bool
 	Ensure(ctx context.Context) (bool, error)
 	Renew(ctx context.Context) (bool, error)
 }
@@ -47,6 +49,8 @@ const (
 	StatusClaiming = "claiming"
 	StatusIssued   = "issued"
 	StatusFailing  = "failing"
+
+	StatusHeld = "held"
 
 	certificateOwnerName = "certificate"
 	certificateAlarmID   = "certificate.renewal"
@@ -83,6 +87,8 @@ type Wires struct {
 	Key         func() *crypto.KeyPair
 	IdentityDir func() string
 
+	WitnessFiles func() witness.FileGuard
+
 	Settings func() Settings
 
 	Alert func(kind, detail string)
@@ -97,6 +103,8 @@ type Seams struct {
 	RelayTLS *tls.Config
 
 	RetryIssueStarted func()
+
+	LookupHost func(ctx context.Context, host string) ([]string, error)
 }
 
 type Runtime struct {
@@ -112,6 +120,8 @@ type Runtime struct {
 	publisher  NamePublisher
 	address    string
 	resolvesTo string
+
+	resolveError string
 
 	serviceZone string
 
@@ -145,6 +155,8 @@ type Runtime struct {
 	relayCancel          context.CancelFunc
 	relayDone            <-chan struct{}
 	beforeRelayAdmission func()
+
+	dayCancel context.CancelFunc
 }
 
 func New(w Wires) *Runtime {
@@ -163,7 +175,7 @@ func (r *Runtime) publisherFor(cfg Settings) (NamePublisher, error) {
 		return nil, errors.New("not live")
 	}
 	key := witness.AsIdentityKey(kp)
-	canonical, env, err := witness.EnsureIdentityEnvelope(key, db, r.w.IdentityDir())
+	canonical, env, err := witness.EnsureIdentityEnvelopeUnder(r.witnessFiles(), key, db, r.w.IdentityDir())
 	if err != nil {
 		return nil, fmt.Errorf("identity envelope: %w", err)
 	}
@@ -203,6 +215,10 @@ func (r *Runtime) Wire(cfg Settings) error {
 	if !ok {
 		return nil
 	}
+
+	if r.w.Key() == nil {
+		return r.wireHeld(cfg, pn, dash)
+	}
 	pub, err := r.publisherFor(cfg)
 	if err != nil {
 		return fmt.Errorf("public name %s: certificate service: %w", pn.Name, err)
@@ -214,7 +230,7 @@ func (r *Runtime) Wire(cfg Settings) error {
 	port := dash.BoundPort()
 	dash.SetPublicCertificate(pn.Name, mgr.Certificate)
 
-	order := mgr.Certificate() == nil && certificateWanted(cfg)
+	order := mgr.OrderOwed() && certificateWanted(cfg)
 	r.mu.Lock()
 	name := pn
 	r.name = &name
@@ -240,27 +256,91 @@ func (r *Runtime) Wire(cfg Settings) error {
 	if order {
 		r.w.Go(func() { r.issue(mgr) })
 	}
-	if tf := r.w.TIME(); tf != nil {
-		if err := armCertificateAlarm(tf, time.Now()); err != nil {
-			logsink.Warn("route.error", "renewal alarm could not be armed: %v", err)
-		}
+	tf := r.w.TIME()
+	if tf == nil {
+
+		r.keepDay()
+		return nil
+	}
+	r.endDay()
+	if err := armCertificateAlarm(tf, time.Now()); err != nil {
+		logsink.Warn("route.error", "renewal alarm could not be armed: %v", err)
 	}
 	return nil
 }
 
-func (r *Runtime) sessionServers() []dashboard.ICEServer {
+const heldWhy = "the identity's key is not loaded, so nothing can be signed to the certificate service: this certificate is not renewed, no new one is ordered, and the route to the name is not kept"
+
+func (r *Runtime) wireHeld(cfg Settings, pn store.PublicName, dash *dashboard.Server) error {
+	mgr, err := r.managerFor(cfg, pn.Name, nil)
+	if err != nil {
+		return fmt.Errorf("public name %s: certificate manager: %w", pn.Name, err)
+	}
+	if mgr.Certificate() == nil {
+		return fmt.Errorf("public name %s: no certificate is held for it, and %s", pn.Name, heldWhy)
+	}
+	dash.SetPublicCertificate(pn.Name, mgr.Certificate)
+	r.mu.Lock()
+	name := pn
+	r.name, r.bound, r.manager, r.publisher = &name, dash.BoundPort(), mgr, nil
+	r.status, r.lastError = StatusHeld, heldWhy
+	r.mu.Unlock()
+	origin := r.applyNameURLFor(cfg)
+	logsink.Warn("route.refusal", "%s: serving the certificate held for it at %s; %s", pn.Name, origin, heldWhy)
+	return nil
+}
+
+func (r *Runtime) keepDay() {
+	parent := r.w.Ctx()
+	if parent == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.dayCancel != nil {
+		r.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.dayCancel = cancel
+	r.mu.Unlock()
+	if !r.w.Go(func() {
+		for {
+			r.Renew()
+			next := time.UnixMilli(cognitive.NextLocalDaily(time.Now(), certificateHourLocal, 0))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Until(next)):
+			}
+		}
+	}) {
+		r.endDay()
+	}
+}
+
+func (r *Runtime) endDay() {
+	r.mu.Lock()
+	cancel := r.dayCancel
+	r.dayCancel = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *Runtime) sessionServers() ([]dashboard.ICEServer, time.Time) {
 	r.mu.Lock()
 	c := r.relay
 	r.mu.Unlock()
 	if c == nil {
-		return nil
+		return nil, time.Time{}
 	}
-	named, _ := c.SessionServers()
+	named, expire := c.SessionServers()
 	out := make([]dashboard.ICEServer, 0, len(named))
 	for _, sv := range named {
 		out = append(out, dashboard.ICEServer{URLs: sv.URLs, Username: sv.Username, Credential: sv.Credential})
 	}
-	return out
+	return out, expire
 }
 
 func (r *Runtime) Returned() {
@@ -282,7 +362,7 @@ func certificateWanted(cfg Settings) bool {
 	case mode == RouteRelay:
 		return true
 	case mode == RouteDirect:
-		records, err := directRoute(cfg)
+		records, _, err := directRoute(cfg)
 		return err == nil && len(records) > 0
 	}
 	return false
@@ -329,7 +409,7 @@ func (r *Runtime) startRelay(cfg Settings, name string, endpoint certs.RelayEndp
 		return
 	}
 	key := witness.AsIdentityKey(kp)
-	canonical, env, err := witness.EnsureIdentityEnvelope(key, db, r.w.IdentityDir())
+	canonical, env, err := witness.EnsureIdentityEnvelopeUnder(r.witnessFiles(), key, db, r.w.IdentityDir())
 	if err != nil {
 		logsink.Warn("route.error", "identity envelope: %v", err)
 		return
@@ -345,7 +425,7 @@ func (r *Runtime) startRelay(cfg Settings, name string, endpoint certs.RelayEndp
 		logsink.Warn("route.refusal", "the relay connection's settings: %s", strings.Join(held, "; "))
 	}
 	tune := func() relay.Tuning { t, _ := r.w.Settings().Certificate.RelayTuning(); return t }
-	c := &relay.Client{Relay: addr, Name: name, IdentityID: id, Key: key, Env: env, Envelope: canonical, Deliver: dash.Carry, TLS: r.RelayTLS, Tune: tune}
+	c := &relay.Client{Relay: addr, Name: name, IdentityID: id, Key: key, Env: env, Envelope: canonical, Deliver: func(conn net.Conn) bool { return dash.Carry(conn, endpoint.Name) }, TLS: r.RelayTLS, Tune: tune}
 	parent := r.w.Ctx()
 	if parent == nil {
 		logsink.Warn("route.refusal", "relay not started: application lifecycle is required")
@@ -395,9 +475,12 @@ func (r *Runtime) Look() (dashboard.PublicNameState, error) {
 	r.lookMu.Lock()
 	defer r.lookMu.Unlock()
 	r.mu.Lock()
-	pub := r.publisher
+	pub, held := r.publisher, r.status == StatusHeld
 	fresh := r.service != nil && time.Since(r.serviceAt) < routeIdle
 	r.mu.Unlock()
+	if held {
+		return r.State(), errors.New(heldWhy)
+	}
 	if pub == nil {
 		return r.State(), errors.New("no public name is claimed")
 	}
@@ -570,6 +653,10 @@ func (r *Runtime) claim(cfg Settings) (dashboard.PublicNameState, error) {
 
 func (r *Runtime) Retry() (dashboard.PublicNameState, error) {
 	r.mu.Lock()
+	if r.status == StatusHeld {
+		r.mu.Unlock()
+		return r.State(), errors.New(heldWhy)
+	}
 	mgr := r.manager
 	if mgr != nil {
 		r.status = StatusClaiming
@@ -620,6 +707,10 @@ func (r *Runtime) State() dashboard.PublicNameState {
 	st.MachineAddresses = machineAddresses()
 	if mode, err := RouteMode(cfg.Certificate); err == nil {
 		st.RouteMode = mode
+
+		if mode == RouteDirect {
+			_, st.HeldFamilies, _ = directRoute(cfg)
+		}
 	}
 	if r.service != nil {
 		relays := []dashboard.RelayChoice{}
@@ -639,11 +730,17 @@ func (r *Runtime) State() dashboard.PublicNameState {
 	st.Origin = r.origin
 	st.DirectOrigin = publicOrigin(r.name.Name, r.bound)
 	st.Address = r.address
+	st.RouteError = r.route.LastError
 	st.ResolvesTo = r.resolvesTo
+	st.ResolveError = r.resolveError
 	st.Status = r.status
 	st.LastError = r.lastError
 	if r.manager != nil {
 		s := r.manager.State()
+
+		if c := r.manager.Certificate(); s.NotAfter.IsZero() && c != nil && c.Leaf != nil {
+			s.NotAfter = c.Leaf.NotAfter
+		}
 		if !s.NotAfter.IsZero() {
 			st.NotAfter = s.NotAfter.UTC().Format(time.RFC3339)
 		}
@@ -669,7 +766,7 @@ func (r *Runtime) Renew() {
 	}
 
 	r.mu.Lock()
-	prepared := r.status == StatusPrepared
+	prepared := r.status == StatusPrepared || r.status == StatusHeld
 	r.mu.Unlock()
 	if prepared {
 		return
@@ -714,6 +811,10 @@ func (o certificateOwner) OnAlarm(_ context.Context, _ string, _ string, _ int64
 	o.r.Renew()
 	next := cognitive.NextLocalDaily(time.Now(), certificateHourLocal, 0)
 	return cognitive.AlarmResult{Accepted: true, NextDeadline: &next}
+}
+
+func (o certificateOwner) OnSafeAlarm(_ context.Context, _, _ string, _ int64, _ string) {
+	o.r.keepDay()
 }
 
 func armCertificateAlarm(t *cognitive.TIME, now time.Time) error {
@@ -774,15 +875,18 @@ func dashboardAdvice(tlsOn bool, host string, st dashboard.PublicNameState, mat 
 	switch st.Status {
 	case StatusIssued:
 		line := "Public name: " + st.Origin + " — trusted certificate, nothing to install"
+
 		switch {
 		case st.ResolvesTo != "":
 			line += "; resolves to " + st.ResolvesTo
 		case st.Address != "":
-			line += "; address " + st.Address + " published, not resolving from here yet (DNS TTL 60 s)"
-		default:
-			line += "; address not published yet (see the log)"
+			line += "; route: " + st.Address
+		case st.RouteError != "":
+			line += "; route not confirmed (see the log)"
 		}
 		return []string{line}
+	case StatusHeld:
+		return []string{"Public name: " + st.Origin + " — serving the certificate it holds; " + heldWhy}
 	case StatusClaiming, StatusFailing:
 		return []string{"Public name: " + st.Origin + " — certificate being issued; the URL is trusted once it is (Settings → Dashboard → Public name)"}
 	}
@@ -857,4 +961,13 @@ func (r *Runtime) RelayChoiceRefusal(was, now Settings) error {
 		return fmt.Errorf("certificate.route_mode: %w", &RelayPortUnnamed{Relay: host, Port: port, From: publicOrigin(name, from), To: publicOrigin(name, to), FromPort: from})
 	}
 	return nil
+}
+
+func (r *Runtime) witnessFiles() witness.FileGuard {
+	if r.w.WitnessFiles != nil {
+		if g := r.w.WitnessFiles(); g != nil {
+			return g
+		}
+	}
+	return witness.Unguarded{}
 }

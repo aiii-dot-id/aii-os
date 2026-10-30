@@ -8,16 +8,16 @@ import (
 )
 
 // ring3Content builds Ring 3 exactly as compose does: the composer's
-// frame, then the three parts in render order.
+// frame, then the two parts in render order.
 func ring3Content() string {
 	secs := []ring.Section{
 		{Name: "surfacing", Content: strings.Repeat("DREAM rewrites this on every pass.\n\n", 4)},
-		{Name: "operator", Content: strings.Repeat("The person I work with, accumulated across sessions.\n\n", 4)},
 		{Name: "working_truth", Content: strings.Repeat("Readback before claim is law. Narration is not bytes.\n\n", 4)},
 	}
 	return frameRing3 + "\n\n" + RenderRing3Body(secs)
 }
 
+// Ring 3 renders surfacing → working_truth, so the OLD
 func TestRing3KeepsCoreShedsEphemeral(t *testing.T) {
 	got := summarize("ring3", ring3Content(), budgetRoute)
 
@@ -54,10 +54,10 @@ func TestRing3ReceiptNamesWhatWent(t *testing.T) {
 	if !strings.Contains(got, "What You're Noticing") {
 		t.Error("receipt does not NAME the dropped part — a count alone is not redeemable")
 	}
-	if !strings.Contains(got, "recall (source=experiences)") {
+	if !strings.Contains(got, `recall source=ring3`) {
 		t.Error("receipt carries no live route back to the content")
 	}
-	if !strings.Contains(got, "2 of 3 parts kept") {
+	if !strings.Contains(got, "1 of 2 parts kept") {
 		t.Errorf("receipt does not state the extent honestly: %q", got)
 	}
 }
@@ -79,7 +79,6 @@ func TestRing3FoldIsDeterministic(t *testing.T) {
 func TestRing3FoldShrinksRealisticSection(t *testing.T) {
 	secs := []ring.Section{
 		{Name: "surfacing", Content: strings.Repeat("DREAM rewrites this on every pass, and the next pass rewrites it again.\n\n", 30)},
-		{Name: "operator", Content: strings.Repeat("The person I work with, accumulated slowly across many sessions.\n\n", 30)},
 		{Name: "working_truth", Content: strings.Repeat("Readback before claim is law. Narration is not bytes, in any tense.\n\n", 30)},
 	}
 	content := frameRing3 + "\n\n" + RenderRing3Body(secs)
@@ -173,12 +172,11 @@ func TestRing3FoldSurvivesAQuotedHeader(t *testing.T) {
 func TestRing3FoldSurvivesPartsOutOfOrder(t *testing.T) {
 	secs := []ring.Section{
 		{Name: "working_truth", Content: strings.Repeat("Readback before claim is law. Narration is not bytes.\n\n", 4)},
-		{Name: "operator", Content: strings.Repeat("The person I work with, accumulated across sessions.\n\n", 4)},
 		{Name: "surfacing", Content: strings.Repeat("DREAM rewrites this on every pass.\n\n", 4)},
 	}
 	content := frameRing3 + "\n\n" + RenderRing3Body(secs)
 	got := summarize("ring3", content, budgetRoute) // must not panic
-	if !strings.Contains(got, "2 of 3 parts kept") || !strings.Contains(got, "Readback before claim") {
+	if !strings.Contains(got, "1 of 2 parts kept") || !strings.Contains(got, "Readback before claim") {
 		t.Fatalf("the fold lost its shape when the parts were reordered: %q", got)
 	}
 }
@@ -197,16 +195,18 @@ func TestRing3FoldRefusesADoubledHeader(t *testing.T) {
 	}
 }
 
-// THE RECEIPT NAMES A ROUTE THAT ARRIVES. The operator model is rebuilt by
-// consolidation and reachable by no recall source; when it is the part not
-// in view, the receipt says so instead of pointing at recall.
-func TestRing3ReceiptIsHonestAboutTheOperatorModel(t *testing.T) {
+func TestAnOperatorSectionInRing3IsNotRendered(t *testing.T) {
 	secs := []ring.Section{
-		{Name: "operator", Content: strings.Repeat("The person I work with, accumulated across sessions.\n\n", 4)},
-		{Name: "working_truth", Content: strings.Repeat("Readback before claim is law. Narration is not bytes.\n\n", 4)},
+		{Name: "surfacing", Content: "You may be noticing a pattern."},
+		{Name: "operator", Content: "Quinn asks what you think and reads the answer."},
+		{Name: "working_truth", Content: "You believe the anchor held."},
 	}
-	got := summarize("ring3", frameRing3+"\n\n"+RenderRing3Body(secs), budgetRoute)
-	if !strings.Contains(got, "Who You Work With not in view") || !strings.Contains(got, "not searchable") {
-		t.Fatalf("the receipt promised a route that does not arrive: %q", got)
+	for _, got := range []string{RenderRing3Body(secs), RenderRing3ForFacility(secs)} {
+		if strings.Contains(got, "Quinn asks") || strings.Contains(got, "Who You Work With") {
+			t.Fatalf("A PROSE MODEL OF THE OPERATOR IS STILL RENDERED IN RING 3:\n%s", got)
+		}
+		if !strings.Contains(got, "You may be noticing") || !strings.Contains(got, "the anchor held") {
+			t.Fatalf("the two parts of Ring 3 went with it:\n%s", got)
+		}
 	}
 }

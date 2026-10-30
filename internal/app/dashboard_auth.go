@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/publicname"
 )
 
@@ -155,6 +156,28 @@ func (a *App) newDashboard(handler *dashboard.WSHandler) (*dashboard.Server, err
 	d.SetOrigin(c.Origin)
 	d.SetAccessToken(a.embeddedAuthentication || c.RequireToken, c.AccessToken)
 	d.SetCarriedIdleSeconds(c.CarriedIdleSeconds)
+
+	a.dash.mu.Lock()
+	a.dash.servingUnkept = ""
+	a.dash.mu.Unlock()
+	if src := a.configSnapshot().SourcePath; src != "" {
+		key, err := install.WriteServingKey(identityHomeFromConfig(src))
+		if err != nil {
+			if _, held := a.SafeMode(); !held {
+				return nil, err
+			}
+			unkept := fmt.Sprintf("This page's proof that it is this identity's was not kept (%v): the page serves with a proof held in this process alone, so aii init, aii register and the launcher, which read it from %s, will say another program holds the port until a start can write that file", err, install.ServingKeyName)
+			logsink.Warn("dashboard.error", "%s", unkept)
+			a.dash.mu.Lock()
+			a.dash.servingUnkept = unkept
+			a.dash.mu.Unlock()
+			key = make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				return nil, err
+			}
+		}
+		d.SetServingKey(key)
+	}
 	a.setDashboardToken("")
 	if d.AccessTokenRequired() {
 		a.setDashboardToken(c.AccessToken)
@@ -332,15 +355,20 @@ func RotateDashboardToken(path string) (string, error) {
 }
 
 func (a *App) wireDashboardAccessHooks(h *dashboard.WSHandler) {
-	h.DashboardToken = a.dashboardToken
 	h.RotateDashboardToken = a.rotateDashboardAccess
 	h.RequireDashboardToken = a.requireDashboardAccess
 	h.AccessCodeSeconds = func() int { return a.configSnapshot().Dashboard.AccessCodeSeconds }
 	h.RefusedPauses = func() int { return a.configSnapshot().Dashboard.RefusedPauses }
+	h.StrangerBodySeconds = func() int { return a.configSnapshot().Dashboard.StrangerBodySeconds }
 	h.UnsignedRequests = func() (int, int) {
 		d := a.configSnapshot().Dashboard
 		return d.UnsignedRequestsPerSecond, d.UnsignedRequestBurst
 	}
+	h.PageTickets = func() (int, int) {
+		d := a.configSnapshot().Dashboard
+		return d.PageTicketSeconds, d.PageTickets
+	}
+	h.RefusalLinesPerMinute = func() int { return a.configSnapshot().Dashboard.RefusalLinesPerMinute }
 	h.Channels = func() dashboard.ChannelSettings { return a.configSnapshot().Dashboard.channelSettings() }
 	h.ApproveOverlayScript = a.approveOverlayScript
 }

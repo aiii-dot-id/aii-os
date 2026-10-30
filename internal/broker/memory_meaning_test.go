@@ -129,3 +129,59 @@ func TestAPluginsRecallSaysTheLayerIsOffWhenNothingMakesVectors(t *testing.T) {
 		t.Fatalf("with no source the layer's account is %+v; it must say that nothing makes vectors", got.Meaning)
 	}
 }
+
+// readingStub is meaningStub reading each text to its first window
+// characters, and saying so, as a package of aii.embeddings@2 does.
+type readingStub struct {
+	meaningStub
+	window int
+}
+
+func (s *readingStub) Tells() bool { return true }
+
+func (s *readingStub) EmbedRead(ctx context.Context, kind memory.Kind, inputs []string) (string, [][]float32, []int, error) {
+	heads, read := make([]string, len(inputs)), make([]int, len(inputs))
+	for i, in := range inputs {
+		r := []rune(in)
+		read[i] = min(len(r), s.window)
+		heads[i] = string(r[:read[i]])
+	}
+	basis, vectors, err := s.meaningStub.Embed(ctx, kind, heads)
+	return basis, vectors, read, err
+}
+
+func (s *readingStub) Embed(ctx context.Context, kind memory.Kind, inputs []string) (string, [][]float32, error) {
+	basis, vectors, _, err := s.EmbedRead(ctx, kind, inputs)
+	return basis, vectors, err
+}
+
+// A PLUGIN'S RECALL SAYS HOW MUCH OF A TEXT MEANING READ, as the
+// identity's does: each hit how many of its characters its vector was made
+// from, and the layer how many of the cue's. Zero where the source does
+// not say (the stub above).
+func TestAPluginsRecallSaysHowMuchOfATextMeaningRead(t *testing.T) {
+	src := &readingStub{window: 24}
+	h, b := memHost(t, Config{Meaning: src})
+	harbor := remember(t, b, `{"text":"the harbor at dusk, and a long account of the evening after it"}`)
+	if _, err := h.instruments.Backfill(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	m := dispatch(t, b, memParams("memory.recall", `{"query":"port"}`))
+	wantResult(t, m, statusSucceeded, "")
+	var got struct {
+		Hits []struct {
+			ID          string `json:"id"`
+			MeaningRead int    `json:"meaning_read"`
+		} `json:"hits"`
+		Meaning struct {
+			CueChars int `json:"cue_chars"`
+			CueRead  int `json:"cue_read"`
+		} `json:"meaning"`
+	}
+	if err := json.Unmarshal(m["operation_result"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Hits) != 1 || got.Hits[0].ID != harbor.ID || got.Hits[0].MeaningRead != 24 || got.Meaning.CueChars != 4 || got.Meaning.CueRead != 4 {
+		t.Fatalf("the recall must say the hit's vector was made from its first 24 characters and the cue read whole: %+v", got)
+	}
+}

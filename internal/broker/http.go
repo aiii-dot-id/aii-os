@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -190,7 +192,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 	lg := firewall.GuardAdmitting(baseGuard, localScopes, b.host.cfg.OwnListener)
 
 	hops := hopPolicy{
-		guard: lg.Guard, envelope: netEnvelopeScopes(b.envelope), grant: grantScopes,
+		guard: lg.Guard, pinned: lg.Pinned, envelope: netEnvelopeScopes(b.envelope), grant: grantScopes,
 		localCapable: localCapable, localScopes: localScopes,
 		oauth: auth.source != nil, oauthHosts: auth.hosts, profile: auth.profile,
 		host: host, port: port, local: local, plaintextOK: grant.PlaintextCredentials,
@@ -236,7 +238,7 @@ func (b *Binding) dispatchHTTP(ctx context.Context, p invokeParams, pol policySn
 		req.Header.Set(name, value)
 	}
 
-	client := firewall.GuardedClient(timeout, hopGuard, b.host.cfg.Transport)
+	client := firewall.GuardedClientDialing(timeout, hopGuard, hops.admitDial, b.host.cfg.Transport)
 	if !call.followRedirects {
 
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -570,7 +572,9 @@ func (b *Binding) httpAnswer(p invokeParams, target, method string, hold *stream
 }
 
 type hopPolicy struct {
-	guard           func(context.Context, string) error
+	guard func(context.Context, string) error
+
+	pinned          func(string) ([]net.IP, bool)
 	envelope, grant []hostScope
 	localCapable    bool
 	localScopes     []firewall.LocalScope
@@ -616,6 +620,53 @@ func (h hopPolicy) admit(ctx context.Context, rawURL string) error {
 			return fmt.Errorf("%w: redirect violates the auth profile host:port or HTTPS requirement", firewall.ErrEgressBlocked)
 		}
 	}
+	return h.reach(hh, hp)
+}
+
+func (h hopPolicy) admitDial(ctx context.Context, host string, addr netip.AddrPort) error {
+	if err := h.guard(ctx, "http://"+addr.String()+"/"); err != nil {
+		return err
+	}
+	if h.oauth || h.profile != "" {
+		if err := h.credentialAt(host, addr); err != nil {
+			return err
+		}
+	}
+	return h.reach(addr.Addr().String(), int(addr.Port()))
+}
+
+func (h hopPolicy) credentialAt(host string, addr netip.AddrPort) error {
+	port := int(addr.Port())
+	pinned := false
+	if h.oauth {
+		for _, allowed := range h.oauthHosts {
+			if strings.EqualFold(allowed, fmt.Sprintf("%s:%d", host, port)) {
+				pinned = true
+				break
+			}
+		}
+	} else {
+		pinned = strings.EqualFold(host, h.host) && port == h.port
+	}
+	if !pinned {
+		return fmt.Errorf("%w: the connect to %s:%d is outside the auth profile's host:port", firewall.ErrEgressBlocked, host, port)
+	}
+	if lit, err := netip.ParseAddr(host); err == nil {
+		if lit.Unmap() == addr.Addr() {
+			return nil
+		}
+	} else if h.pinned != nil {
+		ips, _ := h.pinned(host)
+		for _, ip := range ips {
+			if a, ok := netip.AddrFromSlice(ip); ok && a.Unmap() == addr.Addr() {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s is not an address the guard admitted %s with", firewall.ErrEgressBlocked, addr.Addr(), host)
+}
+
+func (h hopPolicy) reach(hh string, hp int) error {
 	if h.localCapable && localTarget(hh, hp, h.localScopes) {
 
 		if h.declared && !h.declaredLocal {

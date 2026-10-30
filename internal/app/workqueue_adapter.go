@@ -169,12 +169,15 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	goalMsg := llm.Message{Role: "user", Content: goalText}
 
 	h.a.emitPluginEvent(pluginhost.TopicSubagentSpawned, map[string]any{"session": p.SessionID, "role": p.Role, "model": target.modelID, "depth": p.Depth, "leg": leg})
-	reserve, err := h.a.promptReserve(goalMsg, 0)
+
+	safe := h.a.readSafe()
+	reserve, err := h.a.promptReserveForIn(h.a.lifetime(), safe.holds, goalMsg, 0)
 	if err != nil {
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "request estimate", err)
 	}
 	contextSections := h.a.pluginContext(runCtx, p.Goal)
-	prompt, err := h.a.composer.ComposeChildWithContext(target.budget, reserve, p.Context != "full", contextSections)
+
+	prompt, err := h.a.composeLeg(safe, target.budget, reserve, p.Context != "full", contextSections)
 	if err != nil {
 		return h.failBeforeStart(ctx, w, p, leg, maxLegs, "compose", err)
 	}
@@ -189,18 +192,20 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	}
 
 	runStarted := false
-	subLoop := conversation.New(target.client, appToolExecutor{h.a}, appToolDefiner{h.a},
+	subLoop := conversation.New(target.client, appToolExecutor{h.a}, requestToolDefiner{a: h.a, safe: safe.holds},
 		appTranscript{st: h.a.store, actor: p.SessionID, safe: h.a.safeTools}, appEmitter{a: h.a, actor: p.SessionID}, conversation.Config{
 
 			MaxIterations: target.limits.Value(subRoundsSetting),
 
 			MaxToolCalls: target.limits.Value(subCallsSetting),
 
-			TurnTokenBudget:    target.limits.Value(turnTokenBudgetSetting),
+			TurnTokenBudget: target.limits.Value(turnTokenBudgetSetting),
+
+			TurnTime:           target.limits.turnTime,
 			ToolSchemaRefusals: toolSchemaRefusalsSetting.n(cfg),
 			Checkpoint:         target.limits.cfg.Agency.checkpoint(),
 
-			MaxToolResultChars:    h.a.engine.ToolResultLimit(),
+			MaxToolResultChars:    target.limits.N(toolResultCharsSetting),
 			ContextBudgetTokens:   target.budget,
 			ContextBudgetFallback: target.budgetGuess,
 			ThinkingBudget:        thinking,
@@ -285,7 +290,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 		}
 	}
 
-	body := result.Spoken
+	body := result.Said()
 	if body == "" {
 		body = "(completed with no spoken outcome)"
 	}
@@ -310,9 +315,9 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	case result.Spoken == "":
 		outcome = "unserved: " + body
 	case identity.HasOutcomeVerdict(result.Spoken):
-		outcome = result.Spoken
+		outcome = body
 	default:
-		outcome = "partial: ended without a stated verdict; its final message follows.\n\n" + result.Spoken
+		outcome = "partial: ended without a stated verdict; its final message follows.\n\n" + body
 	}
 	modelID := modelIDOf(result, target)
 	tokens := fmt.Sprintf("%d", accTokens)
@@ -327,7 +332,7 @@ func (h *subagentHandler) RunWork(ctx context.Context, w *store.WorkItem) error 
 	if leg > 1 {
 
 		header = strings.TrimSuffix(header, "]") + fmt.Sprintf(" legs=%d/%s]", leg, maxLegs)
-		if bounded && capReasonOf(result) == noCap {
+		if bounded && (result.ExhaustedBudget || result.ExhaustedCallBudget) {
 			outcome += fmt.Sprintf("\nThis was leg %d of %s; the chain is exhausted.", leg, maxLegs)
 		}
 	}
@@ -424,6 +429,8 @@ func subagentNotice(goal, outcome string) string {
 		status += " (calls)"
 	case strings.Contains(first, capTokenFence.how()):
 		status += " (tokens)"
+	case strings.Contains(first, capTimeFence.how()):
+		status += " (time)"
 	case strings.Contains(first, capContext.how()):
 		status += " (context)"
 	case strings.Contains(first, capDeclared.how()):

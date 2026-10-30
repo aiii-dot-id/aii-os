@@ -18,13 +18,27 @@ type FamilyAttempt struct {
 	CallsKnown  bool
 	StartedAt   int64
 	DeliveredAt int64
+
+	Restarted bool
+
+	CheckRan  bool
+	CheckExit *int
 }
+
+func (a FamilyAttempt) ByCheck() bool {
+	return a.Outcome == "served" && a.CheckExit != nil && *a.CheckExit == 0
+}
+func (a FamilyAttempt) ByGrade() bool { return a.Outcome == "served" && a.Grade == "served" }
+
+func (a FamilyAttempt) Confirmed() bool { return a.ByCheck() || a.ByGrade() }
 
 type FamilyRecord struct {
 	Family   string
 	Attempts []FamilyAttempt
-	Shortest *FamilyAttempt
-	Steps    []string
+
+	Shortest          *FamilyAttempt
+	ShortestConfirmed bool
+	Steps             []string
 }
 
 func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
@@ -50,6 +64,7 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 			return out, err
 		}
 		a.Outcome, a.ToolCalls, a.CallsKnown = outcomeClass(a.Result), int(calls.Int64), calls.Valid
+		a.Restarted = a.Result == interruptedByRestart || strings.HasPrefix(a.Result, interruptedLeg)
 		out.Attempts = append(out.Attempts, a)
 	}
 	rows.Close()
@@ -63,15 +78,37 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 		if err != nil && err != sql.ErrNoRows {
 			return out, err
 		}
-		if a.Outcome == "served" && a.CallsKnown && (out.Shortest == nil || a.ToolCalls < out.Shortest.ToolCalls) {
-			out.Shortest = a
+		var exit sql.NullInt64
+		err = s.db.QueryRow(`SELECT json_extract(details,'$.exit_status') FROM conversations
+			WHERE source_kind='tool' AND source_id=? AND kind='tool_result'`, checkExecution(a.ID)).Scan(&exit)
+		if err != nil && err != sql.ErrNoRows {
+			return out, err
+		}
+		if err == nil {
+			a.CheckRan = true
+			if exit.Valid {
+				n := int(exit.Int64)
+				a.CheckExit = &n
+			}
+		}
+	}
+
+	for i := range out.Attempts {
+		a := &out.Attempts[i]
+		if a.Outcome != "served" || !a.CallsKnown {
+			continue
+		}
+		better := out.Shortest == nil || a.Confirmed() && !out.ShortestConfirmed ||
+			a.Confirmed() == out.ShortestConfirmed && a.ToolCalls < out.Shortest.ToolCalls
+		if better {
+			out.Shortest, out.ShortestConfirmed = a, a.Confirmed()
 		}
 	}
 	if out.Shortest == nil {
 		return out, nil
 	}
 	steps, err := s.db.Query(`SELECT COALESCE(json_extract(details,'$.tool'),'') FROM conversations
-		WHERE kind = 'tool_call' AND json_extract(details,'$.work_session_id') = ? ORDER BY rowid`, out.Shortest.ID)
+		WHERE kind = 'tool_call' AND json_extract(details,'$.work_session_id') = ? AND COALESCE(json_extract(details,'$.actor'),'') != ? ORDER BY rowid`, out.Shortest.ID, CheckActor)
 	if err != nil {
 		return out, err
 	}
@@ -86,14 +123,88 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 	return out, steps.Err()
 }
 
+type FamilyTally struct {
+	Attempts, Served, Confirmed, ByCheck, ByGrade, Partial, Unserved, Restarted, Other int
+}
+
+func (r FamilyRecord) Tally() FamilyTally {
+	t := FamilyTally{Attempts: len(r.Attempts)}
+	for _, a := range r.Attempts {
+		switch {
+		case a.Restarted:
+			t.Restarted++
+		case a.Outcome == "served":
+			t.Served++
+		case a.Outcome == "partial":
+			t.Partial++
+		case a.Outcome == "unserved":
+			t.Unserved++
+		default:
+			t.Other++
+		}
+		if a.Confirmed() {
+			t.Confirmed++
+		}
+		if a.ByCheck() {
+			t.ByCheck++
+		}
+		if a.ByGrade() {
+			t.ByGrade++
+		}
+	}
+	return t
+}
+
+const (
+	familyServedConfirmed = "served %d (confirmed %d: check %d, grade %d; %d your own call)"
+
+	familyServedClaimed = "served %d (your own call)"
+	familyRestarted     = "%d ended by restart"
+
+	familyShortestConfirmed = "Shortest confirmed"
+	familyShortestClaimed   = "Shortest served (your own call, none confirmed)"
+)
+
+func (t FamilyTally) Line() string {
+	var parts []string
+	if t.Served > 0 {
+		if t.Confirmed > 0 {
+			parts = append(parts, fmt.Sprintf(familyServedConfirmed, t.Served, t.Confirmed, t.ByCheck, t.ByGrade, t.Served-t.Confirmed))
+		} else {
+			parts = append(parts, fmt.Sprintf(familyServedClaimed, t.Served))
+		}
+	}
+	for _, c := range []struct {
+		n    int
+		word string
+	}{{t.Partial, "partial"}, {t.Unserved, "unserved"}, {t.Other, "no outcome word"}} {
+		if c.n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", c.word, c.n))
+		}
+	}
+	line := strings.Join(parts, ", ")
+	if t.Restarted > 0 {
+		if line != "" {
+			line += "; "
+		}
+		line += fmt.Sprintf(familyRestarted, t.Restarted)
+	}
+	return line
+}
+
+func (r FamilyRecord) ShortestLabel() string {
+	if r.ShortestConfirmed {
+		return familyShortestConfirmed
+	}
+	return familyShortestClaimed
+}
+
 func RenderFamily(r FamilyRecord, playbook string) string {
 	if len(r.Attempts) == 0 {
 		return fmt.Sprintf("Kind %s: no delivered attempt names this family yet.", r.Family)
 	}
-	count := map[string]int{}
 	graded, gradedServed := 0, 0
 	for _, a := range r.Attempts {
-		count[a.Outcome]++
 		if a.Grade != "" {
 			graded++
 			if a.Grade == "served" {
@@ -102,8 +213,8 @@ func RenderFamily(r FamilyRecord, playbook string) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Kind %s: %d delivered attempt(s), newest first: served %d, partial %d, unserved %d; graded %d (served %d).",
-		r.Family, len(r.Attempts), count["served"], count["partial"], count["unserved"], graded, gradedServed)
+	fmt.Fprintf(&b, "Kind %s: %d delivered attempt(s), newest first: %s; graded %d (served %d).",
+		r.Family, len(r.Attempts), r.Tally().Line(), graded, gradedServed)
 	for _, a := range r.Attempts {
 		calls := "calls not counted"
 		if a.CallsKnown {
@@ -121,13 +232,16 @@ func RenderFamily(r FamilyRecord, playbook string) string {
 			wall = ", " + time.Duration(a.DeliveredAt-a.StartedAt).Round(time.Second).String()
 		}
 		outcome := a.Outcome
-		if outcome == "" {
+		switch {
+		case a.Restarted:
+			outcome = "ended by restart"
+		case outcome == "":
 			outcome = "no outcome word"
 		}
-		fmt.Fprintf(&b, "\n  %s %s%s, %s, %s%s: %s", a.ID, when, outcome, grade, calls, wall, a.Description)
+		fmt.Fprintf(&b, "\n  %s %s%s, %s, %s, %s%s: %s", a.ID, when, outcome, grade, checkFact(a), calls, wall, a.Description)
 	}
 	if r.Shortest != nil {
-		fmt.Fprintf(&b, "\nShortest served attempt: %s in %d calls.", r.Shortest.ID, r.Shortest.ToolCalls)
+		fmt.Fprintf(&b, "\n%s attempt: %s in %d calls.", r.ShortestLabel(), r.Shortest.ID, r.Shortest.ToolCalls)
 		if len(r.Steps) > 0 {
 			numbered := make([]string, len(r.Steps))
 			for i, t := range r.Steps {
@@ -142,6 +256,16 @@ func RenderFamily(r FamilyRecord, playbook string) string {
 		fmt.Fprintf(&b, "\nYour playbook for this kind: %s.", playbook)
 	}
 	return b.String()
+}
+
+func checkFact(a FamilyAttempt) string {
+	switch {
+	case a.CheckExit != nil:
+		return fmt.Sprintf("check exited %d", *a.CheckExit)
+	case a.CheckRan:
+		return "check did not exit"
+	}
+	return "no check run"
 }
 
 func (s *Store) SessionToolCalls(id string) (int, error) {

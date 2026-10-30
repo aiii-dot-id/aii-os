@@ -58,9 +58,15 @@ func TestEveryDashboardAndCertificateSettingIsReadOnTheCard(t *testing.T) {
 	for key, want := range map[string]string{
 		"dashboard.access_code_seconds":          "120 seconds",
 		"dashboard.refused_pauses":               "32",
+		"dashboard.stranger_body_seconds":        "10 seconds",
 		"dashboard.unsigned_requests_per_second": "20",
 		"dashboard.unsigned_request_burst":       "100",
+		"dashboard.page_ticket_seconds":          "60 seconds",
+		"dashboard.page_tickets":                 "256",
+		"dashboard.refusal_lines_per_minute":     "120",
 		"dashboard.carried_idle_seconds":         "15 seconds",
+		"dashboard.start_wait_seconds":           "60 seconds",
+		"dashboard.port_search_span":             "100",
 		"dashboard.channels":                     "on",
 		"dashboard.direct_wait_ms":               "3000 ms",
 		"dashboard.direct_ready_allowance_ms":    "1500 ms",
@@ -97,6 +103,8 @@ func TestEveryDashboardAndCertificateSettingIsReadOnTheCard(t *testing.T) {
 	cfg.Dashboard.Channels = &off
 	cfg.Dashboard.ChannelSessions = 3
 	cfg.Dashboard.RefusedPauses = 1 << 20
+	cfg.Dashboard.StrangerBodySeconds = 86400
+	cfg.Dashboard.RefusalLinesPerMinute = 30
 	cfg.Dashboard.ICEServers = &[]dashboard.ICEServer{{URLs: []string{"turn:turn.example.test:3478"}, Username: "u", Credential: credential}}
 	cfg.Certificate.RelayCarriedMax = 7
 	cfg.Certificate.RelayPingSeconds = 45
@@ -104,13 +112,15 @@ func TestEveryDashboardAndCertificateSettingIsReadOnTheCard(t *testing.T) {
 	cfg.Certificate.ServerURL = "none"
 	rows = read(cfg)
 	for key, want := range map[string]string{
-		"dashboard.channels":             "off",
-		"dashboard.channel_sessions":     "3",
-		"dashboard.refused_pauses":       "1024",
-		"certificate.relay_carried_max":  "7",
-		"certificate.relay_ping_seconds": "45 seconds",
-		"certificate.prepare":            "off",
-		"certificate.server_url":         "none: the certificate service is declined",
+		"dashboard.channels":                 "off",
+		"dashboard.channel_sessions":         "3",
+		"dashboard.refused_pauses":           "1024",
+		"dashboard.stranger_body_seconds":    "600 seconds",
+		"dashboard.refusal_lines_per_minute": "30",
+		"certificate.relay_carried_max":      "7",
+		"certificate.relay_ping_seconds":     "45 seconds",
+		"certificate.prepare":                "off",
+		"certificate.server_url":             "none: the certificate service is declined",
 	} {
 		if got := rows[key]; got.Value != want || !got.Set {
 			t.Errorf("%s as stated is read as %q (stated: %v), want %q", key, got.Value, got.Set, want)

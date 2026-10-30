@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -43,19 +44,19 @@ func TestAPlaceIsKnownUnderASecondNameForTheSameFile(t *testing.T) {
 	}
 	p := DefaultPolicy()
 	p.SetPlaces([]*Rule{{ID: "sub.key", Kind: KindSubstrate, Path: kept, Reason: "kept", Enforced: true}})
-	if rule := p.Covered(second); rule == nil || rule.ID != "sub.key" {
-		t.Fatalf("a second name for a kept file is the kept file: %+v", rule)
+	if got := id(p.Covered(second)); got != "sub.key" {
+		t.Fatalf("a second name for a kept file is the kept file: %q", got)
 	}
 	if v := p.Check("read", second); v.Allowed || v.Rule.ID != "sub.key" {
 		t.Fatalf("Check answers for the second name as for the place: %+v", v)
 	}
-	if p.Covered(other) != nil || !p.Check("read", other).Allowed {
+	if holds(p.Covered(other)) || !p.Check("read", other).Allowed {
 		t.Fatal("a file that is no second name for anything kept is open, as before")
 	}
-	if p.Covered(filepath.Join(dir, "elsewhere", "not-made-yet")) != nil {
+	if holds(p.Covered(filepath.Join(dir, "elsewhere", "not-made-yet"))) {
 		t.Fatal("a path that does not exist beside it is open, as before")
 	}
-	if p.Covered("relative/second-name") != nil {
+	if holds(p.Covered("relative/second-name")) {
 		t.Fatal("a relative string is not asked what it is")
 	}
 
@@ -67,17 +68,17 @@ func TestAPlaceIsKnownUnderASecondNameForTheSameFile(t *testing.T) {
 	if err := os.Rename(saved, kept); err != nil {
 		t.Fatal(err)
 	}
-	if p.Covered(kept) == nil {
+	if !holds(p.Covered(kept)) {
 		t.Fatal("the place is kept by its own path whatever file is there")
 	}
-	if rule := p.Covered(second); rule != nil {
-		t.Fatalf("the limit has moved: the earlier second name is known after a save by rename (%+v); correct this test, the contract addendum and KNOWN_LIMITATIONS together", rule)
+	if got := id(p.Covered(second)); got != "" {
+		t.Fatalf("the limit has moved: the earlier second name is known after a save by rename (%s); correct this test, the contract addendum and KNOWN_LIMITATIONS together", got)
 	}
 	fresh := filepath.Join(dir, "elsewhere", "fresh-name")
 	if err := os.Link(kept, fresh); err != nil {
 		t.Fatal(err)
 	}
-	if p.Covered(fresh) == nil {
+	if !holds(p.Covered(fresh)) {
 		t.Fatal("a second name made for the saved file is the kept file")
 	}
 }
@@ -120,14 +121,13 @@ func TestAPlaceIsKnownUnderASecondPathToItsDirectory(t *testing.T) {
 		{"a neighbour of a place not made yet", "vault/inner/other.json", ""},
 		{"a file of the home that nothing keeps", "notes/n.md", ""},
 	} {
-		rule := p.coveredRespelled("", filepath.Join(again, filepath.FromSlash(c.rel)))
-		if got := id(rule); got != c.rule {
+		if got := id(p.coveredRespelled("", filepath.Join(again, filepath.FromSlash(c.rel)))); got != c.rule {
 			t.Errorf("%s (%s) by the second path: held by %q, want %q", c.what, c.rel, got, c.rule)
 		}
 		// By the place's own spelling the pass has nothing to say: the
 		// spelling decides, as before.
-		if rule := p.coveredRespelled("", filepath.Join(home, filepath.FromSlash(c.rel))); rule != nil {
-			t.Errorf("%s (%s) by its own spelling was respelled: %+v", c.what, c.rel, rule)
+		if rule, err := p.coveredRespelled("", filepath.Join(home, filepath.FromSlash(c.rel))); holds(rule, err) {
+			t.Errorf("%s (%s) by its own spelling was respelled: %+v %v", c.what, c.rel, rule, err)
 		}
 		if got := id(p.Covered(filepath.Join(home, filepath.FromSlash(c.rel)))); got != c.rule {
 			t.Errorf("%s (%s) by its own spelling: held by %q, want %q", c.what, c.rel, got, c.rule)
@@ -135,11 +135,30 @@ func TestAPlaceIsKnownUnderASecondPathToItsDirectory(t *testing.T) {
 	}
 }
 
-func id(r *Rule) string {
+// id is the ID of the rule that holds a path, "" for none; a place that
+// could not be checked holds every path, and is said by its error, which
+// is no place's ID.
+func id(r *Rule, err ...error) string {
+	for _, e := range err {
+		if e != nil {
+			return "unchecked: " + e.Error()
+		}
+	}
 	if r == nil {
 		return ""
 	}
 	return r.ID
+}
+
+// holds reports a path held by a rule or by a place that could not be
+// checked: either refuses it.
+func holds(r *Rule, err error) bool { return r != nil || err != nil }
+
+// uncheckedOf is err as the refusal of a place that could not be checked,
+// or nil.
+func uncheckedOf(err error) *UncheckedError {
+	u, _ := err.(*UncheckedError)
+	return u
 }
 
 func TestAPlaceThatCannotBeAskedRefusesWhatItCannotCompare(t *testing.T) {
@@ -175,10 +194,10 @@ func TestAPlaceThatCannotBeAskedRefusesWhatItCannotCompare(t *testing.T) {
 		{ID: "sub.absent", Kind: KindSubstrate, Path: filepath.Join(dir, "never", "made", "x.key"), Reason: "kept", Enforced: true},
 		{ID: "sub.key", Kind: KindSubstrate, Path: kept, Reason: "kept", Enforced: true},
 	})
-	if rule := p.Covered(second); id(rule) != "sub.key" || rule.Kind != KindSubstrate {
-		t.Fatalf("before: the second name is the kept file: %+v", rule)
+	if rule, err := p.Covered(second); id(rule, err) != "sub.key" || rule.Kind != KindSubstrate {
+		t.Fatalf("before: the second name is the kept file: %+v %v", rule, err)
 	}
-	if p.Covered(other) != nil {
+	if holds(p.Covered(other)) {
 		t.Fatal("before: a place that is plainly not there refuses nothing, and another file is open")
 	}
 	if err := os.Chmod(locked, 0); err != nil {
@@ -188,31 +207,36 @@ func TestAPlaceThatCannotBeAskedRefusesWhatItCannotCompare(t *testing.T) {
 	if _, err := os.Stat(kept); err == nil {
 		t.Skip("the directory at mode 000 is still searched here: nothing fails to be asked")
 	}
-	unasked := func(what string, rule *Rule) {
+	unasked := func(what string, rule *Rule, err error) {
 		t.Helper()
-		if rule == nil || rule.Kind != KindUnasked || rule.ID != "sub.key.unasked" || rule.Reason == "kept" ||
-			!strings.Contains(rule.Reason, "could not check kept.key") || !strings.Contains(rule.Reason, "operator") {
-			t.Fatalf("%s: refused as a place that could not be checked, saying so and not the place's reason: %+v", what, rule)
+		if u := uncheckedOf(err); rule != nil || u == nil || !slices.Equal(u.Places, []string{"sub.key"}) || u.Reason == "kept" ||
+			!strings.Contains(u.Reason, "could not check kept.key") || !strings.Contains(u.Reason, "operator") {
+			t.Fatalf("%s: refused as a place that could not be checked, saying so and not the place's reason: %+v %v", what, rule, err)
 		}
 	}
-	unasked("the second name of a kept file that cannot be checked", p.Covered(second))
+	rule, err := p.Covered(second)
+	unasked("the second name of a kept file that cannot be checked", rule, err)
 	v := p.Check("read", second)
 	if v.Allowed {
 		t.Fatalf("Check opens the second name of a kept file that cannot be checked: %+v", v)
 	}
-	unasked("Check", v.Rule)
-	unasked("a file nothing keeps, which cannot be told apart from it", p.Covered(other))
-	if p.Covered("relative/name") != nil {
+	unasked("Check", v.Rule, v.Err)
+	rule, err = p.Covered(other)
+	unasked("a file nothing keeps, which cannot be told apart from it", rule, err)
+	if holds(p.Covered("relative/name")) {
 		t.Fatal("a relative string is not asked what it is, and is not refused for it")
 	}
 	if err := os.Chmod(locked, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if id(p.Covered(second)) != "sub.key" || p.Covered(other) != nil {
+	if id(p.Covered(second)) != "sub.key" || holds(p.Covered(other)) {
 		t.Fatal("once the place can be checked again the answers are the ones before")
 	}
 }
 
+// in one refusal, and the refusal is no rule (an *UncheckedError naming
+// each place's ID), so that a log by rule does not take the refusal of a
+// path the place is not for the place's. Only the first was named: the
 func TestEveryPlaceThatCannotBeCheckedIsNamed(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a directory's mode does not close it on Windows")
@@ -247,17 +271,22 @@ func TestEveryPlaceThatCannotBeCheckedIsNamed(t *testing.T) {
 	}
 	other := filepath.Join(dir, "elsewhere")
 	both := "the host could not check a.key, b.key, a place it keeps (permission denied), so it cannot tell any path apart from it until your operator clears that"
-	for what, rule := range map[string]*Rule{"Covered": p.Covered(other), "Check": p.Check("read", other).Rule} {
-		if rule == nil || rule.Kind != KindUnasked || rule.ID != "sub.a.unasked,sub.b.unasked" || rule.Reason != both {
-			t.Errorf("%s names both places that cannot be checked, in rule order, under an ID of its own:\n got %+v\nwant ID %q, reason %q", what, rule, "sub.a.unasked,sub.b.unasked", both)
+	covered, coveredErr := p.Covered(other)
+	checked := p.Check("read", other)
+	for what, got := range map[string]struct {
+		rule *Rule
+		err  error
+	}{"Covered": {covered, coveredErr}, "Check": {checked.Rule, checked.Err}} {
+		if u := uncheckedOf(got.err); got.rule != nil || u == nil || !slices.Equal(u.Places, []string{"sub.a", "sub.b"}) || u.Reason != both {
+			t.Errorf("%s names both places that cannot be checked, in rule order, as no rule:\n got %+v %+v\nwant places %q, reason %q", what, got.rule, got.err, []string{"sub.a", "sub.b"}, both)
 		}
 	}
 	if err := os.Chmod(one, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if rule := p.Covered(other); rule == nil || rule.ID != "sub.b.unasked" ||
-		rule.Reason != "the host could not check b.key, a place it keeps (permission denied), so it cannot tell any path apart from it until your operator clears that" {
-		t.Errorf("once the first can be checked the refusal names the other alone: %+v", rule)
+	if rule, err := p.Covered(other); rule != nil || uncheckedOf(err) == nil || !slices.Equal(uncheckedOf(err).Places, []string{"sub.b"}) ||
+		err.Error() != "the host could not check b.key, a place it keeps (permission denied), so it cannot tell any path apart from it until your operator clears that" {
+		t.Errorf("once the first can be checked the refusal names the other alone: %+v %v", rule, err)
 	}
 }
 
@@ -341,14 +370,14 @@ func TestAPlaceBehindAFileOrALoopOfLinksIsNotMadeAndRefusesNothing(t *testing.T)
 	}
 	p := DefaultPolicy()
 	p.SetPlaces(places)
-	if rule := p.Covered(other); rule != nil {
-		t.Fatalf("a place behind a file or a loop of links refuses a path it is not: %+v", rule)
+	if rule, err := p.Covered(other); holds(rule, err) {
+		t.Fatalf("a place behind a file or a loop of links refuses a path it is not: %+v %v", rule, err)
 	}
 	if v := p.Check("read", other); !v.Allowed {
 		t.Fatalf("Check refuses a path for a place behind a file or a loop: %+v", v)
 	}
-	if rule := p.Covered(filepath.Join(file, "google", "token.json")); id(rule) != "sub.file" {
-		t.Fatalf("the place itself is kept by its own path still: %+v", rule)
+	if got := id(p.Covered(filepath.Join(file, "google", "token.json"))); got != "sub.file" {
+		t.Fatalf("the place itself is kept by its own path still: %q", got)
 	}
 }
 
@@ -391,7 +420,7 @@ func TestAStreamIsJudgedByTheFileItIsOn(t *testing.T) {
 		}
 	}
 	open := filepath.Join(dir, "notes.md")
-	if p.Covered(open+":x") != nil || !p.Check("write", open+":x").Allowed {
+	if holds(p.Covered(open+":x")) || !p.Check("write", open+":x").Allowed {
 		t.Error("a stream of a file nothing keeps is open, as the file is")
 	}
 }

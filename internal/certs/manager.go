@@ -15,6 +15,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
+	"io/fs"
 	"math/big"
 	"net/http"
 	"os"
@@ -68,6 +69,8 @@ type Manager struct {
 	cert     *tls.Certificate
 	leaf     *x509.Certificate
 	client   *acme.Client
+
+	unreadable error
 }
 
 const (
@@ -116,18 +119,53 @@ func New(cfg Config) (*Manager, error) {
 	if err := m.loadCertificate(); err != nil {
 		logsink.Warn("certs.refusal", "stored certificate not used: %v", err)
 	}
+	if m.leaf != nil && m.otherCA() {
+		logsink.Info("certs.decision", "the ACME directory changed from %s to %s — the certificate held keeps serving until the new directory issues one, and an order is owed there now", m.state.DirectoryURL, cfg.DirectoryURL)
+	}
 	return m, nil
+}
+
+func (m *Manager) otherCA() bool {
+	trim := func(u string) string { return strings.TrimRight(u, "/") }
+	return m.state.DirectoryURL != "" && trim(m.state.DirectoryURL) != trim(m.cfg.DirectoryURL)
+}
+
+func (m *Manager) OrderOwed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unreadable == nil && (m.leaf == nil || m.otherCA())
+}
+
+func (m *Manager) readAgainIfUnreadable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.unreadable == nil {
+		return false
+	}
+	if err := m.loadCertificate(); err != nil && m.unreadable == nil {
+		logsink.Warn("certs.refusal", "stored certificate not used: %v", err)
+	}
+	return m.unreadable != nil
 }
 
 func (m *Manager) certPath() string { return filepath.Join(m.cfg.Dir, "public.crt") }
 func (m *Manager) keyPath() string  { return filepath.Join(m.cfg.Dir, "public.key") }
 
 func (m *Manager) loadCertificate() error {
+	m.unreadable = nil
 	certPEM, err := atomicfile.ReadFile(m.certPath())
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
+	if err != nil {
+		m.unreadable = err
+		return fmt.Errorf("certificate could not be read, so nothing is ordered over it: %w", err)
+	}
 	keyPEM, err := atomicfile.ReadFile(m.keyPath())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		m.unreadable = err
+		return fmt.Errorf("certificate's key could not be read, so nothing is ordered over it: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("certificate without its key")
 	}
@@ -160,7 +198,11 @@ func (m *Manager) Certificate() *tls.Certificate {
 func (m *Manager) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.state
+	s := m.state
+	if m.leaf != nil && m.otherCA() {
+		s.RenewAt = m.cfg.Now()
+	}
+	return s
 }
 
 func (m *Manager) takeOrder(ctx context.Context) error {
@@ -185,7 +227,7 @@ func (m *Manager) Ensure(ctx context.Context) (issued bool, err error) {
 		return false, err
 	}
 	defer m.orderDone()
-	if m.Certificate() != nil {
+	if m.readAgainIfUnreadable() || !m.OrderOwed() {
 		return false, nil
 	}
 	if err := m.obtain(ctx); err != nil {
@@ -202,10 +244,14 @@ func (m *Manager) Renew(ctx context.Context) (renewed bool, err error) {
 		return false, err
 	}
 	defer m.orderDone()
+	if m.readAgainIfUnreadable() {
+		return false, nil
+	}
 	m.mu.Lock()
-	leaf := m.leaf
+	leaf, other := m.leaf, m.otherCA()
 	m.mu.Unlock()
-	if leaf == nil {
+	if leaf == nil || other {
+
 		if err := m.obtain(ctx); err != nil {
 			return false, err
 		}
@@ -362,7 +408,9 @@ func (m *Manager) install(der [][]byte, key *ecdsa.PrivateKey, leaf *x509.Certif
 		return fmt.Errorf("stored certificate does not load: %w", err)
 	}
 	m.state.Name = m.cfg.Name
+
 	m.state.DirectoryURL = m.cfg.DirectoryURL
+	m.state.AccountURL = string(m.client.KID)
 	m.state.IssuedAt = leaf.NotBefore
 	m.state.NotAfter = leaf.NotAfter
 	m.state.Window = nil
@@ -372,6 +420,9 @@ func (m *Manager) install(der [][]byte, key *ecdsa.PrivateKey, leaf *x509.Certif
 func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
 	m.mu.Lock()
 	c, accountURL := m.client, m.state.AccountURL
+	if m.otherCA() {
+		accountURL = ""
+	}
 	m.mu.Unlock()
 	if c != nil {
 		return c, nil
@@ -402,10 +453,14 @@ func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
 	c.KID = acme.KeyID(a.URI)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.client = c
+	if m.leaf != nil && m.otherCA() {
+
+		return c, nil
+	}
 	m.state.AccountURL = a.URI
 	m.state.DirectoryURL = m.cfg.DirectoryURL
 	m.keep("the ACME account")
-	m.client = c
 	return c, nil
 }
 

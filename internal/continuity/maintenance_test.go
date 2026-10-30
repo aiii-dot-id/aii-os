@@ -367,14 +367,14 @@ func TestMaintenanceCopiesOnlyWhatVerifies(t *testing.T) {
 			t.Fatalf("checksum list does not describe %s: %q", name, sums)
 		}
 	}
-	// Nothing but what the list names: no scratch restore, no
-	// write-ahead files beside the database copy.
+	// Nothing but what the list names, and the list's signature: no
+	// scratch restore, no write-ahead files beside the database copy.
 	entries, err := os.ReadDir(first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if n := e.Name(); n != "SHA256SUMS" && !strings.Contains(string(sums), "  "+n+"\n") && !e.IsDir() {
+		if n := e.Name(); n != "SHA256SUMS" && n != "SHA256SUMS.sig" && !strings.Contains(string(sums), "  "+n+"\n") && !e.IsDir() {
 			t.Fatalf("the snapshot holds %s, which its checksum list does not name", n)
 		}
 		if e.IsDir() && e.Name() != "witness-keys" {

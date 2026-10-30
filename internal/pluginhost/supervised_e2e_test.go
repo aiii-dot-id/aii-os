@@ -45,13 +45,17 @@ var (
 // in (storage_alias_windows_test.go).
 const storageJunctionChild = "AII_STORAGE_JUNCTION_CHILD"
 
+// storeWriterChild names the plugin store the child of
+// TestAnotherProcessWritesNothingInAStoreThisOneHolds asks to write
+// (one_writer_test.go): a second process, which prepares nothing either.
+const storeWriterChild = "AII_STORE_WRITER_CHILD"
+
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if flag.Lookup("test.list").Value.String() != "" {
 		os.Exit(m.Run())
 	}
-
-	if os.Getenv(storageJunctionChild) == "1" {
+	if os.Getenv(storageJunctionChild) == "1" || os.Getenv(storeWriterChild) != "" {
 		os.Exit(m.Run())
 	}
 	started := time.Now()

@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tlsfault/tlsfaulttest"
 	"github.com/aiii-dot-id/aii-os/internal/updates"
+	"github.com/aiii-dot-id/aii-os/internal/witness"
 )
 
 // birthFixture births a valid identity in dir and returns its paths.
@@ -123,7 +126,26 @@ func safebootConfig(t *testing.T, dir, _ string, keyPath, ledgerPath, dbPath str
 	// (genesistest.Ring5Server). A test that wants no Ring 5 server, or a
 	// refusing one, sets its own after this.
 	cfg.Genesis.FirewallURL = genesistest.Ring5Server(t)
+	// NO TEST REACHES THE LIVE WITNESS. The default names the hosted one,
+	// so every boot of a rig built here could bookmark it, and its anchor
+	// pass did when one ran long enough. A rig is on no witness; a test that
+	// needs one puts a witnesstest witness here (newSealedFixture).
+	cfg.Witness.URL = ""
 	return cfg
+}
+
+// recordAndDatabase is the record's and the database's bytes, as digests:
+// what a start held in SAFE's read-only posture leaves as it found them.
+// Read after the App has stopped, so a write staged in the WAL has been
+// checkpointed into the database file, and the WAL is required empty.
+func recordAndDatabase(t *testing.T, cfg *Config) [2]string {
+	t.Helper()
+	record, _ := fileDigest(t, cfg.Identity.LedgerPath)
+	db, _ := fileDigest(t, cfg.Identity.DBPath)
+	if info, err := os.Stat(cfg.Identity.DBPath + "-wal"); err == nil && info.Size() > 0 {
+		t.Fatalf("writes are staged in the database's WAL (%d bytes)", info.Size())
+	}
+	return [2]string{record, db}
 }
 
 func fileDigest(t *testing.T, path string) (string, time.Time) {
@@ -437,15 +459,31 @@ func TestASchemaThisBinaryDoesNotDeclareBootsSafe(t *testing.T) {
 }
 
 func TestASchemaSafeBootLeavesAnUpdateRollbackArmed(t *testing.T) {
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not a bundle"))
+	}))
+	defer refusing.Close()
+	now := time.Now()
+	expired, _, _ := tlsfaulttest.Server(t, []string{"mail.example"}, now.Add(-90*24*time.Hour), now.Add(-3*time.Hour))
 	for _, tc := range []struct {
 		name   string
 		damage func(t *testing.T, keyPath, ledgerPath string, db *sql.DB)
+		cfg    func(cfg *Config)
 		armed  bool
 	}{
 		{name: "schema", armed: true, damage: func(t *testing.T, _, _ string, db *sql.DB) {
 			execAll(`ALTER TABLE turn_metrics ADD COLUMN future_tokens INTEGER`, `UPDATE turn_metrics SET future_tokens = 7`)(t, db)
 		}},
-		{name: "chain", damage: func(t *testing.T, keyPath, ledgerPath string, _ *sql.DB) { tamperChain(t, keyPath, ledgerPath) }},
+		{name: "chain", armed: true, damage: func(t *testing.T, keyPath, ledgerPath string, _ *sql.DB) { tamperChain(t, keyPath, ledgerPath) }},
+		{name: "ring5 refused", armed: true, damage: func(*testing.T, string, string, *sql.DB) {},
+			cfg: func(cfg *Config) { cfg.Genesis.FirewallURL, cfg.Genesis.FetchAttempts = refusing.URL, 1 }},
+		// A certificate refused on the way to the Ring 5 server is SAFE, and
+		// a check the previous program passed (it fetched this one).
+		{name: "ring5 certificate refused", armed: true, damage: func(*testing.T, string, string, *sql.DB) {},
+			cfg: func(cfg *Config) { cfg.Genesis.FirewallURL, cfg.Genesis.FetchAttempts = expired.URL, 1 }},
+		{name: "a kept witness answer", damage: func(t *testing.T, _, ledgerPath string, _ *sql.DB) {
+			keepWitnessAnswer(t, ledgerPath, witness.KeptConflict{WitnessURL: "http://127.0.0.1:1", Answer: "witness conflict (witness 409): witness bookmark rollback or fork", Record: 3, KeptAt: "2026-10-20T12:00:00Z"})
+		}, cfg: func(cfg *Config) { cfg.Witness.URL = "http://127.0.0.1:1" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -478,14 +516,23 @@ func TestASchemaSafeBootLeavesAnUpdateRollbackArmed(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			a := New(safebootConfig(t, dir, "Update", keyPath, ledgerPath, dbPath))
-			if err := startLiveForTest(a); err != nil {
+			cfg := safebootConfig(t, dir, "Update", keyPath, ledgerPath, dbPath)
+			start := startLiveForTest
+			if tc.cfg != nil {
+				tc.cfg(cfg)
+				start = func(a *App) error { return a.startLive() }
+			}
+			a := New(cfg)
+			if err := start(a); err != nil {
 				t.Fatal(err)
 			}
 			defer stopApp(t, a)
 			reason, safe := a.SafeMode()
 			if !safe {
 				t.Fatal("the fixture did not boot SAFE")
+			}
+			if marked := fileExists(filepath.Join(dir, ".boot_completed")); marked == tc.armed {
+				t.Fatalf("the boot marker written = %v, want %v: %s", marked, !tc.armed, reason)
 			}
 			if got := updates.RollbackArmed(dir); got != tc.armed {
 				t.Fatalf("rollback armed after the SAFE boot = %v, want %v (reason: %s)", got, tc.armed, reason)
@@ -550,6 +597,14 @@ func TestEachSafeTriggerSaysItsOwnTruth(t *testing.T) {
 			said["posture"] = safeBootPosture(tr, detail)
 			holds, wrong = bootHolds, runHolds
 		}
+		if p.degraded {
+			holds, wrong = waitHolds(), bootHolds
+			for where, text := range said {
+				if !strings.HasPrefix(text, "# DEGRADED") || strings.Contains(text, "SAFE MODE") || !p.unhealthy {
+					t.Errorf("trigger %d (%s): a start that waits is not said as DEGRADED, or counts as a completed boot:\n%s", tr, where, text)
+				}
+			}
+		}
 		for where, text := range said {
 			if !strings.Contains(text, p.why) || !strings.Contains(text, detail) || !strings.Contains(text, holds) || strings.Contains(text, wrong) {
 				t.Errorf("trigger %d (%s): its paragraph, the runtime's words or its own posture's list is missing:\n%s", tr, where, text)
@@ -569,7 +624,7 @@ func TestEachSafeTriggerSaysItsOwnTruth(t *testing.T) {
 	}
 	// Only a damaged record is restored from a snapshot: a schema this
 	// version does not declare, and a missing Ring 5, are not that.
-	for _, tr := range []safeTrigger{safeSchema, safeRing5, safeRing5Refused} {
+	for _, tr := range []safeTrigger{safeSchema, safeRing5, safeRing5Refused, safeRing5Unreached} {
 		for _, said := range []string{safeBootPosture(tr, detail), safeReason(tr, detail)} {
 			for _, never := range []string{"integrity", "known-good", "backup", "snapshot"} {
 				if strings.Contains(strings.ToLower(said), never) {
@@ -591,6 +646,7 @@ func TestASafeBootSaysWhatHappened(t *testing.T) {
 		detail  string // a piece of the runtime's own words
 		setup   func(t *testing.T, cfg *Config, dir, keyPath, ledgerPath, dbPath string)
 		noRing5 bool
+		mode    string // what the strip says: "safe", unless the start waits
 	}{
 		{name: "record", trigger: safeRecord, detail: "chain verification failed at startup",
 			setup: func(t *testing.T, _ *Config, _, keyPath, ledgerPath, _ string) { tamperChain(t, keyPath, ledgerPath) }},
@@ -622,6 +678,7 @@ func TestASafeBootSaysWhatHappened(t *testing.T) {
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			holdRing5AsksOff(t)
 			dir := t.TempDir()
 			keyPath, ledgerPath, dbPath := birthFixture(t, dir, "Says")
 			buildPriorProjection(t, ledgerPath, dbPath)
@@ -657,8 +714,14 @@ func TestASafeBootSaysWhatHappened(t *testing.T) {
 				t.Fatalf("the posture is in Ring 0 and the turn repeats it:\n%s", extra)
 			}
 			c, err := a.continuityState()
-			if err != nil || c.Mode != "safe" || c.SafeReason != reason {
-				t.Fatalf("the operator's notice is not the reason: mode=%q notice=%q err=%v", c.Mode, c.SafeReason, err)
+			notice := c.SafeReason
+			if tc.mode == "" {
+				tc.mode = "safe"
+			} else {
+				notice = c.DegradedWhy
+			}
+			if err != nil || c.Mode != tc.mode || notice != reason {
+				t.Fatalf("the operator's notice is not the reason: mode=%q notice=%q err=%v", c.Mode, notice, err)
 			}
 		})
 	}

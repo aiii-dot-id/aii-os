@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/certs"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -104,5 +106,43 @@ func TestTheCardIsToldTheDirectAddresses(t *testing.T) {
 	box.set(func(s *Settings) { s.Certificate.DirectAddresses = &[]string{"10.8.0.2"} })
 	if st := r.State(); st.DirectAddresses == nil || !reflect.DeepEqual(*st.DirectAddresses, []string{"10.8.0.2"}) {
 		t.Fatalf("the override: %v", st.DirectAddresses)
+	}
+}
+
+func TestOneFamilyWithTwoAddressesDoesNotWithdrawTheOther(t *testing.T) {
+	fixtureAddrs(t, "10.8.0.2/24", "fd00::3/64", "fd00::2/64", "fe80::1/64")
+	auto := Settings{Host: "0.0.0.0"}
+	records, held, err := directRoute(auto)
+	if err != nil {
+		t.Fatalf("one family with two addresses refused the whole route: %v", err)
+	}
+	if !reflect.DeepEqual(records, []certs.Record{{Type: certs.RecordA, Value: "10.8.0.2"}}) {
+		t.Fatalf("the IPv4 address alone is the route: %v", records)
+	}
+	if want := []dashboard.HeldFamily{{Family: "IPv6", Addresses: []string{"fd00::2", "fd00::3"}}}; !reflect.DeepEqual(held, want) {
+		t.Fatalf("the family held, with its addresses: %v, want %v", held, want)
+	}
+	if !certificateWanted(auto) || wantsNothing(auto, RouteDirect) {
+		t.Fatal("a route with an address to publish was read as leading nowhere")
+	}
+	r, _ := fixtureRuntime(auto)
+	if err := r.DirectChoiceRefusal(auto); err != nil {
+		t.Fatalf("working the addresses out was refused where one family can be published: %v", err)
+	}
+	r.ServeForTest(store.PublicName{Name: fixtureName, Zone: "id.example.test"}, "https://"+fixtureName+":8180", nil)
+	if st := r.State(); !reflect.DeepEqual(st.HeldFamilies, held) {
+		t.Fatalf("the card is not told the family held: %v", st.HeldFamilies)
+	}
+
+	// Both families held: nothing to publish, refused, naming each.
+	fixtureAddrs(t, "10.8.0.2/24", "192.168.1.5/24", "fd00::3/64", "fd00::2/64")
+	records, held, err = directRoute(auto)
+	if err == nil || records != nil || len(held) != 2 {
+		t.Fatalf("every family held: %v %v %v", records, held, err)
+	}
+	for _, want := range []string{"IPv4 address (10.8.0.2, 192.168.1.5)", "IPv6 address (fd00::2, fd00::3)", "direct_addresses"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal does not say %q: %v", want, err)
+		}
 	}
 }

@@ -668,6 +668,7 @@ type WitnessReceiptPayload struct {
 	WitnessedAt                    string `json:"witnessed_at"`
 	WitnessKeyID                   string `json:"witness_key_id"`
 	WitnessSigB64                  string `json:"witness_sig_b64"`
+	ContextSHA256                  string `json:"context_sha256,omitempty"`
 }
 
 func (s *Store) materializeSystemWitnessed(evt *ledger.Event) error {
@@ -837,7 +838,7 @@ func (s *Store) citedOperatorTurnLocked(turn uint64, claim, verify string, affir
 	}
 	selection, what := "role = 'operator' AND "+notRoomSpeech, "which the host recorded as the room's speech, not the operator's"
 	if affirmation {
-		selection, what = s.operatorWordSelection(), "which is not the operator's own word to the identity (the room's speech, a grade, or a line the host wrote)"
+		selection, what = s.operatorWordSelection(), "which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote)"
 	}
 	var theirs int
 	if err := s.h().QueryRow(`SELECT COUNT(*) FROM conversations WHERE turn_seq = ? AND `+selection, turn).Scan(&theirs); err != nil {
@@ -850,7 +851,8 @@ func (s *Store) citedOperatorTurnLocked(turn uint64, claim, verify string, affir
 	if affirmation {
 		if err := s.spokenByTheOperator(s.h(), turn); err != nil {
 			var unidentified *UnidentifiedSpeechError
-			if errors.As(err, &unidentified) {
+			var unconfirmed *UnconfirmedSpeechError
+			if errors.As(err, &unidentified) || errors.As(err, &unconfirmed) {
 				return fmt.Errorf("%s cites a spoken turn that cannot stand as the operator's own word (%v): fails closed", claim, err)
 			}
 			return fmt.Errorf("%s: %w", verify, err)
@@ -940,7 +942,17 @@ func (s *Store) ValidateEvent(eventType ledger.EventType, ringLevel int, payload
 		return err
 	}
 
+	if eventType == ledger.EventRelationshipUpsert {
+		if err := s.admitCharterBudgetLocked(payload); err != nil {
+			return err
+		}
+	}
+
 	if err := s.validateSourceIDLocked(eventType, payload); err != nil {
+		return err
+	}
+
+	if err := ledger.AdmitPayloadMembers(eventType, payload); err != nil {
 		return err
 	}
 	if err := s.materializeLocked(cand); err != nil {

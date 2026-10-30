@@ -33,6 +33,8 @@ type Policy struct {
 
 	Hold    bool
 	HoldWhy string
+
+	RestartAttempts int
 }
 
 func (p Policy) allows(ev Evidence) (bool, string) {
@@ -47,6 +49,10 @@ func (p Policy) allows(ev Evidence) (bool, string) {
 		return true, ""
 	}
 	return p.Allows(ev)
+}
+
+func (f *Facility) servingIntent(id string, a *Activation) string {
+	return intentOf(id, a.Package, a.PackageHash, a.ManifestHash, f.policy)
 }
 
 func intentOf(id, pkg, hash, manifestHash string, pol Policy) string {
@@ -570,15 +576,18 @@ func (f *Facility) pass() {
 	for id, inst := range f.instances {
 		intent := intentOf(id, inst.Package, inst.PackageHash, inst.ManifestHash, pol)
 		inst.Budget.For(intent)
+		inst.Budget.Max = pol.RestartAttempts
 		kind, want := f.plan(inst, intent, f.cfg.Now())
 		switch {
 		case want && kind == cmdReadmit:
 
 			f.gen++
-			inst.ReadmitFor = intent
-			c := newCommand(cmdReadmit, inst.Desired.Package, inst.Desired.Hash).withActivation(f.gen, nil)
-			c.intent = intent
-			c.manifestHash = inst.Desired.ManifestHash
+			a := inst.Active()
+			asked := f.servingIntent(id, a)
+			inst.ReadmitFor = asked
+			c := newCommand(cmdReadmit, a.Package, a.PackageHash).withActivation(f.gen, nil)
+			c.intent = asked
+			c.manifestHash = a.ManifestHash
 			jobs = append(jobs, job{e: f.executorFor(id), c: c})
 		case want && kind != cmdDeactivate:
 			f.gen++
@@ -700,10 +709,21 @@ func (f *Facility) spawn(fn func()) bool {
 }
 
 func (f *Facility) retireTimeout() time.Duration {
-	if f.cfg.RetireTimeout > 0 {
-		return f.cfg.RetireTimeout
+	return retireBound(f.cfg.RetireTimeout, f.cfg.Runtime)
+}
+
+type RetireBounder interface {
+	RetireBound() time.Duration
+}
+
+func retireBound(own time.Duration, rt Runtime) time.Duration {
+	if own <= 0 {
+		own = DefaultRetireTimeout
 	}
-	return DefaultRetireTimeout
+	if b, ok := rt.(RetireBounder); ok {
+		own = max(own, b.RetireBound())
+	}
+	return own
 }
 
 func (f *Facility) admissionRefresh() time.Duration {
@@ -730,13 +750,21 @@ func (f *Facility) plan(inst *Instance, intent string, now time.Time) (commandKi
 		return "", false
 	}
 
-	if a := inst.Active(); a != nil && a.Package == inst.Desired.Package && a.PackageHash == inst.Desired.Hash && a.ManifestHash == inst.Desired.ManifestHash {
-		if a.Intent != intent {
-			if inst.ReadmitFor == intent || inst.Starting() != nil || inst.Candidate() != nil {
+	same := false
+	if a := inst.Active(); a != nil {
+		same = a.Package == inst.Desired.Package && a.PackageHash == inst.Desired.Hash && a.ManifestHash == inst.Desired.ManifestHash
+		if asked := f.servingIntent(inst.ID, a); a.Intent != asked {
+			switch {
+			case inst.Starting() != nil || inst.Candidate() != nil:
+				return "", false
+			case inst.ReadmitFor != asked:
+				return cmdReadmit, true
+			case same:
 				return "", false
 			}
-			return cmdReadmit, true
 		}
+	}
+	if a := inst.Active(); a != nil && same {
 
 		if !a.Interim && !a.rejudge {
 			return "", false
@@ -1267,6 +1295,10 @@ type InstanceView struct {
 	Installed bool
 	Dir       string
 
+	Package string
+
+	RefusedForGood bool
+
 	Family string
 
 	Activations []ActivationView
@@ -1276,6 +1308,8 @@ type ActivationView struct {
 	Gen     Generation
 	Role    Role
 	Version string
+
+	Package string
 	Since   time.Time
 	Timings map[Stage]time.Duration
 	Refusal *Refusal
@@ -1299,9 +1333,13 @@ func (f *Facility) Snapshot() Snapshot {
 	leases := map[string][]*Lease{}
 	for _, inst := range f.instances {
 		v := InstanceView{ID: inst.ID, Version: inst.Version, State: inst.State(), Since: inst.Since, Wanted: inst.Desired.Active, Installed: inst.Package != "", Dir: inst.Dir, Family: inst.Family,
-			RetryAt: inst.RetryAt, Refusal: copyRefusal(inst.LastRefusal())}
+			RetryAt: inst.RetryAt, Refusal: copyRefusal(inst.LastRefusal()), Package: inst.Package}
+		if inst.Package != "" {
+			r := inst.LastRefusalUnder(intentOf(inst.ID, inst.Package, inst.PackageHash, inst.ManifestHash, f.policy))
+			v.RefusedForGood = r != nil && r.Class == ClassPermanent && r.Stage != StageCancelled && r.Stage != StagePolicy
+		}
 		for _, a := range inst.Activations {
-			v.Activations = append(v.Activations, ActivationView{Gen: a.Gen, Role: a.Role, Version: a.Version, Since: a.Started,
+			v.Activations = append(v.Activations, ActivationView{Gen: a.Gen, Role: a.Role, Version: a.Version, Package: a.Package, Since: a.Started,
 				Timings: copyTimings(a.Timings), Refusal: copyRefusal(a.Refusal), Selection: copySelection(a.Selection), Checks: copyChecks(a.Checks)})
 
 			if a.Admission != nil && (a.Role == RoleStarting || a.Role == RoleCandidate || (v.Admission == "" && a.Role == RoleActive)) {

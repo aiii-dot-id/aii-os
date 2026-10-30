@@ -67,6 +67,8 @@ type IdentityState struct {
 	TrustLevel    string           `json:"trust_level"`
 	AutonomyLevel string           `json:"autonomy_level"`
 
+	Relationships []RelationshipItem `json:"relationships,omitempty"`
+
 	Meaning *MeaningState `json:"meaning,omitempty"`
 }
 
@@ -82,6 +84,8 @@ type MeaningState struct {
 
 	Question string `json:"question,omitempty"`
 
+	Changes []MeaningChange `json:"changes,omitempty"`
+
 	Waiting bool `json:"waiting,omitempty"`
 
 	SetAside    int    `json:"set_aside,omitempty"`
@@ -90,9 +94,19 @@ type MeaningState struct {
 	Basis string  `json:"basis,omitempty"`
 	Floor float64 `json:"floor,omitempty"`
 
+	Tells       bool `json:"tells,omitempty"`
+	HandedChars int  `json:"handed_chars,omitempty"`
+
 	Coverage []MeaningCoverage `json:"coverage,omitempty"`
 
 	LastPass *MeaningPass `json:"last_pass,omitempty"`
+}
+
+type MeaningChange struct {
+	Choice  string `json:"choice"`
+	Dropped int64  `json:"dropped"`
+	ToEmbed int64  `json:"to_embed"`
+	SentTo  string `json:"sent_to,omitempty"`
 }
 
 type MeaningCoverage struct {
@@ -102,12 +116,24 @@ type MeaningCoverage struct {
 
 	Beyond         int64 `json:"beyond,omitempty"`
 	BeyondEmbedded int64 `json:"beyond_embedded,omitempty"`
+
+	Partial int64 `json:"partial,omitempty"`
+	Untold  int64 `json:"untold,omitempty"`
 }
 
 type MeaningPass struct {
 	At       string `json:"at"`
 	Embedded int    `json:"embedded"`
 	Stopped  string `json:"stopped,omitempty"`
+}
+
+type RelationshipItem struct {
+	ID       string           `json:"id"`
+	Name     string           `json:"name"`
+	Role     string           `json:"role"`
+	Charter  string           `json:"charter"`
+	Approval *CharterApproval `json:"approval,omitempty"`
+	Record   uint64           `json:"record"`
 }
 
 type CharterApproval struct {
@@ -130,6 +156,11 @@ type LLMConfigState struct {
 	RefusedRetryMaxSeconds int `json:"refused_retry_max_seconds"`
 	RefusedRetryMaxDefault int `json:"refused_retry_max_default"`
 
+	Retries          int `json:"retries,omitempty"`
+	RetryBackoffMS   int `json:"retry_backoff_ms,omitempty"`
+	ModelListTimeout int `json:"model_list_timeout_seconds,omitempty"`
+	ModelListCache   int `json:"model_list_cache_seconds,omitempty"`
+
 	ProbeTimeoutSeconds int    `json:"probe_timeout_seconds"`
 	Endpoint            string `json:"endpoint"`
 	APIKeyMasked        string `json:"api_key_masked"`
@@ -150,6 +181,8 @@ type LLMConfigState struct {
 	ImagesMaxBytes int64 `json:"images_max_bytes,omitempty"`
 	ImageMaxSide   int   `json:"image_max_side,omitempty"`
 	ImagesMaxCount int   `json:"images_max_count,omitempty"`
+
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 
 	ThinkingApplies bool `json:"thinking_applies"`
 	MaxOutputTokens int  `json:"max_output_tokens"`
@@ -184,15 +217,23 @@ type PromptConfigState struct {
 
 	Ring3MaxChars             int `json:"ring3_max_chars,omitempty"`
 	SurfacingMaxChars         int `json:"surfacing_max_chars,omitempty"`
+	OperatorBeliefsMaxChars   int `json:"operator_beliefs_max_chars,omitempty"`
 	SelfModelMaxTokens        int `json:"self_model_max_tokens,omitempty"`
+	Ring2EvidenceMaxChars     int `json:"ring2_evidence_max_chars,omitempty"`
+	CharterMaxTokens          int `json:"charter_max_tokens,omitempty"`
 	DreamConversationMaxChars int `json:"dream_conversation_max_chars,omitempty"`
 	TensionsMaxChars          int `json:"tensions_max_chars,omitempty"`
 	BriefMaxChars             int `json:"brief_max_chars,omitempty"`
 
 	AlarmFirings int `json:"alarm_firings,omitempty"`
 
+	StandingMaxChars int `json:"standing_max_chars,omitempty"`
+	PlaybookMaxBytes int `json:"playbook_max_bytes,omitempty"`
+
 	ExcerptChars           int `json:"excerpt_chars,omitempty"`
 	Ring3RecentExperiences int `json:"ring3_recent_experiences,omitempty"`
+
+	WorkCardBeliefs int `json:"work_card_beliefs,omitempty"`
 }
 
 type ProviderDirectory struct {
@@ -208,6 +249,29 @@ type BrokenProviderInfo struct {
 	Reason   string `json:"reason"`
 
 	Repair string `json:"repair,omitempty"`
+}
+
+type ModelCapabilities struct {
+	Model string           `json:"model"`
+	Takes []CapabilityLine `json:"takes"`
+	Gives []CapabilityLine `json:"gives"`
+	Tools CapabilityLine   `json:"tools"`
+
+	Window      CapabilityFigure `json:"window"`
+	OutputLimit CapabilityFigure `json:"output_limit"`
+}
+
+type CapabilityFigure struct {
+	Tokens int    `json:"tokens,omitempty"`
+	From   string `json:"from"`
+}
+
+type CapabilityLine struct {
+	Kind    string   `json:"kind"`
+	State   string   `json:"state"`
+	From    string   `json:"from"`
+	Types   []string `json:"types,omitempty"`
+	NotSent bool     `json:"not_sent,omitempty"`
 }
 
 type ProviderInfo struct {
@@ -239,6 +303,8 @@ type ProviderInfo struct {
 
 	EffortModel  string `json:"effort_model,omitempty"`
 	SummaryField string `json:"summary_field,omitempty"`
+
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 
 	SummaryLevels   []string `json:"summary_levels,omitempty"`
 	ThinkingBudget  int      `json:"thinking_budget,omitempty"`
@@ -312,11 +378,16 @@ type PluginsState struct {
 	Installed []PluginView        `json:"installed,omitempty"`
 	Catalog   []CatalogEntryView  `json:"catalog,omitempty"`
 
-	CatalogURL       string `json:"catalog_url"`
-	CatalogDir       string `json:"catalog_dir,omitempty"`
-	CatalogFetchedAt string `json:"catalog_fetched_at,omitempty"`
-	CatalogError     string `json:"catalog_error,omitempty"`
-	CatalogUpdates   int    `json:"catalog_updates,omitempty"`
+	CatalogURL string `json:"catalog_url"`
+
+	CatalogRefreshMinutes int    `json:"catalog_refresh_minutes,omitempty"`
+	CatalogDir            string `json:"catalog_dir,omitempty"`
+	CatalogFetchedAt      string `json:"catalog_fetched_at,omitempty"`
+	CatalogError          string `json:"catalog_error,omitempty"`
+	CatalogUpdates        int    `json:"catalog_updates,omitempty"`
+
+	ContextProviders int `json:"context_providers,omitempty"`
+	ContextTimeoutMs int `json:"context_timeout_ms,omitempty"`
 
 	Runtime *RuntimeLimitsView `json:"runtime,omitempty"`
 
@@ -482,6 +553,11 @@ type RuntimeLimitsView struct {
 	MaxDepth           int   `json:"max_depth"`
 	RootsKept          int   `json:"roots_kept"`
 	MaxStartupMS       int64 `json:"max_startup_ms"`
+
+	StopMS           int `json:"stop_ms,omitempty"`
+	HandOverMS       int `json:"hand_over_ms,omitempty"`
+	SessionControlMS int `json:"session_control_ms,omitempty"`
+	RestartAttempts  int `json:"restart_attempts,omitempty"`
 }
 
 type StartupView struct {
@@ -612,9 +688,12 @@ type PluginView struct {
 }
 
 type PluginOperationView struct {
-	Tool      string `json:"tool"`
-	Operation string `json:"operation,omitempty"`
-	Summary   string `json:"summary,omitempty"`
+	Tool                string `json:"tool"`
+	Operation           string `json:"operation,omitempty"`
+	Summary             string `json:"summary,omitempty"`
+	Confirms            bool   `json:"confirms,omitempty"`
+	Published           bool   `json:"published,omitempty"`
+	UnconfirmedByDesign string `json:"unconfirmed_by_design,omitempty"`
 }
 
 type PluginProbesView struct {
@@ -696,7 +775,12 @@ type CatalogEntryView struct {
 
 	Needs string `json:"needs,omitempty"`
 
+	Remakes       int64 `json:"remakes,omitempty"`
+	RemakeSeconds int64 `json:"remake_seconds,omitempty"`
+
 	Requires string `json:"requires,omitempty"`
+
+	Build string `json:"build,omitempty"`
 }
 
 const (
@@ -818,6 +902,7 @@ type PluginPendingView struct {
 	LastError string `json:"last_error,omitempty"`
 
 	Remedy          string      `json:"remedy,omitempty"`
+	Resumes         bool        `json:"resumes,omitempty"`
 	RetryAt         string      `json:"retry_at,omitempty"`
 	BytesPresent    int64       `json:"bytes_present"`
 	BytesTotal      int64       `json:"bytes_total"`
@@ -864,8 +949,10 @@ type PublicNameState struct {
 
 	ServiceDeclined bool `json:"service_declined,omitempty"`
 
-	Address    string `json:"address,omitempty"`
-	ResolvesTo string `json:"resolves_to,omitempty"`
+	Address      string `json:"address,omitempty"`
+	RouteError   string `json:"route_error,omitempty"`
+	ResolvesTo   string `json:"resolves_to,omitempty"`
+	ResolveError string `json:"resolve_error,omitempty"`
 
 	Zone        string `json:"zone,omitempty"`
 	ServiceZone string `json:"service_zone,omitempty"`
@@ -884,6 +971,13 @@ type PublicNameState struct {
 
 	DirectAddresses  *[]string `json:"direct_addresses,omitempty"`
 	MachineAddresses []string  `json:"machine_addresses,omitempty"`
+
+	HeldFamilies []HeldFamily `json:"held_families,omitempty"`
+}
+
+type HeldFamily struct {
+	Family    string   `json:"family"`
+	Addresses []string `json:"addresses"`
 }
 
 type RelayChoice struct {
@@ -895,14 +989,21 @@ type RelayChoice struct {
 
 type UpdatesConfigState struct {
 	Automatic bool `json:"automatic"`
+
+	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty"`
 }
 
 type AgencyConfigState struct {
 	PreferLocalForRoles bool `json:"prefer_local_for_roles"`
 
-	RhythmSeconds   int            `json:"rhythm_seconds,omitempty"`
-	OutcomeWindow   int            `json:"outcome_window,omitempty"`
-	TurnTokenBudget limits.Ceiling `json:"turn_token_budget,omitzero"`
+	RhythmSeconds int `json:"rhythm_seconds,omitempty"`
+	OutcomeWindow int `json:"outcome_window,omitempty"`
+
+	ToolOutcomeMin    int            `json:"tool_outcome_min,omitempty"`
+	ToolOutcomeWindow int            `json:"tool_outcome_window,omitempty"`
+	TurnTokenBudget   limits.Ceiling `json:"turn_token_budget,omitzero"`
+
+	TurnSecondsLocal int `json:"turn_seconds_local,omitempty"`
 
 	ToolSchemaRefusals int `json:"tool_schema_refusals,omitempty"`
 
@@ -915,6 +1016,17 @@ type AgencyConfigState struct {
 	ContinuationWallSeconds int `json:"continuation_wall_seconds,omitempty"`
 	AlarmWallSeconds        int `json:"alarm_wall_seconds,omitempty"`
 	HarvestWallSeconds      int `json:"harvest_wall_seconds,omitempty"`
+
+	WorkLineMaxChars int `json:"work_line_max_chars,omitempty"`
+
+	Roles []RoleState `json:"roles,omitempty"`
+}
+
+type RoleState struct {
+	Name        string `json:"name"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	Description string `json:"description,omitempty"`
 }
 
 type CognitionConfigState struct {
@@ -1010,7 +1122,38 @@ type UpdateState struct {
 	StageRefusal     string `json:"stage_refusal,omitempty"`
 	ReleaseURL       string `json:"release_url,omitempty"`
 
+	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty"`
+
 	Package *UpdatePackage `json:"package,omitempty"`
+
+	AnnouncedVersion string `json:"announced_version,omitempty"`
+	AnnouncedOn      string `json:"announced_on,omitempty"`
+	AnnouncedFrom    string `json:"announced_from,omitempty"`
+
+	AnnouncedNotOffered bool `json:"announced_not_offered,omitempty"`
+	AnnouncedBehind     bool `json:"announced_behind,omitempty"`
+
+	HighestVersion   string `json:"highest_version,omitempty"`
+	HighestPublished string `json:"highest_published,omitempty"`
+	HighestVerified  string `json:"highest_verified,omitempty"`
+
+	Lists string `json:"lists,omitempty"`
+
+	ListsNote string `json:"lists_note,omitempty"`
+
+	RunningWithdrawn bool   `json:"running_withdrawn,omitempty"`
+	RunningUnknown   string `json:"running_unknown,omitempty"`
+
+	PreviousKept string `json:"previous_kept,omitempty"`
+
+	Stranded     []UpdateStranded `json:"stranded,omitempty"`
+	StrandedNote string           `json:"stranded_note,omitempty"`
+}
+
+type UpdateStranded struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	Reason  string `json:"reason"`
 }
 
 type UpdatePackage struct {
@@ -1041,6 +1184,10 @@ type ConfigState struct {
 	Prompt          PromptConfigState  `json:"prompt"`
 	Agency          AgencyConfigState  `json:"agency"`
 
+	Tools ToolsConfigState `json:"tools"`
+
+	Record RecordConfigState `json:"record"`
+
 	Cognition       CognitionConfigState `json:"cognition"`
 	Updates         UpdatesConfigState   `json:"updates"`
 	Logs            LogsConfigState      `json:"logs"`
@@ -1049,6 +1196,14 @@ type ConfigState struct {
 	PublicName      PublicNameState      `json:"public_name"`
 
 	Contacts []ContactState `json:"contacts"`
+}
+
+type ToolsConfigState struct {
+	WebFetchMaxBytes int `json:"webfetch_max_bytes"`
+}
+
+type RecordConfigState struct {
+	ToolResultRunes int `json:"tool_result_runes"`
 }
 
 type ContactState struct {
@@ -1072,6 +1227,10 @@ type ContinuityState struct {
 	DegradedSince string `json:"degraded_since"`
 
 	DegradedWhy string `json:"degraded_why,omitempty"`
+
+	SafeCleared string `json:"safe_cleared,omitempty"`
+
+	ServingUnkept string `json:"serving_unkept,omitempty"`
 
 	ReviewAt     string `json:"review_at,omitempty"`
 	ReviewStatus string `json:"review_status,omitempty"`
@@ -1150,6 +1309,15 @@ type WorkSessionItem struct {
 	Project     string `json:"project,omitempty"`
 
 	Grade *GradeView `json:"grade,omitempty"`
+
+	NextMove         string `json:"next_move,omitempty"`
+	ExpectedEvidence string `json:"expected_evidence,omitempty"`
+	Falsifier        string `json:"falsifier,omitempty"`
+	EvidenceClass    string `json:"evidence_class,omitempty"`
+	EvidenceReadback string `json:"evidence_readback,omitempty"`
+
+	Check    string `json:"check,omitempty"`
+	CheckRun string `json:"check_run,omitempty"`
 }
 
 type GradeView struct {
@@ -1197,7 +1365,30 @@ type SandboxState struct {
 	Held    string `json:"held,omitempty"`
 
 	NotKept []string `json:"not_kept,omitempty"`
+
+	Labelled string `json:"labelled,omitempty"`
+
+	AgentNotes *AgentNotesState `json:"agent_notes,omitempty"`
 }
+
+type AgentNotesState struct {
+	Copied bool   `json:"copied"`
+	Folder string `json:"folder,omitempty"`
+}
+
+const (
+	AgentNotesSafe   = "SAFE"
+	AgentNotesOff    = "OFF"
+	AgentNotesExists = "EXISTS"
+	AgentNotesFailed = "FAILED"
+)
+
+type AgentNotesRefusal struct {
+	Code   string
+	Reason string
+}
+
+func (e *AgentNotesRefusal) Error() string { return e.Reason }
 
 type ProjectState struct {
 	ID          string `json:"id"`
@@ -1277,6 +1468,8 @@ type ClientMessage struct {
 
 	AccessCode string `json:"access_code,omitempty"`
 
+	AccessCodeLocal bool `json:"access_code_local,omitempty"`
+
 	InteractionQuery *interaction.Query `json:"interaction_query,omitempty"`
 	MailRepair       *MailRepairRequest `json:"mail_repair,omitempty"`
 	Messages         *MessagesRequest   `json:"messages,omitempty"`
@@ -1296,7 +1489,7 @@ type ClientMessage struct {
 	PluginKey        *PluginKeyRequest  `json:"plugin_key,omitempty"`
 	ProfileEdit      *AuthProfileEdit   `json:"profile_edit,omitempty"`
 	Grade            *GradeRequest      `json:"grade,omitempty"`
-	Roots            []string           `json:"roots,omitempty"`
+	Root             string             `json:"root,omitempty"`
 	SandboxOff       *bool              `json:"sandbox_off,omitempty"`
 	Provider         string             `json:"provider,omitempty"`
 	APIKey           string             `json:"api_key,omitempty"`
@@ -1306,6 +1499,7 @@ type ClientMessage struct {
 	Language         string             `json:"language,omitempty"`
 	Name             string             `json:"name,omitempty"`
 	Q                string             `json:"q,omitempty"`
+	Days             int                `json:"days,omitempty"`
 	Entry            *ProviderEdit      `json:"entry,omitempty"`
 	Position         *int               `json:"position,omitempty"`
 	EntrySHA256      string             `json:"entry_sha256,omitempty"`
@@ -1383,8 +1577,6 @@ type ServerMessage struct {
 
 	AccessCode *AccessCodeState `json:"access_code,omitempty"`
 
-	DashboardToken string `json:"dashboard_token,omitempty"`
-
 	Pending []string `json:"pending,omitempty"`
 	Kind    string   `json:"kind,omitempty"`
 	Name    string   `json:"name,omitempty"`
@@ -1405,6 +1597,8 @@ type ServerMessage struct {
 
 	LogsList []LogFileState `json:"logs_list,omitempty"`
 	LogsTail *LogTailState  `json:"logs_tail,omitempty"`
+
+	Spend *SpendView `json:"spend,omitempty"`
 
 	VoiceSession *VoiceSessionState `json:"voice_session,omitempty"`
 	VoiceEvent   *VoiceEvent        `json:"voice_event,omitempty"`

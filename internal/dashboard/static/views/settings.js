@@ -2,28 +2,41 @@
 import { startSignIn, signInProgress, signInWanted, signInUnmetRow, credentialExpired, wireSignInCompletion } from '../signin.js';
 import { S } from '../state.js';
 import { settingHTML, settingValue, keyDrafts, keyDraftKey, keyTyping, wireSettingControls } from './plugin-setting.js';
-import { $, copyText, esc, loadingCard } from '../util.js';
+import { $, cardHead, esc, loadingCard } from '../util.js';
 import { renderInto } from '../announce.js';
 import { send, query } from '../ws.js';
 import { spokenAudio } from '../say.js';
 import { echoMode, echoModes, setEchoMode } from '../voice-echo.js';
 import { sandboxCardHTML, wireSandboxCard } from '../sandbox.js';
 import { scriptsCardHTML, wireScriptsCard, scriptsCardStale } from '../scripts.js';
+import { toolsCardHTML, wireToolsCard } from '../tools.js';
 import { pendingSlot } from '../pending.js';
+import { signedFetch, ticketed } from '../pagekey.js';
 import { holdReloadWhile } from '../overlay.js';
 import { providerModels } from './model-picker.js';
 import { backupsHTML, wireBackups, requestBackups, forgetBackupsSecrets } from './backups.js';
 import { mailRepairHTML, wireMailRepair, requestHeldMail, mailRepairDisconnected } from './mail-repair.js';
 import { messagesHTML, wireMessages, requestMessages, messagesDisconnected, installedChannels } from './messages.js';
+import { EXPERT_WORDS, expertBoxHTML, expertBoxState, expertShown, wireExpertBoxes } from './expert.js';
+import { WAITING_WORDS, notifyState, notifySaid, turnNotify } from '../waiting.js';
 
 const SECTIONS = [
-  ['substrate', 'Substrate', c => substrateHTML(c)], ['providers', 'Providers', () => providersHTML()], ['speech', 'Speech', c => speechHTML(c)],
-  ['dashboard', 'Dashboard', c => dashboardHTML(c)], ['backups', 'Backups & Keys', () => backupsHTML()], ['witness', 'Witness', c => witnessHTML(c)],
-  ['prompt', 'Prompt', c => promptHTML(c)], ['agency', 'Agency', c => agencyHTML(c)], ['identity', 'Identity', c => cognitionHTML(c)], ['logs', 'Logs', c => logsHTML(c)],
-  ['sandbox', 'Sandbox', () => sandboxCardHTML() || loadingCard('sandbox')], ['tools', 'Tools', () => toolsHTML()],
-  ['storage', 'Storage', c => storageHTML(c)], ['messages', 'Messages', c => messagesHTML() + contactsHTML(c)],
-  ['held-mail', 'Held mail', () => mailRepairHTML()],
-  ['updates', 'Updates', () => updateCardHTML(S.update || null) + uninstallCardHTML(!!(S.stats && S.stats.uninstall_offered))]];
+  ['substrate', 'Substrate', c => substrateHTML(c) + spendHTML(), 'The provider entry and model your identity thinks with, and how long a request may take.'],
+  ['providers', 'Providers', () => providersHTML(), 'The model services this identity can use: their addresses, keys, sign-ins, limits and reasoning effort.'],
+  ['speech', 'Speech', c => speechHTML(c), 'What the microphone does, what turns your speech into text, what speaks the replies, and whose voices are heard.'],
+  ['dashboard', 'Dashboard', c => dashboardHTML(c), 'Where this page is served and who may open it: address, port, HTTPS, access token, public name and other devices; its theme; and whether this browser notifies you of a question.'],
+  ['backups', 'Backups & Keys', () => backupsHTML(), 'The snapshots kept of this identity, the escrow file for their keys, and restoring from a snapshot.'],
+  ['witness', 'Witness', c => witnessHTML(c), 'The outside server that signs receipts for how far this identity\u2019s record reaches, asked again after a set number of events.'],
+  ['prompt', 'Prompt', c => promptHTML(c), 'How much goes to the model with each request: the token ceiling and how many recent turns.'],
+  ['agency', 'Agency', c => agencyHTML(c), 'The roles your identity can start sub-agents in, with what they are told of each, and whether a role runs on a local model.'],
+  ['identity', 'Identity', c => cognitionHTML(c), 'How often your identity digests, dreams and reflects, how much each pass reads and writes, the morning brief, and the limits on one turn.'],
+  ['logs', 'Logs', c => logsHTML(c), 'Where the log files are kept, how many are kept and when they are compressed, and a viewer for them.'],
+  ['sandbox', 'Sandbox', () => sandboxCardHTML() || loadingCard('sandbox'), 'The folders your identity\u2019s tools may read and change, and the switch that lifts that limit.'],
+  ['tools', 'Tools', c => toolsCardHTML(pluginToolNote) + toolsLimitsHTML(c), 'Each tool your identity can use, with a switch to turn it off.'],
+  ['storage', 'Storage', c => storageHTML(c), 'The database\u2019s format and compression, and a copy to download.'],
+  ['messages', 'Messages', c => messagesHTML() + contactsHTML(c), 'What was sent and received over your channels, your notices, and your contacts.'],
+  ['held-mail', 'Held mail', () => mailRepairHTML(), 'Older messages that were held and never sent, and a way to send one through a contact you have now.'],
+  ['updates', 'Updates', () => updateCardHTML(S.update || null, S.config || null) + uninstallCardHTML(!!(S.stats && S.stats.uninstall_offered)), 'The version running, checking for a newer one and installing it, and uninstalling where that is offered.']];
 let sec = 'substrate';
 let provOpen = null;
 const NEW_PROVIDER = Symbol('new provider');
@@ -81,7 +94,7 @@ function submittedEditor(section, root) {
     if (section.startsWith('plugin:')) return el.dataset.psetPlugin === section.slice('plugin:'.length);
     if (section.startsWith('grants:')) return el.dataset.grantPlugin === section.slice('grants:'.length);
     if (section === 'plugins') return el.id === 'cfg-plevel';
-    if (section === 'catalog') return el.id === 'cfg-caturl';
+    if (section === 'catalog') return el.id === 'cfg-caturl' || el.id === 'cfg-catevery';
     if (section === 'plugin_runtime') return el.id.startsWith('cfg-rt-');
     return false;
   });
@@ -148,12 +161,12 @@ function storageHTML(c) {
   if (!c) return loadingCard('configuration');
   const db = c.database || {};
   const formats = [['', 'Keep current format'], ['sqlite', 'Ordinary SQLite'], ['zstd', 'Compressed SQLite (Zstd)']];
-  return '<div class="card"><h3>DATABASE STORAGE</h3>' +
+  return '<div class="card">' + cardHead('DATABASE STORAGE', 'The format the database is kept in on disk, ordinary or compressed, from the next normal start.') +
     '<p>Active format: <strong id="db-active">' + esc(db.active || 'unavailable') + '</strong></p>' +
     '<label class="f" for="cfg-db-format">FORMAT AT NEXT NORMAL STARTUP</label><select id="cfg-db-format">' +
     formats.map(([value, label]) => '<option value="' + value + '"' + ((db.preferred || '') === value ? ' selected' : '') + '>' + label + '</option>').join('') + '</select>' +
     '<p>Saving does not convert the running database or restart the app. At the next normal startup, the current data is converted and verified before use. Compression is not encryption. Routine maintenance uses the existing maintenance alarm.</p>' +
-    '<h3>SELF-OPTIMIZATION AT MAINTENANCE</h3>' +
+    cardHead('SELF-OPTIMIZATION AT MAINTENANCE', 'Two choices that let the maintenance pass tune a compressed database: its compression levels and a dictionary learned from it.') +
     '<label><input type="checkbox" id="cfg-db-levels"' + (db.optimize_levels ? ' checked' : '') + '> Optimize compression levels</label><br>' +
     '<label><input type="checkbox" id="cfg-db-dictionary"' + (db.learn_dictionary ? ' checked' : '') + '> Learn a local compression dictionary</label>' +
     '<p>These independent options default off and apply at the next maintenance pass on a compressed database. They can use more CPU, pause database access longer, and need temporary disk space. A rewrite is kept only when it saves space including its dictionary. Enabling learning does not mean a useful dictionary has been found.</p>' +
@@ -161,13 +174,13 @@ function storageHTML(c) {
     savebarHTML('storage', 'format: next startup; optimization: next maintenance') +
     (db.notice ? '<p data-announce>' + esc(db.notice) + '</p>' : '') +
     ((db.recovery || []).length ? '<p>Conversion working material retained for recovery; never restored automatically:</p><ul>' + db.recovery.map(path => '<li>' + esc(path) + '</li>').join('') + '</ul>' : '') +
-    '<h3>EXPORT A COPY</h3><p>Downloads verified ordinary SQLite without changing the active format. This unencrypted file contains private conversations and runtime data; store it privately. It is not a complete identity backup.</p>' +
+    cardHead('EXPORT A COPY', 'Downloads the database as ordinary SQLite: unencrypted, and not a whole backup of the identity.') + '<p>Downloads verified ordinary SQLite without changing the active format. This unencrypted file contains private conversations and runtime data; store it privately. It is not a complete identity backup: for one, download an encrypted snapshot under Backups &amp; Keys and keep it with your escrow file.</p>' +
     (db.can_export ? '<form method="post" action="/database/export" style="display:inline"><button class="btn" type="submit" data-export-db>Download SQLite copy</button></form>' : '<button class="btn" disabled>Download SQLite copy unavailable</button>') + '</div>';
 }
 function navHTML() {
   return '<div class="card" style="display:flex;gap:6px;flex-wrap:wrap;padding:10px">' +
-    SECTIONS.map(([id, label]) =>
-      '<button class="btn' + (sec === id ? '' : ' ghost') + '" data-sec="' + id + '" style="padding:6px 14px;font-size:12.5px">' + label + '</button>').join('') +
+    SECTIONS.map(([id, label, , tip]) =>
+      '<button class="btn' + (sec === id ? '' : ' ghost') + '" data-sec="' + id + '" title="' + esc(tip) + '" style="padding:6px 14px;font-size:12.5px">' + label + '</button>').join('') +
     '</div>';
 }
 
@@ -190,6 +203,26 @@ function contextSummary(llm) {
   return esc(figure) + ' (' + esc(source) + ')';
 }
 
+const CAP_KIND = { image: 'image', pdf: 'PDF', audio: 'audio', video: 'video', text: 'text', tools: 'tools' };
+function capabilityLine(l) {
+  return '<div data-cap-line="' + esc(l.kind) + '">' + esc(CAP_KIND[l.kind] || l.kind) + ' — ' + esc(l.state) + ' · ' + esc(l.from) +
+    (l.not_sent ? ' · this host does not send it' : '') + '</div>';
+}
+function capabilityFigure(name, f) {
+  f = f || {};
+  return '<div data-cap-figure="' + name + '">' + name + ' — ' + (f.tokens ? Number(f.tokens).toLocaleString('en-US') + ' tokens' : 'unknown') + ' · ' + esc(f.from || 'nobody has said') + '</div>';
+}
+function capabilitiesHTML(c) {
+  if (!c) return '';
+  const head = (t) => '<div style="color:var(--dim);margin-top:4px">' + t + '</div>';
+  return '<div data-capabilities="' + esc(c.model) + '" style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6;overflow-wrap:anywhere">' +
+    '<div style="font-family:var(--mono)">' + esc(c.model) + '</div>' +
+    head('Takes') + (c.takes || []).map(capabilityLine).join('') +
+    head('Gives') + (c.gives || []).map(capabilityLine).join('') +
+    capabilityLine(Object.assign({}, c.tools, { kind: 'tools' })) +
+    capabilityFigure('window', c.window) + capabilityFigure('output limit', c.output_limit) + '</div>';
+}
+
 function substrateHTML(c) {
   if (!c) return loadingCard('configuration');
 
@@ -209,26 +242,85 @@ function substrateHTML(c) {
       (c.llm.thinking_applies ? ' · thinking ' + (c.llm.thinking_budget || '—') : '') +
       ' · effort ' + esc(c.llm.effort_plan || 'provider default (none set)') +
       ' · active ' + esc((c.llm.resolved_provider || '—') + ' / ' + (c.llm.resolved_model || '—')) + '</div>';
-  return '<div class="card"><h3>SUBSTRATE — LLM</h3>' +
+  return '<div class="card">' + cardHead('SUBSTRATE — LLM', 'The provider entry and model your identity thinks with, how long a request may take, and how long a new choice is checked.') +
     provSel +
     modelField('cfg-model', cur, c.llm.model) +
     cfgField('cfg-timeout', 'TIMEOUT (SECONDS)', c.llm.timeout_seconds) + limitExtrasFor('llm.timeout_seconds', c) +
     limitRowsHTML('substrate', c) +
     cfgField('cfg-probe-timeout', 'SUBSTRATE CHECK (SECONDS)', c.llm.probe_timeout_seconds) +
     cfgField('cfg-refused-retry', 'LONGEST WAIT BEFORE A REFUSED MODEL IS TRIED AGAIN (SECONDS; BLANK = ' + (c.llm.refused_retry_max_default || 'THE DEFAULT') + ')', c.llm.refused_retry_max_seconds || '') +
-    resolved +
+    resolved + capabilitiesHTML(c.llm.capabilities) +
     '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">providers.json owns the provider data; this card points at an entry. Endpoint, key, context/output budgets, REASONING EFFORT, and THINKING mode are edited on the entry in the Providers section. A substrate change applies only after the candidate completes a real inference request.</div>' +
     savebarHTML('llm', 'applies live after inference check') + '</div>';
+}
+
+const SPEND_WORDS = {
+  title: 'LANGUAGE MODEL SPEND',
+  tip: 'The tokens the providers reported, by day, by who spent them and on which model.',
+  intro: 'Tokens the providers reported, by day, by who spent them and on which model. No price is known to AII OS, and nothing here stops a turn.',
+  days: 'SHOW',
+  choices: [[1, 'today'], [7, 'the last 7 days'], [30, 'the last 30 days']],
+  none: 'Nothing was spent on these days.',
+  turns: 'turns',
+  facility: 'facility',
+  subagent: 'sub-agent',
+  atLeast: 'at least ',
+  unknown: n => n + (n === 1 ? ' record' : ' records') + ' of unknown spend',
+  calls: n => n + (n === 1 ? ' call' : ' calls'),
+  split: (i, o, c) => 'in ' + i.toLocaleString() + ', out ' + o.toLocaleString() + (c ? ', ' + c.toLocaleString() + ' read from the cache' : ''),
+  zone: z => 'Days are counted in ' + z + '.',
+};
+let spendDays = 7;
+let spendAsking = false;
+function spendRole(role) {
+  if (role === 'turns') return SPEND_WORDS.turns;
+  if (role.startsWith('facility:')) return SPEND_WORDS.facility + ' ' + role.slice(9);
+  if (role.startsWith('sub-agent:')) return SPEND_WORDS.subagent + ' ' + role.slice(10);
+  return SPEND_WORDS.subagent;
+}
+function spendLineHTML(l) {
+  const where = [l.provider, l.model].filter(Boolean).join(' \u00b7 ');
+  const tokens = (l.floor ? SPEND_WORDS.atLeast : '') + (l.tokens || 0).toLocaleString();
+  const parts = [];
+  if (l.calls) parts.push(SPEND_WORDS.calls(l.calls));
+  if (l.input || l.output) parts.push(SPEND_WORDS.split(l.input || 0, l.output || 0, l.cached || 0));
+  if (l.unknown) parts.push(SPEND_WORDS.unknown(l.unknown));
+  return '<li data-spend-line="' + esc(l.role) + '"><b>' + esc(spendRole(l.role)) + '</b>' + (where ? ' \u2014 ' + esc(where) : '') +
+    ': <b data-spend-tokens>' + esc(tokens) + '</b>' + (parts.length ? ' <span class="muted">(' + esc(parts.join('; ')) + ')</span>' : '') + '</li>';
+}
+function spendHTML() {
+  const pick = '<label class="f" for="spend-days">' + SPEND_WORDS.days + '</label><select id="spend-days">' +
+    SPEND_WORDS.choices.map(([n, label]) => '<option value="' + n + '"' + (n === spendDays ? ' selected' : '') + '>' + esc(label) + '</option>').join('') + '</select>';
+  if (!S.spend) {
+    if (!spendAsking && S.view === 'settings') { spendAsking = true; query('spend', { days: spendDays }); }
+    return '<div class="card" data-spend>' + cardHead(SPEND_WORDS.title, SPEND_WORDS.tip) + '' + pick + loadingCard('spend') + '</div>';
+  }
+  spendAsking = false;
+  const days = S.spend.days || [];
+  const body = days.length ? days.map(d =>
+    '<div data-spend-day="' + esc(d.day) + '" style="margin-top:10px"><div class="kv"><span>' + esc(d.day) + '</span><b data-spend-total>' +
+    esc((d.floor ? SPEND_WORDS.atLeast : '') + (d.tokens || 0).toLocaleString()) + '</b></div>' +
+    (d.unknown ? '<div class="dim-note">' + esc(SPEND_WORDS.unknown(d.unknown)) + '</div>' : '') +
+    '<ul style="margin:4px 0 0 18px;font-size:12.5px;line-height:1.6">' + (d.lines || []).map(spendLineHTML).join('') + '</ul></div>').join('')
+    : '<div class="empty">' + SPEND_WORDS.none + '</div>';
+  return '<div class="card" data-spend>' + cardHead(SPEND_WORDS.title, SPEND_WORDS.tip) + '<p class="muted">' + SPEND_WORDS.intro + '</p>' + pick + body +
+    (S.spend.zone ? '<div class="dim-note" style="margin-top:8px">' + esc(SPEND_WORDS.zone(S.spend.zone)) + '</div>' : '') + '</div>';
+}
+function wireSpend(root) {
+  const el = root.querySelector('#spend-days');
+  if (el) el.onchange = () => { spendDays = Number(el.value) || 1; S.spend = null; spendAsking = false; renderSettings(); };
 }
 
 const SPEECH_DIRS = {
   stt: {
     title: 'VOICE INPUT — SPEECH TO TEXT', kind: 'transcription model',
+    tip: 'The engine that turns what you say into text for the identity and, for a paid service, its key and monthly ceiling.',
     none: 'Off', off: 'Voice input is off.',
     unsetProvider: 'No speech-to-text engine. The microphone opens this section until one is chosen.',
   },
   tts: {
     title: 'VOICE REPLIES — TEXT TO SPEECH', kind: 'model',
+    tip: 'The engine and voice that speak the identity\u2019s replies and, for a paid service, its key and monthly ceiling.',
     none: 'Browser voice', off: 'Replies are spoken with your browser\'s built-in voice.',
     unsetProvider: 'Replies are spoken with your browser\'s built-in voice.',
     note: 'Speaks every reply — to what you type, and to what you say in a conversation. With nothing chosen, the engine that hears a conversation answers in its own voice. Another engine speaks a conversation\'s replies only where a page holds its speaker open; elsewhere, and whenever the voice chosen cannot speak, the browser\'s own voice does.',
@@ -503,7 +595,7 @@ function speechCard(dir, sp) {
       ? '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:#c0392b;margin-top:8px">pointer does not resolve: ' + esc(inForce.error) + unsaved + '</div>'
       : '<div id="sp-readback-' + dir + '" style="font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.6">in force: <span style="font-family:var(--mono)">' + esc(inForce.endpoint || '') + '</span> · key ' + esc(inForce.api_key_masked || 'none') + unsaved + '</div>';
   const note = d.note ? '<p class="muted" id="sp-note-' + dir + '">' + esc(d.note) + '</p>' : '';
-  return '<div class="card" data-speech-section="speech_' + dir + '" data-edit-scope="' + esc('speech:' + dir + ':' + provider) + '"><h3>' + d.title + '</h3>' + note + engine + base + key + language + model + voice + engineSettings + readback +
+  return '<div class="card" data-speech-section="speech_' + dir + '" data-edit-scope="' + esc('speech:' + dir + ':' + provider) + '">' + cardHead(d.title, d.tip) + note + engine + base + key + language + model + voice + engineSettings + readback +
     ceiling +
       (dir === 'tts' ? '<button class="btn ghost" id="sp-sample-tts"' + (provider && provider !== OWN_SERVER && !isPlugin ? '' : ' disabled') + '>Play sample</button>' +
         '<span class="savesay" id="sp-sample-state" role="status" aria-live="polite"></span>' : '') + '</div>';
@@ -513,9 +605,9 @@ function speechHTML(c) {
   if (!c) return loadingCard('configuration');
   const sp = c.speech || { stt: {}, tts: {} };
   return '<div id="speech-form"><div class="card" style="position:sticky;top:0;z-index:2">' +
-    '<h3>Speech settings</h3><p>Make your changes below, then save once. Listening rules apply immediately; engine and echo settings apply to the next voice session.</p>' +
+    cardHead('Speech settings', 'One Save for every card below: listening rules apply at once, the engines and echo processing at the next voice session.') + '<p>Make your changes below, then save once. Listening rules apply immediately; engine and echo settings apply to the next voice session.</p>' +
     savebarHTML('speech', '', { label: 'Save speech settings' }) + '</div>' +
-    voiceModeCard(sp) + speakersCard(sp) + heardHistoryCard(sp) + speechCard('stt', sp) + speechCard('tts', sp) + '</div>';
+    voiceModeCard(sp) + myVoiceCard(sp) + speakersCard(sp) + heardHistoryCard(sp) + speechCard('stt', sp) + speechCard('tts', sp) + '</div>';
 }
 
 const HEARD_FIELDS = [
@@ -527,7 +619,7 @@ const HEARD_FIELDS = [
 
 function heardHistoryCard(sp) {
   const h = sp.heard_history || {};
-  return '<div class="card" id="sp-heard-history" data-speech-section="speech_heard">' + '<h3 title="How much of what was heard the host holds for the identity to read when they ask, and for how long.">Heard history</h3>' +
+  return '<div class="card" id="sp-heard-history" data-speech-section="speech_heard">' + cardHead('Heard history', 'How much of what was heard the host holds for the identity to read when they ask, and for how long.') +
     '<p class="muted">What was heard is held in memory for the identity to read when they ask, and is cleared when the identity restarts. Empty takes the default.</p>' +
     HEARD_FIELDS.map(([id, key, label, min, max]) => '<label class="f sub">' + label +
       '<input type="number" id="' + id + '" min="' + min + '" max="' + max + '" step="1" value="' + esc(String(h[key] || '')) + '"></label>').join('') +
@@ -546,7 +638,7 @@ function voiceModeCard(sp) {
   const listen = m.listen || 'interactive';
   const speak = m.speak === 'on' || m.speak === 'off' ? m.speak : '';
   const opt = (v, cur, label) => '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>';
-  return '<div class="card" id="sp-voice-mode" data-speech-section="speech_mode"><h3>Conversation</h3>' +
+  return '<div class="card" id="sp-voice-mode" data-speech-section="speech_mode">' + cardHead('Conversation', 'What the microphone does and whether replies are spoken: the same pair the microphone control in the composer sets.') +
     '<p class="muted">What the microphone does and whether replies are spoken. One pair for this identity: the control in the composer shows the same mode, and the identity is told which one it is in.</p>' +
     '<label class="f">MICROPHONE</label><select id="sp-mode-listen">' +
     opt('interactive', listen, 'Interactive — the operator speaks to the identity') +
@@ -560,7 +652,7 @@ function voiceModeCard(sp) {
     '</select>' +
     '<div class="muted" id="sp-mode-readback">' + esc(voiceModeReadback(m)) + '</div>' +
     '</div>' +
-    '<div class="card"><h3>Echo processing — this browser tab</h3><select id="sp-echo-mode">' +
+    '<div class="card">' + cardHead('Echo processing — this browser tab', 'How this browser keeps the replies it plays from coming back through the microphone; each browser keeps its own choice.') + '<select id="sp-echo-mode">' +
     echoModes.map(([value, label]) => opt(value, echoMode(), label)).join('') + '</select>' +
     '<p class="muted">Saved for this browser with Save speech settings; retained after refresh. Applies on the next Listen or Meeting session. Other browsers keep their own choice. Push-to-talk uses browser cancellation.</p>' +
     '<div class="muted" id="sp-echo-readback">Saved: ' + esc(echoModes.find(([v]) => v === echoMode())[1]) + '</div></div>';
@@ -573,12 +665,36 @@ export function voiceModeReadback(m) {
     (m.set ? '' : ' · nothing chosen: the default is in force');
 }
 
+function myVoiceCard(sp) {
+  const voices = sp.voices || [], named = sp.operator_speakers || [];
+  const row = v => '<div class="row" data-my-voice-row="' + esc(v.uuid) + '" style="flex-wrap:wrap;gap:6px;align-items:baseline">' +
+    '<b data-my-voice-label>' + esc(v.label || 'no label') + '</b>' +
+    '<span style="font-family:var(--mono);font-size:11.5px">' + esc(v.uuid) + '</span>' +
+    '<span class="muted" data-my-voice-state>' + (v.mine ? 'named as your voice' : v.enrolled ? 'an enrolled voice' : v.heard ? 'not an enrolled voice' : '') + '</span>' +
+    (v.mine ? '<button type="button" class="btn ghost" data-my-voice="remove" data-uuid="' + esc(v.uuid) + '">Not my voice</button>'
+      : v.enrolled ? '<button type="button" class="btn ghost" data-my-voice="name" data-uuid="' + esc(v.uuid) + '">This is my voice</button>' : '') +
+    (v.why_not ? '<div class="muted" data-my-voice-why style="flex-basis:100%">' + esc(v.why_not) + '</div>' : '') + '</div>';
+  return '<div class="card" id="sp-my-voice">' + cardHead('Your voice', 'The voices you name as yours, so that what a voice session hears from them counts as your words.') +
+    '<p class="muted">What a voice session hears is recorded as your words, and can stand as your word for a change to who this identity is, only when the speech engine identifies the speaker as a voice you name here: an enrolled voice, by its speaker UUID. A label is what an engine or an identity called a voice; it is not proof of who spoke.</p>' +
+    (named.length ? '' : '<p class="muted" id="sp-my-voice-none">No voice is named as yours. Until you name it here, what a voice session hears counts as a participant\'s words, not yours. Push-to-talk keeps your role.</p>') +
+    voices.map(row).join('') +
+    (voices.length ? '' : '<div class="muted" id="sp-my-voice-empty">No speech engine has reported a speaker UUID in this identity\'s record yet.</div>') +
+    (sp.voices_cut ? '<div class="muted">Voices heard longer ago are not listed.</div>' : '') +
+    '</div>';
+}
+
+function nameMyVoice(uuid, add) {
+  const named = ((S.config && S.config.speech && S.config.speech.operator_speakers) || []).filter(id => id !== uuid);
+  if (add) named.push(uuid);
+  sendConfigChanges('speech_my_voice', { 'speech.operator_speakers': named.length ? named : null });
+}
+
 function speakersCard(sp) {
   const p = sp.speakers || { mode: 'all', uids: [], unidentified: 'deliver', revision: 0 };
   const mode = p.mode || 'all';
   const opt = (v, label) => '<option value="' + v + '"' + (mode === v ? ' selected' : '') + '>' + label + '</option>';
   const unid = p.unidentified || 'deliver';
-  return '<div class="card" id="sp-speakers" data-speech-section="speech_speakers"><h3>Who is heard</h3>' +
+  return '<div class="card" id="sp-speakers" data-speech-section="speech_speakers">' + cardHead('Who is heard', 'Whose voices the identity receives: everyone, only the speakers listed, or everyone but them.') +
     '<p class="muted">Whose words the identity receives. Use stable speaker UUIDs or enrolled ids from the speech engine\'s speaker list, not display names. Provisional or unresolved speakers do not match an allow-list. Identification does not grant authority.</p>' +
     '<label class="f">HEARD</label><select id="sp-speakers-mode">' + opt('all', 'Everyone') + opt('only', 'Only the speakers listed') + opt('ignore', 'Everyone except the speakers listed') + '</select>' +
     '<div id="sp-speakers-list-row"' + (mode === 'all' ? ' hidden' : '') + '><label class="f">SPEAKER IDS</label>' +
@@ -631,7 +747,7 @@ async function showHeard(after) {
   heardAsking = true;
   let body = null, why = '';
   try {
-    const res = await fetch('/speech/heard' + (after ? '?after=' + encodeURIComponent(String(after)) : ''), { cache: 'no-store', credentials: 'same-origin' });
+    const res = await signedFetch('/speech/heard' + (after ? '?after=' + encodeURIComponent(String(after)) : ''), { cache: 'no-store', credentials: 'same-origin' });
     const text = await res.text();
     try { body = JSON.parse(text); } catch (e) { body = null; }
     if (!res.ok) why = (body && body.error) || text.trim() || ('the host answered ' + res.status);
@@ -659,6 +775,17 @@ function drawHeard(root) {
   wireHeard(root);
 }
 
+function wireExport(root) {
+  const form = root.querySelector('form[action="/database/export"]');
+  if (!form) return;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    form.action = await ticketed('POST', '/database/export');
+    form.submit();
+    form.setAttribute('action', '/database/export');
+  };
+}
+
 function wireHeard(root) {
   const show = root.querySelector('#sp-heard-show'), older = root.querySelector('#sp-heard-older');
   if (show) show.onclick = () => showHeard(0);
@@ -683,6 +810,9 @@ function wireSpeech(root) {
     if (unid) unid.hidden = m !== 'ignore';
   };
   if (modeSel) modeSel.onchange();
+  root.querySelectorAll('[data-my-voice]').forEach(btn => {
+    btn.onclick = () => { nameMyVoice(btn.dataset.uuid, btn.dataset.myVoice === 'name'); renderSettings(); };
+  });
   wireHeard(root);
   ['stt', 'tts'].forEach(dir => {
     const sel = root.querySelector('#sp-provider-' + dir);
@@ -811,10 +941,6 @@ function dashboardWarnHTML(host, tls) {
   if (tls || isLoopbackHost(host)) return '';
   return '<div class="fb-hint" id="cfg-dwarn">WITHOUT HTTPS ON THIS ADDRESS, EVERY WORD BETWEEN YOU AND THIS IDENTITY CROSSES THE NETWORK IN THE CLEAR — AND THE BROWSER WILL REFUSE THE MICROPHONE.</div>';
 }
-const TOKEN_EYE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></svg>';
-const TOKEN_COPY = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.5v-.3A1.7 1.7 0 0 0 8.8 1.5H4.2a1.7 1.7 0 0 0-1.7 1.7v4.6a1.7 1.7 0 0 0 1.7 1.7h.3"/></svg>';
-const TOKEN_COPIED = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>';
-let tokenAsk = '', tokenShown = '';
 let tokenBusy = '', tokenSaid = null;
 const TOKEN_OFF_WHERE = '<div class="muted" data-token-off-where style="font-size:12px;margin-top:6px">Asking for a token stops only in config.json on this machine (dashboard.require_token: false), never from this page \u2014 and a dashboard other machines can reach always asks.</div>';
 function tokenActHTML(act, label, busyLabel, secretsOK, privateNote) {
@@ -823,32 +949,59 @@ function tokenActHTML(act, label, busyLabel, secretsOK, privateNote) {
     (tokenSaid ? '<span class="config-result ' + tokenSaid.kind + '" data-token-' + tokenSaid.act + '-said data-announce>' + esc(tokenSaid.text) + '</span>' : '') + '</div>';
 }
 function dashboardTokenHTML(required, secretsOK) {
-  const revealWaiting = !tokenShown && (!S.connected || !!tokenBusy);
-  const revealTitle = revealWaiting ? (tokenBusy ? 'Wait for the access-token change' : 'Reconnect to show access token') : 'Show access token';
   if (!required) {
     return '<label class="f">ACCESS TOKEN</label>' +
       '<div data-token-open>This dashboard asks no browser for a token: any browser on this machine that opens it is its operator.</div>' +
       tokenActHTML('require', 'Ask for an access token', 'Turning on\u2026', secretsOK, 'Asking for a token is turned on over a private connection only \u2014 open this page on the machine itself, or over HTTPS.') +
       TOKEN_OFF_WHERE;
   }
-  return '<label class="f" for="cfg-dtoken">ACCESS TOKEN</label>' +
-    '<div style="display:flex;align-items:center;gap:6px"><input id="cfg-dtoken" type="password" value="' + esc(tokenShown) + '" readonly autocomplete="off" spellcheck="false" style="flex:1" placeholder="press the eye to show it">' +
-    '<button type="button" class="copyb" data-token-reveal title="' + revealTitle + '" aria-label="' + revealTitle + '" aria-pressed="' + (tokenShown ? 'true' : 'false') + '"' + (revealWaiting ? ' disabled' : '') + '>' + TOKEN_EYE + '</button>' +
-    '<button type="button" class="copyb" data-token-copy title="' + (tokenShown ? 'Copy access token' : 'Show the token first') + '" aria-label="Copy access token"' + (tokenShown ? '' : ' disabled') + '>' + TOKEN_COPY + '</button></div>' +
-    '<div class="muted" style="font-size:12px;margin-top:6px">This is the credential for another browser or device, kept in config.json. Rotating replaces it: every other browser and device signs in again with the new one, and this one stays signed in.</div>' +
+  return '<label class="f">ACCESS TOKEN</label>' +
+    '<div data-token-where>This page does not show the access token. Read it with aii dashboard-token on the AII OS machine, in its identity directory; or sign another device in with an access code from Open on another device, below.</div>' +
+    '<div class="muted" style="font-size:12px;margin-top:6px">The token is the credential for another browser or device, kept in config.json. Rotating replaces it: every other browser and device signs in again with the new one, and this one stays signed in.</div>' +
+    localCodeHTML(secretsOK) +
     tokenActHTML('rotate', 'Rotate access token', 'Rotating\u2026', secretsOK, 'Rotating the token is offered over a private connection only \u2014 open this page on the machine itself, or over HTTPS.') +
     TOKEN_OFF_WHERE;
+}
+
+let localCode = null, localSaid = '';
+function codeLifeSaid(seconds) {
+  return seconds % 60 ? seconds + ' seconds' : (seconds / 60) + (seconds === 60 ? ' minute' : ' minutes');
+}
+function localCodeHTML(secretsOK) {
+  if (!secretsOK) return '<div class="muted" data-local-code-private style="font-size:12px;margin-top:6px">A sign-in code for another browser is made over a private connection only \u2014 open this page on the machine itself, or over HTTPS.</div>';
+  let html = '<div data-local-code style="margin-top:10px">';
+  if (localCode) {
+    html += '<div>In another browser on this machine or its network, open this link, or open this dashboard there and type the code where it asks you to sign in:</div>' +
+      '<div data-local-code-link style="font-size:12px;margin:6px 0;user-select:all;word-break:break-all">' + esc(localCode.link || '') + '</div>' +
+      '<div data-local-code-text style="font-size:22px;letter-spacing:2px;margin:6px 0;user-select:all"><b>' + esc(localCode.code) + '</b></div>' +
+      '<div class="muted" style="font-size:12px">It works once, for ' + esc(codeLifeSaid(localCode.seconds)) + ', and only for a browser on this machine or its own network.</div>';
+  }
+  if (localSaid) html += '<div class="config-result bad" data-local-code-said data-announce style="margin-top:6px">' + esc(localSaid) + '</div>';
+  return html + '<div class="savebar"><button type="button" class="btn ghost" data-local-code-act="make">' + (localCode ? 'New code' : 'Make a sign-in code for another browser') + '</button>' +
+    (localCode ? '<button type="button" class="btn ghost" data-local-code-act="done">Done</button>' : '') + '</div></div>';
+}
+function localCodeAct(act) {
+  if (act === 'done') {
+    if (localCode) send({ type: 'access_code_cancel', access_code: localCode.id });
+    localCode = null; localSaid = '';
+    renderSettings();
+    return;
+  }
+  openElsewhereEnd();
+  localCode = null; localSaid = '';
+  if (!accessCodeAsk.arm({ local: true }, send({ type: 'access_code', access_code_local: true }))) localSaid = 'Not connected \u2014 no code was made.';
+  renderSettings();
 }
 
 const TOKEN_ACTS = {
   rotate: {
     confirm: 'Rotate the access token? Every other browser and device signed in to this dashboard signs in again with the new token; this one stays signed in.',
-    done: 'Rotated \u2014 every other browser and device signs in again with the new token. Press the eye to show it.',
+    done: 'Rotated \u2014 every other browser and device signs in again with the new token.',
     failed: 'The token was not rotated.',
   },
   require: {
     confirm: 'Ask for an access token? From now on every browser and device must sign in with it to use this dashboard: every other open page is cut off and asks for the token, and this one stays signed in. Only config.json on this machine turns this off again.',
-    done: 'Asked for \u2014 every other browser and device must now sign in with the token. Press the eye to show it.',
+    done: 'Asked for \u2014 every other browser and device must now sign in with the token.',
     failed: 'No token is asked for yet.',
   },
 };
@@ -860,29 +1013,20 @@ async function runTokenAct(act) {
   const res = await (act === 'rotate' ? S.rotateAccessToken() : S.requireAccessToken());
   tokenBusy = '';
   if (res.ok) {
-    tokenAsk = ''; tokenShown = '';
     if (S.config && S.config.dashboard) S.config.dashboard.require_token = true;
     tokenSaid = { act, kind: 'good', text: a.done };
+    localCode = null;
     scriptsCardStale();
   } else tokenSaid = { act, kind: 'bad', text: res.text || a.failed };
   if (S.view === 'settings' && sec === 'dashboard') renderSettings();
 }
 
-export function acceptDashboardToken(requestID, token) {
-  if (!tokenAsk || requestID !== tokenAsk) return false;
-  tokenAsk = '';
-  tokenShown = token || '';
-  const field = $('cfg-dtoken');
-  if (field) { field.value = tokenShown; field.type = 'text'; }
-  const reveal = document.querySelector('[data-token-reveal]'), copy = document.querySelector('[data-token-copy]');
-  if (reveal) { reveal.title = 'Hide access token'; reveal.setAttribute('aria-label', reveal.title); reveal.setAttribute('aria-pressed', 'true'); }
-  if (copy) { copy.disabled = false; copy.title = 'Copy access token'; }
-  return true;
-}
+let drawnExpert = null;
 function dashboardHTML(c) {
+  drawnExpert = expertBoxState();
   if (!c) return loadingCard('configuration');
   const tls = !!c.dashboard.tls;
-  return '<div class="card"><h3>DASHBOARD — BIND ADDRESS</h3>' +
+  return '<div class="card">' + cardHead('DASHBOARD — BIND ADDRESS', 'The address and port this page is served on, whether it is served over HTTPS, and the access token other browsers sign in with.') +
     cfgField('cfg-dhost', 'HOST (127.0.0.1 = THIS MACHINE ONLY; A LAN IP OR 0.0.0.0 EXPOSES THE DASHBOARD TO THAT NETWORK)', c.dashboard.host) +
     cfgField('cfg-dport', 'PORT', c.dashboard.port) +
     '<label class="f" style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="cfg-dtls"' + (tls ? ' checked' : '') + '> HTTPS (REQUIRED FOR THE MICROPHONE, AND FOR ANY ADDRESS OTHER THAN THIS MACHINE)</label>' +
@@ -891,59 +1035,63 @@ function dashboardHTML(c) {
     savebarHTML('dashboard', 'saved — applies next restart') + '</div>' +
     scriptsCardHTML() +
     publicNameCardHTML(c.public_name || null, c) +
-    themeCardHTML();
+    themeCardHTML() +
+    notifyCardHTML();
+}
+
+export function notifyCardHTML() {
+  const state = notifyState(), said = notifySaid(state);
+  const off = state === 'unavailable';
+  return '<div class="card" data-notify-card>' + cardHead('NOTIFICATIONS', 'Whether this browser shows a notification when the identity asks you something; for this browser only.') +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:13.5px"><input type="checkbox" data-notify-asks' + (state === 'on' ? ' checked' : '') + (off ? ' disabled' : '') + '> ' + esc(WAITING_WORDS.switchLabel) + '</label>' +
+    '<div class="muted" data-notify-said role="status" style="font-size:12px;margin-top:6px"' + (said ? '' : ' hidden') + '>' + esc(said) + '</div>' +
+    '<div class="muted" style="font-size:12px;margin-top:6px">' + esc(WAITING_WORDS.titleLine) + '</div></div>';
+}
+export function wireNotifyCard(root) {
+  root.querySelectorAll('[data-notify-asks]').forEach(box => {
+    box.onchange = () => {
+      const card = box.closest('[data-notify-card]');
+      box.disabled = true;
+      turnNotify(box.checked).then(() => {
+        const fresh = document.createElement('div');
+        fresh.innerHTML = notifyCardHTML();
+        const next = fresh.firstElementChild;
+        if (!card.isConnected) return;
+        card.replaceWith(next);
+        wireNotifyCard(next);
+        next.querySelector('[data-notify-asks]')?.focus();
+      });
+    };
+  });
 }
 
 function wireDashboardToken(root) {
   root.querySelectorAll('[data-token-rotate],[data-token-require]').forEach(btn => {
     btn.onclick = () => runTokenAct(btn.hasAttribute('data-token-rotate') ? 'rotate' : 'require');
   });
-  const field = root.querySelector('#cfg-dtoken');
-  if (!field) return;
-  const reveal = root.querySelector('[data-token-reveal]');
-  const copy = root.querySelector('[data-token-copy]');
-  reveal.onclick = () => {
-    if (!field.value) {
-      if (!S.connected || tokenBusy) return;
-      tokenAsk = query('dashboard_token') || '';
-      return;
-    }
-    const shown = field.type === 'text';
-    field.type = shown ? 'password' : 'text';
-    reveal.title = shown ? 'Show access token' : 'Hide access token';
-    reveal.setAttribute('aria-label', reveal.title);
-    reveal.setAttribute('aria-pressed', String(!shown));
-  };
-  copy.onclick = async () => {
-    if (!field.value) { copy.title = 'Show the token first'; return; }
-    if (!(await copyText(field.value))) {
-      copy.title = 'The browser refused clipboard access';
-      return;
-    }
-    copy.innerHTML = TOKEN_COPIED;
-    copy.title = 'Copied';
-    setTimeout(() => { copy.innerHTML = TOKEN_COPY; copy.title = 'Copy access token'; }, 1200);
-  };
+  root.querySelectorAll('[data-local-code-act]').forEach(btn => {
+    btn.onclick = () => localCodeAct(btn.dataset.localCodeAct);
+  });
 }
 
 export function themeCardHTML() {
   const choice = (typeof S.themeChoice === 'function') ? S.themeChoice() : 'system';
   const opt = (v, label) => '<option value="' + v + '"' + (choice === v ? ' selected' : '') + '>' + label + '</option>';
-  return '<div class="card"><h3>THEME</h3>' +
+  return '<div class="card">' + cardHead('THEME', 'Light, dark, or as this browser is set; for this browser only.') +
     '<label class="f" for="cfg-theme">APPEARANCE (THIS BROWSER ONLY — APPLIES AT ONCE)</label>' +
     '<select id="cfg-theme" data-theme-choice>' + opt('system', 'Follow this browser') + opt('light', 'Light') + opt('dark', 'Dark') + '</select>' +
     '<div class="muted" style="font-size:12px;margin-top:6px">A theme file (theme.json) still overrides either palette.</div></div>';
 }
 function witnessHTML(c) {
   if (!c) return loadingCard('configuration');
-  return '<div class="card"><h3>WITNESS</h3>' +
+  return '<div class="card">' + cardHead('WITNESS', 'The address of the server that signs receipts for this identity\u2019s record, and how many events pass between them.') +
     cfgField('cfg-wurl', 'URL', c.witness.url) +
     cfgField('cfg-wint', 'INTERVAL (EVENTS)', c.witness.interval_events) +
     savebarHTML('witness', 'saved — applies next boot') + '</div>';
 }
 function promptHTML(c) {
   if (!c) return loadingCard('configuration');
-  return '<div class="card"><h3>PROMPT</h3>' +
+  return '<div class="card">' + cardHead('PROMPT', 'The most tokens one request to the model may carry, and how many recent turns go with it.') +
     cfgField('cfg-ptokens', 'MAX TOKENS', c.prompt.max_tokens) + limitExtrasFor('prompt.max_tokens', c) +
     cfgField('cfg-pturns', 'RECENT TURNS', c.prompt.recent_turns) +
     limitRowsHTML('prompt', c) +
@@ -952,12 +1100,28 @@ function promptHTML(c) {
 function agencyHTML(c) {
   if (!c) return loadingCard('configuration');
   const on = !!(c.agency && c.agency.prefer_local_for_roles);
-  return '<div class="card"><h3>AGENCY</h3>' +
+  return '<div class="card">' + cardHead('AGENCY', 'The roles configured for sub-agents, with what the identity is told of each, and whether a role runs on a local model when one answers.') +
+    rolesListHTML(c.agency && c.agency.roles) +
     '<label class="f" style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="cfg-plr"' + (on ? ' checked' : '') + '> USE LOCAL MODEL FOR SUB-AGENT ROLES</label>' +
     '<div data-lifecycle="routing" style="font-size:11.5px;margin-top:4px">Applies live &mdash; the next role-tagged spawn honors it. Explicit agency.roles routes still win.</div>' +
     '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">When checked and a provider entry marked <b>local</b> answers /models, role-tagged spawns (proposer, critic, judge…) run there — free, private evaluation on your own metal. Explicit agency.roles routes still win; untagged spawns are copies of the identity and always think with the configured model. If the local host is down, everything falls back to the configured model (logged).</div>' +
     limitRowsHTML('agency', c) +
     savebarHTML('agency', 'applies live: role routing at the next spawn, each limit as its field says') + '</div>';
+}
+
+const ROLES_WORDS = {
+  label: 'ROLES (agency.roles IN config.json)',
+  none: 'No role is configured. A role is set in config.json under agency.roles: a provider entry, a model, and a description, which the identity is shown with the role\u2019s name.',
+  told: 'The identity is shown each role\u2019s name and description when they start a sub-agent. Change them in config.json; a change applies from the next turn.',
+  noDescription: 'no description: the identity is shown the name alone',
+};
+function rolesListHTML(roles) {
+  const list = roles || [];
+  return '<label class="f">' + esc(ROLES_WORDS.label) + '</label>' + (list.length
+    ? '<div class="roles-list" data-roles>' + list.map(r => '<div class="role-row" data-role="' + esc(r.name) + '"><b>' + esc(r.name) + '</b> <span class="muted">' + esc(r.provider) + ' / ' + esc(r.model) + '</span>' +
+      '<div class="' + (r.description ? 'role-desc' : 'role-desc muted') + '">' + esc(r.description || ROLES_WORDS.noDescription) + '</div></div>').join('') + '</div>' +
+      '<div class="muted" style="font-size:11.5px;margin-top:4px">' + esc(ROLES_WORDS.told) + '</div>'
+    : '<div class="muted" data-roles style="font-size:12px">' + esc(ROLES_WORDS.none) + '</div>');
 }
 
 const COGNITION_FIELDS = {
@@ -966,20 +1130,27 @@ const COGNITION_FIELDS = {
   'cognition.consolidate_batch': ['EXPERIENCES PER CONSOLIDATION', 'Fewer leaves more room for the beliefs each pass weighs.'],
   'cognition.consolidate_max_ops': ['OPERATIONS PER CONSOLIDATION', 'A reply with more mints nothing, and the next pass reads half as many experiences.'],
   'agency.outcome_window': ['OUTCOME PROBE WINDOW', 'Records of the identity\u2019s own ledger one tick reads, looking for what became of an intention or a commitment.'],
+  'agency.tool_outcome_min': ['TOOL OUTCOMES: NEW PATTERN AT', 'How many calls that failed or were refused the same new way make the identity look at their own tool calls; and how many clean calls of a tool make a clean run after an observed failure worth a look.'],
+  'agency.tool_outcome_window': ['TOOL OUTCOMES: LONGEST WAIT', 'The longest anything the identity has not looked at in their own tool calls waits before they are shown it, new or not; and how far back their first look reaches.'],
   'cognition.self_model_every_minutes': ['SELF-PORTRAIT EVERY', 'Lived time between portraits: minutes with you present, counted in pulses.'],
   'cognition.identity_review_every_minutes': ['IDENTITY REVIEW EVERY', 'Lived time between reviews of the record\u2019s structure.'],
   'cognition.self_model_evidence_rows': ['PORTRAIT: RECENT EXPERIENCES', 'The most recent experiences a portrait is drawn from.'],
   'cognition.self_model_spoken_rows': ['PORTRAIT: WHERE OTHERS SPOKE', 'Experiences where someone else spoke, which enter a portrait whatever their age.'],
   'prompt.self_model_max_tokens': ['PORTRAIT BUDGET', 'The longest a new portrait may be; it rides in every prompt. Portraits already accepted stand.'],
+  'prompt.charter_max_tokens': ['CHARTER BUDGET', 'The longest a new charter may be; it rides whole in every prompt. The charter already recorded stands.'],
+  'prompt.ring2_evidence_max_chars': ['ADOPTED BELIEFS: EVIDENCE SHOWN', 'How much of each source a prompt prints under an adopted belief; it rides in every prompt. A longer source is cut there and says how to read it whole. Your pages and the record keep all of it.'],
   'prompt.ring3_max_chars': ['WORKING TRUTH BOUND', 'The longest view of working truth consolidation may write.'],
   'prompt.surfacing_max_chars': ['DREAM NOTE BOUND', 'The longest note a dream pass may write; an outcome observation is held to it too.'],
+  'prompt.operator_beliefs_max_chars': ['WHO YOU WORK WITH BOUND', 'How much of what the identity believes about you each prompt shows, most recent first; the rest are counted there, and recall reaches them.'],
   'prompt.dream_conversation_max_chars': ['CONVERSATION ONE DREAM READS', 'How much unread conversation one dream pass reads.'],
   'prompt.tensions_max_chars': ['CONTRADICTION VIEW BOUND', 'How much of the standing contradictions a pass is shown.'],
   'prompt.brief_max_chars': ['MORNING BRIEF BOUND', 'The longest brief kept; a longer one is refused and yesterday\u2019s stands.'],
   'prompt.excerpt_chars': ['QUOTED TEXT SHOWN', 'How much of one quoted text the identity\u2019s own passes are shown \u2014 a note or belief in a contradiction, a retired belief, an outcome \u2014 and working truth shows of each recent experience. Past it the text is cut, and the cut is said.'],
   'prompt.ring3_recent_experiences': ['RECENT EXPERIENCES IN WORKING TRUTH', 'How many of the newest processed experiences working truth lists; it rides in every prompt.'],
+  'prompt.work_card_beliefs': ['BELIEFS ON THE WORK CARD', 'How many of the identity\u2019s working beliefs the card of an open work session shows, those sharing most words with what the session is; it rides in every prompt while a session is open.'],
   'prompt.alarm_firings': ['ALARM FIRINGS LISTED', 'How many of the newest firings the identity is shown when they read their alarms; one line says how many came earlier and how to ask for them.'],
   'agency.turn_token_budget': ['TURN TOKEN FENCE', 'The tokens one conversation turn may spend across all its calls before it wraps up.'],
+  'agency.turn_seconds_local': ['TURN TIME ON A LOCAL MODEL', 'How long one turn on a provider marked local may run before it wraps up. On a local model this time is the fence, not the token count, unless you set a token fence for it.'],
   'agency.tool_schema_refusals': ['TOOLS LEFT OUT A TURN', 'How many tools one turn may leave out because the model provider would not accept their definitions; past it the turn ends on the refusal.'],
   'agency.turn_checkpoint_calls': ['TURN CHECKPOINT', 'The tool calls a turn may make before it is asked to say where it stands, when it declared no estimate of its own; a turn that declared one is asked at its estimate times the slack below.'],
   'agency.turn_checkpoint_slack': ['SLACK ON A DECLARED ESTIMATE', 'How many times its own estimate of tool calls a turn that declared one may make before it is asked to say where it stands. Estimates run low, by about two and a half times as measured.'],
@@ -988,9 +1159,20 @@ const COGNITION_FIELDS = {
   'agency.continuation_wall_seconds': ['WALL OF A CONTINUED TURN', 'The longest one continued turn of unfinished work may run; at it the turn is cut, and nothing continues it by itself.'],
   'agency.alarm_wall_seconds': ['WALL OF AN ALARM\u2019S TURN', 'The longest the turn an alarm wakes the identity for may run. How long the alarm waits for the identity to be free is not bounded.'],
   'agency.harvest_wall_seconds': ['WALL OF A HARVEST\u2019S TURN', 'The longest the turn that takes in a finished sub-agent\u2019s work may run.'],
+  'agency.work_line_max_chars': ['LONGEST LINE OF A WORK SESSION', 'The most characters the identity may write in a work session\u2019s next move, expected evidence, falsifier or read-back; a longer one is refused and they are told this limit.'],
+  'prompt.standing_max_chars': ['LONGEST STANDING STATE', 'The most characters the identity may write in their standing state, what they are doing that outlives any work session; it rides in every prompt. A longer one is refused and they are told this limit; the one they had stands.'],
+  'prompt.playbook_max_bytes': ['PLAYBOOK SHOWN', 'How much of the identity\u2019s playbook for a kind of work a work session\u2019s start and its card show. A longer playbook is cut there, and the cut says which file holds the rest.'],
+  'record.tool_result_runes': ['TOOL RESULT KEPT IN THE RECORD', 'How much of each tool result the work record keeps: what the transcript shows, what the identity reads back with recall source=work, and what aii work export writes. A longer result keeps its start and says how long it was. A result already recorded keeps what it kept.'],
+  'plugins.context_providers': ['PLUGINS READ FOR CONTEXT', 'How many plugins\u2019 context is read before each turn and each sub-agent leg; any more are said not to have been read.'],
+  'plugins.context_timeout_ms': ['TIME FOR EACH PLUGIN\u2019S CONTEXT', 'How long each of those reads may take; one that takes longer is said to be unavailable for that turn. A turn waits at most this times the number above.'],
+  'plugins.runtime.stop_ms': ['TIME A PLUGIN IS GIVEN TO STOP', 'How long a plugin\u2019s program is given to end when it is stopped or replaced, before it is killed.'],
+  'plugins.runtime.hand_over_ms': ['WAIT FOR A PLUGIN\u2019S WORK BEFORE AN UPDATE', 'How long an update waits for the release it replaces to finish its call in flight and its open sessions; past it the sessions are ended and a call still running puts the update off.'],
+  'plugins.runtime.session_control_ms': ['WAIT FOR A SPEECH ENGINE TO TAKE A CONTROL', 'How long a stop, a barge-in or a close of a speech session waits for the engine to take it; past it the host treats the control as unknown.'],
+  'plugins.runtime.restart_attempts': ['PLUGIN RESTARTS IN TEN MINUTES', 'How many times in ten minutes a plugin that fails is started again before it stays stopped with its reason.'],
 };
 const COGNITION_APPLIES = {
   'agency.turn_token_budget': 'applies from the next turn',
+  'agency.turn_seconds_local': 'applies from the next turn',
   'agency.tool_schema_refusals': 'applies from the next turn',
   'agency.turn_checkpoint_calls': 'applies from the next turn',
   'agency.turn_checkpoint_grace_rounds': 'applies from the next turn',
@@ -1000,12 +1182,23 @@ const COGNITION_APPLIES = {
   'agency.alarm_wall_seconds': 'applies from the next turn an alarm wakes',
   'agency.harvest_wall_seconds': 'applies from the next harvest\u2019s turn',
   'prompt.alarm_firings': 'applies at the next read of the alarms',
+  'agency.work_line_max_chars': 'applies at the next write',
+  'prompt.standing_max_chars': 'applies at the next write',
+  'prompt.playbook_max_bytes': 'applies from the next turn',
+  'prompt.work_card_beliefs': 'applies from the next turn',
+  'record.tool_result_runes': 'applies from the next tool result',
+  'plugins.context_providers': 'applies from the next turn',
+  'plugins.context_timeout_ms': 'applies from the next turn',
+  'plugins.runtime.stop_ms': 'applies to each plugin from its next start',
+  'plugins.runtime.hand_over_ms': 'applies from the next update',
+  'plugins.runtime.session_control_ms': 'applies to each plugin from its next start',
+  'plugins.runtime.restart_attempts': 'applies now, and to each plugin\u2019s program from its next start',
 };
 function cognitionApplies(key) {
   if (key === 'overrides') return 'the overrides apply from the next turn';
   return COGNITION_APPLIES[key] || LIMIT_APPLIES[key] || 'the rhythm reads it at its next pass';
 }
-const FACILITY_NAMES = { consolidate: 'Consolidation', dream: 'Dreaming', self_model: 'Self-portrait', outcomes: 'Outcome intake', brief: 'Morning brief' };
+const FACILITY_NAMES = { consolidate: 'Consolidation', dream: 'Dreaming', self_model: 'Self-portrait', outcomes: 'Outcome intake', tools: 'Tool outcome intake', brief: 'Morning brief' };
 function cognitionField(set, c) {
   const [label, note] = COGNITION_FIELDS[set.key] || LIMIT_FIELDS[set.key] || [set.key, ''];
   const configured = configValue(c, set.key);
@@ -1035,6 +1228,10 @@ const LIMIT_FIELDS = {
   'llm.timeout_seconds': ['TIMEOUT', 'How long a request may wait for the model provider; a streamed reply, how long it may be silent.'],
   'llm.retries': ['RETRIES', 'How many times a request the network failed is tried again; -1 for none.'],
   'llm.retry_backoff_ms': ['PAUSE BEFORE A RETRY', ''],
+  'llm.model_list_timeout_seconds': ['ASKING A PROVIDER FOR ITS MODELS', 'How long the check of a provider may take: the list on the Providers card, the window an entry does not declare, a local model for a role. Starting and switching wait for it.'],
+  'llm.model_list_cache_seconds': ['A PROVIDER\u2019S ANSWER STANDS FOR', 'How long what a provider said of itself is kept before it is asked again.'],
+  'tools.webfetch_max_bytes': ['WHAT WEB_FETCH READS OF A PAGE', 'A longer page is read to here, and says so; offset reaches no further.'],
+  'updates.check_interval_minutes': ['MINUTES BETWEEN UPDATE CHECKS', 'Each check also brings the newest withdrawal lists, so this is also how soon a release or plugin its publisher withdrew is known here. Check now runs one at any time.'],
 };
 const LIMIT_APPLIES = {
   'agency.max_tool_rounds': 'applies from the next turn',
@@ -1049,8 +1246,12 @@ const LIMIT_APPLIES = {
   'llm.timeout_seconds': 'applies to the next request',
   'llm.retries': 'applies to the next request',
   'llm.retry_backoff_ms': 'applies to the next request',
+  'llm.model_list_timeout_seconds': 'applies to the next check',
+  'llm.model_list_cache_seconds': 'applies to the next check',
+  'tools.webfetch_max_bytes': 'applies from the next fetch',
+  'updates.check_interval_minutes': 'applies at once: the next check comes this long after the change',
 };
-const LIMIT_LEVELS = { model: 'the model override', provider: 'the provider override', main: 'the main setting', default: 'the default' };
+const LIMIT_LEVELS = { model: 'the model override', provider: 'the provider override', main: 'the main setting', default: 'the default', local: 'the local model\u2019s time fence (agency.turn_seconds_local), which stands in its place' };
 const LIMIT_STILL_BOUNDS = 'Unlimited lifts this fence only. A turn is still fitted to the model\u2019s window, ends at the continued turn\u2019s wall (agency.continuation_wall_seconds) and the request\u2019s silence ceiling (llm.timeout_seconds), and stops when you press Stop. A turn with no fence once spent 1,945,593 tokens over 101 calls and ran to the context wall.';
 let limitDraft = null;
 function limitBlock(c) {
@@ -1185,7 +1386,7 @@ function cognitionHTML(c) {
   const conditions = (cog.conditions || []).map(k =>
     '<li data-cog-condition="' + esc(k.facility) + '" data-kind="' + esc(k.kind) + '"><b>' + esc(FACILITY_NAMES[k.facility] || k.facility) + '</b> \u2014 ' + esc(k.said) +
     (k.at ? ' <span class="muted">(' + esc(new Date(k.at).toLocaleString()) + ')</span>' : '') + '</li>').join('');
-  return '<div class="card" data-cognition><h3>COGNITION</h3>' +
+  return '<div class="card" data-cognition>' + cardHead('COGNITION', 'The rhythm\u2019s numbers and a turn\u2019s: how often each pass runs, how much it reads and writes, when the morning brief comes, and how far a turn goes.') +
     '<p class="muted">The rhythm\u2019s own numbers, and the turn\u2019s: how the identity digests, reflects and is briefed, and how far a turn goes. Each says under it when it applies. A blank field takes the default shown in it.</p>' +
     '<div class="kv"><span>input budget</span><b data-cog-budget>' + budget + '</b></div>' +
     (conditions ? '<div class="dim-note" style="margin:8px 0">What the last passes came to:</div><ul data-cog-conditions style="margin:0 0 10px 18px;font-size:12.5px;line-height:1.6">' + conditions + '</ul>' : '<div class="dim-note" data-cog-conditions style="margin:8px 0">No facility\u2019s last pass reported carrying less than it was asked.</div>') +
@@ -1200,7 +1401,7 @@ function cognitionHTML(c) {
 function logsHTML(c) {
   if (!c) return loadingCard('configuration');
   const cfg = c.logs || {};
-  let html = '<div class="card"><h3>LOGS</h3>' +
+  let html = '<div class="card">' + cardHead('LOGS', 'Where the log files are written, how many old ones are kept, and after how many days they are compressed.') +
     cfgField('cfg-ldir', 'DIRECTORY (RELATIVE TO IDENTITY HOME; EMPTY = DISABLED)', cfg.dir) +
     cfgField('cfg-lbackups', 'MAX BACKUPS (-1 = KEEP ALL)', cfg.max_backups == null ? '' : cfg.max_backups) +
     cfgField('cfg-lcomp', 'COMPRESS AFTER DAYS (-1 = NEVER)', cfg.compress_days == null ? '' : cfg.compress_days) +
@@ -1216,7 +1417,7 @@ function logsHTML(c) {
     html += loadingCard('log files');
     return html;
   }
-  html += '<div class="card"><h3>VIEWER</h3>';
+  html += '<div class="card">' + cardHead('VIEWER', 'The log files on this machine: choose one to read its last lines.');
   if (!S.logsList.length) {
     html += '<div class="empty">no log files yet — the engine has not restarted since logging was enabled</div>';
   } else {
@@ -1236,12 +1437,8 @@ function pluginToolNote(t) {
   return t.plugin ? '<br><span class="store-hint">An operation of plugin ' + esc(t.plugin) + ', shown as the identity is given it. ' +
     'Its author\'s summary is on that plugin\'s card on the Plugins page, whole.</span>' : '';
 }
-function toolsHTML() {
-  return '<div class="card"><h3>TOOLS — RING 5 REACH</h3>' +
-    (S.tools.length ? S.tools.map(t =>
-      '<div class="tool-row"><span class="tn">' + esc(t.name) + '</span><span class="td">' + esc(t.description) + pluginToolNote(t) + '</span>' +
-      '<label class="switch"><input type="checkbox" data-tool="' + esc(t.name) + '"' + (t.enabled ? ' checked' : '') + '><span class="tk"></span></label></div>').join('') :
-      '<div class="empty">no tools</div>') + '</div>';
+function toolsLimitsHTML(c) {
+  return c ? '<div class="card">' + cardHead('TOOLS — LIMITS', 'The bounds the identity\u2019s tools work within, each applied as its field says.') + limitRowsHTML('tools', c) + savebarHTML('tools', 'each applies as its field says') + '</div>' : loadingCard('configuration');
 }
 
 const STATUS_DOT = {
@@ -1286,10 +1483,11 @@ function providerEditor(p, tag) {
   return '<div data-provider-editor data-edit-scope="' + esc(tag === 'new' ? 'new-provider' : 'provider:' + p.name) + '" style="padding:10px 0 4px">' +
     nameField +
     '<label class="f">API TYPE (DIALECT)</label><select id="pv-type-' + tag + '">' +
-    ['openai', 'anthropic', 'gemini'].map(t => '<option value="' + t + '"' + (t === apiType ? ' selected' : '') + '>' + t + '</option>').join('') +
+    ['openai', 'anthropic', 'gemini', 'responses'].map(t => '<option value="' + t + '"' + (t === apiType ? ' selected' : '') + '>' + t + '</option>').join('') +
     '</select>' +
     cfgField('pv-url-' + tag, 'ENDPOINT URL', p.endpoint || '') +
     cfgField('pv-model-' + tag, 'DEFAULT MODEL', p.default_model || '') +
+    capabilitiesHTML(p.capabilities) +
 
     cfgField('pv-key-' + tag, 'API KEY (ENTER TO REPLACE' + (storedKey ? ', ONE STORED' : ', NONE STORED') + ')', '', 'password') +
     (storedKey ? '<label class="f" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="pv-keepkey-' + tag + '"' + (keepKey ? ' checked' : '') + '> KEEP STORED KEY WHEN BLANK</label>' : '') +
@@ -1330,7 +1528,22 @@ export function wireProviderSignIn(root) {
 
 const shellWord = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
-export function updateCardHTML(u) {
+const UPDATE_HIGHEST_LABEL = 'newest signed release seen';
+const UPDATE_HIGHEST_PUBLISHED = 'published {day}, as GitHub dates it';
+const UPDATE_HIGHEST_VERIFIED = 'verified here {day}';
+const updateHighestDays = (u) => {
+  const days = [];
+  if (u.highest_published) days.push(UPDATE_HIGHEST_PUBLISHED.replace('{day}', esc(u.highest_published)));
+  if (u.highest_verified) days.push(UPDATE_HIGHEST_VERIFIED.replace('{day}', esc(u.highest_verified)));
+  return days.length ? ' (' + days.join('; ') + ')' : '';
+};
+
+const UPDATE_EVERY_HOUR = 'Checks run once an hour.';
+function updateCadence(u) {
+  const m = u && u.check_interval_minutes;
+  return !m || m === 60 ? UPDATE_EVERY_HOUR : 'Checks run every ' + m + ' minutes.';
+}
+export function updateCardHTML(u, c) {
   let state;
   const managed = !!(u && u.stage_refusal);
   if (!u || !u.enabled) state = 'Unavailable — this build carries no release version, so it does not check for updates.';
@@ -1345,13 +1558,32 @@ export function updateCardHTML(u) {
   else state = 'Not checked yet.';
   const canCheck = !!(u && u.enabled && !u.checking);
   const auto = !!(u && u.automatic);
-  return '<div class="card"><h3>UPDATES</h3>' +
+  const announced = !!(u && u.announced_version);
+  let heard = '';
+  if (announced) heard = ' The newest release is announced in the signed plugin catalog' + (u.announced_from ? ' at ' + esc(u.announced_from) : '') + ', fetched every hour. Nothing marks an announcement as old: if announcements stop reaching this machine, its date stops moving.';
+  else if (u && u.enabled) heard = ' No release announcement has reached this machine yet.';
+  return '<div class="card">' + cardHead('UPDATES', 'The version running, whether a newer one is out, and whether a newer one installs itself.') +
     '<div class="sp-kv"><span>running</span><b>' + esc((u && u.current_version) || 'dev') + '</b></div>' +
+    (announced ? '<div class="sp-kv" data-update-announced><span>newest announced</span><b>' + esc(u.announced_version) + (u.announced_on ? ' (' + esc(u.announced_on) + ')' : '') + '</b></div>' : '') +
+    (u && u.highest_version ? '<div class="sp-kv" data-update-highest><span>' + UPDATE_HIGHEST_LABEL + '</span><b>' + esc(u.highest_version) + updateHighestDays(u) + '</b></div>' : '') +
+    (u && u.running_withdrawn ? '<div data-update-withdrawn style="margin-top:6px"><b>The release this program came from (' + esc(u.current_version) + ') has been withdrawn by its publisher.</b>' +
+      (u.available_version ? ' ' + esc(u.available_version) + ' is offered here: install it.' : ' No replacement is offered yet.') + '</div>' : '') +
+    (u && u.running_unknown ? '<div data-update-withdrawn style="margin-top:6px">The withdrawal list this machine holds names releases, and whether this program\'s own release is one of them could not be told: ' + esc(String(u.running_unknown).replace(/[.\s]+$/, '')) + '.</div>' : '') +
     '<div data-update-state data-announce style="margin-top:6px">' + state + '</div>' +
+    (u && u.previous_kept ? '<div data-update-previous style="margin-top:6px">The app this one replaced is kept beside it, at <code>' + esc(u.previous_kept) + '</code>, until the next update replaces it. To go back to it, quit AII OS and put that app in this one\'s place.</div>' : '') +
+    (announced && u.announced_not_offered ? '<div data-update-unoffered style="margin-top:6px">' + esc(u.announced_version) + ' is announced, and the release source this machine checks offers ' +
+      (u.available_version ? esc(u.available_version) : 'nothing newer than ' + esc(u.current_version) + ', which is running') + '. A newer release may be held back on the way here.</div>' : '') +
+    (announced && u.announced_behind ? '<div data-update-behind style="margin-top:6px">This program (' + esc(u.current_version) + ') is newer than the newest release announced (' + esc(u.announced_version) + '). That is expected on a test channel; otherwise the announcement is behind, or this release was withdrawn.</div>' : '') +
+    (u && u.available_version && u.stranded && u.stranded.length ? '<div data-update-stranded style="margin-top:6px">Updating to ' + esc(u.available_version) + ' leaves ' + u.stranded.length + ' installed plugin' + (u.stranded.length === 1 ? '' : 's') + ' without a version for it:' +
+      u.stranded.map(s => '<div style="margin-left:12px">' + esc(s.id) + ' ' + esc(s.version) + ': ' + esc(s.reason) + '</div>').join('') + '</div>' : '') +
+    (u && u.available_version && u.stranded_note ? '<div data-update-stranded-note style="margin-top:6px">' + esc(u.stranded_note) + '</div>' : '') +
+    (u && u.lists ? '<div data-update-lists style="margin-top:6px">' + esc(u.lists).replace(/\n/g, '<br>') + '</div>' : '') +
+    (u && u.lists_note ? '<div class="muted" data-update-lists-note style="font-size:12px;margin-top:6px">' + esc(u.lists_note).replace(/\n/g, '<br>') + '</div>' : '') +
     '<label class="f" style="margin-top:8px"><input type="checkbox" id="cfg-uauto"' + (auto ? ' checked' : '') + '> Install updates automatically — a signed release is downloaded, verified and installed on a check; you choose when to relaunch</label>' +
-    '<div class="muted" style="font-size:12px;margin-top:6px">Checks run once an hour.' +
+    '<div class="muted" data-update-cadence style="font-size:12px;margin-top:6px">' + updateCadence(u) + heard +
     (managed ? ' This install is managed by your package manager (' + esc(u.stage_refusal) + '): updates are reported here and installed with it.' : '') +
     ' Mobile builds only report.</div>' +
+    (c ? limitRowsHTML('updates', c) : '') +
     savebarHTML('updates', '', { also: '<button class="btn ghost" data-update-check' + (canCheck ? '' : ' disabled') + '>Check now</button>' +
       (u && u.needs_restart ? '<button class="btn" data-update-restart>Relaunch now</button>' : '') }) +
     '</div>';
@@ -1367,6 +1599,16 @@ function routeHTML(p, c) {
     : mode === 'disabled' ? 'nowhere \u2014 the route is withdrawn (set in config.json), and the name and its certificate are kept'
     : mode === 'direct' ? 'directly at the addresses this machine is reached at' : 'as config.json says: ' + esc(mode);
   let html = '<div data-route style="margin-top:12px"><label class="f" for="cfg-route">ROUTE</label><div data-route-now>The name points ' + now + '.</div>';
+  if (p.address) html += '<div data-route-published>The certificate service last answered that the route is: ' + esc(p.address) + '.</div>';
+  if (p.route_error) html += '<div data-route-error data-announce>The route is not confirmed as chosen: ' + esc(String(p.route_error).replace(/[.\s]+$/, '')) + '.</div>';
+  if (p.resolves_to) html += '<div data-route-resolves>From this machine the name resolves to ' + esc(p.resolves_to) + '.</div>';
+  else if (p.resolve_error) html += '<div data-route-resolves data-announce>From this machine the name does not resolve: ' + esc(String(p.resolve_error).replace(/[.\s]+$/, '')) + '.</div>';
+  if (mode === 'direct') {
+    const below = expertShown() ? ', below.' : ' (' + EXPERT_WORDS + ', under Route, shows them).';
+    html += (p.held_families || []).map(h => '<div class="muted" data-route-held style="font-size:12px;margin-top:6px">No ' + esc(h.family) +
+      ' address is published: this machine has more than one (' + esc((h.addresses || []).join(', ')) +
+      ') and the dashboard binds every interface. Tick the ones people reach it at under Direct addresses' + below + '</div>').join('');
+  }
   if (!c || !c.secrets_ok) {
     return html + '<div class="muted" data-route-private style="font-size:12px;margin-top:6px">The route is chosen over a private connection only \u2014 open this page on the machine itself, or over HTTPS.</div></div>';
   }
@@ -1390,8 +1632,9 @@ function routeHTML(p, c) {
   else if (short) note = 'A relay exposes this dashboard\u2019s sign-in to the internet, and its access token is short \u2014 Rotate access token above makes a new one, then choose a relay.';
   else note = 'A relay serves one port, and behind it the name is reached on that port: a relay on another port than the address has now moves the address.';
   if (short && mode === 'relay') html += '<div class="config-result bad" data-route-token-short data-announce style="margin-top:6px">The access token is short, and the relay exposes this dashboard\u2019s sign-in to the internet. Rotate access token above makes a new one.</div>';
-  const expert = !!(S.stats && S.stats.expert);
-  return html + '<div data-route-expert' + (expert ? '' : ' hidden') + '>' + '<select id="cfg-route">' + options + '</select>' +
+  const expert = expertShown();
+  return html + '<div data-route-technical-box style="margin-top:6px">' + expertBoxHTML() + '</div>' +
+    '<div data-route-expert data-technical="route"' + (expert ? '' : ' hidden') + '>' + '<select id="cfg-route">' + options + '</select>' +
     '<div class="muted" data-route-note style="font-size:12px;margin-top:6px">' + note + '</div>' + ask +
     '<div data-route-move data-announce style="font-size:12px;margin-top:6px" hidden></div>' +
     (expert ? directAddressesHTML(p) : '') +
@@ -1427,7 +1670,7 @@ function openElsewhereHTML(p, c) {
   const f = openFlow || {};
   let html = '<div data-open-elsewhere style="margin-top:14px"><label class="f">OPEN ON ANOTHER DEVICE</label>';
   if (f.code) {
-    const life = f.code.seconds % 60 ? f.code.seconds + ' seconds' : (f.code.seconds / 60) + (f.code.seconds === 60 ? ' minute' : ' minutes');
+    const life = codeLifeSaid(f.code.seconds);
     html += '<div data-open-code>' + (f.code.qr ? '<div data-open-qr style="width:220px;max-width:100%;background:#fff;padding:4px">' + f.code.qr + '</div>' : '') +
       '<div style="margin-top:8px">On a phone, point its camera at the picture. On a device with no camera, open <b>' + esc(p.origin || '') + '</b> and type this code where it asks you to sign in:</div>' +
       '<div data-open-code-text style="font-size:22px;letter-spacing:2px;margin:6px 0;user-select:all"><b>' + esc(f.code.code) + '</b></div>' +
@@ -1497,6 +1740,7 @@ function openElsewhereAdvance() {
     return wait('Claiming this identity\u2019s name\u2026');
   }
   if (p.status === 'claiming') return wait('Obtaining the certificate for ' + p.name + '\u2026');
+  if (p.status === 'held') return stop('This identity serves the certificate it holds for ' + p.name + ' and cannot renew it or reach the certificate service: ' + (p.last_error || 'unknown') + '.');
   if (p.status !== 'issued' && p.status !== 'prepared') return stop('The certificate for ' + p.name + ' could not be obtained: ' + (p.last_error || 'unknown') + '. Retry now, above, tries again.');
   if (!reachesOtherDevices(p)) {
     if (c.dashboard.token_short) return stop('The access token is short, and a relay exposes this dashboard\u2019s sign-in to the internet. Rotate access token above makes a new one; then press this again.');
@@ -1505,7 +1749,7 @@ function openElsewhereAdvance() {
       return wait('Asking which relays are offered\u2026');
     }
     const r = p.relays.find(x => x.suggested);
-    if (!r) return stop('No relay is offered yet, so nothing leads to this machine from outside its own network. A technical operator can reach it over their own VPN: Expert shows how.');
+    if (!r) return stop('No relay is offered yet, so nothing leads to this machine from outside its own network. A technical operator can reach it over their own VPN: ' + EXPERT_WORDS + ', under Route below, shows how.');
     if (r.origin && p.origin && r.origin !== p.origin && (p.moves_with || []).length && !f.acceptMove) {
       settle(); f.running = false; f.bad = false; f.said = ''; f.needsMove = routeMoveText(p, c, r.origin, true);
       return;
@@ -1541,15 +1785,22 @@ function openElsewhereEnd() {
 }
 
 export function acceptAccessCode(requestID, code) {
-  if (!accessCodeAsk.claim(requestID)) return false;
-  if (openFlow && code) { openFlow.code = code; openFlow.own = ''; openFlow.running = false; openFlow.bad = false; openFlow.said = ''; }
+  const held = accessCodeAsk.claim(requestID);
+  if (!held) return false;
+  if (held.local) localCode = code;
+  else {
+    localCode = null;
+    if (openFlow && code) { openFlow.code = code; openFlow.own = ''; openFlow.running = false; openFlow.bad = false; openFlow.said = ''; }
+  }
   renderSettings();
   return true;
 }
 
 export function rejectAccessCode(message, requestID) {
-  if (!accessCodeAsk.claim(requestID)) return false;
-  if (openFlow) { openFlow.running = false; openFlow.bad = true; openFlow.said = message; openFlow.own = ''; }
+  const held = accessCodeAsk.claim(requestID);
+  if (!held) return false;
+  if (held.local) localSaid = message;
+  else if (openFlow) { openFlow.running = false; openFlow.bad = true; openFlow.said = message; openFlow.own = ''; }
   renderSettings();
   return true;
 }
@@ -1599,7 +1850,7 @@ function directAddressesHTML(p) {
   const listed = [...new Set([...(set || []), ...machine])];
   const pick = a => '<br><label style="margin-left:18px"><input type="checkbox" data-route-addr value="' + esc(a) + '"' + ((set || []).includes(a) ? ' checked' : '') + '> ' +
     esc(a) + (machine.includes(a) ? '' : ' (not an address this machine reports)') + '</label>';
-  return '<div data-route-addresses style="margin-top:10px"><label class="f">DIRECT ADDRESSES</label>' +
+  return '<div data-route-addresses data-technical="direct-addresses" style="margin-top:10px"><label class="f">DIRECT ADDRESSES</label>' +
     '<label><input type="radio" name="cfg-route-addr" value="auto"' + (named ? '' : ' checked') + '> Work them out from the address the dashboard is bound to</label><br>' +
     '<label><input type="radio" name="cfg-route-addr" value="list"' + (named ? ' checked' : '') + '> Publish exactly these</label>' + listed.map(pick).join('') +
     (named && !set.length ? '<div class="muted" data-route-addr-empty style="font-size:12px;margin-top:6px">config.json names an empty list: the direct route publishes nothing.</div>' : '') +
@@ -1639,6 +1890,9 @@ export function publicNameCardHTML(p, c) {
       state += ' The certificate service now serves <b>' + esc(p.service_zone) + '</b>; this name is under ' + esc(p.zone) + '.';
       control = '<button class="btn" data-public-name="move">Move to ' + esc(p.service_zone) + '</button>';
     }
+  } else if (p.status === 'held') {
+    state = '<b>' + esc(p.name) + '</b> — serving the certificate this identity holds' + (p.not_after ? ', which expires ' + esc(p.not_after) : '') +
+      '. It cannot be renewed: ' + esc(p.last_error || 'unknown') + '.';
   } else {
     state = '<b>' + esc(p.name) + '</b> — the certificate could not be obtained: ' + esc(p.last_error || 'unknown') +
       (p.days_left ? ' (' + Math.floor(p.days_left) + ' days left on the current one)' : '');
@@ -1647,7 +1901,7 @@ export function publicNameCardHTML(p, c) {
   const phone = S.stats && S.stats.hosted_on_phone
     ? '<div class="muted" data-public-name-phone style="font-size:12px;margin-top:6px">This identity runs on a phone. Another device can open it only while this app is open on the screen; when the phone sleeps or the app is closed, the other device waits and reconnects by itself. To be reachable at any time, the identity has to live on a computer that stays on.</div>'
     : '';
-  return '<div class="card"><h3>PUBLIC NAME</h3><div data-public-name-state style="margin-top:6px">' + state + '</div>' + phone +
+  return '<div class="card">' + cardHead('PUBLIC NAME', 'A public name to reach this identity at from any browser, the certificate for that name, opening this page on another device, and the route the name takes.') + '<div data-public-name-state style="margin-top:6px">' + state + '</div>' + phone +
     '<div class="muted" style="font-size:12px;margin-top:6px">A public name is claimed once and never changes; the certificate for it renews itself. Changing the bind address above does not touch it.</div>' +
     (control ? '<div class="savebar">' + control + '</div>' : '') +
     (c && c.secrets_ok ? openElsewhereHTML(p || {}, c) : '') + routeHTML(p, c) + settingsReadHTML(c) + '</div>';
@@ -1696,7 +1950,7 @@ export function wireUpdateCheck(root) {
 }
 export function uninstallCardHTML(offered) {
   if (!offered) return '';
-  return '<div class="card"><h3>UNINSTALL</h3>' +
+  return '<div class="card">' + cardHead('UNINSTALL', 'Removes AII OS from this account through the app on this Mac, which asks you there; every identity\u2019s data stays.') +
     '<div>Uninstall AII OS from this account. AII OS opens on this Mac and asks you there; every identity stops, and each one\'s data stays exactly where it is.</div>' +
     '<div style="margin-top:8px"><button class="btn ghost" data-uninstall>Uninstall AII OS\u2026</button> <span class="savenote" data-uninstall-note></span></div>' +
     '</div>';
@@ -1714,6 +1968,8 @@ S.openSettings = (section, focusID) => {
 S.renderUpdate = () => { if (S.view === 'settings' && sec === 'updates') renderSettings(); };
 S.renderBackups = () => { if (S.view === 'settings' && sec === 'backups') renderSettings(); };
 S.renderSandbox = () => { if (S.view === 'settings' && sec === 'sandbox') renderSettings(); };
+S.renderTools = () => { if (S.view === 'settings' && sec === 'tools') renderSettings(); };
+S.renderExpertPlaces = () => { if (S.view === 'settings' && sec === 'dashboard' && drawnExpert !== expertBoxState()) renderSettings(); };
 S.renderMailRepair = () => { if (S.view === 'settings' && sec === 'held-mail') renderSettings(); };
 S.renderMessages = () => { if (S.view === 'settings' && sec === 'messages') renderSettings(); };
 export function openBackups() { sec = 'backups'; }
@@ -1844,7 +2100,7 @@ function credentialState(info) {
   return '<div style="font-size:11.5px;color:var(--faint);margin:2px 0 6px">' + bits.join(' &middot; ') + '</div>';
 }
 function providersHTML() {
-  let html = '<div class="card"><h3>PROVIDERS — providers.json</h3>' +
+  let html = '<div class="card">' + cardHead('PROVIDERS — providers.json', 'Each model service in providers.json: its address, key or sign-in, models and limits, and whether it answers now.') +
     '<div style="font-size:11.5px;color:var(--faint);margin-bottom:8px;line-height:1.5">The operator\'s file, beside config.json — edited here or by hand. Status describes live model discovery and is never stored; activation is decided by a real inference check.</div>';
   if (prov.waiting()) html += '<div class="config-result" data-announce>Saving ' + esc(prov.waiting().name) + '… waiting for the runtime to confirm.</div>';
   else if (provBroken.waiting()) html += '<div class="config-result" data-announce>' + (provBroken.waiting().type === 'provider_repair' ? 'Repairing ' : 'Removing ') + esc(provBroken.waiting().label) + '… waiting for the runtime to confirm.</div>';
@@ -2074,17 +2330,19 @@ export function renderSettings() {
   };
 
   st.querySelectorAll('[data-sec]').forEach(btn => {
-    btn.onclick = () => { sec = btn.dataset.sec; provOpen = null; S.requestSettingsSection(); renderSettings(); };
+    btn.onclick = () => { sec = btn.dataset.sec; provOpen = null; if (sec === 'substrate') { S.spend = null; spendAsking = false; } S.requestSettingsSection(); renderSettings(); };
   });
   st.querySelectorAll('[data-save]').forEach(btn => { btn.onclick = () => { saveSettings(btn.dataset.save); renderSettings(); }; });
   wireLimits(st);
   if (sec === 'held-mail') wireMailRepair(st);
   if (sec === 'messages') { wireMessages(st); wireContacts(st); }
   wirePublicName(st);
+  wireExpertBoxes(st);
   wireDashboardToken(st);
   wireScriptsCard(st, () => { if (S.view === 'settings' && sec === 'dashboard') renderSettings(); });
   wireUnsetHints(st);
   wireSpeech(st);
+  wireExport(st);
   wireSettingControls(st, { send, rerender: renderSettings, typing, connect: () => { if (S.go) S.go('plugins'); } });
 
   const dHost = $('cfg-dhost'), dTLS = $('cfg-dtls');
@@ -2122,6 +2380,8 @@ export function renderSettings() {
   }; });
   wireUpdateCheck(st);
   wireThemeChoice(st);
+  wireNotifyCard(st);
+  wireSpend(st);
   st.querySelectorAll('[data-logfile]').forEach(row => {
     row.onclick = () => {
       S.logFile = row.dataset.logfile;
@@ -2149,9 +2409,7 @@ export function renderSettings() {
   if (briefOff) briefOff.onchange = () => { $('cog-brief-at').disabled = briefOff.checked; };
   if (sec === 'sandbox') wireSandboxCard(st);
   if (sec === 'backups') wireBackups(st);
-  st.querySelectorAll('[data-tool]').forEach(sw => {
-    sw.onchange = () => send({ type: 'tool_toggle', tool: sw.dataset.tool, enabled: sw.checked });
-  });
+  if (sec === 'tools') wireToolsCard(st);
   showDraftNotice(st);
   focusAfter(st, had);
   addressSection();
@@ -2166,7 +2424,7 @@ function contactsHTML(c) {
   const field = (l, key, label) => '<input type="text" data-contact-field="' + key + '" aria-label="' + label + '" placeholder="' + label + '"' +
     (key === 'channel' ? ' list="contact-channels"' : '') + ' value="' + esc(l[key]) + '">';
   const tick = (l, key, label) => '<label><input type="checkbox" data-contact-field="' + key + '"' + (l[key] ? ' checked' : '') + '> ' + label + '</label>';
-  return '<div class="card" data-contacts><h3>CONTACTS</h3><p>Who the identity can write to, and whose messages may wake it. A person\u2019s first line is tried first, then the next. Mark the lines that are yours as you: your notices arrive on this page, and with \u201cSend my notices to me off the dashboard\u201d on (Chat, under Expert) they go to these lines while no page is open. Changes apply at once.</p>' +
+  return '<div class="card" data-contacts>' + cardHead('CONTACTS', 'Who the identity can write to, whose messages may wake them, and which lines are yours.') + '<p>Who the identity can write to, and whose messages may wake them. A person\u2019s first line is tried first, then the next. Mark the lines that are yours as you: your notices arrive on this page, and with \u201cSend my notices to me off the dashboard\u201d on (Chat, under ' + EXPERT_WORDS + ') they go to these lines while no page is open. Changes apply at once.</p>' +
     '<datalist id="contact-channels">' + installedChannels().map(n => '<option value="' + esc(n) + '"></option>').join('') + '</datalist>' +
     (lines.length ? lines.map((l, i) => '<div class="item" data-contact-line="' + i + '">' +
       field(l, 'name', 'Name') + ' ' + field(l, 'channel', 'Channel') + ' ' + field(l, 'address', 'Address') + ' ' +
@@ -2229,6 +2487,8 @@ function saveSettings(section, collecting = false) {
     ch['plugins.autoload'] = $('cfg-plevel').value;
   } else if (section === 'catalog') {
     ch['plugins.catalog_url'] = $('cfg-caturl').value.trim();
+    const every = num($('cfg-catevery').value);
+    if (every !== ((S.config && S.config.plugins && S.config.plugins.catalog_refresh_minutes) || 60)) ch['plugins.catalog_refresh_minutes'] = every;
   } else if (section === 'plugin_runtime') {
     const mib = id => $(id).value.trim() === '' ? null : num($(id).value) * 1048576;
     ch['plugins.runtime.max_installed_bytes'] = mib('cfg-rt-installed');
@@ -2239,6 +2499,8 @@ function saveSettings(section, collecting = false) {
     ch['plugins.runtime.roots_kept'] = num($('cfg-rt-kept').value);
   } else if (section === 'updates') {
     ch['updates.automatic'] = !!$('cfg-uauto').checked;
+    const bad = collectLimits(ch);
+    if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
   } else if (section.startsWith('grants:')) {
     const id = section.slice('grants:'.length);
     document.querySelectorAll('[data-grant-plugin="' + id.replace(/"/g, '\\"') + '"]').forEach(el => {
@@ -2324,6 +2586,10 @@ function saveSettings(section, collecting = false) {
     ch['agency.prefer_local_for_roles'] = !!$('cfg-plr').checked;
     const bad = collectLimits(ch);
     if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
+  } else if (section === 'tools') {
+    const bad = collectLimits(ch);
+    if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
+    if (!Object.keys(ch).length) { configResult = { kind: 'good', section: section, text: 'Nothing to save \u2014 no setting was changed.' }; return; }
   } else if (section === 'cognition') {
     const bad = collectLimits(ch);
     if (bad) { configResult = { kind: 'bad', section: section, text: bad }; return; }
@@ -2413,17 +2679,11 @@ export function savebarHTML(section, note, more) {
 }
 
 export function settingsConnectionLost() {
-  tokenAsk = '';
-  const reveal = document.querySelector('[data-token-reveal]');
-  if (reveal && !tokenShown) {
-    reveal.disabled = true;
-    reveal.title = 'Reconnect to show access token';
-    reveal.setAttribute('aria-label', reveal.title);
-  }
   mailRepairDisconnected();
   messagesDisconnected();
   let changed = false;
   Object.keys(asking).forEach(k => delete asking[k]);
+  spendAsking = false;
   const lostProv = prov.drop();
   if (lostProv) {
     provResult = { kind: 'bad', text: 'Connection lost before provider confirmation — check its current state after reconnect.' };
@@ -2516,7 +2776,7 @@ export function acceptSettingsConfig(requestID) {
     return !sameSaved(saved, sent);
   });
   if (missed.length) {
-    const labels = { 'speech.speakers': 'Who is heard', 'speech.mode': 'Conversation mode' };
+    const labels = { 'speech.speakers': 'Who is heard', 'speech.mode': 'Conversation mode', 'speech.operator_speakers': 'Your voice' };
     for (const f of HEARD_FIELDS) labels['speech.heard_history.' + f[1]] = 'Heard history (' + f[2] + ')';
     configResult = { kind: 'bad', section: pending.section, text: 'Save could not be verified for ' + missed.map(p => labels[p] || p).join(', ') +
       '. Your edits are kept; review the saved values and try again.' };
@@ -2550,12 +2810,17 @@ export function savedText(section, restartRequired, changes) {
     return 'Active — ' + provider + (dir === 'stt' ? ' transcribed the check.' : ' spoke the check.');
   }
   if (section === 'speech_speakers') return 'Saved — applies to the next words heard.';
+  if (section === 'speech_my_voice') return 'Saved — applies to the next words heard, and to the next change cited.';
   if (section === 'speech_heard') return 'Saved — applies to the next words heard and the next read.';
   if (section === 'contacts') return 'Saved — the contacts are in force now.';
   if (section === 'route') return 'Saved — the name is re-routed on the route owner\'s next pass, within the minute.';
   if (section === 'agency') {
     const when = [...new Set(Object.keys(changes || {}).filter(k => LIMIT_APPLIES[k]).map(k => LIMIT_APPLIES[k]))];
     return 'Saved — role routing applies live to the next role-tagged spawn' + (when.length ? '; ' + when.join('; ') : '') + '.';
+  }
+  if (section === 'tools') {
+    const when = [...new Set(Object.keys(changes || {}).filter(k => LIMIT_APPLIES[k]).map(k => LIMIT_APPLIES[k]))];
+    return 'Saved' + (when.length ? ' \u2014 ' + when.join('; ') : '') + '.';
   }
   if (section === 'cognition') {
     const when = [...new Set(Object.keys(changes || {}).filter(k => k !== 'overrides_digest').map(k => k === 'cognition.morning_brief_at' ? 'the rhythm reads it at its next pass' : cognitionApplies(k)))];

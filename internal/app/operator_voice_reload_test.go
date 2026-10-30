@@ -2,6 +2,8 @@ package app
 
 import (
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 // A VOICE TAKEN OUT OF THE FILE STOPS BEING THE OPERATOR'S AT THE RELOAD.
@@ -28,6 +30,11 @@ func TestAVoiceRemovedInTheFileStopsStandingAtTheReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.noteSpeakerObservation(decodeVoiceFrame(knownUUIDObservation("vs-1", 20, 7, "t1", "quinn-desk", atDesk, "matched")), false)
+	// The operator confirmed these words in the page, so whether they stand
+	// is a question of the voice named alone.
+	if err := a.store.AnnotateTurn(seq, store.AnnotationConfirmed, "ask-1", `{"ask":"ask-1"}`); err != nil {
+		t.Fatal(err)
+	}
 	stands := func() bool {
 		t.Helper()
 		turn, err := a.store.LatestOperatorWord()

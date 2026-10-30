@@ -319,8 +319,12 @@ func TestAFilledVendorFactIsNeverWrittenBack(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Any other fill would take the write-back past an early return on
-		// its own, and the case would prove nothing.
-		if len(reg.lent) != 1 || !reflect.DeepEqual(*reg.lent[reg.Providers[0].Name], tc.only) {
+		// its own, and the case would prove nothing. The vendor facts lent
+		// by name (fillEmbeddedFacts) are lent to every shipped entry and
+		// held to the same take-back; each test of its own proves them.
+		got := *reg.lent[reg.Providers[0].Name]
+		got.facts = nil
+		if len(reg.lent) != 1 || !reflect.DeepEqual(got, tc.only) {
 			t.Fatalf("%s: the file must hold that fill and no other", tc.fact)
 		}
 		if _, err := saveProvidersFile(path, reg); err != nil {

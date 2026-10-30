@@ -4,7 +4,7 @@ let swapped = {};
 
 export function onOverlayChanged(token, paths) {
   if (typeof token !== 'number' || !Array.isArray(paths)) return;
-  if (location.pathname.startsWith('/shipped/')) return;
+  if (location.pathname.startsWith('/shipped/') || location.pathname.startsWith('/plain/')) return;
   if (token <= lastToken) return;
   lastToken = token;
   let needsReload = false;
@@ -84,6 +84,11 @@ function saveDraft() {
   } catch (err) {}
 }
 function draftSafeReload() { saveDraft(); location.reload(); }
+
+export function reloadForTheOverlay() {
+  if (location.pathname.startsWith('/plain/')) return;
+  reloadWhenFree();
+}
 
 export function restoreDraft() {
   const ta = document.getElementById('msg-input'); if (!ta) return;

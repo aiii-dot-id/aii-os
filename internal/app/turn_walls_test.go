@@ -3,6 +3,8 @@ package app
 import (
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 // A CONTINUED LEG ENDS AT THE OPERATOR'S WALL. Set at the door to one
@@ -12,11 +14,15 @@ func TestAContinuedLegEndsAtTheOperatorsWall(t *testing.T) {
 	a, _ := dispatchApp(t)
 	t.Cleanup(func() { stopApp(t, a) })
 	// This test measures the wall and its cut-short notice, independently of
-	// the separately tested bounded timeout recovery.
-	off := false
-	a.cfgMu.Lock()
-	a.cfg.Agency.TurnContinuation = &off
-	a.cfgMu.Unlock()
+	// the separately tested bounded timeout recovery: the chain is spent, so
+	// the cut leg is not continued. Continuation stays on, and the leg's
+	// session is the active one, or the leg would stand down before asking.
+	a.turn.mu.Lock()
+	a.turn.contChain = limits.DefaultContinuations
+	a.turn.mu.Unlock()
+	if err := a.store.StartWorkSession(t.Context(), "ws_wall", "walled work"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.applyConfigChange(map[string]any{"agency.continuation_wall_seconds": float64(1)}); err != nil {
 		t.Fatalf("the door refused a wall of one second: %v", err)
 	}
@@ -38,7 +44,7 @@ func TestAContinuedLegEndsAtTheOperatorsWall(t *testing.T) {
 	}
 	// Cut during its first request, before a word: the operator is told
 	// it was cut short, and by what (row 9.51).
-	if got, want := outboxReply(t, a, "continuation_1_"), "The next part of ws_wall was cut short: it reached the wall of a continued turn (agency.continuation_wall_seconds, 1 s)."; got != want {
+	if got, want := outboxReply(t, a, "continuation_1_"), "The next part of walled work was cut short: it reached the wall of a continued turn (agency.continuation_wall_seconds, 1 s)."; got != want {
 		t.Errorf("the operator is told %q, want %q", got, want)
 	}
 }

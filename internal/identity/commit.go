@@ -16,9 +16,9 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
-const BeliefPromotionRule = "belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn, a dream's note as the experiences its dream read, so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on."
+const BeliefPromotionRule = "belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted; so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on."
 
-const OperatorWordRule = "relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them: an enrolled voice, matched to the speaker UUID they named as their own. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place."
+const OperatorWordRule = "relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (an enrolled voice, matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place."
 
 var outcomeForm = regexp.MustCompile(`^(served|partial|unserved):\s*\S.*`)
 
@@ -33,6 +33,7 @@ type commitStore interface {
 	TurnAnnotations(kind string, seqs []uint64) (map[uint64]string, error)
 	AddOutboxNoticeOnce(id, toRole, toIdentity, content string, seq *uint64) (bool, error)
 	EntityExists(id string) (bool, error)
+	GetBelief(id string) (*store.Belief, error)
 }
 
 var relIDPattern = regexp.MustCompile(`^rel_[a-z0-9][a-z0-9_-]{7,63}$`)
@@ -59,9 +60,6 @@ func requireEvidenceDeclared(variant string, args map[string]any) error {
 }
 
 func (e *Engine) prepareBeliefOrigins(args map[string]any) error {
-	if ok, _ := args["duplicate_ok"].(bool); ok {
-		return fmt.Errorf("duplicate_ok applies to notes, not beliefs; add evidence to the existing belief or state a real distinction")
-	}
 	if _, hasNone := args["evidence"]; hasNone {
 		return fmt.Errorf("evidence is not a belief origin; use evidence_refs[] naming real experiences or beliefs")
 	}
@@ -117,7 +115,7 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		return e.verbSkill(ctx, withAction(args, "propose"))
 	}
 	if e.inSafeMode() {
-		return "", fmt.Errorf("commit refused: I am in safe mode — %s. Nothing is written to my record while SAFE holds.", e.safeModeReason())
+		return "", e.refusedHeld("commit")
 	}
 	variant, _ := args["variant"].(string)
 	if variant == "" {
@@ -155,9 +153,6 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		eventType = ledger.EventBeliefPromote
 		targetRing = 2
 
-		if subID, _ := ctx.Value(SubagentWorkSession{}).(string); subID != "" {
-			return "", fmt.Errorf("a worker seat cannot promote to Ring 2 — who the identity is is the primary seat's to author; report the evidence and let the primary seat promote")
-		}
 		promoteID, _ := args["id"].(string)
 		if promoteID == "" {
 			return "", fmt.Errorf("belief.promote requires id")
@@ -183,15 +178,12 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		}
 	case "belief.attest":
 
-		return "", fmt.Errorf("belief.attest was removed: attest via note (testimony) or edge.create (evidence)")
+		return "", rejectf("commit.variant", "no effect — belief.attest was removed: attest via note (testimony) or edge.create (evidence)")
 	case "relationship.upsert":
 
 		eventType = ledger.EventRelationshipUpsert
 		targetRing = 1
 
-		if subID, _ := ctx.Value(SubagentWorkSession{}).(string); subID != "" {
-			return "", fmt.Errorf("a worker seat cannot author Ring 1 — the charter is the primary seat's to say to the operator and to record once affirmed")
-		}
 		relID, _ := args["id"].(string)
 		if relID == "" {
 			return "", fmt.Errorf("relationship.upsert requires an explicit id — the operator's affirmation cites it")
@@ -217,11 +209,22 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 
 			return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it: %v. A spoken word is cited only when the speech engine identified its speaker as your primary human operator: an enrolled voice, matched to the speaker UUID they named as their own. Ask them to type their affirmation, then record it", err)
 		}
+		var unconfirmed *store.UnconfirmedSpeechError
+		if errors.As(err, &unconfirmed) {
+
+			if e.confirmWord == nil {
+				return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it yet: %v. A spoken word is cited once they confirm in their page that it is theirs, and no page can ask them here. Ask them to type their affirmation, then record it", err)
+			}
+			if cerr := e.confirmWord(unconfirmed.TurnSeq); cerr != nil {
+				return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it yet: %v. A spoken word is cited once they confirm in their page that it is theirs, and the card that asks them could not be put on their page (%v). Ask them to type their affirmation, then record it", err, cerr)
+			}
+			return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it yet: %v. A spoken word is cited once they confirm in their page that it is theirs: a card on their page now shows them those words to confirm. Record the change again once they have confirmed; if they answer no, ask them to type their affirmation", err)
+		}
 		if err != nil {
 			return "", fmt.Errorf("ring 1 authority check failed: %w", err)
 		}
 		if turn == nil {
-			return "", fmt.Errorf("Ring 1 requires the operator's own word — no turn they typed or spoke to you is on record (the room's speech, grades and the host's lines do not count); say the change to them and wait for their reply")
+			return "", fmt.Errorf("Ring 1 requires the operator's own word — no turn they typed or spoke to you is on record (the room's speech, grades, the buttons they press on your questions and the host's lines do not count); say the change to them and wait for their reply")
 		}
 		args["operator_approval_excerpt"] = turn.Content
 		args["operator_approval_turn"] = turn.TurnSeq
@@ -309,6 +312,8 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 				args["content"] = pos
 			}
 		}
+
+		delete(args, "_positional")
 		if content, _ := args["content"].(string); content == "" {
 			return "", fmt.Errorf("working_style.upsert requires content")
 		}
@@ -405,7 +410,7 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 
 		heard := e.heardAs(ring1.word.TurnSeq)
 
-		role, name, theirCharter, unread := ring1.role, ring1.name, false, ""
+		role, name, theirCharter, listed, unread := ring1.role, ring1.name, false, false, ""
 		rel, isRing1, err := e.store.RelationshipAsHeld(ring1.id)
 		if err == nil && rel == nil {
 			err = fmt.Errorf("none is held under that id")
@@ -414,8 +419,9 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 			unread = fmt.Sprintf(" The relationship as it now stands could not be read (%v): the name and the role are the entry's own, and it may be your charter.", err)
 		} else {
 			role, name, theirCharter = rel.CounterpartRole, rel.CounterpartName, isRing1
+			listed = !isRing1 && rel.SupersededBy == ""
 		}
-		notice := ring1Notice(theirCharter, role, name, ring1.id, evt.Seq, ring1.word.TurnSeq, excerpt, heard+unread, ring1.charter)
+		notice := ring1Notice(theirCharter, listed, role, name, ring1.id, evt.Seq, ring1.word.TurnSeq, excerpt, heard+unread, ring1.charter)
 		result := fmt.Sprintf("Committed: %s (seq %d), citing the operator's words at turn %d as the affirmation: %q%s", variant, evt.Seq, ring1.word.TurnSeq, excerpt, heard)
 		if _, err := e.store.AddOutboxNoticeOnce(fmt.Sprintf("ring1_%d", evt.Seq), "operator", "", notice, &evt.Seq); err != nil {
 			result += fmt.Sprintf("; the notice of it to the operator could not be written (%v): tell them yourself", err)
@@ -440,7 +446,7 @@ func (e *Engine) heardAs(turnSeq uint64) string {
 	return fmt.Sprintf(" Those words were spoken, and %d correction rule(s) changed them before they were recorded; the recognizer heard: %q.", v.Corrections, excerptOf(v.RecognizedText, ring1ExcerptRunes))
 }
 
-func ring1Notice(theirCharter bool, role, name, id string, seq, turn uint64, excerpt, heard, text string) string {
+func ring1Notice(theirCharter, listed bool, role, name, id string, seq, turn uint64, excerpt, heard, text string) string {
 	named := "no name given"
 	if name != "" {
 		named = fmt.Sprintf("name %q", excerptOf(name, ring1ExcerptRunes))
@@ -455,6 +461,9 @@ func ring1Notice(theirCharter bool, role, name, id string, seq, turn uint64, exc
 		}
 		what = fmt.Sprintf("a relationship with %s (role %q; %s)", with, role, id)
 		stands, whole = "the relationship", fmt.Sprintf("record %d of the signed record", seq)
+		if listed {
+			whole = "on the Identity page, under OTHER RELATIONSHIPS — RING 1"
+		}
 	}
 	return fmt.Sprintf("[ring 1] The identity recorded %s, citing your words at turn %d as your affirmation: %q.%s %s If those words were not your affirmation, say so: the record keeps the citation, and %s stands on your word alone.",
 		what, turn, excerpt, heard, recordedText(text, whole), stands)

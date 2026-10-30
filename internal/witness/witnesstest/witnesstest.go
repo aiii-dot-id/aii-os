@@ -72,6 +72,12 @@ func (p *Platform) WriteEnv(t testing.TB, dir string) string {
 
 func (p *Platform) SignManifest(t testing.TB, witnessEnv *witness.PublicKeyEnvelope) []byte {
 	t.Helper()
+	now := time.Now().UTC()
+	return p.SignManifestWindow(t, witnessEnv, now.Add(-time.Hour), now.Add(24*time.Hour))
+}
+
+func (p *Platform) SignManifestWindow(t testing.TB, witnessEnv *witness.PublicKeyEnvelope, notBefore, expires time.Time) []byte {
+	t.Helper()
 	envRaw, err := json.Marshal(witnessEnv)
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +94,8 @@ func (p *Platform) SignManifest(t testing.TB, witnessEnv *witness.PublicKeyEnvel
 		"key_id":            witnessEnv.KeyID,
 		"signature_profile": witness.ProfileRoot,
 		"created_at":        now.Format(time.RFC3339),
-		"not_before":        now.Add(-time.Hour).Format(time.RFC3339),
-		"expires_at":        now.Add(24 * time.Hour).Format(time.RFC3339),
+		"not_before":        notBefore.UTC().Format(time.RFC3339),
+		"expires_at":        expires.UTC().Format(time.RFC3339),
 		"critical":          true,
 	}
 	raw, err := json.Marshal(payload)
@@ -135,7 +141,11 @@ func (p *Platform) SignManifest(t testing.TB, witnessEnv *witness.PublicKeyEnvel
 	return out
 }
 
-const rollbackOrFork = "witness bookmark rollback or fork"
+const (
+	rollbackOrFork = "witness bookmark rollback or fork"
+	codeRollback   = "rollback"
+	codeFork       = "fork"
+)
 
 type row struct {
 	ordinal int64
@@ -158,18 +168,35 @@ type Witness struct {
 
 	refuseStatus int
 	refuseBody   string
+	refuseJSON   bool
 }
 
 func (w *Witness) Refuses(status int, body string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.refuseStatus, w.refuseBody = status, body
+	w.refuseStatus, w.refuseBody, w.refuseJSON = status, body, false
+}
+
+func (w *Witness) RefusesWithCode(status int, code, message string) {
+	body, err := json.Marshal(map[string]string{"error": message, "code": code})
+	if err != nil {
+		panic("witnesstest: a refusal of two strings always marshals: " + err.Error())
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.refuseStatus, w.refuseBody, w.refuseJSON = status, string(body), true
 }
 
 func (w *Witness) StatusAsks() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.statuses
+}
+
+func (w *Witness) BookmarksSeen() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.Bookmarks
 }
 
 func (w *Witness) Slowly(fn func()) {
@@ -214,12 +241,15 @@ func NewWitness(t testing.TB, p *Platform) *Witness {
 		writeJSON(rw, env)
 	})
 	mux.HandleFunc("/witness/pubkey/manifest", func(rw http.ResponseWriter, r *http.Request) {
-		if w.manifest == nil {
+		w.mu.Lock()
+		manifest := w.manifest
+		w.mu.Unlock()
+		if manifest == nil {
 			http.Error(rw, "no manifest", http.StatusNotFound)
 			return
 		}
 		rw.Header().Set("Content-Type", "application/json")
-		_, _ = rw.Write(w.manifest)
+		_, _ = rw.Write(manifest)
 	})
 	mux.HandleFunc("/status", func(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Lock()
@@ -231,6 +261,12 @@ func NewWitness(t testing.TB, p *Platform) *Witness {
 	w.server = httptest.NewServer(mux)
 	t.Cleanup(w.server.Close)
 	return w
+}
+
+func (w *Witness) ServesManifest(raw []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.manifest = raw
 }
 
 func (w *Witness) URL() string { return w.server.URL }
@@ -267,6 +303,12 @@ func (w *Witness) handleBookmark(rw http.ResponseWriter, r *http.Request) {
 	defer w.mu.Unlock()
 	w.Bookmarks++
 	if w.refuseStatus != 0 {
+		if w.refuseJSON {
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(w.refuseStatus)
+			_, _ = rw.Write([]byte(w.refuseBody))
+			return
+		}
 		http.Error(rw, w.refuseBody, w.refuseStatus)
 		return
 	}
@@ -312,8 +354,13 @@ func (w *Witness) handleBookmark(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.LedgerOrdinal <= st.ordinal {
+
+		code := codeRollback
+		if req.LedgerOrdinal == st.ordinal {
+			code = codeFork
+		}
 		rw.WriteHeader(http.StatusConflict)
-		writeJSON(rw, map[string]string{"error": rollbackOrFork})
+		writeJSON(rw, map[string]any{"error": rollbackOrFork, "code": code, "receipt": st.receipt})
 		return
 	}
 	receipt := w.sign(req, st.ordinal, st.hash)

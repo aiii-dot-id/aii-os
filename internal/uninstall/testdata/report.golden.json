@@ -5,7 +5,7 @@
       "slot": "identity-0",
       "path": "{home}/.aii/identity-0",
       "real_path": "{home}/.aii/identity-0",
-      "name": "Vega",
+      "name": "Example",
       "registered": true,
       "running": true
     },
@@ -40,7 +40,7 @@
       "what": "identity",
       "path": "{home}/.aii/identity-0",
       "real_path": "{home}/.aii/identity-0",
-      "name": "Vega",
+      "name": "Example",
       "why": "an identity's slot is never touched: its record, its key and its data stay, and aii register runs it again"
     },
     {

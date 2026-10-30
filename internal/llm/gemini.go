@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,7 +43,14 @@ type geminiPart struct {
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 
+	InlineData *geminiBlob `json:"inlineData,omitempty"`
+
 	plain bool
+}
+
+type geminiBlob struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFunctionCall struct {
@@ -101,6 +109,7 @@ type geminiResponse struct {
 	} `json:"promptFeedback"`
 	UsageMetadata *geminiUsage `json:"usageMetadata"`
 	ResponseID    string       `json:"responseId"`
+	ModelVersion  reportedName `json:"modelVersion"`
 	Error         *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -235,8 +244,19 @@ func geminiContents(messages []Message) (system string, contents []geminiContent
 			}
 			add("user", geminiPart{FunctionResponse: &geminiFunctionResponse{ID: fn.id, Name: fn.name, Response: map[string]string{"output": m.Content}}})
 		default:
+
+			var parts []geminiPart
+			for _, img := range m.Images {
+				if !Writes(DialectGemini, img.MediaType) {
+					return "", nil, unwritten(DialectGemini, img)
+				}
+				parts = append(parts, geminiPart{InlineData: &geminiBlob{MimeType: img.MediaType, Data: base64.StdEncoding.EncodeToString(img.Data)}})
+			}
 			if m.Content != "" {
-				add("user", geminiText(m.Content))
+				parts = append(parts, geminiText(m.Content))
+			}
+			if len(parts) > 0 {
+				add("user", parts...)
 			}
 		}
 	}
@@ -333,6 +353,7 @@ type geminiTurn struct {
 	blocked bool
 	usage   *geminiUsage
 	id      string
+	model   string
 }
 
 func (t *geminiTurn) done() bool { return t.finish != "" || t.blocked }
@@ -340,6 +361,9 @@ func (t *geminiTurn) done() bool { return t.finish != "" || t.blocked }
 func (t *geminiTurn) add(r geminiResponse) {
 	if r.ResponseID != "" {
 		t.id = r.ResponseID
+	}
+	if r.ModelVersion != "" {
+		t.model = string(r.ModelVersion)
 	}
 	if r.UsageMetadata != nil {
 		t.usage = r.UsageMetadata
@@ -438,7 +462,7 @@ func (t *geminiTurn) response() (*Response, error) {
 	}
 	return &Response{
 		Choices: []Choice{{Message: msg, FinishReason: finish, ReasoningAccount: strings.Join(slices.DeleteFunc(account, blank), "\n\n")}},
-		Usage:   usage, ID: t.id,
+		Usage:   usage, ID: t.id, ModelID: t.model,
 	}, nil
 }
 
@@ -478,6 +502,7 @@ func readGeminiStream(r io.Reader) (*Response, error) {
 	sc.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
 	var turn geminiTurn
 	var provider string
+	generated := false
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -492,6 +517,9 @@ func readGeminiStream(r io.Reader) (*Response, error) {
 			return nil, fmt.Errorf("decode stream event: %w", err)
 		}
 		if event.Error != nil {
+			if provider == "" {
+				generated = len(turn.parts) > 0
+			}
 			provider = event.Error.Message
 			if provider == "" {
 				provider = payload
@@ -507,7 +535,7 @@ func readGeminiStream(r io.Reader) (*Response, error) {
 		return nil, fmt.Errorf("API response stream exceeds %d bytes", maxResponseBytes)
 	}
 	if provider != "" {
-		return nil, fmt.Errorf("provider reported: %.400s", provider)
+		return nil, &StreamFailure{Text: provider, Generated: generated}
 	}
 	if !turn.done() {
 		return nil, fmt.Errorf("response stream ended without a finish reason after %d part(s) — truncated, not complete", len(turn.parts))

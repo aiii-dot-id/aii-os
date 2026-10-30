@@ -80,8 +80,8 @@ func TestDegenerateEmissionNudgedThenEnded(t *testing.T) {
 	if !strings.Contains(second[len(second)-1].Content, "degenerated into repetition") {
 		t.Fatalf("the corrective note did not reach the second call: %q", second[len(second)-1].Content)
 	}
-	if !strings.Contains(res.Spoken, "detected in the model's output twice") {
-		t.Fatalf("the second strike did not end the turn with a declaration: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "detected in the model's output twice") {
+		t.Fatalf("the second strike did not end the turn with a declaration: %q", res.Said())
 	}
 }
 
@@ -95,7 +95,7 @@ func TestDegenerateFinalAnswerIsMarked(t *testing.T) {
 	if len(client.seen) != 1 {
 		t.Fatalf("a degenerate final answer must not retry: %d calls", len(client.seen))
 	}
-	if !strings.Contains(res.Spoken, "treat its repeating tail as noise") {
-		t.Fatalf("the reader was not warned: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "treat its repeating tail as noise") {
+		t.Fatalf("the reader was not warned: %q", res.Said())
 	}
 }

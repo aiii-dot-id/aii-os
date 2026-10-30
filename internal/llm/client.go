@@ -32,6 +32,8 @@ type Client struct {
 	maxOutputTokens     int
 	dialect             Dialect
 
+	subscription bool
+
 	refusals   *ToolRefusals
 	refusalKey string
 
@@ -75,6 +77,15 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("API returned %d: %s", e.StatusCode, e.Body)
+}
+
+type StreamFailure struct {
+	Text      string
+	Generated bool
+}
+
+func (e *StreamFailure) Error() string {
+	return fmt.Sprintf("provider reported: %.400s", e.Text)
 }
 
 func (e *HTTPError) AuthFailure() bool {
@@ -422,6 +433,7 @@ func New(cfg *ClientConfig) *Client {
 		model:            cfg.Model,
 		maxInputTokens:   cfg.MaxInputTokens,
 		dialect:          DialectFor(cfg.Provider),
+		subscription:     cfg.Provider == "chatgpt",
 		oauthBillingText: cfg.AnthropicOAuthBillingText,
 		claudeCode:       cloneClaudeProfile(cfg.ClaudeCode),
 		thinkingBudget:   cfg.ThinkingBudget,
@@ -487,9 +499,21 @@ type wireMessage struct {
 }
 
 type wirePart struct {
-	Type     string        `json:"type"`
-	Text     string        `json:"text,omitempty"`
-	ImageURL *wireImageURL `json:"image_url,omitempty"`
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	ImageURL   *wireImageURL   `json:"image_url,omitempty"`
+	File       *wireFile       `json:"file,omitempty"`
+	InputAudio *wireInputAudio `json:"input_audio,omitempty"`
+}
+
+type wireFile struct {
+	Filename string `json:"filename"`
+	FileData string `json:"file_data"`
+}
+
+type wireInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
 }
 
 type wireImageURL struct {
@@ -503,7 +527,20 @@ func (w wireMessage) MarshalJSON() ([]byte, error) {
 	}
 	parts := []wirePart{{Type: "text", Text: w.Content}}
 	for _, img := range w.Images {
-		parts = append(parts, wirePart{Type: "image_url", ImageURL: &wireImageURL{URL: imageDataURL(img)}})
+		switch {
+		case !Writes(DialectOpenAI, img.MediaType):
+			return nil, unwritten(DialectOpenAI, img)
+		case img.MediaType == "application/pdf":
+			parts = append(parts, wirePart{Type: "file", File: &wireFile{Filename: img.Name, FileData: imageDataURL(img)}})
+		case strings.HasPrefix(img.MediaType, "audio/"):
+			format := "wav"
+			if img.MediaType == "audio/mpeg" {
+				format = "mp3"
+			}
+			parts = append(parts, wirePart{Type: "input_audio", InputAudio: &wireInputAudio{Data: base64.StdEncoding.EncodeToString(img.Data), Format: format}})
+		default:
+			parts = append(parts, wirePart{Type: "image_url", ImageURL: &wireImageURL{URL: imageDataURL(img)}})
+		}
 	}
 	return json.Marshal(struct {
 		Role    string     `json:"role"`
@@ -617,12 +654,12 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 	defer func() {
 		c.warnIfUnderCounted(admittedAt, c.inputCeiling(ctx), resp)
 		if resp != nil {
-			resp.ModelID = c.model
+			resp.ModelID = c.answeredModel(resp.ModelID)
 			resp.Duration = time.Since(started)
 			resp.Usage.UnknownAttempts += attempts.unknown
 			if resp.Usage.Problem == wire.UsageInvalid {
 
-				warnInconsistentUsage(c.refusalKey, providerLabel(c.dialect), c.model, resp.Usage.Refused)
+				warnInconsistentUsage(c.refusalKey, c.providerLabel(), c.model, resp.Usage.Refused)
 			}
 			if (c.cache != nil && c.cache.Diagnostics) || resp.Usage.Problem == wire.UsageInvalid {
 				logsink.Debug("llm.return", "cache receipt: model=%q request_id=%q response_id=%q elapsed_ms=%d input=%d read=%d write=%d usage_reported=%t problem=%q diagnostics=%q", c.model, resp.RequestID, resp.ID, resp.Duration.Milliseconds(), resp.Usage.PromptTokens, resp.Usage.CachedPromptTokens, resp.Usage.CacheWriteTokens, resp.Usage.Reported, resp.Usage.Problem, cacheDiagnosticState(resp.Diagnostics, opts.PreviousResponseID))
@@ -634,7 +671,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 				logsink.Info("llm.refusal", "call abandoned (caller ended it): %v", ctxErr)
 			} else {
 				err = c.refusedTool(err, opts.Tools)
-				logsink.Error("llm.error", "call FAILED (%s %s): %s", providerLabel(c.dialect), c.model, clip(err.Error(), 500))
+				logsink.Error("llm.error", "call FAILED (%s %s): %s", c.providerLabel(), c.model, clip(err.Error(), 500))
 			}
 			unknown := attempts.unknown
 			if attempts.lastUnknown && unknown > 0 {
@@ -664,26 +701,45 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 
 	callID := newCallID()
 	ctx = withCallID(ctx, callID)
+	for retry := 1; ; retry++ {
+		resp, err = c.send(ctx, messages, opts)
+		if !c.askAgain(ctx, err, retry) {
+			break
+		}
+
+		attempts.unknown++
+	}
+	if resp != nil {
+		resp.CallID = callID
+	}
+	return resp, err
+}
+
+func (c *Client) askAgain(ctx context.Context, err error, retry int) bool {
+	var failed *StreamFailure
+	if !errors.As(err, &failed) || failed.Generated || retry > c.retries || ctx.Err() != nil {
+		return false
+	}
+	pause := backoffFor(c.retryBackoff, retry+1, true)
+	logsink.Warn("llm.error", "retry %d/%d in %s after: %v", retry, c.retries, pause, err)
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(pause):
+		return true
+	}
+}
+
+func (c *Client) send(ctx context.Context, messages []Message, opts ChatOptions) (*Response, error) {
 	switch c.dialect {
 	case DialectResponses:
-		r, rerr := c.chatGPTResponses(ctx, messages, opts)
-		if r != nil {
-			r.CallID = callID
-		}
-		return r, rerr
+		return c.chatGPTResponses(ctx, messages, opts)
 	case DialectAnthropic:
-		r, rerr := c.chatAnthropic(ctx, messages, opts)
-		if r != nil {
-			r.CallID = callID
-		}
-		return r, rerr
+		return c.chatAnthropic(ctx, messages, opts)
 	case DialectGemini:
-		r, rerr := c.chatGemini(ctx, messages, opts)
-		if r != nil {
-			r.CallID = callID
-		}
-		return r, rerr
+		return c.chatGemini(ctx, messages, opts)
 	}
+	tools := opts.Tools
 	toolChoice := ""
 	if opts.DisableTools {
 		toolChoice = "none"
@@ -724,10 +780,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions)
 		}
 	}
 
-	resp, err = c.chatOpenAI(ctx, body)
-	if resp != nil {
-		resp.CallID = callID
-	}
+	resp, err := c.chatOpenAI(ctx, body)
 	return c.withReplay(resp), err
 }
 
@@ -827,7 +880,7 @@ func (c *Client) warnIfUnderCounted(admittedAt, ceiling int, resp *Response) {
 		return
 	}
 	logsink.Warn("llm.budget", "the provider counted %d input tokens for a request admitted at an estimate of %d (%s %s): the tokenizer-free estimate UNDER-counts for this model, so the input ceiling of %d is not protecting it — lower the model's input ceiling in config by at least that ratio",
-		resp.Usage.PromptTokens, admittedAt, providerLabel(c.dialect), c.model, ceiling)
+		resp.Usage.PromptTokens, admittedAt, c.providerLabel(), c.model, ceiling)
 }
 
 func simpleMessages(ctx context.Context, systemPrompt, userMessage string) []Message {
@@ -973,14 +1026,14 @@ func authFailureCode(code string) bool {
 	}
 }
 
-func providerLabel(d Dialect) string {
-	switch d {
-	case DialectOpenAI:
+func (c *Client) providerLabel() string {
+	switch {
+	case c.dialect == DialectOpenAI:
 		return "openai-compatible"
-	case DialectResponses:
+	case c.subscription:
 		return "chatgpt"
 	default:
-		return string(d)
+		return string(c.dialect)
 	}
 }
 

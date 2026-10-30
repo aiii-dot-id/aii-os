@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,6 +69,9 @@ func (a *App) readWorkState(ctx context.Context) (string, error) {
 		if card := resumeCardFor(ws); card != "" {
 			parts = append(parts, card)
 		}
+		if line := a.checkCardLine(ws); line != "" {
+			parts = append(parts, line)
+		}
 		parts = append(parts, sessionNotesLine(ws.ID))
 		return strings.Join(parts, "\n\n"), nil
 	}
@@ -129,10 +133,16 @@ func (a *App) buildWorkState() (string, error) {
 		if card := resumeCardFor(ws); card != "" {
 			parts = append(parts, card)
 		}
+		if line := a.checkCardLine(ws); line != "" {
+			parts = append(parts, line)
+		}
 		parts = append(parts, sessionNotesLine(ws.ID))
 
 		if line := a.familyCardLine(a.lifetime(), ws); line != "" {
 			parts = append(parts, line)
+		}
+		if block := a.workCardBeliefs(a.lifetime(), ws); block != "" {
+			parts = append(parts, block)
 		}
 	}
 
@@ -170,6 +180,10 @@ func (a *App) buildWorkState() (string, error) {
 	}
 	return strings.Join(parts, "\n\n"), nil
 }
+
+const rhythmWindowHours = 48
+
+const rhythmHeading = "### Rhythm — last %dh: %d turns, %d calls, %d%% read-only, %d spawns, %d harvests"
 
 const toolDigestTools = 5
 
@@ -235,17 +249,18 @@ func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string
 	}
 
 	if a.store != nil {
-		if turns, calls, roPct, spawns, harvests, batchCenti, err := a.store.RhythmStats(48 * time.Hour); err != nil {
+		hours, window := rhythmWindowHours, rhythmWindowHours*time.Hour
+		if turns, calls, roPct, spawns, harvests, batchCenti, err := a.store.RhythmStats(window); err != nil {
 
 			logsink.Warn("prompt.error", "rhythm stats unreadable this turn: %v", err)
 		} else if turns > 0 {
-			line := fmt.Sprintf("### Rhythm — last 48h: %d turns, %d calls, %d%% read-only, %d spawns, %d harvests", turns, calls, roPct, spawns, harvests)
+			line := fmt.Sprintf(rhythmHeading, hours, turns, calls, roPct, spawns, harvests)
 
 			if batchCenti > 0 {
 				line += fmt.Sprintf(", %d.%02d calls per model round", batchCenti/100, batchCenti%100)
 			}
 
-			if calibration, cerr := a.store.PlanCalibration(48 * time.Hour); cerr != nil {
+			if calibration, cerr := a.store.PlanCalibration(window); cerr != nil {
 
 				logsink.Warn("prompt.error", "plan calibration unreadable this turn: %v", cerr)
 			} else {
@@ -257,14 +272,14 @@ func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string
 				}
 			}
 
-			if done, failedN, truncN, terr := a.store.ToolResultStats(48 * time.Hour); terr != nil {
+			if done, failedN, truncN, terr := a.store.ToolResultStats(window); terr != nil {
 
 				logsink.Warn("prompt.error", "tool result stats unreadable this turn: %v", terr)
 			} else if done > 0 && (failedN > 0 || truncN > 0) {
 				line += fmt.Sprintf("\nOf the last %d tool calls, %d failed and %d were truncated.", done, failedN, truncN)
 			}
 
-			if digest, derr := a.store.ToolOutcomeDigest(48*time.Hour, toolDigestTools); derr != nil {
+			if digest, derr := a.store.ToolOutcomeDigest(window, toolDigestTools); derr != nil {
 				logsink.Warn("prompt.error", "tool outcome digest unreadable this turn: %v", derr)
 			} else if len(digest) > 0 {
 				line += "\nBy tool, calls that did not simply work: " + formatToolDigest(digest)
@@ -365,20 +380,45 @@ func (a *App) buildTurnFacts(ctx context.Context, events bool, current ...string
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func (a *App) safeTurnSection() string {
+func (a *App) safeTurnSection() string { return a.readSafe().section }
+
+type safeReading struct {
+	holds   bool
+	section string
+
+	waiting bool
+}
+
+func (a *App) readSafe() safeReading {
 	t, detail, safe := a.safeCause()
-	if !safe || a.rings == nil || !a.rings.Ring0IsConstitution() {
-		return ""
+	r := safeReading{holds: safe, waiting: safe && safePostures[t].degraded}
+	if safe && a.rings != nil && a.rings.Ring0IsConstitution() {
+		r.section = safeTurnNotice(t, detail)
 	}
-	return safeTurnNotice(t, detail)
+	return r
+}
+
+func (a *App) composeTurn(safe safeReading, workState, facts string, reserve int, contextSections []prompt.Section) (*prompt.Prompt, error) {
+	if safe.holds {
+		return a.composer.ComposeSafeTurn(workState, facts, safe.section, safe.waiting, reserve, contextSections)
+	}
+	return a.composer.ComposeTurnWithContext(workState, facts, "", reserve, contextSections)
+}
+
+func (a *App) composeLeg(safe safeReading, budget, reserve int, folded bool, contextSections []prompt.Section) (*prompt.Prompt, error) {
+	if safe.holds {
+		return a.composer.ComposeSafeWithin(budget, "", safe.section, safe.waiting, reserve, folded, contextSections)
+	}
+	return a.composer.ComposeChildWithContext(budget, reserve, folded, contextSections)
 }
 
 func (a *App) diagnosticPromptRead(parts *[]string, name string, cause error) error {
-	if _, safe := a.SafeMode(); !safe {
+	h, safe := a.Hold()
+	if !safe {
 		return fmt.Errorf("load %s: %w", name, cause)
 	}
 	logsink.Warn("prompt.error", "SAFE diagnostic %s unavailable: %v", name, cause)
-	*parts = append(*parts, "### SAFE diagnostic: "+name+"\n(unavailable in this read-only view; the runtime log names the failed read. Do not infer that the retained data is empty or that work succeeded.)")
+	*parts = append(*parts, "### "+h.Name()+" diagnostic: "+name+"\n(unavailable in this read-only view; the runtime log names the failed read. Do not infer that the retained data is empty or that work succeeded.)")
 	return nil
 }
 
@@ -512,11 +552,15 @@ func (a *App) promptReserve(current llm.Message, omitted int) (int, error) {
 }
 
 func (a *App) promptReserveFor(ctx context.Context, current llm.Message, omitted int) (int, error) {
+	return a.promptReserveForIn(ctx, a.readSafe().holds, current, omitted)
+}
+
+func (a *App) promptReserveForIn(ctx context.Context, safe bool, current llm.Message, omitted int) (int, error) {
 	if omitted < 0 {
 		omitted = 0
 	}
 
-	defs, err := conversation.FilterRequestTools(ctx, a.buildToolDefinitions())
+	defs, err := conversation.FilterRequestTools(ctx, a.buildToolDefinitionsIn(safe))
 	if err != nil {
 		return 0, err
 	}
@@ -545,7 +589,7 @@ func safeInterruptions(turns []identity.SafeTurn) map[string][]string {
 	var marks map[string][]string
 	for _, t := range turns {
 		r := t.Record
-		if r.Role != interaction.System || r.Kind != interaction.Notice || (r.Details.ReasonCode != "interrupted" && r.Details.ReasonCode != store.ReasonNextPartNotRun) || r.RelatedID == "" {
+		if r.Role != interaction.System || r.Kind != interaction.Notice || !slices.Contains(store.BesideReasons, r.Details.ReasonCode) || r.RelatedID == "" {
 			continue
 		}
 		if marks == nil {

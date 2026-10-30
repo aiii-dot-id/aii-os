@@ -1,5 +1,5 @@
 import { S } from '../state.js';
-import { esc } from '../util.js';
+import { cardHead, esc } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
@@ -96,23 +96,23 @@ function noticeHTML(n) {
 
 export function messagesHTML() {
   const busy = pending.waiting() ? ' disabled' : '';
-  let html = '<div class="card" data-messages><h3>MESSAGES</h3><p>What came in on the channels and what the identity sent to people. Reading this page changes nothing.</p>' +
+  let html = '<div class="card" data-messages>' + cardHead('MESSAGES', 'Reads what came in on the channels and what the identity sent to people; reading changes nothing.') + '<p>What came in on the channels and what the identity sent to people. Reading this page changes nothing.</p>' +
     '<p data-messages-notice data-announce>' + esc(notice) + '</p><button class="btn" data-messages-refresh' + busy + '>Refresh</button></div>';
   if (!state) return html;
   const arrivals = state.arrivals || [], open = state.open || [], delivered = state.delivered || [];
-  html += '<div class="card" data-arrivals><h3>ARRIVALS</h3>' +
+  html += '<div class="card" data-arrivals>' + cardHead('ARRIVALS', 'Messages that came in on the channels: who sent each, and whether it woke the identity.') +
     (arrivals.length ? arrivals.map(arrivalHTML).join('') : '<p class="muted">Nothing has arrived.</p>') + omitted(arrivals.length, state.arrivals_total, 'arrivals') + '</div>';
-  html += '<div class="card" data-open-sends><h3>NOT DELIVERED</h3>' +
+  html += '<div class="card" data-open-sends>' + cardHead('NOT DELIVERED', 'Messages the identity sent to people that no channel has delivered, by where each stands.') +
     (open.length ? STATES.map(([id, label]) => {
       const rows = open.filter(s => s.state === id);
       return rows.length ? '<section data-send-state="' + id + '"><h4>' + label + '</h4>' + rows.map(sendHTML).join('') + '</section>' : '';
     }).join('') : '<p class="muted">Every message the identity sent to a person has been delivered.</p>') +
     omitted(open.length, state.open_total, 'messages not delivered', 'oldest') + '</div>';
-  html += '<div class="card" data-delivered-sends><h3>DELIVERED</h3><p>Delivered means an adapter took the message, not that a person read it.</p>' +
+  html += '<div class="card" data-delivered-sends>' + cardHead('DELIVERED', 'Messages to people that a channel\u2019s adapter took; that is not proof a person read them.') + '<p>Delivered means an adapter took the message, not that a person read it.</p>' +
     (delivered.length ? delivered.map(sendHTML).join('') : '<p class="muted">Nothing delivered yet.</p>') +
     omitted(delivered.length, state.delivered_total, 'delivered messages') + '</div>';
   const notices = state.notices || [];
-  html += '<div class="card" data-notices><h3>YOUR NOTICES</h3><p>What the identity and the host addressed to you, and the route each took: a page, or off the dashboard to the lines marked as you while no page was open. A page that was sent one did not necessarily show it to anyone, and one of unknown effect stays unknown here.</p>' +
+  html += '<div class="card" data-notices>' + cardHead('YOUR NOTICES', 'What the identity and the host addressed to you, and whether each went to a page or off the dashboard.') + '<p>What the identity and the host addressed to you, and the route each took: a page, or off the dashboard to the lines marked as you while no page was open. A page that was sent one did not necessarily show it to anyone, and one of unknown effect stays unknown here.</p>' +
     (notices.length ? notices.map(noticeHTML).join('') : '<p class="muted">No notices yet.</p>') +
     omitted(notices.length, state.notices_total, 'notices') + '</div>';
   return html;

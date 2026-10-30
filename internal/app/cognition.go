@@ -46,6 +46,9 @@ func consolidateConfig(cfg Config) cognitive.ConsolidateConfig {
 		OutcomeWindow:       cfg.Agency.OutcomeWindow,
 		ObservationMaxChars: cfg.Prompt.SurfacingMaxChars,
 
+		ToolOutcomeMin:    cfg.Agency.ToolOutcomeMin,
+		ToolOutcomeWindow: time.Duration(cfg.Agency.ToolOutcomeWindow) * time.Hour,
+
 		Batch:  cfg.Cognition.ConsolidateBatch,
 		MaxOps: cfg.Cognition.ConsolidateMaxOps,
 	}
@@ -87,15 +90,16 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 
 	teller := &cognitive.Teller{Report: a.noteCondition, Door: door, Exists: a.store.EntityExists, Room: a.facilityRoom}
 	dreamFac := cognitive.NewDream(stAdapt, llmAdapt, door, ringWriter, dreamConfig(cfg))
-	dreamFac.SetAuthority(ringAuthority{a.promptGate, a.store})
+	dreamFac.SetAuthority(ringAuthority{a.promptGate, a.store, a.operatorBeliefsMaxChars})
 	dreamFac.SetTeller(teller)
 	dreamFac.SetConversation(stAdapt)
 	dreamFac.SetTensions(stAdapt)
 	a.timeFac.RegisterOwner(dreamFac)
 	consolidateFac := cognitive.NewConsolidate(stAdapt, llmAdapt, door, ringWriter, consolidateConfig(cfg))
-	consolidateFac.SetAuthority(ringAuthority{a.promptGate, a.store})
+	consolidateFac.SetAuthority(ringAuthority{a.promptGate, a.store, a.operatorBeliefsMaxChars})
 	consolidateFac.SetTensions(stAdapt)
 	consolidateFac.SetOutcomes(stAdapt)
+	consolidateFac.SetToolOutcomes(stAdapt)
 	consolidateFac.SetDecisionLog(a.store)
 	consolidateFac.SetTeller(teller)
 	dreamFac.SetHeld(consolidateFac)
@@ -104,7 +108,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	a.reconcileRing3(consolidateFac)
 	selfModelFac := cognitive.NewSelfModel(stAdapt, llmAdapt, selfModelCommitter{engine: a.engine})
 	selfModelFac.Reconfigure(selfModelConfig(cfg))
-	selfModelFac.SetAuthority(ringAuthority{a.promptGate, a.store})
+	selfModelFac.SetAuthority(ringAuthority{a.promptGate, a.store, a.operatorBeliefsMaxChars})
 	selfModelFac.SetTeller(teller)
 	a.timeFac.RegisterOwner(selfModelFac)
 	reviewFac := cognitive.NewIdentityReview(stAdapt)
@@ -112,7 +116,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 
 	a.cognition.reviewFacility.Store(reviewFac)
 	a.briefFacility = cognitive.NewMorningBrief(stAdapt, llmAdapt, briefWriter, briefConfig(cfg))
-	a.briefFacility.SetAuthority(ringAuthority{a.promptGate, a.store})
+	a.briefFacility.SetAuthority(ringAuthority{a.promptGate, a.store, a.operatorBeliefsMaxChars})
 	a.briefFacility.SetTeller(teller)
 	a.briefFacility.SetTurnGate(facilityGate{a})
 	a.briefFacility.SetAttention(func(ctx context.Context) ([]memory.AttentionItem, error) {
@@ -124,6 +128,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	rhythmFac := cognitive.NewRhythm(stAdapt, facilityGate{a}, dreamFac, consolidateFac, selfModelFac, reviewFac)
 	rhythmFac.SetSpacing(rhythmSpacing(cfg))
 	rhythmFac.SetOutcomes(consolidateFac)
+	rhythmFac.SetToolOutcomes(consolidateFac)
 	rhythmFac.SetConversation(dreamFac)
 	rhythmFac.SetDecisionLog(func(facility, decision, reason string) {
 		if err := a.store.RecordMemoryDecision(store.MemoryDecision{Kind: "rhythm", Facility: facility, Decision: decision, Record: map[string]any{"reason": reason}}); err != nil {
@@ -211,6 +216,8 @@ func (a *App) armFacilityAlarms(cfg Config) error {
 	a.continuity.EnsureSnapshotKey(continuitySettingsOf(cfg))
 	a.continuity.SweepSnapshotDebrisAtBoot(continuitySettingsOf(cfg))
 
+	a.continuity.SignKeptSnapshotsAtStart(continuitySettingsOf(cfg))
+
 	if err := continuity.ArmMaintenanceAlarm(a.timeFac, time.Now()); err != nil {
 		return fmt.Errorf("arm maintenance: %w", err)
 	}
@@ -282,8 +289,15 @@ func cognitionValue(cfg Config, key string) int {
 }
 
 func (a *App) applyCognition(cfg Config) {
+
+	if a.updateChecker != nil {
+		a.updateChecker.Rearm()
+	}
 	if a.store != nil {
 		a.store.SetSelfModelMaxTokens(cfg.Prompt.SelfModelMaxTokens)
+		a.store.SetRing2EvidenceChars(cfg.Prompt.Ring2EvidenceMaxChars)
+		a.store.SetCharterMaxTokens(cfg.Prompt.CharterMaxTokens)
+		a.store.SetToolResultRunes(cfg.Record.ToolResultRunes)
 	}
 	set := a.cognition.rhythm.Load()
 	if set == nil {

@@ -345,6 +345,8 @@ type Restore struct {
 	At       time.Time `json:"at"`
 	Source   string    `json:"source"`
 	SourceAt time.Time `json:"source_at,omitzero"`
+
+	Unsigned bool `json:"unsigned,omitempty"`
 }
 
 func (r Restore) BroughtBack(createdMs int64) bool { return createdMs <= r.broughtBackUntil() }

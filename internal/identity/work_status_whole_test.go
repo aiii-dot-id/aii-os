@@ -139,3 +139,34 @@ func TestWorkStatusRefusesWhatIsNotADeliveredSubAgent(t *testing.T) {
 		t.Fatalf("a refused read changed a running child: %+v (%v)", ws, err)
 	}
 }
+
+// A DELIVERED RESULT'S PARTS FIT A SMALL BOUND. Its parts were 12,000
+// runes whatever prompt.max_tool_result_chars said, and over the bound
+// the loop keeps a result's tail: under 3,000 each part lost its head. A
+// part now leaves room for its heading, whose goal is the identity's own
+// text of any length, and its closing line.
+func TestADeliveredResultsPartsFitASmallBound(t *testing.T) {
+	engine, st, _, _, _ := setupEngine(t)
+	engine.toolResultChars = 3000
+	long := "served: HEAD\n" + strings.Repeat("a line of the result. ", 1000) + "TAIL"
+	subAgentSession(t, st, "ws_bound", strings.Repeat("a long goal ", 40), long)
+	got, _ := readDelivery(t, engine, "ws_bound")
+	if got != long {
+		t.Fatalf("the parts do not make the whole result: %d runes of %d", len([]rune(got)), len([]rune(long)))
+	}
+	arg := "ws_bound"
+	for n := 1; n < 100; n++ {
+		out, err := engine.ExecuteAction(context.Background(), "verb", "work", map[string]any{"action": "status", "id": arg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size := len([]rune(out)); size > 3000 {
+			t.Fatalf("part %d is %d runes, over the bound of 3000", n, size)
+		}
+		_, next, more := strings.Cut(out, `continues: work action=status id="`)
+		if !more {
+			return
+		}
+		arg, _, _ = strings.Cut(next, `"`)
+	}
+}

@@ -1,0 +1,107 @@
+{
+  "task": "subagent-states-a-verdict",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Spawn a sub-agent to read inbox/a.txt and report",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "spawn",
+                  "goal": "Read inbox/a.txt and report its first word."
+                }
+              }
+            ]
+          },
+          {
+            "text": "A sub-agent is on it."
+          }
+        ]
+      },
+      {
+        "on": "Your sub-goal:",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "served: inbox/a.txt begins with alpha."
+          }
+        ]
+      },
+      {
+        "on": "your sub-agent finished",
+        "steps": [
+          {
+            "text": "It found alpha."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "F1: the child ends without saying whether their goal was served",
+    "fails": [
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Spawn a sub-agent to read inbox/a.txt and report",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "spawn",
+                  "goal": "Read inbox/a.txt and report its first word."
+                }
+              }
+            ]
+          },
+          {
+            "text": "A sub-agent is on it."
+          }
+        ]
+      },
+      {
+        "on": "Your sub-goal:",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "I think the operator wants the first word: it is alpha."
+          }
+        ]
+      },
+      {
+        "on": "your sub-agent finished",
+        "steps": [
+          {
+            "text": "It found alpha."
+          }
+        ]
+      }
+    ]
+  }
+}

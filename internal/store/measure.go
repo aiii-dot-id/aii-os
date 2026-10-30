@@ -126,6 +126,17 @@ func (s *Store) Measure(window time.Duration) (MeasurementReadout, error) {
 		Numerator: interrupted, Sample: iSample,
 	})
 
+	several, sSample, err := s.severalActiveCalls(time.UnixMilli(cutoff))
+	if err != nil {
+		return out, err
+	}
+	out.Metrics = append(out.Metrics, Metric{
+		Name:        "calls_while_several_sessions_active",
+		Definition:  severalActiveDefinition,
+		EventSource: "conversations(kind=tool_call, details.session_reason)", Scope: "local", Kind: "count", Instrumented: true,
+		Numerator: several, Sample: sSample,
+	})
+
 	out.Metrics = append(out.Metrics, Metric{
 		Name:        "context_reuse_changed_a_decision",
 		Definition:  "retrieved context that changed a later decision or prevented repetition",
@@ -172,4 +183,20 @@ func RenderMeasurement(r MeasurementReadout) string {
 		}
 	}
 	return b.String()
+}
+
+const severalActiveDefinition = "tool calls in the window that began while more than one of your main work sessions was active; each was counted to the newest, and its record says several_active"
+
+func (s *Store) severalActiveCalls(cutoff time.Time) (int, []string, error) {
+	floor, stamp, found, err := windowSince(s.db, cutoff)
+	if err != nil || !found {
+		return 0, nil, err
+	}
+	const where = ` FROM conversations WHERE kind='tool_call' AND turn_seq >= ? AND recorded_at >= ? AND json_extract(details,'$.session_reason') = ?`
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*)`+where, floor, stamp, SeveralActive).Scan(&n); err != nil {
+		return 0, nil, err
+	}
+	sample, err := s.sampleStrings(`SELECT source_id`+where+` ORDER BY turn_seq DESC LIMIT 3`, floor, stamp, SeveralActive)
+	return n, sample, err
 }

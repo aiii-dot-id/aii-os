@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
 
@@ -56,6 +57,11 @@ func (s *Store) ReplayAll(source EventSource) (retErr error) {
 	return nil
 }
 
+const (
+	replayUnlinkedReason       = "replay record %d does not link to the record before it"
+	replayUnnamedPayloadReason = "replay record %d holds a payload its entry does not name"
+)
+
 func (s *Store) replayInTransaction(source EventSource, expected *MirrorHead) error {
 
 	if _, err := s.h().Exec("PRAGMA defer_foreign_keys = ON"); err != nil {
@@ -73,6 +79,13 @@ func (s *Store) replayInTransaction(source EventSource, expected *MirrorHead) er
 		if err := source(func(evt *ledger.Event) error {
 			if expected != nil && evt.Seq != last.Seq+1 {
 				return &ReplayBoundaryError{Reason: fmt.Sprintf("replay sequence %d does not follow %d", evt.Seq, last.Seq)}
+			}
+
+			if expected != nil && evt.Prev != last.Hash {
+				return &ReplayBoundaryError{Reason: fmt.Sprintf(replayUnlinkedReason, evt.Seq)}
+			}
+			if expected != nil && crypto.ContentHash(evt.Payload) != evt.Content {
+				return &ReplayBoundaryError{Reason: fmt.Sprintf(replayUnnamedPayloadReason, evt.Seq)}
 			}
 			last = MirrorHead{Seq: evt.Seq, Hash: evt.EntryHash()}
 			if err := s.materializeLocked(evt); err != nil {

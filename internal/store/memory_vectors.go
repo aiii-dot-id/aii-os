@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -16,7 +17,17 @@ type MemoryVector struct {
 	Scale      float64
 	Q          []byte
 	EmbeddedAt time.Time
+
+	Unread *int
 }
+
+const VectorUnreadPrefix = "memory_vectors.unread/"
+
+const VectorUnreadJoin = " LEFT JOIN runtime_meta vr ON vr.key = '" + VectorUnreadPrefix + "' || v.store || '/' || v.id AND vr.updated_at = v.embedded_at"
+
+const VectorUnread = "CAST(vr.value AS INTEGER)"
+
+const VectorUnreadSaid = "EXISTS (SELECT 1 FROM runtime_meta vr WHERE vr.key = '" + VectorUnreadPrefix + "' || v.store || '/' || v.id AND vr.updated_at = v.embedded_at)"
 
 func (s *Store) PutMemoryVectors(vs []MemoryVector) error {
 	if len(vs) == 0 {
@@ -34,15 +45,36 @@ func (s *Store) PutMemoryVectors(vs []MemoryVector) error {
 		return err
 	}
 	defer stmt.Close()
+	told, err := tx.Prepare(`INSERT INTO runtime_meta (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer told.Close()
+	untold, err := tx.Prepare(`DELETE FROM runtime_meta WHERE key = ?`)
+	if err != nil {
+		return err
+	}
+	defer untold.Close()
 	for _, v := range vs {
-		if v.Store == "" || v.ID == "" || v.Basis == "" || v.Dims <= 0 || v.Scale <= 0 || len(v.Q) != v.Dims {
-			return fmt.Errorf("memory vector for %s/%s is malformed (basis %q, dims %d, %d bytes, scale %v)", v.Store, v.ID, v.Basis, v.Dims, len(v.Q), v.Scale)
+		if v.Store == "" || v.ID == "" || v.Basis == "" || v.Dims <= 0 || v.Scale <= 0 || len(v.Q) != v.Dims || (v.Unread != nil && *v.Unread < 0) {
+			return fmt.Errorf("memory vector for %s/%s is malformed (basis %q, dims %d, %d bytes, scale %v, unread %v)", v.Store, v.ID, v.Basis, v.Dims, len(v.Q), v.Scale, v.Unread)
 		}
 		at := v.EmbeddedAt
 		if at.IsZero() {
 			at = time.Now()
 		}
-		if _, err := stmt.Exec(v.Store, v.ID, v.Basis, v.ContentSHA, v.Dims, v.Scale, v.Q, at.UTC().Format(time.RFC3339Nano)); err != nil {
+		stamp := at.UTC().Format(time.RFC3339Nano)
+		if _, err := stmt.Exec(v.Store, v.ID, v.Basis, v.ContentSHA, v.Dims, v.Scale, v.Q, stamp); err != nil {
+			return err
+		}
+		key := VectorUnreadPrefix + v.Store + "/" + v.ID
+		if v.Unread != nil {
+			_, err = told.Exec(key, strconv.Itoa(*v.Unread), stamp)
+		} else {
+			_, err = untold.Exec(key)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -77,6 +109,13 @@ func (s *Store) DropMemoryVectorsOffBasis(basis string) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+func (s *Store) CountMemoryVectorsOffBasis(ctx context.Context, basis string) (n int64, err error) {
+	err = s.ReadWith(ctx, func(db Reader) error {
+		return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_vectors WHERE basis != ?`, basis).Scan(&n)
+	})
+	return n, err
 }
 
 func (s *Store) DeleteMemoryVectors(store string, ids []string) (int64, error) {

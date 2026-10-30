@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
+	"github.com/aiii-dot-id/aii-os/internal/oswall"
 )
 
 type nativeFiles struct {
@@ -18,6 +19,12 @@ type nativeFiles struct {
 	private string
 
 	own []string
+
+	view []string
+
+	shown func(string) bool
+
+	startSeconds int
 
 	inherited int
 }
@@ -94,6 +101,9 @@ func (f nativeFiles) paths() ([]nativePath, error) {
 		if !p.read || p.path == p.source {
 			return false
 		}
+		if f.shown != nil && !f.shown(p.path) {
+			return false
+		}
 		for _, mask := range masks {
 			if !mask.read && mask.dir && nativeBelow(mask.path, p.path) {
 				return false
@@ -129,25 +139,6 @@ func (f nativeFiles) paths() ([]nativePath, error) {
 	return slices.Compact(paths), nil
 }
 
-func exceptionInPlace(place, except string) bool {
+func exceptionInPlace(place, except string) bool { return oswall.ExceptionInPlace(place, except) }
 
-	if fi, err := os.Lstat(except); err == nil && fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return false
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false
-	}
-	p, err := filepath.EvalSymlinks(place)
-	if err != nil {
-		return false
-	}
-	e, err := filepath.EvalSymlinks(except)
-	if err != nil {
-		return errors.Is(err, fs.ErrNotExist)
-	}
-	return e == firewall.ResolveSlot(except) && nativeBelow(p, e)
-}
-
-func nativeBelow(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
+func nativeBelow(parent, child string) bool { return oswall.Below(parent, child) }

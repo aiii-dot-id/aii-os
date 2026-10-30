@@ -84,11 +84,13 @@ back with it; carry what you wanted from it into `custom.js` or
 2. **Containment by os.Root.** Every served path resolves inside this
    directory by the kernel; a symlink planted here cannot reach out of it.
    Served overlay code runs same-origin with dashboard authority and may
-   re-form the view and speak to this server — but it can never beacon to
-   an external origin: `uiCSP` sets `default-src 'none'` and allows only
-   `'self'` on every fetch-carrying directive (script, style, img,
-   connect, frame), with `form-action 'none'`. The network boundary is
-   the browser's, kernel-enforced per response.
+   re-form the view and speak to this server. It cannot make a background
+   request to any other origin: `uiCSP` sets `default-src 'none'` and
+   allows only `'self'` on every fetch-carrying directive (script, style,
+   img, connect, frame) and on `form-action`. The browser enforces that
+   per response. That is a limit on requests, not a promise that nothing
+   a page shows can leave it: what you write here runs with everything
+   your operator's page can see, and is trusted with it.
 3. **Separate audit from live updates:** `overlays` (audit readback, retained
    events, `decidedAt` stamps) is render-only. `overlay_changed` (fresh
    monotonic token + changed paths) is the only live invalidation trigger.

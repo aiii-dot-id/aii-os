@@ -44,6 +44,8 @@ type App struct {
 
 	embeddedAuthentication bool
 
+	identityChoice *IdentityChoice
+
 	cfg *Config
 
 	dashboard *dashboard.Server
@@ -134,6 +136,8 @@ type App struct {
 	catalog    plugincatalog.Catalog
 	pkgFetch   packageFetch
 
+	listFetch func(ctx context.Context, name string, max int64) ([]byte, error)
+
 	storeMaterialize func(context.Context, pluginhost.Material, pluginhost.ModelFetcher) error
 
 	lateModels *pluginhost.Acquirer
@@ -213,6 +217,8 @@ type App struct {
 	turnMu          sync.Mutex
 	interactionTurn string
 	steers          []steerEntry
+
+	steerRoom chan struct{}
 
 	turnVoice []*voiceBinding
 

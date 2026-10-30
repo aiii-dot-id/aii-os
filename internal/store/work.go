@@ -252,6 +252,16 @@ func (s *Store) UpdateWorkPlan(ctx context.Context, sessionID string, focus, nex
 }
 
 func (s *Store) StartWorkSession(ctx context.Context, id, description string) error {
+	return s.StartWorkSessionWith(ctx, id, description, WorkStart{})
+}
+
+type WorkStart struct {
+	Family, State, Focus, NextMove, Plan, ExpectedEvidence, Falsifier, DecisionNeeded, Standing *string
+
+	Check *string
+}
+
+func (s *Store) StartWorkSessionWith(ctx context.Context, id, description string, w WorkStart) error {
 	changed := false
 	defer s.notifyInteraction(&changed)
 	var ev *WorkEvent
@@ -259,19 +269,44 @@ func (s *Store) StartWorkSession(ctx context.Context, id, description string) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if w.Family != nil && !familySlug.MatchString(*w.Family) {
+		return fmt.Errorf("family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", *w.Family)
+	}
+	str := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
 	tx, err := s.w().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	_, err = tx.Exec(
-		`INSERT INTO work_sessions (id, description, status, state, project_id, started_at) VALUES (?, ?, 'active', '', ?, ?)`,
-		id, description, s.activeProject, time.Now().UTC().UnixMilli())
+		`INSERT INTO work_sessions (id, description, status, state, project_id, started_at, family, focus, next_move, plan, expected_evidence, falsifier, decision_needed) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, description, str(w.State), s.activeProject, time.Now().UTC().UnixMilli(), str(w.Family), str(w.Focus), str(w.NextMove), str(w.Plan), str(w.ExpectedEvidence), str(w.Falsifier), str(w.DecisionNeeded))
 	if err != nil {
 		return err
 	}
 	if err = s.recordWorkChangeTx(ctx, tx, interaction.WorkChange{Session: id}, interaction.TurnID(ctx), "Work started: "+description); err != nil {
 		return err
+	}
+	if w.State != nil || w.Focus != nil || w.NextMove != nil || w.Plan != nil || w.ExpectedEvidence != nil || w.Falsifier != nil || w.DecisionNeeded != nil {
+		change := interaction.WorkChange{Session: id, State: w.State, Focus: w.Focus, NextMove: w.NextMove, Plan: w.Plan, ExpectedEvidence: w.ExpectedEvidence, Falsifier: w.Falsifier, DecisionNeeded: w.DecisionNeeded}
+		if err = s.recordWorkChangeTx(ctx, tx, change, interaction.TurnID(ctx), "Work plan updated"); err != nil {
+			return err
+		}
+	}
+	if w.Check != nil && *w.Check != "" {
+		if err = s.declareCheckTx(ctx, tx, id, *w.Check); err != nil {
+			return err
+		}
+	}
+	if w.Standing != nil {
+		if err = setStanding(tx, *w.Standing); err != nil {
+			return err
+		}
 	}
 	err = tx.Commit()
 	changed = true
@@ -521,9 +556,13 @@ func (s *Store) LiveSubagentSessions() ([]WorkSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	fields, err := s.workSessionSelect()
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.Query(
-		`SELECT id, description, status, COALESCE(state,''), COALESCE(result,'')
-		, project_id FROM work_sessions
+		`SELECT `+fields+` FROM work_sessions
 		 WHERE status = 'active' AND `+child+`
 		 ORDER BY rowid DESC LIMIT 10`, args...)
 	if err != nil {
@@ -533,7 +572,7 @@ func (s *Store) LiveSubagentSessions() ([]WorkSession, error) {
 	var out []WorkSession
 	for rows.Next() {
 		w := WorkSession{Child: true}
-		if err := rows.Scan(&w.ID, &w.Description, &w.Status, &w.State, &w.Result, &w.Project); err != nil {
+		if err := scanWorkSession(rows, &w); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -590,9 +629,13 @@ func (s *Store) RecentDeliveredSubagents(limit int) ([]WorkSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	fields, err := s.workSessionSelect()
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.Query(
-		`SELECT id, description, status, COALESCE(state,''), COALESCE(result,'')
-		, project_id, COALESCE(evidence,'') FROM work_sessions
+		`SELECT `+fields+` FROM work_sessions
 		 WHERE status = 'delivered' AND `+child+`
 		 ORDER BY rowid DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
@@ -602,7 +645,7 @@ func (s *Store) RecentDeliveredSubagents(limit int) ([]WorkSession, error) {
 	var out []WorkSession
 	for rows.Next() {
 		w := WorkSession{Child: true}
-		if err := rows.Scan(&w.ID, &w.Description, &w.Status, &w.State, &w.Result, &w.Project, &w.Evidence); err != nil {
+		if err := scanWorkSession(rows, &w); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -617,9 +660,13 @@ func (s *Store) WorkSessionsByProject(projectID string, limit int) ([]WorkSessio
 	if err != nil {
 		return nil, false, err
 	}
+	fields, err := s.workSessionSelect()
+	if err != nil {
+		return nil, false, err
+	}
+
 	rows, err := s.db.Query(
-		`SELECT id, description, status, COALESCE(state,''), COALESCE(result,'')
-		, project_id, `+child+` FROM work_sessions
+		`SELECT `+fields+`, `+child+` FROM work_sessions
 		 WHERE project_id = ?
 		 ORDER BY rowid DESC LIMIT ?+1`, append(args, projectID, limit)...)
 	if err != nil {
@@ -629,7 +676,7 @@ func (s *Store) WorkSessionsByProject(projectID string, limit int) ([]WorkSessio
 	var out []WorkSession
 	for rows.Next() {
 		var w WorkSession
-		if err := rows.Scan(&w.ID, &w.Description, &w.Status, &w.State, &w.Result, &w.Project, &w.Child); err != nil {
+		if err := scanWorkSession(rows, &w, &w.Child); err != nil {
 			return nil, false, err
 		}
 		out = append(out, w)

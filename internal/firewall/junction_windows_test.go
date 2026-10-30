@@ -50,11 +50,11 @@ func TestThePolicyFollowsAJunction(t *testing.T) {
 		if got := ResolvePath(c.through); !strings.EqualFold(got, c.want) {
 			t.Errorf("%s resolves to %s, want %s", c.through, got, c.want)
 		}
-		if rule := p.Covered(c.through); rule == nil {
+		if !holds(p.Covered(c.through)) {
 			t.Errorf("%s, through a junction, is not covered by a kept place", c.through)
 		}
 	}
-	if rule := p.Covered(home + `\notes.md`); rule != nil {
-		t.Errorf("the home is covered: %+v", rule)
+	if rule, err := p.Covered(home + `\notes.md`); holds(rule, err) {
+		t.Errorf("the home is covered: %+v %v", rule, err)
 	}
 }

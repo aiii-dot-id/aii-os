@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/plugstore"
 )
 
@@ -75,6 +76,7 @@ func (ss *storeService) settled() bool {
 
 func (ss *storeService) collect() error {
 	ss.mu.Lock()
+	ss.reopenLocked(true)
 	w := ss.w
 	stores := append([]*plugstore.Writer(nil), ss.drain...)
 	ss.mu.Unlock()
@@ -209,14 +211,16 @@ func heldIn(w *plugstore.Writer, e plugstore.Entry) bool {
 	return true
 }
 
-func pendingDigests(p Pending) []string {
+func pendingDigests(p Pending) []string { return workDigests(p.Work) }
+
+func workDigests(work pluginhost.StoreWork) []string {
 	var out []string
-	if v := p.Work.View; v != nil {
+	if v := work.View; v != nil {
 		for _, d := range v.Models {
 			out = append(out, plugstore.DirBlobs+"/"+d.SHA256)
 		}
 	}
-	if r := p.Work.Root; r != nil {
+	if r := work.Root; r != nil {
 		out = append(out, plugstore.DirArchives+"/"+r.Runtime.SHA256)
 	}
 	return out
@@ -227,14 +231,28 @@ func retire(w *plugstore.Writer, e plugstore.Entry) error {
 	if err != nil {
 		return err
 	}
-	if e.Kind == plugstore.DirViews {
-		view, _ := w.View(e.ID)
-		if err := plugstore.RevokeView(view, e.ID); err != nil {
-			h.Close()
-			return plugstore.Busy(err)
-		}
+	if e.Kind != plugstore.DirViews {
+		return h.Retire()
 	}
-	return h.Retire()
+	view, _ := w.View(e.ID)
+	if err := plugstore.RevokeView(view, e.ID); err != nil {
+		err = grantedAgain(view, e.ID, plugstore.Busy(err))
+		h.Close()
+		return err
+	}
+	if err := h.Retire(); err != nil {
+		return grantedAgain(view, e.ID, err)
+	}
+	return nil
+}
+
+const regrantFailedWords = "it stayed (%v) and its capability could not be given back, so a plugin started from it may be refused its files: %w"
+
+func grantedAgain(view, key string, err error) error {
+	if gerr := plugstore.GrantView(view, key); gerr != nil {
+		return fmt.Errorf(regrantFailedWords, err, gerr)
+	}
+	return err
 }
 
 func storeEntries(w *plugstore.Writer) ([]plugstore.Entry, error) {
@@ -297,12 +315,21 @@ func readEveryRecord(w *plugstore.Writer) error {
 func (ss *storeService) collectDebris(w *plugstore.Writer, now time.Time) {
 	st := ss.s.stateNow()
 	wanted := map[string]bool{}
-	for _, p := range st.Pending {
-		wanted[p.Entry] = true
-		for _, d := range pendingDigests(p) {
+	want := func(work pluginhost.StoreWork) {
+		wanted[work.Entry] = true
+		for _, d := range workDigests(work) {
 			wanted[d] = true
 		}
 	}
+
+	for _, p := range st.Pending {
+		want(p.Work)
+	}
+	ss.mu.Lock()
+	for _, work := range ss.works {
+		want(work)
+	}
+	ss.mu.Unlock()
 	for _, kind := range []string{plugstore.DirArchives, plugstore.DirBlobs, plugstore.DirRoots, plugstore.DirViews} {
 		names, err := os.ReadDir(filepath.Join(w.Dir, kind))
 		if err != nil {

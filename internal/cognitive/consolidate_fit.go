@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
-	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
@@ -15,7 +15,8 @@ type passMaterial struct {
 	beliefs     []rows.Belief
 	standing    map[string]string
 	intentions  []string
-	operator    string
+	about       map[string]bool
+	aboutWho    string
 	tensions    TensionsSource
 	tensionsMax int
 	excerpt     int
@@ -44,7 +45,7 @@ func (c *ConsolidateFacility) material(cfg *ConsolidateConfig, experiences []row
 			}
 		}
 	}
-	m.beliefs = nearestFirst(m.beliefs, experiences)
+	m.beliefs = linkedFirst(nearestFirst(m.beliefs, experiences), c.linkedTo(experiences))
 	if intentions, err := c.store.ListIntentions(); err == nil {
 		for _, i := range intentions {
 			if i.State == "active" {
@@ -52,8 +53,17 @@ func (c *ConsolidateFacility) material(cfg *ConsolidateConfig, experiences []row
 			}
 		}
 	}
-	if c.ringWriter != nil {
-		m.operator = c.ringWriter.RingSection(ring.Ring3, "operator")
+
+	m.about, m.aboutWho = map[string]bool{}, "the operator"
+	if about, err := c.store.AboutOperator(); err != nil {
+		logsink.Warn("consolidate.error", "which beliefs are about the operator could not be read: %v — the pass runs without the mark", err)
+	} else {
+		if about.Name != "" {
+			m.aboutWho = about.Name
+		}
+		for _, b := range about.Beliefs {
+			m.about[b.ID] = true
+		}
 	}
 	return m
 }
@@ -74,6 +84,32 @@ func nearestFirst(beliefs []rows.Belief, experiences []rows.Experience) []rows.B
 	}
 	out := append([]rows.Belief(nil), beliefs...)
 	stableSortBy(out, func(a, b rows.Belief) bool { return score[a.ID] > score[b.ID] })
+	return out
+}
+
+func (c *ConsolidateFacility) linkedTo(experiences []rows.Experience) map[string]bool {
+	ids := make([]string, len(experiences))
+	for i, e := range experiences {
+		ids[i] = e.ID
+	}
+	edges, err := c.store.EdgesTouching(ids)
+	if err != nil {
+		logsink.Warn("consolidate.error", "the edges of the batch cannot be read (%v) — the pass keeps the beliefs nearest what it reads, without those it is linked to", err)
+		return nil
+	}
+	linked := map[string]bool{}
+	for _, edge := range edges {
+		linked[edge.FromID], linked[edge.ToID] = true, true
+	}
+	return linked
+}
+
+func linkedFirst(beliefs []rows.Belief, linked map[string]bool) []rows.Belief {
+	if len(beliefs) < 2 || len(linked) == 0 {
+		return beliefs
+	}
+	out := append([]rows.Belief(nil), beliefs...)
+	stableSortBy(out, func(a, b rows.Belief) bool { return linked[a.ID] && !linked[b.ID] })
 	return out
 }
 
@@ -134,12 +170,16 @@ func (m *passMaterial) render(v evidenceView) string {
 	if v.beliefs > 0 {
 		parts = append(parts, "Current beliefs (for merge/supersede decisions):")
 		for _, b := range m.beliefs[:v.beliefs] {
-			parts = append(parts, fmt.Sprintf("  [%s, %s] %s", b.ID, m.standing[b.ID], b.Statement))
+			if m.about[b.ID] {
+				parts = append(parts, fmt.Sprintf("  [%s, %s, about %s] %s", b.ID, m.standing[b.ID], m.aboutWho, b.Statement))
+			} else {
+				parts = append(parts, fmt.Sprintf("  [%s, %s] %s", b.ID, m.standing[b.ID], b.Statement))
+			}
 			listed[b.ID] = true
 		}
 	}
 	if v.beliefs < len(m.beliefs) {
-		parts = append(parts, fmt.Sprintf("  [%d of %d current beliefs shown — those nearest what you read here; the rest stand in your record as they are, and recall (source=ledger) reaches them. A belief not shown is not absent: do not mint one that may already stand.]", v.beliefs, len(m.beliefs)))
+		parts = append(parts, fmt.Sprintf("  [%d of %d current beliefs shown — those linked to what you read here, then those nearest it; the rest stand in your record as they are, and recall (source=ledger) reaches them. A belief not shown is not absent: do not mint one that may already stand.]", v.beliefs, len(m.beliefs)))
 	}
 
 	if v.extras {
@@ -157,12 +197,8 @@ func (m *passMaterial) render(v evidenceView) string {
 		parts = append(parts, fmt.Sprintf("  [%d of %d active intentions shown; recall (source=ledger) reaches the rest]", v.intentions, len(m.intentions)))
 	}
 
-	if v.extras && m.operator != "" {
-		parts = append(parts, "Who you work with — your current model (revise it from the experiences above; do not reinvent it):")
-		parts = append(parts, m.operator)
-	}
 	if !v.extras {
-		parts = append(parts, "[Not in view this pass, for want of room: the beliefs retired since these experiences, the contradictions standing in your record, and your model of the person you work with — leave that model out of your reply; it stands as it is.]")
+		parts = append(parts, "[Not in view this pass, for want of room: the beliefs retired since these experiences, and the contradictions standing in your record.]")
 	}
 	return strings.Join(parts, "\n")
 }

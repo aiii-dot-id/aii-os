@@ -19,7 +19,7 @@ func TestCandidateKeepsNativeMetadataOnlyForTheAcceptedEntry(t *testing.T) {
 	images := true
 	probe := providerProbe{
 		state: probeOK, models: []string{"fixture-model"},
-		meta:      map[string]modelMeta{"fixture-model": {Context: 65536, MaxOut: 8192, Images: &images}},
+		meta:      map[string]modelMeta{"fixture-model": {Context: 65536, MaxOut: 8192, Input: imageKinds(&images)}},
 		checkedAt: time.Unix(1000, 0), key: probeKey(entry),
 	}
 	a := &App{}
@@ -63,7 +63,7 @@ func TestAProviderEditKeepsItsAcceptedNativeImageEvidence(t *testing.T) {
 	entry.URL = server.URL
 	a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {
 		state: probeOK, key: probeKey(entry), checkedAt: time.Now(), models: []string{entry.DefaultModel},
-		meta: map[string]modelMeta{entry.DefaultModel: {Images: boolp(true)}},
+		meta: map[string]modelMeta{entry.DefaultModel: {Input: imageKinds(boolp(true))}},
 	}}
 	if err := a.changeProviders(entry.Name, func(reg *providerRegistry) error {
 		reg.Providers[0].URL = entry.URL

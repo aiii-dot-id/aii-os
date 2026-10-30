@@ -21,6 +21,51 @@ type Result struct {
 	ReviewedCapabilities []string
 
 	FileDigests map[string]string
+
+	trust trustObjects
+}
+
+type trustObjects struct {
+	cert, sig, att, plat             []byte
+	hasCert, hasSig, hasAtt, hasPlat bool
+}
+
+func (r *Result) Recheck(roots TrustRoots) error {
+	if _, verr := verifyTrust(r.trust, roots, r.Manifest, r.PackageHash, r.ManifestHash); verr != nil {
+		return verr
+	}
+	return nil
+}
+
+func verifyTrust(t trustObjects, roots TrustRoots, m *Manifest, packageHash, manifestHash string) (*Result, *Error) {
+	result := &Result{Tier: TierT0}
+	switch {
+	case t.hasPlat:
+		if !contract.Invariants.T3RequiresPlatformReleaseSig {
+
+			return nil, fail(ReasonPlatformSigInvalid, "platform-sig", "embedded tier contract does not require the platform_release signature for T3")
+		}
+		if verr := verifyPlatformSig(t.plat, roots, packageHash, manifestHash); verr != nil {
+			return nil, verr
+		}
+		result.Tier = TierT3
+	case t.hasCert:
+		publisherID, verr := verifyPublisherChain(t.cert, t.sig, roots, packageHash, manifestHash)
+		if verr != nil {
+			return nil, verr
+		}
+		result.Tier = TierT1
+		result.PublisherID = publisherID
+		if t.hasAtt {
+			reviewed, verr := verifyAttestation(t.att, roots, m, packageHash, manifestHash)
+			if verr != nil {
+				return nil, verr
+			}
+			result.Tier = TierT2
+			result.ReviewedCapabilities = reviewed
+		}
+	}
+	return result, nil
 }
 
 func (r *Result) MemberDigest(rel string, raw []byte) (want, got string, ok bool) {
@@ -106,38 +151,13 @@ func Verify(r io.Reader, roots TrustRoots) (*Result, error) {
 		return nil, fail(ReasonTrustObjectShape, "trust-shape", "certifier.attestation requires the complete publisher pair (t2_requires_valid_t1)")
 	}
 
-	result := &Result{
-		Manifest:     m,
-		PackageHash:  packageHashValue,
-		ManifestHash: manifestHashValue,
-		Tier:         TierT0,
+	trust := trustObjects{cert: certBytes, sig: sigBytes, att: attBytes, plat: platBytes,
+		hasCert: hasCert, hasSig: hasSig, hasAtt: hasAtt, hasPlat: hasPlat}
+	result, verr := verifyTrust(trust, roots, m, packageHashValue, manifestHashValue)
+	if verr != nil {
+		return nil, verr
 	}
-	switch {
-	case hasPlat:
-		if !contract.Invariants.T3RequiresPlatformReleaseSig {
-
-			return nil, fail(ReasonPlatformSigInvalid, "platform-sig", "embedded tier contract does not require the platform_release signature for T3")
-		}
-		if verr := verifyPlatformSig(platBytes, roots, packageHashValue, manifestHashValue); verr != nil {
-			return nil, verr
-		}
-		result.Tier = TierT3
-	case hasCert:
-		publisherID, verr := verifyPublisherChain(certBytes, sigBytes, roots, packageHashValue, manifestHashValue)
-		if verr != nil {
-			return nil, verr
-		}
-		result.Tier = TierT1
-		result.PublisherID = publisherID
-		if hasAtt {
-			reviewed, verr := verifyAttestation(attBytes, roots, m, packageHashValue, manifestHashValue)
-			if verr != nil {
-				return nil, verr
-			}
-			result.Tier = TierT2
-			result.ReviewedCapabilities = reviewed
-		}
-	}
+	result.Manifest, result.PackageHash, result.ManifestHash, result.trust = m, packageHashValue, manifestHashValue, trust
 
 	for _, v := range m.Variants {
 		if got := "sha256:" + contents.digest.perFile[v.Entrypoint]; got != v.ArtifactHash {
@@ -173,7 +193,7 @@ func checkTierEligibility(m *Manifest, tier Tier) *Error {
 	}
 	for _, v := range m.Variants {
 
-		if v.AdmissionProfile == "certified_native" || v.AdmissionProfile == "platform_reserved" || isNativeRuntime(v.ExecutionRuntime) {
+		if v.Native() {
 			if tier != TierT3 {
 				return fail(reasonNativeTierIneligible(), "tier-classification", "variant %s is native (%s, %s) and native is T3 only, but the verified evidence proves %s", v.VariantID, v.AdmissionProfile, v.ExecutionRuntime, tier)
 			}
@@ -182,8 +202,12 @@ func checkTierEligibility(m *Manifest, tier Tier) *Error {
 	return nil
 }
 
-func isNativeRuntime(runtime string) bool {
+func NativeRuntime(runtime string) bool {
 	return runtime == "service_process" || runtime == "native_t3_component"
+}
+
+func (v Variant) Native() bool {
+	return v.AdmissionProfile == "certified_native" || v.AdmissionProfile == "platform_reserved" || NativeRuntime(v.ExecutionRuntime)
 }
 
 func streamBundle(r io.Reader) (*bundleContents, *Error) {

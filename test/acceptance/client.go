@@ -32,15 +32,17 @@ type session struct {
 
 // connect signs in and opens the dashboard socket the way the page does:
 // the access token is POSTed to the slot's own /auth/token, which sets
-// the verifier cookie, and the socket is opened with the page's Origin
-// and interaction protocol version. The token travels in that one
-// request body and is never printed.
+// the verifier cookie and answers the page key (Aii-Page-Key), and the
+// socket is opened with the page's Origin and interaction protocol version
+// and sent the page key as its first message. The token travels in that
+// one request body and is never printed.
 func connect(ctx context.Context, t target) (*session, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
 	client := &http.Client{Jar: jar}
+	key := ""
 	if t.token != "" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.origin+"/auth/token", strings.NewReader(t.token))
 		if err != nil {
@@ -54,6 +56,7 @@ func connect(ctx context.Context, t target) (*session, error) {
 		if resp.StatusCode != http.StatusNoContent {
 			return nil, fmt.Errorf("the slot's dashboard refused its own access token (HTTP %d)", resp.StatusCode)
 		}
+		key = resp.Header.Get("Aii-Page-Key")
 	}
 	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(t.origin, "http")+"/ws?interaction_version=1", &websocket.DialOptions{
 		HTTPClient: client,
@@ -61,6 +64,14 @@ func connect(ctx context.Context, t target) (*session, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open the dashboard socket: %w", err)
+	}
+	hello, err := json.Marshal(map[string]string{"type": "hello", "page_key": key})
+	if err == nil {
+		err = conn.Write(ctx, websocket.MessageText, hello)
+	}
+	if err != nil {
+		conn.CloseNow()
+		return nil, fmt.Errorf("send the dashboard socket its page key: %w", err)
 	}
 	conn.SetReadLimit(frameLimit)
 	return &session{conn: conn}, nil

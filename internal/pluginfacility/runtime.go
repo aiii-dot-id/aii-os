@@ -25,6 +25,10 @@ type Validator interface {
 	Validate(ctx context.Context, r Running) (Checks, error)
 }
 
+type Rechecker interface {
+	Recheck(ctx context.Context, ev Evidence) error
+}
+
 type CheckOutcome string
 
 const (
@@ -85,6 +89,10 @@ type Evidence struct {
 
 	Family string
 
+	Native bool
+
+	Capabilities []string
+
 	Handle any
 
 	ChecksFailed map[string]string
@@ -121,6 +129,8 @@ type Selection struct {
 	Sets []SetVerdict
 
 	Needs string
+
+	Basis string
 }
 
 type Exclusion struct {
@@ -144,7 +154,7 @@ func copySelection(s *Selection) *Selection {
 	if s == nil {
 		return nil
 	}
-	c := &Selection{Variant: s.Variant, Better: s.Better, Kept: s.Kept, Needs: s.Needs}
+	c := &Selection{Variant: s.Variant, Better: s.Better, Kept: s.Kept, Needs: s.Needs, Basis: s.Basis}
 	for _, e := range s.Excluded {
 		c.Excluded = append(c.Excluded, Exclusion{Variant: e.Variant, Reasons: append([]string(nil), e.Reasons...)})
 	}

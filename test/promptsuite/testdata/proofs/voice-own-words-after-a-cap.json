@@ -1,0 +1,92 @@
+{
+  "task": "voice-own-words-after-a-cap",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "one at a time",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt begins with alpha."
+          }
+        ]
+      },
+      {
+        "on": "Anything to add?",
+        "steps": [
+          {
+            "text": "Only that b.txt and c.txt are still unread; ask and I will read them."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C2: the host's note is narrated as the identity's own in the next turn",
+    "fails": [
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "one at a time",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt begins with alpha."
+          }
+        ]
+      },
+      {
+        "on": "Anything to add?",
+        "steps": [
+          {
+            "text": "As I said: this turn reached its limit of 1 tool calls and was finished without further tools. Ask again to continue."
+          }
+        ]
+      }
+    ]
+  },
+  "noted": [
+    1
+  ]
+}

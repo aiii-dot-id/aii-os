@@ -65,6 +65,27 @@ a release and its signatures are not asked for; what the archive holds
 always is.
 
 
+## Model capabilities
+
+    curl -o /tmp/models-dev.json https://models.dev/api.json
+    go run ./cmd/aii-release capabilities -models-dev /tmp/models-dev.json -as-of <the day>
+
+Before a release, the shipped `config/providers.json` gets a row for every
+model a vendor's entry seeds: what it takes beside text, what it gives,
+whether it calls tools, its window and output limit, read from models.dev
+(MIT), from the list of the vendor that serves the model, with the source
+and the date in the row. The tool makes no request; the file is the one
+you downloaded. It fills only what a row does not say, and prints every
+value models.dev gives differently, and every seeded model it does not
+list: a value in the row was put there by hand from a better source, so
+keep it or change it, naming that source in the row's `source`, and
+commit the file with the release. The running program asks each
+provider first; the row answers where nothing else does. models.dev's MIT
+licence, which asks to go with what is derived from its data, travels in
+every THIRD_PARTY_LICENSES from the tree's copy, `third_party/models.dev/LICENSE`
+(`aii-release licenses`); a release that regenerates the rows from a
+models.dev whose licence changed replaces that copy.
+
 ## Icons
 
 One master, `icon/aii-os.png` (the AII OS artwork, cropped square
@@ -132,7 +153,10 @@ which would make them dynamic fails the build instead
 Beside them is `aii-vulkan-probe`, the bounded process `aii` runs to read a
 GPU's Vulkan memory budget. It loads the system's `libvulkan.so.1`, which
 only the dynamic linker can do, so it is the one dynamic executable and the
-reason the package depends on `libc6`. Missing, or on a host without a
+reason the package depends on `libc6`. The package also depends on
+`bubblewrap`: it is the wall an identity's shell and its native plugins run
+behind, and without it the shell is refused and a native plugin is not
+started. Missing, or on a host without a
 Vulkan driver, it leaves Vulkan unknown. The Linux updater archives carry
 it too, at the archive root beside `aii` and `aii-app`, and the in-app
 updater installs both from there: out of the same signature-verified

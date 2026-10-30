@@ -112,7 +112,18 @@ run(async () => {
 	runPageInEnginesAtSize(t, page, recoveryModules(t, "export {};\n"), 390, 844)
 }
 
+// blankStart is the start path of the rig's own blank page (a #card in an
+// empty body), for a driver that needs no page of the dashboard's.
+const blankStart = "/__blank.html"
+
 func runDashboardInEngines(t *testing.T, s *Server, startPath, driver string) {
+	t.Helper()
+	runDashboardInEachEngine(t, func(*testing.T) *Server { return s }, startPath, driver)
+}
+
+// runDashboardInEachEngine is runDashboardInEngines with a server made for
+// each engine's run, for a journey that changes what the server holds.
+func runDashboardInEachEngine(t *testing.T, serverFor func(*testing.T) *Server, startPath, driver string) {
 	t.Helper()
 	engines := resolveEngines()
 	if len(engines) == 0 {
@@ -121,6 +132,7 @@ func runDashboardInEngines(t *testing.T, s *Server, startPath, driver string) {
 	for _, found := range engines {
 		found := found
 		t.Run(found.engine.name, func(t *testing.T) {
+			s := serverFor(t)
 			results := make(chan string, 4)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/__result" {
@@ -137,8 +149,15 @@ func runDashboardInEngines(t *testing.T, s *Server, startPath, driver string) {
 					io.WriteString(w, driver)
 					return
 				}
+				if driver != "" && r.URL.Path == blankStart {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.Header().Set("Content-Security-Policy", uiCSP)
+					io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="card"></div><script type="module" src="/__driver.js"></script></body></html>`)
+					return
+				}
 				if driver != "" && r.URL.Path == startPath {
 					rec := httptest.NewRecorder()
+					r.Header.Del("Accept-Encoding")
 					s.server.Handler.ServeHTTP(rec, r)
 					for k, v := range rec.Header() {
 						if k != "Content-Length" && k != "Etag" {

@@ -296,6 +296,13 @@ func (s *Store) CountLiveWork(kind string) (int, error) {
 }
 
 func (s *Store) EnqueueWorkWithSessionBelowLimit(item *WorkItem, limit int, sessionID, description string) (int, bool, error) {
+	return s.EnqueueWorkOfKind(item, limit, sessionID, description, "")
+}
+
+func (s *Store) EnqueueWorkOfKind(item *WorkItem, limit int, sessionID, description, family string) (int, bool, error) {
+	if family != "" && !familySlug.MatchString(family) {
+		return 0, false, fmt.Errorf("family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", family)
+	}
 	changed := false
 	defer s.notifyInteraction(&changed)
 	s.mu.Lock()
@@ -326,8 +333,12 @@ func (s *Store) EnqueueWorkWithSessionBelowLimit(item *WorkItem, limit int, sess
 			return live, false, fmt.Errorf("queued work parent must be a session ID string")
 		}
 		if parent.Valid && parent.String != "" {
-			if err := tx.QueryRow(`SELECT project_id FROM work_sessions WHERE id = ?`, parent.String).Scan(&project); err != nil {
+			var parentFamily string
+			if err := tx.QueryRow(`SELECT project_id, family FROM work_sessions WHERE id = ?`, parent.String).Scan(&project, &parentFamily); err != nil {
 				return live, false, fmt.Errorf("read queued work parent %q: %w", parent.String, err)
+			}
+			if family == "" {
+				family = parentFamily
 			}
 		}
 	}
@@ -335,8 +346,8 @@ func (s *Store) EnqueueWorkWithSessionBelowLimit(item *WorkItem, limit int, sess
 		return live, false, err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO work_sessions (id, description, status, state, project_id) VALUES (?, ?, 'active', '', ?)`,
-		sessionID, description, project,
+		`INSERT INTO work_sessions (id, description, status, state, project_id, family) VALUES (?, ?, 'active', '', ?, ?)`,
+		sessionID, description, project, family,
 	); err != nil {
 		return live, false, err
 	}

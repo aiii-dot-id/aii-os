@@ -73,6 +73,7 @@ func (a *App) releaseTurn() {
 	a.turnMu.Lock()
 	leftovers := a.steers
 	a.steers = nil
+	a.steersTakenLocked()
 	kept := len(leftovers) > 0 && a.steerFlush == nil
 	if !kept {
 		a.turnGate <- struct{}{}
@@ -97,6 +98,7 @@ func (a *App) releaseTurn() {
 		a.turnMu.Lock()
 		leftovers = append(leftovers, a.steers...)
 		a.steers = nil
+		a.steersTakenLocked()
 		a.turnGate <- struct{}{}
 		a.turnMu.Unlock()
 		a.refuseSteers(leftovers, "runtime stopped before the queued words could run")

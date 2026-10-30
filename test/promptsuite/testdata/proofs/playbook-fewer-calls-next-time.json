@@ -1,0 +1,279 @@
+{
+  "task": "playbook-fewer-calls-next-time",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "blue heron",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions blue heron",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "blue heron",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n3.txt mentions blue heron"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "playbooks/find-phrase/SKILL.md",
+                  "content": "# find-phrase\n\nOne grep with literal=true over the folder, then answer with the file it names.\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n3.txt"
+          }
+        ]
+      },
+      {
+        "on": "copper kettle",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions copper kettle",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "copper kettle",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n4.txt mentions copper kettle"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n4.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A5: the second attempt reads every file one by one",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "blue heron",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions blue heron",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "blue heron",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n3.txt mentions blue heron"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "playbooks/find-phrase/SKILL.md",
+                  "content": "# find-phrase\n\nOne grep with literal=true over the folder, then answer with the file it names.\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n3.txt"
+          }
+        ]
+      },
+      {
+        "on": "copper kettle",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions copper kettle",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n1.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n2.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n3.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n4.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n5.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n6.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n7.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n8.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n4.txt mentions copper kettle"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n4.txt"
+          }
+        ]
+      }
+    ]
+  }
+}

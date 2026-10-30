@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,8 +33,8 @@ func codeServer(t *testing.T) (*Server, string) {
 }
 
 // signIn posts what a new device offers to the sign-in door and returns the
-// status and the cookie it was given.
-func signIn(t *testing.T, base, bound, offered string) (int, string) {
+// status, the cookie it was given and the page key its page keeps.
+func signIn(t *testing.T, base, bound, offered string) (int, string, string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, "http://"+base+"/auth/token", strings.NewReader(offered))
 	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
@@ -44,18 +45,19 @@ func signIn(t *testing.T, base, bound, offered string) (int, string) {
 	_, port, _ := net.SplitHostPort(bound)
 	for _, c := range res.Cookies() {
 		if c.Name == "aii_token_"+port {
-			return res.StatusCode, c.Value
+			return res.StatusCode, c.Value, res.Header.Get(pageKeyHeader)
 		}
 	}
-	return res.StatusCode, ""
+	return res.StatusCode, "", res.Header.Get(pageKeyHeader)
 }
 
-// admitted reports whether a cookie signs a browser in.
-func admitted(t *testing.T, bound, cookie string) bool {
+// admitted reports whether a cookie and a page key sign a browser in.
+func admitted(t *testing.T, bound, cookie, key string) bool {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, "http://"+bound+"/auth/token", nil)
 	_, port, _ := net.SplitHostPort(bound)
 	req.Header.Set("Cookie", "aii_token_"+port+"="+cookie)
+	req.Header.Set(pageKeyHeader, key)
 	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +68,7 @@ func admitted(t *testing.T, bound, cookie string) bool {
 
 func TestAnAccessCodeSignsADeviceInOnce(t *testing.T) {
 	s, bound := codeServer(t)
-	st, err := s.issueAccessCode(s.auth.Load(), "")
+	st, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,18 +81,18 @@ func TestAnAccessCodeSignsADeviceInOnce(t *testing.T) {
 	if st.Seconds != DefaultAccessCodeSeconds || st.Own {
 		t.Fatalf("the code's life as told: %+v", st)
 	}
-	status, cookie := signIn(t, bound, bound, st.Code)
-	if status != http.StatusNoContent || cookie == "" || !admitted(t, bound, cookie) {
+	status, cookie, key := signIn(t, bound, bound, st.Code)
+	if status != http.StatusNoContent || cookie == "" || !admitted(t, bound, cookie, key) {
 		t.Fatalf("the code did not sign the device in: %d, cookie %q", status, cookie)
 	}
-	if status, again := signIn(t, bound, bound, st.Code); status != http.StatusUnauthorized || again != "" {
+	if status, again, _ := signIn(t, bound, bound, st.Code); status != http.StatusUnauthorized || again != "" {
 		t.Fatalf("the code worked twice: %d", status)
 	}
-	if !admitted(t, bound, cookie) {
+	if !admitted(t, bound, cookie, key) {
 		t.Fatal("a refused second use signed the first device out")
 	}
 	// The token itself still signs in at the same door.
-	if status, _ := signIn(t, bound, bound, "fixture-token-0123456789"); status != http.StatusNoContent {
+	if status, _, _ := signIn(t, bound, bound, "fixture-token-0123456789"); status != http.StatusNoContent {
 		t.Fatalf("the token at its own door: %d", status)
 	}
 }
@@ -107,16 +109,16 @@ func TestAnAccessCodeIsReadAsItIsTyped(t *testing.T) {
 		func(c string) string { return " " + strings.ReplaceAll(c, "-", "") + " " },
 		func(c string) string { return strings.NewReplacer("0", "o", "1", "l").Replace(strings.ToLower(c)) },
 	} {
-		st, err := s.issueAccessCode(s.auth.Load(), "")
+		st, err := s.issueAccessCode(s.auth.Load(), "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for i := 0; i < 3; i++ {
-			if status, _ := signIn(t, bound, bound, "0000-0000-0000"); status != http.StatusUnauthorized {
+			if status, _, _ := signIn(t, bound, bound, "0000-0000-0000"); status != http.StatusUnauthorized {
 				t.Fatalf("a wrong code: %d", status)
 			}
 		}
-		if status, cookie := signIn(t, bound, bound, typed(st.Code)); status != http.StatusNoContent || cookie == "" {
+		if status, cookie, _ := signIn(t, bound, bound, typed(st.Code)); status != http.StatusNoContent || cookie == "" {
 			t.Fatalf("the code typed as %q was refused after three wrong tries: %d", typed(st.Code), status)
 		}
 	}
@@ -124,22 +126,25 @@ func TestAnAccessCodeIsReadAsItIsTyped(t *testing.T) {
 
 func TestTheOperatorsOwnAccessCode(t *testing.T) {
 	s, bound := codeServer(t)
-	_, err := s.issueAccessCode(s.auth.Load(), "too short")
+	_, err := s.issueAccessCode(s.auth.Load(), "too short", false)
 	var short *AccessCodeShort
 	if !errors.As(err, &short) || short.Line != AccessCodeLength || short.Length != len("TOOSHORT") {
 		t.Fatalf("an own code under twelve characters: %v", err)
 	}
+	if !strings.Contains(err.Error(), "and no count of tries is kept") {
+		t.Fatalf("the refusal does not say no count of tries is kept: %v", err)
+	}
 	if s.accessCode.Load() != nil {
 		t.Fatal("a refused own code was kept")
 	}
-	st, err := s.issueAccessCode(s.auth.Load(), "My Own Sign-In Phrase")
+	st, err := s.issueAccessCode(s.auth.Load(), "My Own Sign-In Phrase", false)
 	if err != nil || !st.Own || st.Code != "My Own Sign-In Phrase" {
 		t.Fatalf("an own code of fifteen characters: %+v %v", st, err)
 	}
-	if status, _ := signIn(t, bound, bound, "my own sign-in phrase"); status != http.StatusNoContent {
+	if status, _, _ := signIn(t, bound, bound, "my own sign-in phrase"); status != http.StatusNoContent {
 		t.Fatalf("the operator's own code, typed in lower case: %d", status)
 	}
-	if status, _ := signIn(t, bound, bound, "My Own Sign-In Phrase"); status != http.StatusUnauthorized {
+	if status, _, _ := signIn(t, bound, bound, "My Own Sign-In Phrase"); status != http.StatusUnauthorized {
 		t.Fatal("the operator's own code worked twice")
 	}
 }
@@ -153,7 +158,7 @@ func TestAnAccessCodeDies(t *testing.T) {
 	s.now = func() time.Time { return now }
 	issue := func() AccessCodeState {
 		t.Helper()
-		st, err := s.issueAccessCode(s.auth.Load(), "")
+		st, err := s.issueAccessCode(s.auth.Load(), "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,7 +166,7 @@ func TestAnAccessCodeDies(t *testing.T) {
 	}
 	refused := func(why string, st AccessCodeState) {
 		t.Helper()
-		if status, _ := signIn(t, bound, bound, st.Code); status != http.StatusUnauthorized {
+		if status, _, _ := signIn(t, bound, bound, st.Code); status != http.StatusUnauthorized {
 			t.Fatalf("%s: the code still signed a device in (%d)", why, status)
 		}
 	}
@@ -185,7 +190,7 @@ func TestAnAccessCodeDies(t *testing.T) {
 	refused("replaced by a newer code", first)
 	// A late close from the page that held the first does not touch the second.
 	s.cancelAccessCode(first.ID)
-	if status, _ := signIn(t, bound, bound, second.Code); status != http.StatusNoContent {
+	if status, _, _ := signIn(t, bound, bound, second.Code); status != http.StatusNoContent {
 		t.Fatalf("a close naming an older code erased the newer one: %d", status)
 	}
 	// The page that holds it closes.
@@ -205,30 +210,30 @@ func TestAnAccessCodeIsIssuedOnlyUnderThePolicyInForce(t *testing.T) {
 	s, _ := codeServer(t)
 	old := s.auth.Load()
 	s.SetAccessToken(true, "another-token-0123456789")
-	if _, err := s.issueAccessCode(old, ""); !errors.Is(err, ErrAccessCodeStale) {
+	if _, err := s.issueAccessCode(old, "", false); !errors.Is(err, ErrAccessCodeStale) {
 		t.Fatalf("a session admitted under the old token was given a code for the new one: %v", err)
 	}
 	if s.accessCode.Load() != nil {
 		t.Fatal("a refused request left a code outstanding")
 	}
 	s.SetAccessToken(false, "")
-	if _, err := s.issueAccessCode(s.auth.Load(), ""); !errors.Is(err, ErrAccessCodeNeedsToken) {
+	if _, err := s.issueAccessCode(s.auth.Load(), "", false); !errors.Is(err, ErrAccessCodeNeedsToken) {
 		t.Fatalf("a code from a dashboard that asks for no token: %v", err)
 	}
 }
 
 func TestARotationWhileACodeIsSpentGrantsNothingUnderTheNewToken(t *testing.T) {
 	s, bound := codeServer(t)
-	st, err := s.issueAccessCode(s.auth.Load(), "")
+	st, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.accessCodeSpent = func() { s.SetAccessToken(true, "another-token-0123456789") }
-	status, cookie := signIn(t, bound, bound, st.Code)
+	status, cookie, key := signIn(t, bound, bound, st.Code)
 	if status != http.StatusNoContent || cookie == "" {
 		t.Fatalf("the fixture did not reach the cookie: %d", status)
 	}
-	if cookie == s.accessHash() || admitted(t, bound, cookie) {
+	if cookie == s.accessHash() || admitted(t, bound, cookie, key) {
 		t.Fatal("a code issued under the old token signed a device in under the new one")
 	}
 }
@@ -247,7 +252,7 @@ func TestAnAccessCodeOfferedOverAConnectionThatIsNotPrivateIsEnded(t *testing.T)
 		said, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		return res.StatusCode, res.Header.Get("Set-Cookie"), strings.TrimSpace(string(said))
 	}
-	st, err := s.issueAccessCode(s.auth.Load(), "")
+	st, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,11 +274,11 @@ func TestAnAccessCodeOfferedOverAConnectionThatIsNotPrivateIsEnded(t *testing.T)
 		t.Fatalf("a code that was seen in the clear still signed a device in over a private connection: %d", status)
 	}
 	// Another is made, and works where it should.
-	next, err := s.issueAccessCode(s.auth.Load(), "")
+	next, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := signIn(t, bound, bound, next.Code); status != http.StatusNoContent {
+	if status, _, _ := signIn(t, bound, bound, next.Code); status != http.StatusNoContent {
 		t.Fatalf("the next code, over a private connection: %d", status)
 	}
 }
@@ -294,6 +299,9 @@ func TestAnAccessCodeIsMadeOverAPrivateConnectionOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.CloseNow()
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"hello","page_key":"`+mintPageKey(s.auth.Load())+`"}`)); err != nil {
+			t.Fatal(err)
+		}
 		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"access_code","request_id":"code"}`)); err != nil {
 			t.Fatal(err)
 		}
@@ -316,6 +324,143 @@ func TestAnAccessCodeIsMadeOverAPrivateConnectionOnly(t *testing.T) {
 	}
 	if m := ask(bound); m.Type != "access_code" || m.AccessCode == nil || m.AccessCode.Code == "" {
 		t.Fatalf("the machine's own page was not given a code: %+v", m)
+	}
+}
+
+func TestALocalAccessCodeSignsInOnlyABrowserOnThisMachineOrItsNetwork(t *testing.T) {
+	s, bound := codeServer(t)
+	s.machineAddrs = func() ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("198.51.100.20"), Mask: net.CIDRMask(24, 32)}}, nil
+	}
+	_, port, _ := net.SplitHostPort(bound)
+	ask := func() AccessCodeState {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, _, err := websocket.Dial(ctx, "ws://"+bound+"/ws?interaction_version=1", &websocket.DialOptions{HTTPHeader: http.Header{
+			"Origin": []string{"http://" + bound},
+			"Cookie": []string{"aii_token_" + port + "=" + verifier("fixture-token-0123456789")},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.CloseNow()
+		if err := sendHello(ctx, conn, pageKeyFor(s)); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"access_code","request_id":"code","access_code_local":true}`)); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("the request for a local code was not answered: %v", err)
+			}
+			var m ServerMessage
+			if json.Unmarshal(raw, &m) == nil && m.RequestID == "code" {
+				if m.Type != "access_code" || m.AccessCode == nil {
+					t.Fatalf("the signed-in page was not given a local code: %+v", m)
+				}
+				return *m.AccessCode
+			}
+		}
+	}
+	// offer sends a code to the sign-in door as a browser at peer would,
+	// over TLS, and through a relay when carried.
+	offer := func(code, peer string, carried bool) (int, string, string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "https://"+bound+"/auth/token", strings.NewReader(code))
+		req.Host, req.RemoteAddr, req.TLS = bound, peer, &tls.ConnectionState{}
+		if carried {
+			req = req.WithContext(context.WithValue(req.Context(), carriedKey{}, true))
+		}
+		rec := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(rec, req)
+		return rec.Code, rec.Header().Get("Set-Cookie"), strings.TrimSpace(rec.Body.String())
+	}
+	st := ask()
+	if st.Link != "http://"+bound+"/auth/link#"+strings.ReplaceAll(st.Code, "-", "") || st.QR != "" {
+		t.Fatalf("a local code's link is not at the address the page reached, or it carries a picture: link %q, picture %v", st.Link, st.QR != "")
+	}
+	for _, from := range []struct {
+		what, peer string
+		carried    bool
+	}{
+		{"through a relay", "127.0.0.1:40000", true},
+		{"from an address on none of this machine's networks", "203.0.113.9:40000", false},
+	} {
+		if status, cookie, said := offer(st.Code, from.peer, from.carried); status != http.StatusForbidden || cookie != "" || said != ErrAccessCodeNotLocal.Error() {
+			t.Fatalf("a local code offered %s: %d, cookie %q, told %q; want it refused with the reason", from.what, status, cookie, said)
+		}
+		if s.accessCode.Load() != nil {
+			t.Fatalf("a local code offered %s is still outstanding", from.what)
+		}
+		if status, _, _ := signIn(t, bound, bound, st.Code); status != http.StatusUnauthorized {
+			t.Fatalf("a local code offered %s still signed this machine's browser in: %d", from.what, status)
+		}
+		st = ask()
+	}
+	if status, cookie, _ := offer(st.Code, "198.51.100.77:40000", false); status != http.StatusNoContent || cookie == "" {
+		t.Fatalf("a local code from an address on this machine's network: %d, cookie %q", status, cookie)
+	}
+	if status, _, _ := offer(st.Code, "198.51.100.77:40000", false); status != http.StatusUnauthorized {
+		t.Fatalf("a local code worked twice: %d", status)
+	}
+	if status, _, _ := signIn(t, bound, bound, ask().Code); status != http.StatusNoContent {
+		t.Fatalf("a local code from this machine: %d", status)
+	}
+	other, err := s.issueAccessCode(s.auth.Load(), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _, _ := offer(other.Code, "203.0.113.9:40000", true); status != http.StatusNoContent {
+		t.Fatalf("a code from Open on another device, through a relay: %d", status)
+	}
+}
+
+func TestTheTokenCardsCodeIsNotSpentFromOutsideTheNetwork(t *testing.T) {
+	s, bound := codeServer(t)
+	_, port, _ := net.SplitHostPort(bound)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws://"+bound+"/ws?interaction_version=1", &websocket.DialOptions{HTTPHeader: http.Header{
+		"Origin": []string{"http://" + bound},
+		"Cookie": []string{"aii_token_" + port + "=" + verifier("fixture-token-0123456789")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	if err := sendHello(ctx, conn, pageKeyFor(s)); err != nil {
+		t.Fatal(err)
+	}
+	// As the token's card asks it (settings.js).
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"access_code","request_id":"code","access_code_local":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	for code == "" {
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("the card's request for a code was not answered: %v", err)
+		}
+		var m ServerMessage
+		if json.Unmarshal(raw, &m) == nil && m.RequestID == "code" {
+			if m.Type != "access_code" || m.AccessCode == nil {
+				t.Fatalf("the signed-in page was not given a code: %+v", m)
+			}
+			code = m.AccessCode.Code
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://"+bound+"/auth/token", strings.NewReader(code))
+	req.Host, req.RemoteAddr, req.TLS = bound, "203.0.113.9:40000", &tls.ConnectionState{} // TEST-NET-3: on no network of this machine
+	rec := httptest.NewRecorder()
+	s.server.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("the card's code offered from outside this machine's network: %d, cookie %q; want it refused, signing nothing in", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
+	if status, _, _ := signIn(t, bound, bound, code); status != http.StatusUnauthorized {
+		t.Fatalf("a code offered from outside this machine's network was not ended: %d", status)
 	}
 }
 
@@ -465,11 +610,11 @@ func TestTheLauncherOnThisMachineIsGivenOneSignInLink(t *testing.T) {
 	if got.Seconds != 45 || got.ExpiresAt == "" {
 		t.Fatalf("the link does not live as the setting says: %+v", got)
 	}
-	status, cookie := signIn(t, bound, bound, code)
-	if status != http.StatusNoContent || cookie == "" || !admitted(t, bound, cookie) {
+	status, cookie, key := signIn(t, bound, bound, code)
+	if status != http.StatusNoContent || cookie == "" || !admitted(t, bound, cookie, key) {
 		t.Fatalf("the link did not sign the browser in: %d, cookie %q", status, cookie)
 	}
-	if status, _ := signIn(t, bound, bound, code); status != http.StatusUnauthorized {
+	if status, _, _ := signIn(t, bound, bound, code); status != http.StatusUnauthorized {
 		t.Fatalf("the link worked twice: %d", status)
 	}
 
@@ -479,7 +624,7 @@ func TestTheLauncherOnThisMachineIsGivenOneSignInLink(t *testing.T) {
 	}
 	unspent, _ := codeOf(body)
 	s.SetAccessToken(true, "fixture-token-rotated-9876543210")
-	if status, _ := signIn(t, bound, bound, unspent); status != http.StatusUnauthorized {
+	if status, _, _ := signIn(t, bound, bound, unspent); status != http.StatusUnauthorized {
 		t.Fatalf("a link made under the old token signed a browser in after the rotation: %d", status)
 	}
 
@@ -506,7 +651,7 @@ func TestADeviceSignedInByAnAccessCodeApprovesScriptsAndExportsTheKeys(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Shutdown(t.Context()) })
-	st, err := s.issueAccessCode(s.auth.Load(), "")
+	st, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,17 +661,18 @@ func TestADeviceSignedInByAnAccessCodeApprovesScriptsAndExportsTheKeys(t *testin
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	signed := findCookie(res.Cookies(), "aii_token_"+port)
+	signed := findCookie(res.Cookies(), tlsCookieName(port))
 	if res.StatusCode != http.StatusNoContent || signed == nil {
 		t.Fatalf("the code did not sign the device in: %d", res.StatusCode)
 	}
-	cookie := signed.Value
+	cookie, key := signed.Value, res.Header.Get(pageKeyHeader)
 
 	digest := digestOf(t, filepath.Join(dir, "custom.js"))
 	req, _ := http.NewRequest(http.MethodPost, "https://"+bound+"/overlay/scripts/approve", strings.NewReader(`{"path":"custom.js","sha256":"`+digest+`"}`))
 	req.Header.Set("Origin", "https://"+bound)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cookie", "aii_token_"+port+"="+cookie)
+	req.Header.Set("Cookie", tlsCookieName(port)+"="+cookie)
+	req.Header.Set(pageKeyHeader, key)
 	res, err = testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -537,7 +683,7 @@ func TestADeviceSignedInByAnAccessCodeApprovesScriptsAndExportsTheKeys(t *testin
 		t.Fatalf("the device signed in by a code could not approve the script: %d %q %+v", res.StatusCode, body, approved)
 	}
 
-	conn, err := dialWSToken(bound, cookie)
+	conn, err := dialWSToken(bound, cookie, key)
 	if err != nil {
 		t.Fatal(err)
 	}

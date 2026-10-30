@@ -440,8 +440,8 @@ func TestAKeptSnapshotIsProvedAndOneThatRottedIsNot(t *testing.T) {
 	}
 	// EDITED AND RE-SUMMED: whoever changes a snapshot can rewrite its
 	// checksum list to match, and then every file "matches". What still
-	// does not hold is the restore — the database no longer ends where the
-	// record does — and that is what the proof is for.
+	// does not hold is the list's signature, and the restore — the database
+	// no longer ends where the record does.
 	// Cut in half before it is re-summed: one flipped byte can land where
 	// nothing reads it, and then there is nothing for a proof to refuse.
 	raw = raw[:len(raw)/2]

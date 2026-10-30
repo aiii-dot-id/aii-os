@@ -95,9 +95,11 @@ func prepareRegistry(top providerRegistry, entries []json.RawMessage) (*provider
 
 	reg.eff = newEffectiveCaps(&reg)
 	fillEmbeddedRoute(&reg)
+	fillEmbeddedFacts(&reg)
 	fillEmbeddedCredentialOptions(&reg)
 	fillEmbeddedEffortLevels(&reg)
 	fillEmbeddedCatalogueAuthors(&reg)
+	fillEmbeddedCapabilitySources(&reg)
 	fillEmbeddedVendorKeyEnv(&reg)
 	fillEmbeddedSpeech(&reg)
 	if err := bindOAuth(&reg); err != nil {

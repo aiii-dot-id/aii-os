@@ -182,3 +182,19 @@ func publishView(t *testing.T, w *Writer, key string) (view, record string) {
 	}
 	return view, record
 }
+
+func TestAStoreReopenedMakesNoMissingParent(t *testing.T) {
+	root := t.TempDir()
+	volume := filepath.Join(root, "volume")
+	if _, err := ReopenWriter(filepath.Join(volume, "plugins")); !errors.Is(err, ErrStoreUnreachable) {
+		t.Fatalf("a store whose parent is missing: want ErrStoreUnreachable, got %v", err)
+	}
+	if _, err := os.Lstat(volume); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("reopening made the missing parent %s (%v)", volume, err)
+	}
+	w, err := ReopenWriter(filepath.Join(root, "plugins"))
+	if err != nil {
+		t.Fatalf("a store whose parent is there: %v", err)
+	}
+	w.Close()
+}

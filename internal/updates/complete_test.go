@@ -114,6 +114,48 @@ func TestAnInstallUpdatedByAnOlderUpdaterIsCompletedAtTheNextCheck(t *testing.T)
 	}
 }
 
+// An updater from before review DR06 (0.1.12) kept its record and backup
+// in the identity's data directory. The healthy boot of its update notes
+// the install as incomplete all the same, and the next check completes it.
+func TestAnInstallUpdatedByAPreDR06UpdaterIsCompletedAtTheNextCheck(t *testing.T) {
+	rig := newHelperRig(t)
+	archive := contractArchive(t, packagefmt.HostPlatform())
+	in, names := byAnOlderUpdater(t, rig)
+	tgt := targetForTest(t, in.exe)
+	pend, _, err := readRecord(tgt.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tgt.backup, filepath.Join(in.dir, previousFile)); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(tgt.record)
+	if err := writeRecord(filepath.Join(in.dir, pendingFile), updatePending{Attempts: 1, BackupSHA256: pend.BackupSHA256, NewSHA256: pend.NewSHA256}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeBootMarkerAt(in.dir, in.exe)
+	raw, err := os.ReadFile(tgt.incomplete)
+	var fact incompleteInstall
+	if err != nil || json.Unmarshal(raw, &fact) != nil || fact.NewSHA256 != pend.NewSHA256 {
+		t.Fatalf("the healthy boot of a pre-DR06 update that installed aii alone left no note of it: %s (%v)", raw, err)
+	}
+	if exists(filepath.Join(in.dir, pendingFile)) || exists(filepath.Join(in.dir, previousFile)) {
+		t.Fatal("the healthy boot did not retire the earlier build's state")
+	}
+
+	c, _ := restarted(t, rig, in, archive)
+	if err := c.completeInstall(context.Background(), in.exe); err != nil {
+		t.Fatalf("the completion: %v", err)
+	}
+	for _, name := range names {
+		assertApplyFile(t, filepath.Join(in.dir, name), name)
+	}
+	if exists(tgt.incomplete) {
+		t.Error("a completed install left its note")
+	}
+}
+
 // An update this build applies installs the whole set, and its healthy
 // boot notes nothing.
 func TestAnUpdateThatInstalledTheWholeSetLeavesNothingToComplete(t *testing.T) {

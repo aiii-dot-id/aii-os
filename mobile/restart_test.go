@@ -24,7 +24,7 @@ func restartFixture(t *testing.T) (*Runtime, string) {
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	r, err := Start(path, home)
+	r, err := Start(path, home, newTestKeystore())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +66,11 @@ func TestMobileDashboardRestartHandsOffOnceAndKeepsAuthentication(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer conn.CloseNow()
+	// The socket's first message is the page key the sign-in answered, as the
+	// shell's page sends it.
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"hello","page_key":"`+response.Header.Get("Aii-Page-Key")+`"}`)); err != nil {
+		t.Fatal(err)
+	}
 	wait := make(chan bool, 1)
 	go func() { wait <- r.WaitForRestart() }()
 	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"restart","request_id":"mobile-restart-proof"}`)); err != nil {

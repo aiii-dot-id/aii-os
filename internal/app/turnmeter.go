@@ -37,6 +37,8 @@ type turnState struct {
 	toolEmit func(kind, name, args string)
 	lastTurn string
 
+	requestSafe *bool
+
 	turnCalls    int
 	turnReadOnly int
 	turnSpawned  int
@@ -141,7 +143,8 @@ func workDeclaration(args map[string]any) (spawned bool, predicted, independent 
 	switch action, _ := args["action"].(string); action {
 	case "spawn":
 		spawned = true
-	case "update":
+	case "update", "start", "":
+
 		predicted, independent = declaredCount(args["steps"]), declaredCount(args["independent"])
 	}
 	return spawned, predicted, independent

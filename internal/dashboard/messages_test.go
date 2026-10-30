@@ -31,7 +31,7 @@ func TestTheMessagesReadAnswersItsOwnRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Shutdown(context.Background())
-	c, err := dialWSToken(addr, s.accessHash())
+	c, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestTheMessagesReadAnswersItsOwnRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bare.Shutdown(context.Background())
-	c2, err := dialWSToken(addr, bare.accessHash())
+	c2, err := dialWSToken(addr, bare.accessHash(), pageKeyFor(bare))
 	if err != nil {
 		t.Fatal(err)
 	}

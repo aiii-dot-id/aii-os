@@ -84,7 +84,7 @@ func TestSpeakerObservationAmendsTheTurnItNames(t *testing.T) {
 	}
 
 	before := len(fanned)
-	a.voiceEngineEvent(nil, observation("vs-1", 23, 99, "Jim", "known", 0.9, false), sink)
+	a.voiceEngineEvent(nil, observation("vs-1", 23, 99, "Guest", "known", 0.9, false), sink)
 	if len(fanned) != before+1 || last().RefersTo != 99 {
 		t.Fatal("an observation for a final the host never recorded is still shown")
 	}
@@ -93,7 +93,7 @@ func TestSpeakerObservationAmendsTheTurnItNames(t *testing.T) {
 	}
 
 	// A typed-through-voice turn (the wake path) is tagged the same way.
-	b2 := &voiceBinding{session: "vs-1", gen: 2, done: func() {}, seq: 8, text: "second"}
+	b2 := &voiceBinding{session: "vs-1", gen: 2, done: func() {}, seq: 8, text: "second", said: voiceMarker + "second"}
 	a.turnMu.Lock()
 	a.turnVoice = append(a.turnVoice, b2)
 	a.turnMu.Unlock()

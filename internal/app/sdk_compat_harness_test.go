@@ -15,14 +15,20 @@ package app
 // lane, with the worker built from this tree.
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,14 +51,14 @@ type compatBuild struct {
 // bytes are logged before use and must still be identical after the test. The
 // release preparation receipt binds these files to the authoring source; this
 // test binds the actual worker/package/trust bytes it exercised.
-func sdkActualPluginBuild(t *testing.T, env, id, stem, version string) compatBuild {
+func sdkActualPluginBuild(t *testing.T, env, stem, version string) compatBuild {
 	t.Helper()
 	dir := os.Getenv(env)
 	if dir == "" {
 		t.Skip("set " + env + " to the prepared actual-plugin fixture directory")
 	}
 	b := compatBuild{
-		pluginID: id,
+		pluginID: packagedPluginID(t, filepath.Join(dir, stem+"-t0.aiiospkg")),
 		worker:   filepath.Join(dir, "aii-plugin-worker"),
 		t0:       filepath.Join(dir, stem+"-t0.aiiospkg"),
 		v1:       filepath.Join(dir, stem+"-"+version+".aiiospkg"),
@@ -63,6 +69,43 @@ func sdkActualPluginBuild(t *testing.T, env, id, stem, version string) compatBui
 		compatFixtureFile(t, path)
 	}
 	return b
+}
+
+// packagedPluginID is the plugin id the package at path declares in its
+// manifest.json: the tests name a published plugin by what its own package
+// says, not by a copy of the id in this tree (the source carries no live
+// identity's name, and a published plugin's id may hold one).
+func packagedPluginID(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer z.Close()
+	tr := tar.NewReader(z)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			t.Fatalf("%s holds no manifest.json", path)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, name, ok := strings.Cut(h.Name, "/"); !ok || name != "manifest.json" {
+			continue
+		}
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(tr).Decode(&m); err != nil || m.ID == "" {
+			t.Fatalf("%s: manifest.json names no id: %v", path, err)
+		}
+		return m.ID
+	}
 }
 
 // compatFixtureFile binds one exact immutable fixture across execution.

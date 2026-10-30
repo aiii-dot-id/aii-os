@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
@@ -28,7 +27,7 @@ func WriteNew(path string, data []byte, perm os.FileMode) (published bool, err e
 }
 
 func stage(path string, data []byte, perm os.FileMode) (tmp string, err error) {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	f, err := fileperm.CreateTempForReplacement(path)
 	if err != nil {
 		return "", fmt.Errorf("create temporary file: %w", err)
 	}

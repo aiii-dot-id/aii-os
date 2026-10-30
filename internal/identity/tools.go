@@ -26,7 +26,7 @@ func (e *Engine) verbTools(ctx context.Context, args map[string]any) (string, er
 		if plane == nil {
 			return "No plugin operations are installed beside you.", nil
 		}
-		return renderToolBrief(plane.Brief()), nil
+		return renderToolBrief(plane.Brief(), e.inSafeMode()), nil
 	case "search":
 		query := strings.TrimSpace(stringArg(args, "query"))
 		if query == "" {
@@ -61,7 +61,7 @@ func (e *Engine) verbTools(ctx context.Context, args map[string]any) (string, er
 	} else {
 		lines = append(lines, "Organs:")
 	}
-	for _, v := range Verbs() {
+	for _, v := range OfferedVerbs(e.inSafeMode()) {
 		if depth >= 2 {
 			lines = append(lines, fmt.Sprintf("  %s — %s", v.Name, v.Description))
 		} else {
@@ -89,7 +89,7 @@ func (e *Engine) verbTools(ctx context.Context, args map[string]any) (string, er
 
 	if action == "" && plane != nil {
 		if b := plane.Brief(); b.Total > 0 || b.Unavailable > 0 {
-			lines = append(lines, "", renderToolBrief(b))
+			lines = append(lines, "", renderToolBrief(b, e.inSafeMode()))
 		}
 	}
 
@@ -100,6 +100,15 @@ func (e *Engine) verbTools(ctx context.Context, args map[string]any) (string, er
 	lines = append(lines, docs,
 		"  SKILLS.md — what this binary can do, and how to use it well",
 		"  METHOD.md — the practice: Occam, First Principles, the six steps, the five gates")
+
+	if hd, ok := e.toolDisc.(HomeDocs); ok {
+		if docs := hd.HomeDocs(); len(docs) > 0 {
+			lines = append(lines, homeDocsHeading)
+			for _, doc := range docs {
+				lines = append(lines, "  "+doc)
+			}
+		}
+	}
 
 	return fmt.Sprintf("What you can reach (depth %d):\n%s", depth, strings.Join(lines, "\n")), nil
 }
@@ -114,12 +123,14 @@ func writesFiles(offered []ToolInfo) bool {
 	return false
 }
 
+const homeDocsHeading = "\nAlso at your root:"
+
 func stringArg(args map[string]any, key string) string {
 	s, _ := args[key].(string)
 	return s
 }
 
-func renderToolBrief(b ToolBrief) string {
+func renderToolBrief(b ToolBrief, safe bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Plugin operations beside you: %d across %d families (%d unavailable).", b.Total, len(b.Families)+b.MoreFamilies, b.Unavailable)
 	for _, f := range b.Families {
@@ -130,6 +141,10 @@ func renderToolBrief(b ToolBrief) string {
 	}
 	if b.MoreFamilies > 0 {
 		fmt.Fprintf(&sb, "\n  … and %d more families; search to narrow", b.MoreFamilies)
+	}
+	if safe {
+
+		return sb.String()
 	}
 	sb.WriteString("\nEach family names its primary operations first; they are in your tool list. Next: tools action=search query=<what you need> · action=show name=<operation> · action=call name=<operation> args={…} for one that is not. A plugin's success is what the host's receipt says, never the plugin's own text.")
 	return sb.String()

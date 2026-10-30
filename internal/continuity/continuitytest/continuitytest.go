@@ -110,3 +110,57 @@ func CheckSums(dir string) error {
 	}
 	return escrow.CheckSums(dir, present)
 }
+
+func Unsign(path string, snapshotKey []byte) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return unsignSet(path)
+	}
+	work, err := os.MkdirTemp(filepath.Dir(path), ".unsign-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	set := filepath.Join(work, "set")
+	names, err := escrow.OpenSnapshot(path, snapshotKey, set)
+	if err != nil {
+		return err
+	}
+	if err := unsignSet(set); err != nil {
+		return err
+	}
+	var kept []string
+	for _, n := range names {
+		if n != escrow.SumsSigName {
+			kept = append(kept, n)
+		}
+	}
+	recipient, err := escrow.SnapshotRecipient(snapshotKey)
+	if err != nil {
+		return err
+	}
+	again := filepath.Join(work, "again"+escrow.SnapshotSuffix)
+	if err := escrow.EncryptSnapshot(set, kept, recipient, again); err != nil {
+		return err
+	}
+	return os.Rename(again, path)
+}
+
+func unsignSet(set string) error {
+	sumsPath := filepath.Join(set, escrow.SumsName)
+	sums, err := os.ReadFile(sumsPath)
+	if err != nil {
+		return err
+	}
+	signed, named := escrow.SignedPart(sums)
+	if !named {
+		return fmt.Errorf("%s names no signature", sumsPath)
+	}
+	if err := os.WriteFile(sumsPath, signed, 0o600); err != nil {
+		return err
+	}
+	return os.Remove(filepath.Join(set, escrow.SumsSigName))
+}

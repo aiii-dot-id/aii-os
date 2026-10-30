@@ -19,6 +19,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
@@ -46,6 +47,8 @@ func (a *App) watchConfig(path string) {
 			a.applyLogOverlay(controlPath)
 			continue
 		}
+
+		a.dropSettledConfigCopies(path)
 
 		a.reloadIfChanged()
 	}
@@ -192,6 +195,8 @@ func (l LLMConfig) refusedRetryMax() time.Duration {
 
 func llmRuntimeChanged(fresh, current LLMConfig) bool {
 	fresh.RefusedRetryMaxSeconds, current.RefusedRetryMaxSeconds = 0, 0
+	fresh.ModelListTimeoutSeconds, current.ModelListTimeoutSeconds = 0, 0
+	fresh.ModelListCacheSeconds, current.ModelListCacheSeconds = 0, 0
 	return fresh != current
 }
 
@@ -392,7 +397,9 @@ func (a *App) reload(asked bool) {
 	rootsNamed := fresh.Tools.ExtraRoots
 	rootsChanged := !reflect.DeepEqual(fresh.Tools.ExtraRoots, current.Tools.ExtraRoots)
 	sandboxSwitched := fresh.Tools.SandboxOff != current.Tools.SandboxOff
-	if (rootsChanged || sandboxSwitched) && a.toolReg != nil {
+
+	sandboxMoved := rootsChanged || sandboxSwitched
+	if sandboxMoved && a.toolReg != nil {
 		if rootsChanged {
 			a.toolReg.SetExtraRoots(fresh.Tools.ExtraRoots)
 			_, fresh.Tools.ExtraRoots = a.toolReg.Roots()
@@ -435,7 +442,7 @@ func (a *App) reload(asked bool) {
 		return !reflect.DeepEqual(a, b)
 	}()
 	autoloadChanged := fresh.Plugins.Autoload != current.Plugins.Autoload
-	catalogChanged := fresh.Plugins.CatalogURL != current.Plugins.CatalogURL
+	catalogChanged := fresh.Plugins.CatalogURL != current.Plugins.CatalogURL || fresh.Plugins.CatalogRefreshMinutes != current.Plugins.CatalogRefreshMinutes
 	maintenanceChanged := !reflect.DeepEqual(fresh.Maintenance, current.Maintenance) ||
 		fresh.Identity.DBOptimizeLevels != current.Identity.DBOptimizeLevels ||
 		fresh.Identity.DBLearnDictionary != current.Identity.DBLearnDictionary ||
@@ -449,13 +456,21 @@ func (a *App) reload(asked bool) {
 	contactsChanged := !reflect.DeepEqual(fresh.Contacts, current.Contacts)
 	readAtUseChanged := !reflect.DeepEqual(fresh.Plugins.Settings, current.Plugins.Settings) ||
 		fresh.Updates.Automatic != current.Updates.Automatic ||
+		fresh.Updates.Repo != current.Updates.Repo ||
+		fresh.Updates.APIURL != current.Updates.APIURL ||
 		fresh.Dashboard.Expert != current.Dashboard.Expert ||
 		fresh.Dashboard.AccessCodeSeconds != current.Dashboard.AccessCodeSeconds ||
 		fresh.Dashboard.RefusedPauses != current.Dashboard.RefusedPauses ||
+		fresh.Dashboard.StrangerBodySeconds != current.Dashboard.StrangerBodySeconds ||
 		fresh.Dashboard.UnsignedRequestsPerSecond != current.Dashboard.UnsignedRequestsPerSecond ||
 		fresh.Dashboard.UnsignedRequestBurst != current.Dashboard.UnsignedRequestBurst ||
+		fresh.Dashboard.StartWaitSeconds != current.Dashboard.StartWaitSeconds ||
+		fresh.Dashboard.PortSearchSpan != current.Dashboard.PortSearchSpan ||
+		fresh.Dashboard.PageTicketSeconds != current.Dashboard.PageTicketSeconds ||
+		fresh.Dashboard.PageTickets != current.Dashboard.PageTickets ||
 		fresh.Dashboard.Record != current.Dashboard.Record ||
 		!reflect.DeepEqual(fresh.Dashboard.SentRequests, current.Dashboard.SentRequests) ||
+		fresh.Dashboard.RefusalLinesPerMinute != current.Dashboard.RefusalLinesPerMinute ||
 		!reflect.DeepEqual(fresh.Dashboard.channelSettings(), current.Dashboard.channelSettings()) ||
 		fresh.Certificate.RelayPingSeconds != current.Certificate.RelayPingSeconds ||
 		fresh.Certificate.RelayBackoffBaseMS != current.Certificate.RelayBackoffBaseMS ||
@@ -563,6 +578,9 @@ func (a *App) reload(asked bool) {
 	if fresh.Memory.MeaningSource != current.Memory.MeaningSource {
 		logsink.Info("config.decision", "memory.meaning_source applied live -> %q (the source is chosen again at its next use)", fresh.Memory.MeaningSource)
 	}
+	if !reflect.DeepEqual(fresh.Genesis.AgentMemory, current.Genesis.AgentMemory) {
+		logsink.Info("config.decision", "genesis.agent_memory changed: a birth reads it, and Copy notes in Settings → Sandbox reads it when pressed; nothing else reads it, and it waits for no boot")
+	}
 	if !reflect.DeepEqual(fresh.Logs.Group, current.Logs.Group) || !reflect.DeepEqual(fresh.Logs.Taps, current.Logs.Taps) {
 		logsink.Info("config.decision", "logs.group and logs.taps applied live")
 	}
@@ -571,7 +589,7 @@ func (a *App) reload(asked bool) {
 		a.pokePluginSweep()
 	}
 	if catalogChanged {
-		logsink.Info("config.decision", "plugins.catalog_url applied live -> %q (the catalog refreshes now)", fresh.Plugins.CatalogURL)
+		logsink.Info("config.decision", "plugins.catalog_url and plugins.catalog_refresh_minutes applied live -> %q, every %d minutes (the catalog refreshes now)", fresh.Plugins.CatalogURL, plugincatalog.HeldRefreshMinutes(fresh.Plugins.CatalogRefreshMinutes))
 		a.catalog.Poke()
 	}
 	if maintenanceChanged {
@@ -588,7 +606,7 @@ func (a *App) reload(asked bool) {
 		a.pokeOutbox()
 	}
 	if readAtUseChanged {
-		logsink.Info("config.decision", "plugin settings, automatic updates, the page's switches and the relay connection's figures applied live (each is read where it is used)")
+		logsink.Info("config.decision", "plugin settings, automatic updates and the release source, the page's switches and the relay connection's figures applied live (each is read where it is used)")
 	}
 	if togglesChanged {
 		logsink.Info("config.decision", "tool toggles applied live -> disabled %v", fresh.Tools.Disabled)
@@ -604,7 +622,7 @@ func (a *App) reload(asked bool) {
 		}
 		logsink.Info("config.decision", "agency ceilings applied live -> depth %d, parallel %d (queue %s), mints %d, wall %ds, local wall %ds; a child %s rounds, %s calls, %s legs; a turn %s rounds, %s tokens, its checkpoint at %s calls undeclared or %d times a declared estimate, with %d rounds after, %s continuations in a row",
 			ag.MaxSubagentDepth, ag.MaxParallelSubagents, queue, ag.SubagentMaxMints, ag.SubagentWallSeconds,
-			ag.SubagentWallSecondsLocal, ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs, ag.MaxToolRounds, ag.TurnTokenBudget,
+			ag.SubagentWallSecondsLocal, ag.SubagentMaxToolRounds, ag.SubagentMaxToolCalls, ag.SubagentMaxLegs, ag.MaxToolRounds, turnTokenBudgetSetting.value(*fresh),
 			checkpointCallsSetting.value(*fresh), slackSetting.n(*fresh), graceRoundsSetting.n(*fresh), continuationsSetting.value(*fresh))
 	}
 	if rhythmChanged {
@@ -622,6 +640,9 @@ func (a *App) reload(asked bool) {
 	}
 	if a.dashboard != nil && !reflect.DeepEqual(current, *fresh) {
 		a.dashboard.BroadcastConfig()
+	}
+	if a.dashboard != nil && sandboxMoved {
+		a.dashboard.BroadcastSandbox()
 	}
 }
 
@@ -666,6 +687,7 @@ func sameWritten(a, b Config) bool {
 
 func blankLiveAppliable(c *Config) {
 	c.contactsPresent = false
+	c.stated = nil
 	c.cognitionHeld = nil
 	c.Logs.Level = ""
 	c.Logs.Detail = nil
@@ -673,32 +695,50 @@ func blankLiveAppliable(c *Config) {
 	c.Logs.Taps = nil
 
 	c.Memory.MeaningSource = ""
+
+	c.Genesis.AgentMemory = nil
 	c.LLM = LLMConfig{}
 	c.Overrides = nil
 	c.Speech = SpeechConfig{}
 	c.Tools.ExtraRoots = nil
 	c.Tools.SandboxOff = false
 	c.Tools.Disabled = nil
+
+	c.Tools.ShellWallDevices, c.Tools.WallStartSeconds = nil, 0
+	c.Tools.ShellWindowsUTF8 = nil
 	c.Dashboard.Files = DashboardFilesConfig{}
 	c.Dashboard.Record = DashboardRecordConfig{}
 	c.Dashboard.SentRequests = DashboardSentRequestsConfig{}
 	c.Plugins.Autoload = ""
 	c.Plugins.CatalogURL = ""
+	c.Plugins.CatalogRefreshMinutes = 0
+
+	c.Plugins.CatalogMaxIndexBytes, c.Plugins.CatalogMaxSignatureBytes = 0, 0
+	c.Plugins.CatalogFetchTimeoutSeconds, c.Plugins.CatalogRefreshTimeoutSeconds, c.Plugins.CatalogFirstRefreshSeconds = 0, 0, 0
+	c.Plugins.TrustListMaxBytes = 0
 	c.Plugins.Grants = nil
 	c.Plugins.AuthProfiles = nil
 
 	c.Plugins.Runtime = PluginRuntimeConfig{SlowStorageCallMs: c.Plugins.Runtime.SlowStorageCallMs, MaxMemories: c.Plugins.Runtime.MaxMemories,
 		MaxInflightReceipts: c.Plugins.Runtime.MaxInflightReceipts}
 	c.Plugins.Resources = nil
+	c.Plugins.NativeView = nil
 	c.Maintenance = continuity.MaintenanceConfig{}
 	c.Identity.DBOptimizeLevels = false
 	c.Identity.DBLearnDictionary = false
 	c.Plugins.Settings = nil
 	c.Updates.Automatic = false
+
+	c.Updates.Repo, c.Updates.APIURL = "", ""
+	c.Updates.CheckIntervalMinutes = 0
 	c.Dashboard.Expert = false
 	c.Dashboard.AccessCodeSeconds = 0
 	c.Dashboard.RefusedPauses = 0
+	c.Dashboard.StrangerBodySeconds = 0
 	c.Dashboard.UnsignedRequestsPerSecond, c.Dashboard.UnsignedRequestBurst = 0, 0
+	c.Dashboard.StartWaitSeconds, c.Dashboard.PortSearchSpan = 0, 0
+	c.Dashboard.PageTicketSeconds, c.Dashboard.PageTickets = 0, 0
+	c.Dashboard.RefusalLinesPerMinute = 0
 	c.Dashboard.Channels, c.Dashboard.ICEServers = nil, nil
 	c.Dashboard.DirectWaitMS, c.Dashboard.DirectReadyAllowanceMS = 0, 0
 	c.Dashboard.ChannelSessions, c.Dashboard.ChannelQueueBytes, c.Dashboard.ChannelStallMS = 0, 0, 0

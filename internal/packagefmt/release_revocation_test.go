@@ -102,3 +102,46 @@ func TestAHostReleaseIsOutsideTheOtherRootsDomains(t *testing.T) {
 		}
 	}
 }
+
+// A WITHDRAWN SIGNATURE IS ASKED ABOUT AS IT VERIFIES. The release tool's
+// next list reads a withdrawn signature's kind before it verifies it, and
+// read it from the bytes as received, where a member spelled in another
+// case after the real artifact_kind was the kind asked about, while the
+// verification read the canonical bytes. Read from the canonical bytes,
+// "ARTIFACT_KIND" sorts before the real member, so the kind asked about is
+// the kind that verifies, in either order.
+func TestAWithdrawnSignatureIsAskedAboutAsItVerifies(t *testing.T) {
+	plat, _, err := packagetest.NewPlatformRelease("aiii_platform_release_case_variant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := plat.Sign(packagefmt.ArtifactKindHostRelease, map[string]any{
+		"archive_hash": strings.Repeat("a", 64), "version": "0.2.0", "platform": "linux", "arch": "amd64", "source_rev": "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := plat.SignRevocationStatus(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := packagefmt.TrustRoots{PlatformRelease: plat.Env}
+	other := `"ARTIFACT_KIND":"a.kind.no.root.may.revoke"`
+	for _, before := range []bool{false, true} {
+		doc := append([]byte("{"+other+","), asset[1:]...)
+		if !before {
+			doc = append(append([]byte(nil), asset[:len(asset)-1]...), []byte(","+other+"}")...)
+		}
+		out, err := packagefmt.NextStatusPayload(roots, packagetest.StatusFilePlatform, current, [][]byte{doc})
+		if err != nil {
+			t.Fatalf("before=%v: the signature verifies as a %s and was refused: %v", before, packagefmt.ArtifactKindHostRelease, err)
+		}
+		var next struct {
+			Revoked []struct {
+				ArtifactKind string `json:"artifact_kind"`
+			} `json:"revoked"`
+		}
+		if err := json.Unmarshal(out, &next); err != nil || len(next.Revoked) != 1 || next.Revoked[0].ArtifactKind != packagefmt.ArtifactKindHostRelease {
+			t.Fatalf("before=%v: the next list does not withdraw the %s (%v): %s", before, packagefmt.ArtifactKindHostRelease, err, out)
+		}
+	}
+}

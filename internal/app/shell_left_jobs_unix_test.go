@@ -13,8 +13,9 @@ import (
 )
 
 // leaveAJob gives the identity a tool registry and runs one command
-// through it that exits leaving `sleep 30` behind. It returns the job's
-// process group, which is running.
+// through it that exits leaving `sleep 30` behind, under a shell named by
+// a marker of this call's own. It returns the job's process group, as
+// this host numbers it (leftJobGroup), which is running.
 func leaveAJob(t *testing.T, a *App) int {
 	t.Helper()
 	a.toolReg = tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
@@ -22,14 +23,12 @@ func leaveAJob(t *testing.T, a *App) int {
 	// registry's own guarded ending, never by the bare number: once the
 	// job has ended that number may be anybody's.
 	t.Cleanup(func() { a.toolReg.EndLeftJobs(0) })
-	res, err := a.toolReg.Execute(context.Background(), "shell", map[string]any{"command": `echo $$; sleep 30 >/dev/null 2>&1 &`})
+	marker := fmt.Sprintf("aii-left-job-%d", time.Now().UnixNano())
+	res, err := a.toolReg.Execute(context.Background(), "shell", map[string]any{"command": `echo $$; sh -c 'sleep 30; :' ` + marker + ` >/dev/null 2>&1 &`})
 	if err != nil || res.Failed() {
 		t.Fatalf("the command that leaves a job: %v %+v", err, res)
 	}
-	var pgid int
-	if _, err := fmt.Sscanf(res.Output, "%d\n", &pgid); err != nil {
-		t.Fatalf("the shell's own pid is the first line of %q: %v", res.Output, err)
-	}
+	pgid := leftJobGroup(t, res.Output, marker)
 	if err := syscall.Kill(-pgid, 0); err != nil {
 		t.Fatalf("the job the command left is not running: %v", err)
 	}

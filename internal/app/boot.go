@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
@@ -29,7 +30,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/sections"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 	"github.com/aiii-dot-id/aii-os/internal/store"
-	"github.com/aiii-dot-id/aii-os/internal/tlsfault"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"github.com/aiii-dot-id/aii-os/internal/updates"
 	"github.com/aiii-dot-id/aii-os/internal/witness"
@@ -98,7 +98,7 @@ func schemaRefusal(err error, armed bool) (string, bool) {
 	}
 	detail := refusal.Error()
 	if armed {
-		detail += ". An update installed this version just before this start and it has not completed a boot, so restarting rolls back to the previous version (if the rollback cannot be done, the log says why)"
+		detail += rollbackArmedSays
 	}
 	return detail, true
 }
@@ -174,6 +174,24 @@ func witnessSafeTrigger(ce *witness.ConflictError) safeTrigger {
 	return safeWitnessSays
 }
 
+func keptWitnessAnswer(cfg Config) (safeTrigger, string, error) {
+	kc, err := witness.ReadKeptConflict(filepath.Dir(cfg.Identity.LedgerPath))
+	if errors.Is(err, witness.ErrKeptConflictUnread) {
+		return safeWitnessSays, fmt.Sprintf("%v: what the witness said is not known, so it is not taken as absent", err), nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	if kc == nil || !kc.Of(cfg.Witness.URL) {
+		return 0, "", nil
+	}
+	t := safeWitnessSays
+	if kc.Local {
+		t = safeWitnessConflict
+	}
+	return t, fmt.Sprintf("witness rollback/fork conflict, kept beside the ledger (%s) since %s, when the record ended at record %d: %s", witness.ConflictFileName, kc.KeptAt, kc.Record, kc.Answer), nil
+}
+
 func (a *App) newToolRegistry(cfg Config) (*tools.Registry, error) {
 	reg := tools.NewRegistry(cfg.Tools.CWD, a.ensureRing5Policy(), tools.Timeouts{
 		ShellSeconds:    cfg.Tools.ShellTimeoutSeconds,
@@ -183,14 +201,23 @@ func (a *App) newToolRegistry(cfg Config) (*tools.Registry, error) {
 		return nil, err
 	}
 	a.applyLocalFetch(cfg, reg)
+	reg.SetWebFetchMaxBytes(func() int { return webFetchMaxBytesSetting.n(a.configSnapshot()) })
 
-	reg.SetSafeSource(a.SafeMode)
+	reg.SetHoldSource(a.Hold)
 
 	reg.SetShellWallPlaces(func() ([]*firewall.Rule, error) {
 		cfg := a.configSnapshot()
-		kept, _, err := sandboxOffPlaces(a.activeConfig(cfg), a.grantedRoots())
-		return kept, err
+		active := a.activeConfig(cfg)
+		kept, _, err := sandboxOffPlaces(active, a.grantedRoots())
+		return append(shellSubstrateLabels(active, cfg.Tools.CWD), kept...), err
 	})
+
+	reg.SetShellWallSettings(func() tools.ShellWallSettings {
+		c := a.configSnapshot().Tools
+		return tools.ShellWallSettings{Devices: c.ShellWallDevices, StartSeconds: c.WallStartSeconds}
+	})
+
+	reg.SetShellWindowsUTF8(func() bool { return a.configSnapshot().Tools.shellWindowsUTF8() })
 	if err := applyDisabledTools(reg, cfg.Tools.Disabled); err != nil {
 		return nil, err
 	}
@@ -223,9 +250,9 @@ func (a *App) startLive() (retErr error) {
 		rolled := updates.CheckRollback(filepath.Dir(cfg.Identity.LedgerPath))
 
 		if rolled == "" {
-			keepConfigBeforeUpdate(cfg.SourcePath, updates.RequireSettledBootUpdate(filepath.Dir(cfg.Identity.LedgerPath)))
+			keepConfigUnderUpdate(cfg.SourcePath, Current(), updates.UnsettledBesideProgram(filepath.Dir(cfg.Identity.LedgerPath)))
 		}
-		putBack := func() error { return restoreConfigBeforeUpdate(cfg.SourcePath) }
+		putBack := func() error { return putBackConfigKept(cfg.SourcePath, Current(), true) }
 		if err := afterRollback(rolled, putBack, a.releaseIdentityClaim, reexecSelf); err != nil {
 			return err
 		}
@@ -237,6 +264,9 @@ func (a *App) startLive() (retErr error) {
 		logsink.Info("updates.decision", "rollback machinery idle on this host — %s", sr.Reason)
 	}
 
+	a.stripShipped()
+	cfg = a.configSnapshot()
+
 	a.seedHomeDocs()
 
 	if n := takeStartAttempt(); n > 0 {
@@ -244,7 +274,18 @@ func (a *App) startLive() (retErr error) {
 	}
 
 	a.continuity.SweepKeyCheckScratch(continuitySettingsOf(cfg))
+
+	if wrapped, err := crypto.WrapKeyFile(cfg.Identity.KeyPath); err != nil {
+		return fmt.Errorf("wrap the identity key: %w", err)
+	} else if wrapped {
+		logsink.Warn("boot.decision", "the identity's key at %s is now wrapped by this phone's keystore (%s), and the copy in the clear is gone", cfg.Identity.KeyPath, crypto.DeviceKeyHolder())
+	}
 	kp, err := loadKeyPair(cfg.Identity.KeyPath)
+
+	var custody *crypto.KeyCustodyError
+	if errors.As(err, &custody) && custody.Reason == crypto.KeystoreFailed {
+		return fmt.Errorf("load identity key: %w", err)
+	}
 	if err != nil {
 
 		artifact, aerr := recordPlace(cfg.Identity.LedgerPath)
@@ -322,6 +363,13 @@ func (a *App) startLive() (retErr error) {
 		return err
 	}
 
+	if t, detail, err := keptWitnessAnswer(cfg); err != nil {
+		return stopped("read the witness's answer kept beside the ledger", err)
+	} else if t != 0 {
+		logsink.Error("boot.refusal", "THE WITNESS'S ANSWER THAT THIS RECORD MOVED BACK OR SPLIT IS KEPT BESIDE THE LEDGER — entering BOOT-SAFE (minimal, read-only): %s", detail)
+		return a.holdOnKeptWitnessAnswer(cfg, kp, t, detail)
+	}
+
 	if a.ring5Content == "" {
 		if cfg.Genesis.FirewallURL == "" {
 			return a.startSafeBoot(safeRing5, "security_posture.absent: no Ring 5 server is configured")
@@ -333,11 +381,19 @@ func (a *App) startLive() (retErr error) {
 			return fmt.Errorf("the start ended before Ring 5 was fetched: %w", errStopping)
 		}
 		if err != nil {
-
 			detail := fmt.Sprintf("security_posture.verify_fail: required Ring 5 unavailable or unverifiable: %v", err)
-			if fault := (*tlsfault.Fault)(nil); errors.As(err, &fault) {
+
+			if refusedCertificate(err) {
 				return a.startSafeBoot(safeRing5Refused, detail)
 			}
+
+			if notAnswered(err) {
+				if endsForRollback(cfg) {
+					return stopped("fetch Ring 5", err)
+				}
+				return a.waitForRing5(cfg, detail)
+			}
+
 			return a.startSafeBoot(safeRing5, detail)
 		}
 		a.ring5Content = r5.Content
@@ -392,6 +448,9 @@ func (a *App) startLive() (retErr error) {
 	st.SetOperatorASCII(cfg.Dashboard.OperatorASCII != nil && *cfg.Dashboard.OperatorASCII)
 	st.SetOperatorVoices(cfg.Speech.OperatorSpeakers)
 	st.SetSelfModelMaxTokens(cfg.Prompt.SelfModelMaxTokens)
+	st.SetRing2EvidenceChars(cfg.Prompt.Ring2EvidenceMaxChars)
+	st.SetCharterMaxTokens(cfg.Prompt.CharterMaxTokens)
+	st.SetToolResultRunes(cfg.Record.ToolResultRunes)
 
 	if a.rings == nil {
 		a.rings = ring.NewManager()
@@ -423,6 +482,9 @@ func (a *App) startLive() (retErr error) {
 	st.SetOperatorASCII(cfg.Dashboard.OperatorASCII != nil && *cfg.Dashboard.OperatorASCII)
 	st.SetOperatorVoices(cfg.Speech.OperatorSpeakers)
 	st.SetSelfModelMaxTokens(cfg.Prompt.SelfModelMaxTokens)
+	st.SetRing2EvidenceChars(cfg.Prompt.Ring2EvidenceMaxChars)
+	st.SetCharterMaxTokens(cfg.Prompt.CharterMaxTokens)
+	st.SetToolResultRunes(cfg.Record.ToolResultRunes)
 
 	if owed {
 		if err := a.continuity.SettleRestore(continuitySettingsOf(cfg), settle); err != nil {
@@ -442,14 +504,21 @@ func (a *App) startLive() (retErr error) {
 		return stopped("load ring snapshots", err)
 	}
 
+	restored := 0
 	for _, sn := range snaps {
+		if sn.RingLevel == int(ring.Ring3) && sn.Section == "operator" {
+			removeOperatorModel(st, sn)
+			continue
+		}
 		if err := a.rings.SetSection(ring.RingLevel(sn.RingLevel), sn.Section, sn.Content); err != nil {
 
 			logsink.Error("ring.refusal", "ring snapshot %q at ring %d skipped: %v", sn.Section, sn.RingLevel, err)
+			continue
 		}
+		restored++
 	}
-	if len(snaps) > 0 {
-		logsink.Info("ring.start", "Ring snapshots restored: %d sections", len(snaps))
+	if restored > 0 {
+		logsink.Info("ring.start", "Ring snapshots restored: %d sections", restored)
 	}
 	brief, written, err := st.Brief()
 	if err != nil {
@@ -474,6 +543,8 @@ func (a *App) startLive() (retErr error) {
 	}
 
 	a.sayContactLinesTheDoorRefuses(a.configSnapshot())
+
+	a.sayConfigsSetAside(a.configSnapshot())
 	if cc.APIKey == "" && cc.Credential == nil {
 
 		logsink.Info("llm.refusal", "no API key on provider %q — expected for a local endpoint; if this provider requires one, chat will fail at call time with the provider's own error (set it in the dashboard, or %s)", llmEntry.Name, keyRemedy(llmEntry, cfg.LLM))
@@ -536,9 +607,9 @@ func (a *App) startLive() (retErr error) {
 
 	a.composer.SetPluginOperations(pluginOperations(toolReg))
 
-	a.applySubstrate(cfg)
+	placed := a.applySubstrate(cfg)
 	toolReg.SetExtraRoots(cfg.Tools.ExtraRoots)
-	if len(cfg.Tools.ExtraRoots) > 0 {
+	if placed || len(cfg.Tools.ExtraRoots) > 0 {
 		a.loadRing5()
 	}
 	door := &ledgerAdapter{Ledger: lg, kp: kp, st: st, onIntegrity: a.integrityLost, onAppend: a.ledgerAppended}
@@ -552,10 +623,10 @@ func (a *App) startLive() (retErr error) {
 	}
 	a.door = door
 
-	witnessClient := witness.New(cfg.Witness.URL, cfg.Witness.TLSSPKISHA256)
-	a.witnessProbe = witnessClient
+	a.keepWitnessEnvelope(kp, lg)
 
-	witnessClient.SetGenesisURL(cfg.Genesis.ServerURL)
+	witnessClient := witnessClientFor(cfg)
+	a.witnessProbe = witnessClient
 	anchorer := witness.NewAnchorer(witnessClient, lg, witness.AsIdentityKey(kp), a.store, a.store,
 		witnessMinter{door: door},
 		cfg.Witness.IntervalEvents, cfg.Witness.PlatformPubkeyPath)
@@ -563,6 +634,18 @@ func (a *App) startLive() (retErr error) {
 	anchorer.SetSealer(lg)
 
 	anchorer.SetAppendPause(door)
+
+	anchorer.SetFileGuard(door)
+
+	anchorer.SetOnWitnessKeyKept(func(err error) {
+		a.tellWitnessKeyKept(cfg.Witness.URL, err, witnessNoticeNow())
+	})
+
+	if cfg.Witness.URL != "" {
+		anchorer.SetOnWitnessParked(func(err error) {
+			a.tellWitnessParked(err, witnessNoticeNow())
+		})
+	}
 	anchorer.SetOnIntegrityConflict(func(ce *witness.ConflictError) {
 
 		if ce.WitnessSide {
@@ -582,12 +665,21 @@ func (a *App) startLive() (retErr error) {
 	anchorer.SetOnUnrecognisedConflict(func(ce *witness.ConflictError) {
 		a.tellUnrecognisedWitnessReply(cfg.Witness.URL, ce, witnessNoticeNow())
 	})
+
+	anchorer.SetOnStandingRefusal(func(ce *witness.ConflictError, why string) {
+		a.tellWitnessRefusalStands(cfg.Witness.URL, ce, why, witnessNoticeNow())
+	})
+	anchorer.SetOnEnrolmentAdopted(func(registeredID string) {
+		a.tellWitnessEnrolmentAdopted(cfg.Witness.URL, registeredID, witnessNoticeNow())
+	})
 	if cfg.Witness.URL != "" {
 		a.anchorer = anchorer
 	}
 
 	if _, safe := a.SafeMode(); !safe {
-		if err := anchorer.SettlePending(); errors.Is(err, witness.ErrPendingReceiptRefused) {
+		if err := anchorer.SettlePending(); errors.Is(err, witness.ErrWitnessOperationActive) {
+			logsink.Warn("witness.refusal", "the witness receipt pending beside the ledger was not settled at boot: witness work is parked behind an operation this version cannot carry out: %v", err)
+		} else if errors.Is(err, witness.ErrPendingReceiptRefused) {
 			logsink.Error("witness.refusal", "the witness receipt pending beside the ledger was refused at boot — anchoring is refused until it is settled: %v", err)
 		} else if err != nil {
 			logsink.Error("witness.error", "the witness receipt pending beside the ledger was not settled at boot — the next anchor pass tries again first: %v", err)
@@ -647,9 +739,14 @@ func (a *App) startLive() (retErr error) {
 		ConversationWindow: cfg.Memory.ConversationVectorWindow,
 		ToolResultChars:    cfg.Prompt.MaxToolResultChars,
 		AlarmFirings:       a.alarmFirings,
+		WorkLineMaxChars:   a.workLineMaxChars,
+		StandingMaxChars:   a.standingMaxChars,
 		Reachable:          func(name string) bool { return len(a.reachFor(name)) > 0 },
 		AskProposer:        a.proposeAsk,
+		AskFits:            a.askFits,
 		WorkStarted:        a.workStarted,
+		WorkDelivered:      a.workDelivered,
+		ConfirmSpokenWord:  a.confirmSpokenWord,
 		WorkWake:           a.executor.Wake,
 		YieldGate:          a.yieldGate,
 		RouteLimits:        a.spawnLimitsFor,
@@ -712,6 +809,21 @@ func (a *App) startLive() (retErr error) {
 	)
 
 	a.updateChecker.SetRunner(a.runBackground)
+
+	a.updateChecker.SetTrustLists(a.bringTrustLists)
+
+	a.updateChecker.SetStranded(a.strandedBy)
+
+	a.updateChecker.SetInterval(a.updateInterval)
+
+	a.updateChecker.SetAPIURL(func() string { return a.configSnapshot().Updates.APIURL })
+
+	a.updateChecker.SetTrustSet(func() *packagefmt.RevocationStatusSet {
+		if opts := a.pluginOptions(); opts != nil {
+			return opts.Roots.Revocation
+		}
+		return nil
+	})
 
 	startDashboard := a.dashboard == nil
 	if startDashboard {
@@ -782,7 +894,7 @@ func (a *App) startLive() (retErr error) {
 
 	a.startMachineLink(bgCtx, cfg)
 	a.startPluginSweep(bgCtx)
-	a.runBackground(func() { a.catalog.Run(bgCtx, a.catalogChanged) })
+	a.runBackground(func() { a.catalog.Run(bgCtx, a.catalogRefreshed, a.catalogRefreshEvery) })
 	a.runBackground(func() { a.runOutbox(bgCtx) })
 	a.startSelectedModalities(llmEntry, cc.Model)
 
@@ -814,7 +926,7 @@ func (a *App) startLive() (retErr error) {
 	a.installReloadSignal()
 
 	updates.WriteBootMarker(filepath.Dir(cfg.Identity.LedgerPath))
-	dropConfigBeforeUpdate(cfg.SourcePath, updates.RequireSettledBootUpdate(filepath.Dir(cfg.Identity.LedgerPath)))
+	a.dropSettledConfigCopies(cfg.SourcePath)
 
 	a.runBackground(func() {
 		a.updateChecker.Run(bgCtx)
@@ -936,8 +1048,24 @@ func witnessPlatform(cfg Config) (*witness.PublicKeyEnvelope, error) {
 	return witness.LoadPlatformEnvelope(cfg.Witness.PlatformPubkeyPath)
 }
 
+func removeOperatorModel(st *store.Store, sn store.RingSnapshot) {
+	if err := st.RemoveRingSection(sn.RingLevel, sn.Section); err != nil {
+		logsink.Warn("ring.error", "Ring 3's operator model is no longer shown, and could not be removed from the store (%v); the next start tries again", err)
+		return
+	}
+	logsink.Info("ring.start", "Ring 3's operator model (%d characters, written %s) is removed: what the identity learns about the operator is recorded as beliefs with evidence now, and \"Who You Work With\" is rendered from them after the charter. It read: %s",
+		utf8.RuneCountInString(sn.Content), sn.UpdatedAt, sn.Content)
+}
+
 func (a *App) newComposer(promptBudget int) *prompt.Composer {
 	c := prompt.New(a.rings, promptBudget)
 	c.SetClosing(conversation.SystemAdditions())
+
+	c.SetChosenName(func() string {
+		name, _ := a.uiNameFromFile()
+		return name
+	})
+	c.SetOperatorBound(a.operatorBeliefsMaxChars)
+	c.SetSafeClosing(conversation.SystemAdditionsSaying(prompt.SafeClosing))
 	return c
 }

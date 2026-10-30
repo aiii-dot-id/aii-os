@@ -133,6 +133,12 @@ type pluginState struct {
 
 	policyMu sync.Mutex
 
+	installMu sync.Mutex
+
+	slotsMu sync.Mutex
+
+	slotChangeHeld func()
+
 	engines engineWork
 }
 
@@ -258,7 +264,7 @@ func (a *App) watchPinnedPredecessor(act *pluginhost.Activation, v *pluginhost.V
 				if !a.claimRetiring(ap) {
 					return
 				}
-				cctx, cancel := context.WithTimeout(context.Background(), pluginhost.StopBudget)
+				cctx, cancel := context.WithTimeout(context.Background(), ap.StopBudget())
 				if cerr := ap.CloseQuiet(cctx); cerr != nil {
 					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s stop: %v", act.ID, ap.Version, cerr)
 				}
@@ -272,7 +278,7 @@ func (a *App) watchPinnedPredecessor(act *pluginhost.Activation, v *pluginhost.V
 
 				untrusted = nil
 				logsink.Warn("plugins.refusal", "plugin %s: pinned predecessor %s: session untrusted (%s) — asking the engine to abort", act.ID, ap.Version, v.FaultReason())
-				actx, acancel := context.WithTimeout(context.Background(), pluginhost.StopBudget)
+				actx, acancel := context.WithTimeout(context.Background(), ap.StopBudget())
 				if cerr := v.Close(actx, "abort", "host fault: "+v.FaultReason()); cerr != nil {
 					logsink.Warn("plugins.error", "plugin %s: pinned predecessor %s: abort not admitted (%v); waiting for the reap", act.ID, ap.Version, cerr)
 				}
@@ -315,7 +321,8 @@ func (a *App) pluginPolicy(cfg Config, minTier packagefmt.Tier, trustMoved bool)
 	admission := pluginAdmissionPolicy(cfg)
 
 	safeReason, safe := a.SafeMode()
-	if fp := fmt.Sprintf("%s|%d|%d|%d|safe=%t", cfg.Plugins.Autoload, admission.ReserveBytes, admission.BudgetBytes, admission.MaxConcurrentStarts, safe); fp != a.policyFinger {
+	attempts := restartAttemptsSetting.n(cfg)
+	if fp := fmt.Sprintf("%s|%d|%d|%d|attempts=%d|safe=%t", cfg.Plugins.Autoload, admission.ReserveBytes, admission.BudgetBytes, admission.MaxConcurrentStarts, attempts, safe); fp != a.policyFinger {
 		a.policyFinger, a.policyRev = fp, a.policyRev+1
 	}
 	rev, gen := a.policyRev, a.trustGen
@@ -327,21 +334,27 @@ func (a *App) pluginPolicy(cfg Config, minTier packagefmt.Tier, trustMoved bool)
 		Hold:      safe,
 		HoldWhy:   safeHoldSentence(safeReason),
 
-		Allows: func(ev pluginfacility.Evidence) (bool, string) {
+		RestartAttempts: attempts,
 
-			if cfg.Plugins.Autoload == "none" {
-				return false, "plugins.autoload is none — automatic loading is disabled"
-			}
-			tier, none, ok := autoloadTier(ev.Tier)
-			if !ok || none {
-				return true, ""
-			}
-			if tier < minTier {
-				return false, fmt.Sprintf("verified %s is below plugins.autoload %s", ev.Tier, cfg.Plugins.Autoload)
+		Allows: func(ev pluginfacility.Evidence) (bool, string) {
+			if r := a.startRefusal(cfg.Plugins.Autoload, minTier, ev); r != nil {
+				return false, r.Reason
 			}
 			return true, ""
 		},
 	}
+}
+
+func (a *App) startRefusal(autoload string, minTier packagefmt.Tier, ev pluginfacility.Evidence) *pluginStartRefusal {
+
+	if autoload == "none" {
+		return &pluginStartRefusal{ID: ev.ID, Requirement: startNeedsLevel, Reason: "plugins.autoload is none — automatic loading is disabled"}
+	}
+
+	if tier, none, ok := autoloadTier(ev.Tier); ok && !none && tier < minTier {
+		return &pluginStartRefusal{ID: ev.ID, Requirement: startNeedsLevel, Reason: fmt.Sprintf("verified %s is below plugins.autoload %s", ev.Tier, autoload)}
+	}
+	return a.nativeHold(ev)
 }
 
 func safeHoldSentence(reason string) string {
@@ -431,6 +444,8 @@ func (a *App) applyFacilitySnapshot() {
 		}
 	}
 	a.pluginMu.Unlock()
+
+	a.judgeKeptReleases()
 	a.pluginsChanged()
 }
 

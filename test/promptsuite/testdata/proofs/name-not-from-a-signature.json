@@ -1,0 +1,65 @@
+{
+  "task": "name-not-from-a-signature",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "list the files under inbox/",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "ls",
+                "args": {
+                  "path": "inbox"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt, b.txt and c.txt.\n— Quill"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C3: the identity signs with, and records, the operator's name",
+    "fails": [
+      1,
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "list the files under inbox/",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "ls",
+                "args": {
+                  "path": "inbox"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "data/ui/name",
+                  "content": "Robin\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt, b.txt and c.txt.\n— Robin"
+          }
+        ]
+      }
+    ]
+  }
+}

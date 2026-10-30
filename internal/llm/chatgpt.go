@@ -15,14 +15,22 @@ type respInputContent struct {
 	Text string `json:"text"`
 
 	ImageURL string `json:"-"`
+	Filename string `json:"-"`
 }
 
 func (c respInputContent) MarshalJSON() ([]byte, error) {
-	if c.Type == "input_image" {
+	switch c.Type {
+	case "input_image":
 		return json.Marshal(struct {
 			Type     string `json:"type"`
 			ImageURL string `json:"image_url"`
 		}{c.Type, c.ImageURL})
+	case "input_file":
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Filename string `json:"filename"`
+			FileData string `json:"file_data"`
+		}{c.Type, c.Filename, c.ImageURL})
 	}
 	return json.Marshal(struct {
 		Type string `json:"type"`
@@ -59,10 +67,11 @@ type respRequest struct {
 	Instructions string          `json:"instructions,omitempty"`
 	Tools        []respTool      `json:"tools,omitempty"`
 
-	Store      bool           `json:"store"`
-	Stream     bool           `json:"stream"`
-	Reasoning  *respReasoning `json:"reasoning,omitempty"`
-	ToolChoice string         `json:"tool_choice,omitempty"`
+	MaxOutputTokens int            `json:"max_output_tokens,omitempty"`
+	Store           bool           `json:"store"`
+	Stream          bool           `json:"stream"`
+	Reasoning       *respReasoning `json:"reasoning,omitempty"`
+	ToolChoice      string         `json:"tool_choice,omitempty"`
 }
 
 type respReasoning struct {
@@ -88,6 +97,7 @@ type respCompleted struct {
 	Type     string `json:"type"`
 	Response struct {
 		ID               string           `json:"id"`
+		Model            reportedName     `json:"model"`
 		Status           string           `json:"status"`
 		Output           []respOutputItem `json:"output"`
 		IncompleteDetail *struct {
@@ -116,6 +126,13 @@ func (c *Client) chatGPTResponses(ctx context.Context, messages []Message, opts 
 		CacheKey: policy.Key, Include: []string{"reasoning.encrypted_content"}, Model: c.model,
 		Store:  false,
 		Stream: true,
+	}
+	if !c.subscription {
+
+		req.MaxOutputTokens = c.maxOutputTokens
+		if req.MaxOutputTokens <= 0 {
+			req.MaxOutputTokens = DefaultMaxOutputTokens
+		}
 	}
 	if opts.DisableTools {
 		req.ToolChoice = "none"
@@ -165,7 +182,14 @@ func (c *Client) chatGPTResponses(ctx context.Context, messages []Message, opts 
 		default:
 			content := []respInputContent{{Type: "input_text", Text: m.Content}}
 			for _, img := range m.Images {
-				content = append(content, respInputContent{Type: "input_image", ImageURL: imageDataURL(img)})
+				switch {
+				case !Writes(DialectResponses, img.MediaType):
+					return nil, unwritten(DialectResponses, img)
+				case img.MediaType == "application/pdf":
+					content = append(content, respInputContent{Type: "input_file", ImageURL: imageDataURL(img), Filename: img.Name})
+				default:
+					content = append(content, respInputContent{Type: "input_image", ImageURL: imageDataURL(img)})
+				}
 			}
 			req.Input = append(req.Input, respInputItem{Role: "user", Content: content})
 		}
@@ -217,9 +241,11 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 
 	var items []respOutputItem
 	var usage Usage
-	var responseID string
+	var responseID, model string
 	var incomplete, lastErr string
 	completed := false
+
+	generated, failedAfter := false, false
 
 	for sc.Scan() {
 		line := sc.Text()
@@ -235,6 +261,11 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 		}
 		if json.Unmarshal([]byte(payload), &probe) != nil {
 			continue
+		}
+		switch probe.Type {
+		case "response.created", "response.in_progress", "response.queued", "response.failed", "error":
+		default:
+			generated = true
 		}
 		switch probe.Type {
 		case "response.output_item.done":
@@ -253,6 +284,7 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 				items = ev.Response.Output
 			}
 			responseID = ev.Response.ID
+			model = string(ev.Response.Model)
 			if u := ev.Response.Usage; u != nil {
 				usage = u.normalized()
 			}
@@ -261,6 +293,9 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 			}
 			completed = true
 		case "response.failed", "error":
+			if lastErr == "" {
+				failedAfter = generated
+			}
 			var ev respCompleted
 			_ = json.Unmarshal([]byte(payload), &ev)
 			if ev.Response.Error != nil && ev.Response.Error.Message != "" {
@@ -277,14 +312,14 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 		return nil, fmt.Errorf("API response stream exceeds %d bytes", maxResponseBytes)
 	}
 	if lastErr != "" {
-		return nil, fmt.Errorf("provider reported: %.400s", lastErr)
+		return nil, &StreamFailure{Text: lastErr, Generated: failedAfter}
 	}
 
 	if !completed {
 		return nil, fmt.Errorf("response stream ended without a terminal event after %d output item(s) — truncated, not complete", len(items))
 	}
 	response := assembleResponse(items, usage, incomplete)
-	response.ID = responseID
+	response.ID, response.ModelID = responseID, model
 	return response, nil
 }
 

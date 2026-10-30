@@ -310,15 +310,15 @@ func TestAContextFilledTurnContinuesLikeACappedOne(t *testing.T) {
 		t.Fatalf("a pressure ending was reported as a count running out: %+v", res)
 	}
 	for _, want := range []string{"The context filled during this turn after", "continues automatically in a fresh turn"} {
-		if !strings.Contains(res.Spoken, want) {
-			t.Errorf("the ending omits %q: %q", want, res.Spoken)
+		if !strings.Contains(res.Said(), want) {
+			t.Errorf("the ending omits %q: %q", want, res.Said())
 		}
 	}
 	// When the caller schedules no fresh turn the reply closes on the one
 	// line that says so, in the loop's line's place.
 	const why = "no work session is active"
 	want := "what I have\n\n" + nothingContinuesLine(res.ToolCallsUsed, why)
-	if got := res.NothingContinues(why); got != want {
+	if got := said(res, res.NothingContinues(why)); got != want {
 		t.Errorf("the reply of a context-filled turn nothing continues = %q, want %q", got, want)
 	}
 }

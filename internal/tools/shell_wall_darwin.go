@@ -17,6 +17,21 @@ import (
 
 const shellWallDescription = " Commands run behind the operating system's wall: one that reaches a place the host keeps fails there with 'Operation not permitted'. ps, top, sudo, crontab and at do not run behind it; pgrep and pkill do."
 
+func shellWallDescriptionNow() string { return shellWallDescription }
+
+func wallKeepsPlaces() bool { return true }
+
+type shellHolder struct{}
+
+func (shellHolder) end() {}
+
+func (t *ShellTool) behindTheWall(w shellWall, _, bin string, argv []string) (string, []string, []*os.File, func(), error) {
+	wbin, wargv, err := behindWall(t.sandbox, w, bin, argv)
+	return wbin, wargv, nil, func() {}, err
+}
+
+func (t *ShellTool) endWall() { t.holder.end() }
+
 const sandboxExec = "/usr/bin/sandbox-exec"
 
 func behindWall(home string, w shellWall, bin string, argv []string) (string, []string, error) {

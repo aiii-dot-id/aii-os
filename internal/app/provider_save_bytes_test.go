@@ -73,8 +73,8 @@ func TestASaveWritesTheOperatorsFileByteForByte(t *testing.T) {
       "name": "Mine",
       "api_type": "anthropic",
       "url": "https://api.anthropic.com",
-      "credential": "claude-code",
-      "default_model": "claude-opus-5"
+      "default_model": "claude-opus-5",
+      "credential": "claude-code"
     },
 `)},
 		{"a removal", func(a *App) error { return a.deleteProvider("Mine") }, replaced(saveEveryWant, mine, "")},
@@ -104,33 +104,7 @@ const saveEveryFile = `{"providers":[
 {"name":"ChatGPT (Plus/Pro)","api_type":"openai","url":"https://chatgpt.com/backend-api/codex","credential":"codex","oauth":"openai-chatgpt","credential_options":{"base_url":"https://chatgpt.com/backend-api/codex"},"default_model":"gpt-5.5"}],
 "model_capabilities":{"m":{"thinking":"enabled"}},"dialect_effort_floor":{"openai":["low","medium"]}}`
 
-const saveOwnWant = `{
-  "providers": [
-    {
-      "name": "Mine",
-      "api_type": "openai",
-      "effort_levels": [
-        "low"
-      ],
-      "url": "https://mine.example/v1",
-      "api_key": "k",
-      "default_model": "m",
-      "default": true
-    }
-  ],
-  "model_capabilities": {
-    "m": {
-      "effort": [
-        "low"
-      ]
-    }
-  },
-  "dialect_effort_floor": {
-    "openai": [
-      "low"
-    ]
-  }
-}`
+const saveOwnWant = saveOwnFile
 
 const saveEveryWant = `{
   "providers": [
@@ -148,7 +122,6 @@ const saveEveryWant = `{
     },
     {
       "name": "ElevenLabs",
-      "api_type": "openai",
       "url": "https://api.elevenlabs.io",
       "api_key": "el"
     },
@@ -160,13 +133,13 @@ const saveEveryWant = `{
     {
       "name": "zAI",
       "api_type": "openai",
+      "url": "https://api.z.ai/api/paas/v4",
+      "api_key": "z",
+      "default_model": "glm-5.3",
       "effort_levels": [
         "low",
         "high"
-      ],
-      "url": "https://api.z.ai/api/paas/v4",
-      "api_key": "z",
-      "default_model": "glm-5.3"
+      ]
     },
     {
       "name": "Mine",
@@ -189,8 +162,7 @@ const saveEveryWant = `{
   ],
   "model_capabilities": {
     "m": {
-      "thinking": "enabled",
-      "effort": null
+      "thinking": "enabled"
     }
   },
   "dialect_effort_floor": {

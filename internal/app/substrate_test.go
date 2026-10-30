@@ -18,6 +18,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
@@ -48,6 +49,107 @@ func TestPluginStorageVerificationKeepsItsOptionsSnapshot(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+func TestWindowsStockConfigurationDirectoryIsKeptBeforeItsFiles(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows mandatory labels protect replacement files through their directory")
+	}
+	home := t.TempDir()
+	t.Chdir(home)
+	cfg := defaultConfig()
+	for _, source := range []string{filepath.Join(home, "config", "config.json"), install.ConfigPathIn("")} {
+		cfg.SourcePath = source
+		dir, err := filepath.Abs(filepath.Dir(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundDirectory := false
+		for _, rule := range substrateObjects(*cfg, home) {
+			if rule.ID == "sub.config-directory" {
+				foundDirectory = rule.Path == realPath(dir) && !rule.ReadOpen && !rule.NativeReads
+			}
+			if rule.ID == "sub.config" && !foundDirectory {
+				t.Fatalf("configuration %q precedes its kept replacement directory", source)
+			}
+		}
+		if !foundDirectory {
+			t.Fatalf("configuration %q has no kept directory", source)
+		}
+		labels := shellSubstrateLabels(*cfg, home)
+		if len(labels) != 1 || labels[0].Path != realPath(dir) || labels[0].ReadOpen || len(labels[0].Except) != 0 {
+			t.Fatalf("the shell lost its secret replacement parent: %+v", labels)
+		}
+		for _, rule := range substratePlaces(*cfg, home) {
+			if rule.ID == "sub.config-directory" {
+				t.Fatal("a native parent label claimed ownership of every file beside the configuration")
+			}
+		}
+	}
+	for _, source := range []string{filepath.Join(home, "config.json"), "config.json"} {
+		cfg.SourcePath = source
+		for _, rule := range substrateObjects(*cfg, home) {
+			if rule.ID == "sub.config-directory" {
+				t.Fatalf("configuration %q directly in the home must not close the whole home", source)
+			}
+		}
+	}
+}
+
+func TestConfigurationFilesStayKeptWithoutOwningTheirNeighbours(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(home)
+	dir := filepath.Join(home, "config")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.SourcePath = filepath.Join(dir, "config.json")
+	cfg.Machine.Dir = filepath.Join(t.TempDir(), "machine")
+	secretPaths := []string{cfg.SourcePath, providerFilePath(cfg.SourcePath), cfg.SourcePath + ".before-update", providerFilePath(cfg.SourcePath) + ".rolled-back"}
+	for _, p := range secretPaths {
+		if err := os.WriteFile(p, []byte("SECRET"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	floor := firewall.DefaultPolicy()
+	floor.SetPlaces(substratePlaces(*cfg, home))
+	reg := tools.NewRegistry(home, floor, tools.Timeouts{})
+	for _, name := range []string{skillsFileName, methodFileName, "notes.txt"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("my annotation"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		read, err := reg.Execute(t.Context(), "read", map[string]any{"file_path": p})
+		if err != nil || read.Refused || read.Failed() || !strings.Contains(read.Output, "my annotation") {
+			t.Fatalf("ordinary configuration neighbour %s is not readable: %+v (%v)", name, read, err)
+		}
+		edit, err := reg.Execute(t.Context(), "edit", map[string]any{"file_path": p, "old_string": "my annotation", "new_string": "my revised annotation"})
+		if err != nil || edit.Refused || edit.Failed() || string(mustRead(t, p)) != "my revised annotation" {
+			t.Fatalf("ordinary configuration neighbour %s is not editable: %+v (%v)", name, edit, err)
+		}
+	}
+	for i, p := range secretPaths {
+		alias := filepath.Join(dir, fmt.Sprintf("annotation-%d.md", i))
+		if err := os.Link(p, alias); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{p, alias} {
+			for _, tool := range []string{"read", "edit"} {
+				args := map[string]any{"file_path": name}
+				if tool == "edit" {
+					args["old_string"], args["new_string"] = "SECRET", "changed"
+				}
+				res, err := reg.Execute(t.Context(), tool, args)
+				if err != nil || !res.Refused || res.ReasonCode != tools.ReasonPathRefused || strings.Contains(res.Output, "SECRET") {
+					t.Fatalf("%s admitted a configuration secret or its alias: %+v (%v)", tool, res, err)
+				}
+			}
+		}
+		if string(mustRead(t, p)) != "SECRET" {
+			t.Fatal("refused edit changed a protected file")
+		}
+	}
 }
 
 func TestNativeSubstrateInventoryUsesConfiguredOwners(t *testing.T) {
@@ -134,9 +236,16 @@ func stockSlotApp(t *testing.T, files map[string]string) (*App, string) {
 // may reach it through a symlink.
 func stockSlotAppAt(t *testing.T, home string, files map[string]string) (*App, string) {
 	t.Helper()
+	return stockSlotAppBorn(t, home, "SubstrateTest", files)
+}
+
+// stockSlotAppBorn is stockSlotAppAt with the name the record is born
+// with ("Unnamed" is what a birth without a name in it records).
+func stockSlotAppBorn(t *testing.T, home, name string, files map[string]string) (*App, string) {
+	t.Helper()
 	data := filepath.Join(home, "data")
 	genesistest.NewRoot(t).Birth(t, genesis.BirthConfig{
-		Name:       "SubstrateTest",
+		Name:       name,
 		KeyPath:    filepath.Join(data, "identity.sec"),
 		LedgerPath: filepath.Join(data, "ledger.jsonl"),
 		DBPath:     filepath.Join(data, "aii.db"),
@@ -163,6 +272,35 @@ func stockSlotAppAt(t *testing.T, home string, files map[string]string) (*App, s
 	}
 	t.Cleanup(func() { stopApp(t, app) })
 	return app, home
+}
+
+// An identity born unnamed is told to write its name to the file the
+// dashboard reads. Once it has, its opening says what is true of both:
+// the record holds no name, and the operator sees the one it chose. The
+// instruction is not repeated for life.
+func TestAnUnnamedIdentitysOpeningNamesTheNameItWroteAsTheOneItsOperatorSees(t *testing.T) {
+	app, _ := stockSlotAppBorn(t, t.TempDir(), "Unnamed", nil)
+	opening := func() string {
+		t.Helper()
+		p, err := app.composer.Compose("", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Text
+	}
+	if s := opening(); !strings.Contains(s, "You have not recorded a name yet.") || !strings.Contains(s, prompt.NameFile) {
+		t.Fatalf("before a name is written the opening says where to write it: %.200q", s)
+	}
+	if out := toolWrite(app, prompt.NameFile, "Aria\n"); !strings.Contains(out, "Wrote") {
+		t.Fatalf("recording a name: %q", out)
+	}
+	s := opening()
+	if !strings.Contains(s, "Your record holds no name. The name you chose, Aria, is the one your operator sees.") {
+		t.Fatalf("the opening after the name was written: %.200q", s)
+	}
+	if strings.Contains(s, "You have not recorded a name yet.") || strings.Contains(s, "You are Aria") {
+		t.Fatalf("the file is display only and the instruction is done: %.200q", s)
+	}
 }
 
 // toolRead is what the identity's own read tool answers for a path, its
@@ -345,7 +483,7 @@ func TestTheUISurfaceHoldsWhenTheSlotIsReachedThroughASymlink(t *testing.T) {
 		}
 	}
 	// The plugin door names the surface the same way, so it holds through the link too.
-	door := newPluginSandbox(app.toolReg, app.configSnapshot().Identity.LedgerPath)
+	door := newPluginSandbox(app.toolReg, app.configSnapshot())
 	for _, rel := range []string{"data/theme.json", "data/ui/name", "data/ui/custom.css"} {
 		_, _, err := door.Admit("org.example.probe fs.write", rel)
 		var denied *tools.SubstrateError
@@ -414,7 +552,7 @@ func TestAPluginNeverReachesTheIdentitysUISurface(t *testing.T) {
 		"data/credentials/anthropic.json": "SECRET credential",
 		"data/ui/README.md":               "seeded",
 	})
-	door := newPluginSandbox(app.toolReg, app.configSnapshot().Identity.LedgerPath)
+	door := newPluginSandbox(app.toolReg, app.configSnapshot())
 	const plugin = "org.example.probe fs.write"
 
 	for _, rel := range []string{
@@ -633,7 +771,7 @@ func TestTheDashboardSurfaceIsOpenedByItsOwnNameNeverThroughALink(t *testing.T) 
 				}
 			}
 		}
-		surface := newPluginSandbox(nil, filepath.Join(data, "ledger.jsonl")).surface
+		surface := newPluginSandbox(nil, Config{Identity: IdentityConfig{LedgerPath: filepath.Join(data, "ledger.jsonl")}}).surface
 		leads := false
 		for _, r := range surface {
 			leads = leads || r.Covers(filepath.Join(realPath(target), "x"))

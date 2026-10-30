@@ -133,20 +133,20 @@ func TestTheWorkVerbStatesWhatTheAsksUsedTo(t *testing.T) {
 		s, _ := p["description"].(string)
 		return s
 	}
-	for _, want := range []string{"twice this many calls", "at 32", "four more rounds", "fresh turn"} {
+	for _, want := range []string{"twice this many", "(32 with none declared)", "four more rounds", "fresh turn"} {
 		if !strings.Contains(desc("steps"), want) {
 			t.Errorf("the steps schema does not state the cap rule (%q): %s", want, desc("steps"))
 		}
 	}
-	if d := desc("independent"); strings.Contains(d, "will ask") || !strings.Contains(d, "Nothing asks you for it") {
+	if d := desc("independent"); strings.Contains(d, "will ask") || !strings.Contains(d, "nothing acts on it") {
 		t.Errorf("the independent schema promises an ask the loop no longer makes: %s", d)
 	}
 }
 
 func TestTheDefaultStepsSentenceIsUnchanged(t *testing.T) {
-	const before = "(update, optional) how many tool calls you expect the rest of this turn to take. It is your budget: the turn checkpoints at twice this many calls (with none declared, at 32), gives you four more rounds to say where it stands, and the work continues in a fresh turn while its session is active. A later declaration revises it. Stated BEFORE the work, compared against what it took, and reported back to you in your rhythm line"
-	for name, verbs := range map[string][]Verb{"the registry": Verbs(), "a turn at the defaults": VerbsAt(conversation.Checkpoint{}),
-		"a turn handed the defaults": VerbsAt(conversation.Checkpoint{Calls: limits.Of(32), GraceRounds: 4})} {
+	const before = "(update) how many tool calls the rest of this turn will take. The turn checkpoints at twice this many (32 with none declared), gives you four more rounds to say where it stands, and continues in a fresh turn while its session is active. Your rhythm line shows estimates against what they took"
+	for name, verbs := range map[string][]Verb{"the registry": Verbs(), "a turn at the defaults": VerbsAt(conversation.Checkpoint{}, nil),
+		"a turn handed the defaults": VerbsAt(conversation.Checkpoint{Calls: limits.Of(32), GraceRounds: 4}, nil)} {
 		if got := stepsOf(t, verbs); got != before {
 			t.Errorf("%s: the default steps sentence changed:\n got %s\nwant %s", name, got, before)
 		}
@@ -172,20 +172,20 @@ func stepsOf(t *testing.T, verbs []Verb) string {
 // otherwise the registry's, and the registry is not written to.
 func TestVerbsAtStatesTheTurnsCheckpoint(t *testing.T) {
 	registry := stepsOf(t, Verbs())
-	at := VerbsAt(conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 1})
+	at := VerbsAt(conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 1}, nil)
 	got := stepsOf(t, at)
-	for _, want := range []string{"twice this many calls", "(with none declared, at 500)", "gives you one more round to say", "fresh turn"} {
+	for _, want := range []string{"twice this many", "(500 with none declared)", "gives you one more round to say", "fresh turn"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the steps sentence at a floor of 500 and a grace of 1 lacks %q: %s", want, got)
 		}
 	}
-	if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12})); !strings.Contains(s, "(with none declared, at 64), gives you 12 more rounds to say") {
+	if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12}, nil)); !strings.Contains(s, "(64 with none declared), gives you 12 more rounds to say") {
 		t.Errorf("a count past ten is written in figures: %s", s)
 	}
 	// The slack on a declared estimate, as the sentence has always said
 	// the default: "twice".
-	for slack, want := range map[int]string{1: "the turn checkpoints at this many calls", 3: "the turn checkpoints at three times this many calls", 12: "the turn checkpoints at 12 times this many calls"} {
-		if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Slack: slack})); !strings.Contains(s, want) {
+	for slack, want := range map[int]string{1: "The turn checkpoints at this many (", 3: "The turn checkpoints at three times this many (", 12: "The turn checkpoints at 12 times this many ("} {
+		if s := stepsOf(t, VerbsAt(conversation.Checkpoint{Slack: slack}, nil)); !strings.Contains(s, want) {
 			t.Errorf("at a slack of %d the sentence lacks %q: %s", slack, want, s)
 		}
 	}

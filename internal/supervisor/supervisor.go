@@ -49,6 +49,8 @@ const (
 	maxStderrLineBytes = 4096
 )
 
+const DefaultStopGrace = closeGraceEOF + closeGraceTerm
+
 type Dispatcher interface {
 	Dispatch(ctx context.Context, method string, params []byte) (reply []byte, err error)
 }
@@ -124,6 +126,8 @@ type Spec struct {
 
 	Backoff Backoff
 
+	StopGrace time.Duration
+
 	ExtraFiles []*os.File
 
 	Artifact io.Closer
@@ -149,6 +153,21 @@ func (s Spec) readyTimeout() time.Duration {
 		return s.ReadyTimeout
 	}
 	return DefaultReadyTimeout
+}
+
+func (s Spec) stopGraces() (eof, term time.Duration) {
+	whole := s.StopGrace
+	if whole <= 0 {
+		whole = DefaultStopGrace
+	}
+	if s.ArgvContainment.TermIsKill {
+		return whole, 0
+	}
+	if s.StopGrace <= 0 {
+		return closeGraceEOF, closeGraceTerm
+	}
+	eof = s.StopGrace * 3 / 5
+	return eof, s.StopGrace - eof
 }
 
 func WorkerExitMeaning(code int) string {
@@ -205,7 +224,9 @@ type child struct {
 	started time.Time
 	called  atomic.Bool
 
-	contained  func() error
+	contained func() error
+
+	tree       *procTree
 	isolation  Containment
 	cleanupErr error
 	frames     chan []byte
@@ -238,6 +259,14 @@ type child struct {
 }
 
 func (c *child) abandonNow() { c.abandonOnce.Do(func() { close(c.abandon) }) }
+
+func (c *child) retire() error {
+	var err error
+	if c.contained != nil {
+		err = c.contained()
+	}
+	return errors.Join(err, c.tree.retire())
+}
 
 func (c *child) markReady() { c.readyOnce.Do(func() { close(c.ready) }) }
 
@@ -469,6 +498,8 @@ func (s *Supervisor) spawnOnceAndAwaitReady(ctx context.Context) (spawnErr error
 	if err := s.awaitReady(ctx, c); err != nil {
 		return err
 	}
+
+	c.tree.note(c.cmd.Process.Pid)
 	return s.promote(c)
 }
 
@@ -500,6 +531,7 @@ func (s *Supervisor) launch() (*child, *launched, error) {
 	var stdin io.WriteCloser
 	var stdout, stderr io.ReadCloser
 	var walled *launched
+	var tree *procTree
 	if s.spec.AppContainer != nil {
 
 		var lerr error
@@ -524,9 +556,17 @@ func (s *Supervisor) launch() (*child, *launched, error) {
 		}
 
 		consolewin.Hide(cmd)
+
+		if argv := treeKeeperArgv(); argv != nil {
+			keeper := exec.Command(argv[0], argv[1:]...)
+			if tree, err = startTree(cmd, keeper); err != nil {
+				pair.release(true)
+				return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+			}
+		}
 		if err := cmd.Start(); err != nil {
 			pair.release(true)
-			return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
+			return nil, nil, &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errors.Join(err, tree.retire())}
 		}
 	}
 
@@ -536,6 +576,7 @@ func (s *Supervisor) launch() (*child, *launched, error) {
 	c := &child{
 		started: time.Now(),
 		cmd:     cmd,
+		tree:    tree,
 		stdin:   stdin,
 		stdout:  stdout,
 		stderr:  stderr,
@@ -565,7 +606,7 @@ func (s *Supervisor) contain(c *child, walled *launched) error {
 
 		_ = c.cmd.Process.Kill()
 		_ = c.cmd.Wait()
-		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: cerr}
+		return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: errors.Join(cerr, c.tree.retire())}
 	}
 	if cmsg != "" {
 		logsink.Info("plugins.start", "plugin %s: native child %s", s.spec.PluginID, cmsg)
@@ -577,9 +618,7 @@ func (s *Supervisor) contain(c *child, walled *launched) error {
 		if err != nil {
 			_ = c.cmd.Process.Kill()
 			_ = c.cmd.Wait()
-			if c.contained != nil {
-				err = errors.Join(err, c.contained())
-			}
+			err = errors.Join(err, c.retire())
 			return &SpawnRefusedError{PluginID: s.spec.PluginID, Cause: err}
 		}
 		if msg != "" {
@@ -596,10 +635,7 @@ func (s *Supervisor) publish(c *child, done chan struct{}) (int, error) {
 		s.mu.Unlock()
 		_ = c.cmd.Process.Kill()
 		_ = c.cmd.Wait()
-		var cleanupErr error
-		if c.contained != nil {
-			cleanupErr = c.contained()
-		}
+		cleanupErr := c.retire()
 		if cleanupErr != nil {
 			return 0, &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: cleanupErr}
 		}
@@ -762,11 +798,9 @@ func (s *Supervisor) reap(c *child, gen int) {
 			err = &exec.ExitError{ProcessState: state}
 		}
 	}
-	if c.contained != nil {
 
-		if err := c.contained(); err != nil {
-			c.cleanupErr = &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
-		}
+	if err := c.retire(); err != nil {
+		c.cleanupErr = &ContainmentCleanupError{PluginID: s.spec.PluginID, Err: err}
 	}
 	drained := make(chan struct{})
 	go func() {
@@ -943,8 +977,10 @@ func (s *Supervisor) kill(c *child, cancelled bool) {
 		c.cancelled.Store(true)
 	}
 	c.abandonNow()
-	_ = c.stdin.Close()
+
 	if c.cmd.Process != nil {
+
+		c.tree.note(c.cmd.Process.Pid)
 		_ = c.cmd.Process.Kill()
 	}
 	s.awaitReaped(c)
@@ -1190,15 +1226,21 @@ func (s *Supervisor) CloseContext(ctx context.Context) error {
 	if c == nil {
 		return s.releaseArtifact()
 	}
+	if c.cmd.Process != nil {
+
+		c.tree.note(c.cmd.Process.Pid)
+	}
 	c.abandonNow()
-	_ = c.stdin.Close()
+
+	go func() { _ = c.stdin.Close() }()
+	graceEOF, graceTerm := s.spec.stopGraces()
 	select {
 	case <-c.exited:
 		if c.cleanupErr != nil {
 			return c.cleanupErr
 		}
 		return s.releaseArtifact()
-	case <-time.After(closeGraceEOF):
+	case <-time.After(graceEOF):
 	case <-ctx.Done():
 	}
 	signalTerm(c.cmd)
@@ -1208,10 +1250,11 @@ func (s *Supervisor) CloseContext(ctx context.Context) error {
 			return c.cleanupErr
 		}
 		return s.releaseArtifact()
-	case <-time.After(closeGraceTerm):
+	case <-time.After(graceTerm):
 	case <-ctx.Done():
 	}
 	if c.cmd.Process != nil {
+		c.tree.note(c.cmd.Process.Pid)
 		_ = c.cmd.Process.Kill()
 	}
 	if !s.awaitReaped(c) {
@@ -1224,6 +1267,8 @@ func (s *Supervisor) CloseContext(ctx context.Context) error {
 }
 
 var closeGraceKill = 5 * time.Second
+
+func KillReapBound() time.Duration { return closeGraceKill }
 
 func (s *Supervisor) awaitReaped(c *child) bool {
 	select {

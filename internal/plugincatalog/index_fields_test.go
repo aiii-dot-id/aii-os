@@ -39,3 +39,18 @@ func TestCatalogEntryStoreFieldsAreBounded(t *testing.T) {
 		t.Fatalf("search by title found %d entries, want 1", len(hits))
 	}
 }
+
+// A build is portable only when the index lists it for every system AND
+// every processor: that is the one build selection falls back to, and the
+// one the store names as portable before Install. A build that names
+// either is a build for that system or processor.
+func TestOnlyABuildForEverySystemAndProcessorIsPortable(t *testing.T) {
+	for _, c := range []struct {
+		platform, arch string
+		want           bool
+	}{{"*", "*", true}, {"linux", "x86_64", false}, {"*", "arm64", false}, {"macos", "*", false}} {
+		if got := (CatalogPackage{Platform: c.platform, Arch: c.arch}).Portable(); got != c.want {
+			t.Errorf("%s/%s: portable=%v, want %v", c.platform, c.arch, got, c.want)
+		}
+	}
+}

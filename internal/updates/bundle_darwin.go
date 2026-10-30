@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"golang.org/x/sys/unix"
 )
@@ -100,7 +101,7 @@ func swapBundles(a, b string) error {
 	return nil
 }
 
-func applyBundleUpdate(tgt target, archiveBytes []byte, owner string) (already bool, retErr error) {
+func applyBundleUpdate(tgt target, archiveBytes []byte, dataDir, owner, version string) (already bool, retErr error) {
 
 	if cap := hostcap.Can(hostcap.Subprocess); !cap.Available {
 		return false, fmt.Errorf("cannot install an application bundle here: %s "+
@@ -114,13 +115,7 @@ func applyBundleUpdate(tgt target, archiveBytes []byte, owner string) (already b
 		return false, fmt.Errorf("stage beside %s: %w", tgt.path, err)
 	}
 
-	keepStage := false
-	defer func() {
-
-		if !keepStage {
-			_ = os.RemoveAll(stageDir)
-		}
-	}()
+	defer os.RemoveAll(stageDir)
 
 	archivePath := filepath.Join(stageDir, "payload.zip")
 	if err := os.WriteFile(archivePath, archiveBytes, 0o600); err != nil {
@@ -133,18 +128,18 @@ func applyBundleUpdate(tgt target, archiveBytes []byte, owner string) (already b
 	if err := verifyStagedBundle(staged, tgt.path); err != nil {
 		return false, err
 	}
-	already, keepStage, err = installBundle(tgt, staged, owner)
-	return already, err
+	return installBundle(tgt, staged, dataDir, owner, version)
 }
 
-func installBundle(tgt target, staged, owner string) (already, keepStage bool, err error) {
+func installBundle(tgt target, staged, dataDir, owner, version string) (already bool, err error) {
 	want, err := imageHash(staged)
 	if err != nil {
-		return false, false, fmt.Errorf("read the staged bundle to compare: %w", err)
+		return false, fmt.Errorf("read the staged bundle to compare: %w", err)
 	}
-	already, err = tgt.replace(want, func(have string) error {
+	return tgt.replace(want, func(have string) error {
+		pend := updatePending{BackupSHA256: have, NewSHA256: want, Version: version, Owner: owner}
 
-		if err := writeRecord(tgt.record, updatePending{BackupSHA256: have, NewSHA256: want, Owner: owner}); err != nil {
+		if err := writeRecord(tgt.record, pend); err != nil {
 			return errors.Join(fmt.Errorf("write update record: %w", err), withdraw(tgt.record))
 		}
 		replaceStep("recorded")
@@ -152,41 +147,44 @@ func installBundle(tgt target, staged, owner string) (already, keepStage bool, e
 		if err := os.RemoveAll(tgt.backup); err != nil {
 			return errors.Join(fmt.Errorf("clear previous bundle backup: %w", err), withdraw(tgt.record))
 		}
-		keep, err := installSwapped(tgt.path, staged, tgt.backup)
-		keepStage = keep
-		if err != nil && !keep {
+		if err := os.Rename(staged, tgt.backup); err != nil {
+			return errors.Join(fmt.Errorf("move the new bundle beside %s: %w", tgt.path, err), withdrawSwap(tgt, pend))
+		}
+		replaceStep("in-slot")
 
-			return errors.Join(err, withdraw(tgt.record))
+		markerRetired, err := retireBootMarker(dataDir)
+		if err == nil {
+			replaceStep("marker-retired")
+			if err = exchangeBundles(tgt.path, tgt.backup); err == nil {
+
+				if serr := atomicfile.SyncDir(filepath.Dir(tgt.path)); serr != nil {
+					return fmt.Errorf("new bundle installed but not durable — the previous bundle and the record are kept so the next boot can still roll back: %w", serr)
+				}
+				replaceStep("published")
+				return nil
+			}
+			err = fmt.Errorf("exchange the new bundle in: %w", err)
+		} else {
+			err = fmt.Errorf("retire boot marker: %w", err)
 		}
 
-		return err
+		if markerRetired {
+			if back, rerr := rearmBootMarker(dataDir); rerr != nil {
+				state := "NOT re-armed"
+				if back {
+					state = "re-armed but not durably"
+				}
+				return errors.Join(err, fmt.Errorf("boot marker %s — the record and the bundle beside %s are kept, and the next boot settles them: %w", state, tgt.path, rerr))
+			}
+		}
+		return errors.Join(err, withdrawSwap(tgt, pend))
 	})
-	return already, keepStage, err
 }
 
-var renameOutgoing = os.Rename
-
-func installSwapped(bundlePath, staged, prev string) (bool, error) {
-
-	if err := swapBundles(bundlePath, staged); err != nil {
-		return false, err
-	}
-
-	if err := renameOutgoing(staged, prev); err != nil {
-
-		if undo := swapBundles(bundlePath, staged); undo == nil {
-			return false, fmt.Errorf("update NOT applied: the previous bundle could not be kept for rollback (%w) — the swap was undone and the installed bundle is unchanged", err)
-		}
-
-		return true, fmt.Errorf("update installed but UNSAFE: the previous bundle could not be moved to %s (%w) and the swap could not be undone — the only copy of the previous bundle is %s; move it there to restore rollback", prev, err, staged)
-	}
-	return false, nil
-}
-
-func applyIfBundle(tgt target, archiveBytes []byte, owner string) (handled, already bool, err error) {
+func applyIfBundle(tgt target, archiveBytes []byte, dataDir, owner, version string) (handled, already bool, err error) {
 	if !tgt.bundle {
 		return false, false, nil
 	}
-	already, err = applyBundleUpdate(tgt, archiveBytes, owner)
+	already, err = applyBundleUpdate(tgt, archiveBytes, dataDir, owner, version)
 	return true, already, err
 }

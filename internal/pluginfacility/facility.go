@@ -71,10 +71,15 @@ const (
 	InputPolicy  Input = "policy"
 	InputConfig  Input = "config"
 	InputHost    Input = "host"
+	InputNetwork Input = "network"
 )
 
 type PackageBound interface {
 	WaitsOnPackage() bool
+}
+
+type NetworkBound interface {
+	WaitsOnNetwork() bool
 }
 
 type Final interface {

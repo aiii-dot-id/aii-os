@@ -41,7 +41,9 @@ func TestAnOverrideRoundTripsFromTheFileThroughTheDoor(t *testing.T) {
 	app, _ := dispatchApp(t)
 	defer stopApp(t, app)
 	st := app.configState()
-	if row := settingState(t, st, "agency.turn_token_budget"); len(row.Overrides) != 0 || row.Effective.Level != "main" {
+	// The fence no level states is the default's (the table owns it), not
+	// a main setting the file never named.
+	if row := settingState(t, st, "agency.turn_token_budget"); len(row.Overrides) != 0 || row.Effective.Level != "default" {
 		t.Fatalf("rig: %+v", row)
 	}
 	block := `{"test":{"agency":{"turn_token_budget":"unlimited"},"models":{"m":{"agency":{"max_tool_rounds":44}}}}}`

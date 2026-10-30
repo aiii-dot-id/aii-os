@@ -97,6 +97,10 @@ type RestoreJournal struct {
 	Staging  string         `json:"staging"`
 	Moves    []RestoreMove  `json:"moves"`
 	Restored RestoreRecord  `json:"restored"`
+
+	Unsigned bool `json:"unsigned,omitempty"`
+
+	WitnessStaged []string `json:"witness_staged,omitempty"`
 }
 
 type RestoreRecord struct {
@@ -148,10 +152,13 @@ func restorable(cfg Settings) error {
 func (r *Runtime) resolveRestoreSource(cfg Settings, source, name string) (path string, snap *keptSnapshot, err error) {
 	switch source {
 	case SourceSnapshot:
-		kept, _ := keptSnapshots(r.BackupsDir(cfg))
-		for i := range kept {
-			if kept[i].Name == name {
-				return filepath.Join(r.BackupsDir(cfg), kept[i].Name), &kept[i], nil
+
+		for _, dir := range []string{newMachineDir(cfg), r.BackupsDir(cfg)} {
+			kept, _ := keptSnapshots(dir)
+			for i := range kept {
+				if kept[i].Name == name {
+					return filepath.Join(dir, kept[i].Name), &kept[i], nil
+				}
 			}
 		}
 		return "", nil, fmt.Errorf("%q is not one of the snapshots kept here", name)
@@ -183,6 +190,7 @@ func (r *Runtime) PerformPendingRestore(ctx context.Context, cfg Settings, kp *c
 			logsink.Error("restore.error", "the interrupted restore did not finish: %v — the journal stays and the next start goes on from here", ferr)
 			return fmt.Errorf("an interrupted restore did not finish: %w", ferr)
 		}
+		r.endNewMachine(cfg)
 		return nil
 	}
 	raw, err := os.ReadFile(restoreRequestPath(cfg))
@@ -219,7 +227,10 @@ func (r *Runtime) PerformPendingRestore(ctx context.Context, cfg Settings, kp *c
 		return withdraw("a staging directory could not be made: " + err.Error())
 	}
 	set := filepath.Join(staging, "set")
-	through, err := r.stageAndProve(ctx, cfg, kp, srcPath, snap, set, filepath.Join(staging, "proof"))
+
+	artifact, aerr := ledger.RecordArtifact(cfg.Identity.LedgerPath)
+	noRecord := aerr == nil && artifact == ""
+	through, unsigned, err := r.stageAndProve(ctx, cfg, kp, srcPath, snap, set, filepath.Join(staging, "proof"), noRecord)
 	if err != nil {
 		os.RemoveAll(staging)
 		return withdraw("the source does not prove: " + err.Error())
@@ -229,6 +240,7 @@ func (r *Runtime) PerformPendingRestore(ctx context.Context, cfg Settings, kp *c
 		os.RemoveAll(staging)
 		return withdraw(err.Error())
 	}
+	j.Unsigned = unsigned
 	jr, _ := json.MarshalIndent(j, "", "  ")
 	if err := writeFileDurably(filepath.Join(dir, RestoreJournalName), append(jr, '\n')); err != nil {
 		os.RemoveAll(staging)
@@ -297,7 +309,7 @@ func readRestoreJournal(cfg Settings) (RestoreJournal, bool, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		switch {
-		case rel == filepath.Base(cfg.Identity.DBPath), rel == filepath.Base(cfg.Identity.LedgerPath), rel == witness.TailFileName:
+		case rel == filepath.Base(cfg.Identity.DBPath), rel == filepath.Base(cfg.Identity.LedgerPath), rel == witness.TailFileName, rel == witness.ConflictFileName:
 		case strings.HasPrefix(rel, filepath.Base(cfg.Identity.DBPath)+"-") && isDatabaseSidecar(SnapshotDB+strings.TrimPrefix(rel, filepath.Base(cfg.Identity.DBPath))):
 		case segmentNameRe.MatchString(rel):
 		case strings.HasPrefix(rel, witness.WitnessKeysDirName+"/") && strings.HasSuffix(rel, ".json") && strings.Count(rel, "/") == 1:
@@ -324,55 +336,63 @@ func readRestoreJournal(cfg Settings) (RestoreJournal, bool, error) {
 	return j, true, nil
 }
 
-func (r *Runtime) stageAndProve(ctx context.Context, cfg Settings, kp *crypto.KeyPair, srcPath string, snap *keptSnapshot, set, scratch string) (uint64, error) {
+func (r *Runtime) stageAndProve(ctx context.Context, cfg Settings, kp *crypto.KeyPair, srcPath string, snap *keptSnapshot, set, scratch string, takesUnsigned bool) (uint64, bool, error) {
 	if snap != nil && snap.Encrypted {
 		key, err := os.ReadFile(r.snapshotKeyPath(cfg))
 		if err != nil {
-			return 0, fmt.Errorf("it is encrypted and the snapshot key on this machine does not read: %w", err)
+			return 0, false, fmt.Errorf("it is encrypted and the snapshot key on this machine does not read: %w", err)
 		}
 		defer escrow.Wipe(key)
 		present, err := escrow.OpenSnapshot(srcPath, key, set)
 		if err != nil {
-			return 0, fmt.Errorf("it does not open: %w", err)
+			return 0, false, fmt.Errorf("it does not open: %w", err)
 		}
 		if err := escrow.CheckSums(set, present); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	} else {
 		if err := copySetTree(srcPath, set); err != nil {
-			return 0, fmt.Errorf("copy: %w", err)
+			return 0, false, fmt.Errorf("copy: %w", err)
 		}
 		if snap != nil {
 			present, err := filesUnder(set)
 			if err != nil {
-				return 0, err
+				return 0, false, err
 			}
 			if err := escrow.CheckSums(set, present); err != nil {
-				return 0, err
+				return 0, false, err
 			}
 		}
 	}
 	if snap != nil {
 		raw, err := os.ReadFile(filepath.Join(set, snapshotReceiptName))
 		if err != nil {
-			return 0, fmt.Errorf("it holds no receipt, so it holds no database to restore with its record: %w", err)
+			return 0, false, fmt.Errorf("it holds no receipt, so it holds no database to restore with its record: %w", err)
 		}
 		var want snapshotReceipt
 		if err := json.Unmarshal(raw, &want); err != nil {
-			return 0, fmt.Errorf("its receipt does not read: %w", err)
+			return 0, false, fmt.Errorf("its receipt does not read: %w", err)
 		}
 		if want.Identity != kp.Fingerprint() {
-			return 0, fmt.Errorf("it is identity %s's, and the key on this machine is %s's", want.Identity, kp.Fingerprint())
+			return 0, false, fmt.Errorf("it is identity %s's, and the key on this machine is %s's", want.Identity, kp.Fingerprint())
+		}
+		unsigned := false
+		switch err := heldToKey(set, kp, want); {
+		case errors.Is(err, escrow.ErrUnsigned) && takesUnsigned:
+			unsigned = true
+			logsink.Warn("restore.decision", "%s carries no signature of the identity's key (snapshots made before 0.2.0 carry none); no record of the identity is on this machine, so it is restored as it proves, and the page says it was unsigned", filepath.Base(srcPath))
+		case err != nil:
+			return 0, false, err
 		}
 		if err := r.proveSnapshotIn(ctx, cfg, set, want, scratch); err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		return want.LastSeq, nil
+		return want.LastSeq, unsigned, nil
 	}
 
 	beside, err := besideFor(cfg, set)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var verified store.MirrorHead
 	n, fp, err := genesis.VerifyHeld(filepath.Join(set, "ledger.jsonl"), beside, func(string) func(*ledger.Event) error {
@@ -382,19 +402,19 @@ func (r *Runtime) stageAndProve(ctx context.Context, cfg Settings, kp *crypto.Ke
 		}
 	})
 	if err != nil {
-		return 0, fmt.Errorf("%w; witness: %s", err, beside.Summary())
+		return 0, false, fmt.Errorf("%w; witness: %s", err, beside.Summary())
 	}
 	if fp != kp.Fingerprint() {
-		return 0, fmt.Errorf("it is identity %s's, and the key on this machine is %s's", fp, kp.Fingerprint())
+		return 0, false, fmt.Errorf("it is identity %s's, and the key on this machine is %s's", fp, kp.Fingerprint())
 	}
 	head, _, err := store.ProveRestore(ctx, filepath.Join(set, SnapshotDB), filepath.Join(set, "ledger.jsonl"), scratch, verified)
 	if err != nil {
-		return 0, fmt.Errorf("it does not restore: %w", err)
+		return 0, false, fmt.Errorf("it does not restore: %w", err)
 	}
 	if head.Seq != uint64(n) {
-		return 0, fmt.Errorf("restored, its database ends at record %d and its record at %d", head.Seq, n)
+		return 0, false, fmt.Errorf("restored, its database ends at record %d and its record at %d", head.Seq, n)
 	}
-	return uint64(n), nil
+	return uint64(n), false, nil
 }
 
 func setAsideLabel(name, fingerprint string) string {
@@ -440,7 +460,14 @@ func planRestoreMoves(cfg Settings, req RestoreRequest, set, staging string, thr
 	for _, side := range databaseSidecars {
 		live = append(live, filepath.Base(cfg.Identity.DBPath)+side)
 	}
-	live = append(live, filepath.Base(cfg.Identity.LedgerPath), witness.TailFileName)
+
+	live = append(live, filepath.Base(cfg.Identity.LedgerPath), witness.TailFileName, witness.ConflictFileName)
+
+	members, err := stagedWitnessMembers(set)
+	if err != nil {
+		return j, err
+	}
+	j.WitnessStaged = members
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if !e.IsDir() && segmentNameRe.MatchString(e.Name()) {
@@ -448,11 +475,11 @@ func planRestoreMoves(cfg Settings, req RestoreRequest, set, staging string, thr
 		}
 	}
 	for _, name := range live {
-		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
 			continue
 		}
 		j.Moves = append(j.Moves, RestoreMove{Kind: MovePreserve,
-			From: filepath.Join(dir, name), To: filepath.Join(aside, setName(cfg, name))})
+			From: filepath.Join(dir, filepath.FromSlash(name)), To: filepath.Join(aside, filepath.FromSlash(setName(cfg, name)))})
 	}
 	if keys, err := os.ReadDir(witness.WitnessKeysDir(dir)); err == nil {
 		for _, e := range keys {
@@ -471,6 +498,9 @@ func planRestoreMoves(cfg Settings, req RestoreRequest, set, staging string, thr
 			to = cfg.Identity.DBPath
 		case rel == "ledger.jsonl":
 			to = cfg.Identity.LedgerPath
+		case rel == witness.ConflictFileName:
+
+			to = filepath.Join(dir, witness.ConflictFileName)
 		case rel == witness.TailFileName:
 
 			to = filepath.Join(dir, witness.TailFileName)
@@ -560,6 +590,9 @@ func (r *Runtime) finishRestore(cfg Settings, j RestoreJournal) error {
 		return fmt.Errorf("what was set aside is not durable: %w", err)
 	}
 	r.restoreStep("moved")
+	if err := r.witnessMembers(j, dir); err != nil {
+		return err
+	}
 
 	if held, _ := os.ReadDir(j.Aside); len(held) == 0 {
 		os.Remove(j.Aside)
@@ -583,7 +616,7 @@ func (r *Runtime) finishRestore(cfg Settings, j RestoreJournal) error {
 		}
 	}
 
-	settle, _ := json.MarshalIndent(RestoreSettlement{At: time.Now().UTC(), Source: j.Request.Source, Name: j.Request.Name, Earlier: earlierSettlement(cfg, j)}, "", "  ")
+	settle, _ := json.MarshalIndent(RestoreSettlement{At: time.Now().UTC(), Source: j.Request.Source, Name: j.Request.Name, Unsigned: j.Unsigned, Earlier: earlierSettlement(cfg, j)}, "", "  ")
 	if err := writeFileDurably(restoreSettlePath(cfg), append(settle, '\n')); err != nil {
 		return fmt.Errorf("what the next start owes the messages this restore brought back could not be written: %w", err)
 	}
@@ -742,6 +775,7 @@ func (r *Runtime) withdrawJournal(cfg Settings, j RestoreJournal, made []bool) e
 	}
 
 	os.Remove(filepath.Join(j.Aside, witness.WitnessKeysDirName))
+	os.Remove(filepath.Join(j.Aside, witness.AbandonedDirName))
 	os.Remove(j.Aside)
 
 	why := "the files it had staged and proved are gone from " + j.Staging
@@ -820,6 +854,8 @@ type RestoreSettlement struct {
 	Source string    `json:"source"`
 	Name   string    `json:"name"`
 
+	Unsigned bool `json:"unsigned,omitempty"`
+
 	Earlier string `json:"earlier,omitempty"`
 }
 
@@ -867,7 +903,7 @@ func (r *Runtime) SettleRestore(cfg Settings, s RestoreSettlement) error {
 		return nil
 	}
 	r.restoreStep("settle")
-	restore := store.Restore{At: s.At, Source: s.Source, SourceAt: restoreSourceAt(s.Source, s.Name)}
+	restore := store.Restore{At: s.At, Source: s.Source, SourceAt: restoreSourceAt(s.Source, s.Name), Unsigned: s.Unsigned}
 	n, err := r.w.Store().SettleRestore(restore, RestoredFrom(restore)+", in which it was still waiting to be sent — it may already have been sent before the restore")
 	if err != nil {
 		return fmt.Errorf("the messages a restore brought back could not be settled, so nothing that could send them is started: %w", err)
@@ -1132,4 +1168,118 @@ func lastRestoreFailure(cfg Settings) *restoreFailure {
 		return nil
 	}
 	return &f
+}
+
+func admitStagedWitnessMember(path, rel string) error {
+	if rel != witness.OperationFileName && !(strings.Count(rel, "/") == 1 && witness.ArchiveNameValid(strings.TrimPrefix(rel, witness.AbandonedDirName+"/"))) {
+		return fmt.Errorf("the snapshot holds %s, which is not a witness operation a snapshot can hold", rel)
+	}
+	if err := admitWitnessMember(path, rel); err != nil {
+		return fmt.Errorf("the snapshot's %s: %w", rel, err)
+	}
+	return nil
+}
+
+var witnessMemberFiles = []string{witness.EnvelopeFileName, witness.PendingRequestFileName, witness.PendingReceiptFileName, witness.OperationFileName}
+
+func stagedWitnessMembers(set string) ([]string, error) {
+	var members []string
+	for _, n := range witnessMemberFiles {
+		if _, err := os.Lstat(filepath.Join(set, n)); err == nil {
+			members = append(members, n)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	archives, err := os.ReadDir(filepath.Join(set, witness.AbandonedDirName))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, e := range archives {
+		members = append(members, witness.AbandonedDirName+"/"+e.Name())
+	}
+	for _, rel := range members {
+		if rel == witness.OperationFileName || strings.HasPrefix(rel, witness.AbandonedDirName+"/") {
+			if err := admitStagedWitnessMember(filepath.Join(set, filepath.FromSlash(rel)), rel); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return members, nil
+}
+
+func (r *Runtime) witnessMembers(j RestoreJournal, dir string) error {
+	set := ""
+	if j.Staging != "" {
+		set = filepath.Join(j.Staging, "set")
+	}
+	carried := map[string]bool{}
+	for _, m := range j.WitnessStaged {
+		carried[m] = true
+	}
+	names := append([]string(nil), witnessMemberFiles...)
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[n] = true
+	}
+	for _, base := range []string{dir, set} {
+		if base == "" {
+			continue
+		}
+		archives, _ := os.ReadDir(filepath.Join(base, witness.AbandonedDirName))
+		for _, e := range archives {
+			rel := witness.AbandonedDirName + "/" + e.Name()
+			if !e.IsDir() && witness.ArchiveNameValid(e.Name()) && !seen[rel] {
+				seen[rel] = true
+				names = append(names, rel)
+			}
+		}
+	}
+	for _, rel := range names {
+		live := filepath.Join(dir, filepath.FromSlash(rel))
+		aside := filepath.Join(j.Aside, filepath.FromSlash(rel))
+		staged := ""
+		if set != "" {
+			staged = filepath.Join(set, filepath.FromSlash(rel))
+		}
+		stillStaged := staged != "" && exists(staged)
+		if carried[rel] && !stillStaged {
+			continue
+		}
+		if exists(live) {
+			if exists(aside) {
+				return fmt.Errorf("witness member %s stands beside the record and in the set aside both: the restore is not completed over it", rel)
+			}
+			if err := os.MkdirAll(filepath.Dir(aside), 0o700); err != nil {
+				return fmt.Errorf("witness member %s: %w", rel, err)
+			}
+			if err := os.Rename(live, aside); err != nil {
+				return fmt.Errorf("witness member %s set aside: %w", rel, err)
+			}
+			r.restoreStep("witness-aside:" + rel)
+		}
+		if carried[rel] {
+			if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+				return fmt.Errorf("witness member %s: %w", rel, err)
+			}
+			if err := os.Rename(staged, live); err != nil {
+				return fmt.Errorf("witness member %s put in place: %w", rel, err)
+			}
+			r.restoreStep("witness-installed:" + rel)
+		}
+	}
+	for _, d := range []string{dir, j.Aside, filepath.Join(dir, witness.AbandonedDirName), filepath.Join(j.Aside, witness.AbandonedDirName)} {
+		if !exists(d) {
+			continue
+		}
+		if err := r.syncDir(d); err != nil {
+			return fmt.Errorf("the witness members are not durable (%s): %w", d, err)
+		}
+	}
+	return nil
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }

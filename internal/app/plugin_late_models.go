@@ -41,11 +41,6 @@ func (a *App) reconcileLateModels() {
 			continue
 		}
 
-		if acq := a.acquirer(); acq != nil {
-			if st, busy := acq.Status(ap.ID); busy && st.Phase != pluginhost.PhaseReady {
-				continue
-			}
-		}
 		late.Want(ap.LateMaterial(absent))
 	}
 

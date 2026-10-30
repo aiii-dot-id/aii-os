@@ -302,23 +302,8 @@ func TestLedgerShowReadsTheClosedSegmentsWithNoHostRunning(t *testing.T) {
 	}
 }
 
-// -json IS THE FILE. Each record's line is printed byte for byte as the
-// file holds it, the segments' interior records without a proof and the
-// tail's with theirs, and a line whose envelope is not in the writer's
-// form (the walk accepts it: what is signed is the entry) stays as it is.
 func TestLedgerShowJSONIsEachLineAsTheFileHoldsIt(t *testing.T) {
 	f := newShowFixture(t, false)
-	raw, err := os.ReadFile(f.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spaced := bytes.Replace(raw, []byte(`{"entry":`), []byte(`{ "entry" :`), 1)
-	if bytes.Equal(spaced, raw) {
-		t.Fatal("fixture: the tail has no line to space")
-	}
-	if err := os.WriteFile(f.path, spaced, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	code, out, errOut := runShow(t, trustHeads, "-dir", f.dir, "-json")
 	if code != 0 || errOut != "" {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -331,8 +316,24 @@ func TestLedgerShowJSONIsEachLineAsTheFileHoldsIt(t *testing.T) {
 	if out != want.String() {
 		t.Fatalf("-json is not the file's lines:\n got %q\nwant %q", out, want.String())
 	}
+
+	raw, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaced := bytes.Replace(raw, []byte(`{"entry":`), []byte(`{ "entry" :`), 1)
+	if bytes.Equal(spaced, raw) {
+		t.Fatal("fixture: the tail has no line to space")
+	}
+	if err := os.WriteFile(f.path, spaced, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut = runShow(t, trustHeads, "-dir", f.dir, "-json")
+	if code != 1 || !strings.Contains(errOut, "the line is not the canonical form of the record it holds") {
+		t.Fatalf("a line not in the writer's form was not refused by the walk: exit %d, stderr %q", code, errOut)
+	}
 	if !strings.Contains(out, `{ "entry" :`) {
-		t.Fatal("the spaced line was re-encoded")
+		t.Fatalf("the refused line was not printed as the file holds it:\n%s", out)
 	}
 }
 

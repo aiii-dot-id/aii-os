@@ -12,8 +12,10 @@ import (
 
 const shellDialect = "bash"
 
-func shellInvocation() (string, []string) {
-	return "bash", []string{"-c"}
+const shellRelayDescription = ""
+
+func shellCommand(command, _ string, _ bool) (shellStart, error) {
+	return shellStart{bin: "bash", argv: []string{"-c", command}}, nil
 }
 
 func shellEnv(sandbox string) []string {
@@ -38,7 +40,7 @@ func prepareTree(cmd *exec.Cmd) {
 
 type shellTree struct{}
 
-func (t *shellTree) adopt(*exec.Cmd) {}
+func (t *shellTree) adopt(*exec.Cmd, bool) error { return nil }
 
 func (t *shellTree) kill(cmd *exec.Cmd) error {
 	if cmd.Process == nil {

@@ -38,10 +38,10 @@ func (s *Server) noServiceWorker(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.serviceWorkers.own(refusalLinesAMinute, func(n uint64) {
+		if s.serviceWorkers.own(s.refusalLines(), func(n uint64) {
 			logsink.Warn("dashboard.refusal", "%d more request(s) for a service worker's script answered in the last minute with one that removes itself", n)
 		}) {
-			logsink.Warn("dashboard.refusal", "%s was asked for as a service worker's script: answered with one that removes itself, as this dashboard installs none", r.URL.Path)
+			logsink.Warn("dashboard.refusal", "%s was asked for as a service worker's script: answered with one that removes itself, as this dashboard installs none", peerSaid(r.URL.Path, refusalPeerTextBytes))
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")

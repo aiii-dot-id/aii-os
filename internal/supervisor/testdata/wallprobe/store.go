@@ -27,14 +27,15 @@ func storeProbe() {
 	}
 	reads("read")
 	if late := os.Getenv("WALL_LATE"); late != "" {
+		// The test links the file and then grants the view: the read
+		// waits for both, so a read between the two is not its answer.
 		deadline := time.Now().Add(20 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Lstat(late); err == nil {
-				break
-			}
+		got := tryRead(late)
+		for got != "ok" && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
+			got = tryRead(late)
 		}
-		fmt.Println("late=" + tryRead(late))
+		fmt.Println("late=" + got)
 	}
 	fmt.Println("waiting")
 	sc := bufio.NewScanner(os.Stdin)

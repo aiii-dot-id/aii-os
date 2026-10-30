@@ -76,8 +76,47 @@ func TestAHomeThatLostOnlyItsRecordStartsAtItsRestoreDoor(t *testing.T) {
 	}
 }
 
-// WITH NOTHING TO RESTORE FROM THE REFUSAL STANDS, as it did: a key and a
-// database alone open no door, and nothing is born over them.
+func TestAHomeThatLostItsRecordRestoresASnapshotMadeBeforeSigning(t *testing.T) {
+	r := newRestoreRig(t)
+	at, snap := r.lived(t, 2, "kept", true)
+	if err := os.Remove(r.ledgerPath); err != nil {
+		t.Fatal(err)
+	}
+	probe := New(r.cfg)
+	if err := continuitytest.Unsign(filepath.Join(probe.backupsDir(probe.configSnapshot()), snap), nil); err != nil {
+		t.Fatal(err)
+	}
+	safe, err := r.bootThroughChoice(t)
+	if err != nil {
+		t.Fatalf("rig: the start at the restore door: %v", err)
+	}
+	if reason, isSafe := safe.SafeMode(); !isSafe || !strings.Contains(reason, safePostures[safeRecordMissing].what) {
+		stopApp(t, safe)
+		t.Fatalf("rig: the start is not SAFE at the restore door: %v %q", isSafe, reason)
+	}
+	plan, err := continuityDoor(safe).RestorePlan(continuity.SourceSnapshot, snap)
+	if err == nil {
+		err = continuityDoor(safe).Restore(continuity.SourceSnapshot, snap, plan.ConfirmText)
+	}
+	stopApp(t, safe)
+	if err != nil {
+		t.Fatalf("a restore cannot be asked for at the restore door: %v", err)
+	}
+
+	a, err := r.bootThroughChoice(t)
+	if err != nil {
+		t.Fatalf("the start after the request: %v", err)
+	}
+	defer stopApp(t, a)
+	v := continuityDoor(a).View()
+	if why, isSafe := a.SafeMode(); isSafe || a.ledger == nil || a.ledger.LastSeq() < at {
+		t.Fatalf("A SNAPSHOT MADE BEFORE SIGNING WAS NOT RESTORED IN A HOME THAT LOST ITS RECORD: SAFE %t (%s); the page says: %s", isSafe, why, v.RestoreFailed)
+	}
+	if !strings.Contains(v.Restored, "carried no signature of the identity's key") {
+		t.Errorf("THE PAGE DOES NOT SAY THE SNAPSHOT WAS UNSIGNED: %q", v.Restored)
+	}
+}
+
 func TestAHomeWithNoRecordAndNothingToRestoreFromIsStillRefused(t *testing.T) {
 	r := newRestoreRig(t)
 	r.lived(t, 1, "lost", false)
@@ -85,12 +124,12 @@ func TestAHomeWithNoRecordAndNothingToRestoreFromIsStillRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, err := r.bootThroughChoice(t)
-	if err == nil {
-		stopApp(t, a)
-		t.Fatal("a home with no record and no snapshot was started")
+	if err != nil {
+		t.Fatalf("the refusal ended the start instead of bringing up its page: %v", err)
 	}
-	if !strings.Contains(err.Error(), "refusing FIRSTBOOT") || fileExists(r.ledgerPath) {
-		t.Fatalf("the refusal does not name itself, or a record was made: %v", err)
+	defer stopApp(t, a)
+	if why, safe := a.SafeMode(); !safe || !strings.Contains(why, "refusing FIRSTBOOT") || a.ledger != nil || fileExists(r.ledgerPath) {
+		t.Fatalf("the refusal does not name itself, a record was opened, or one was made: %v %q", safe, why)
 	}
 }
 
@@ -626,12 +665,12 @@ func TestAHomeThatLostBothWithNothingToRestoreFromIsStillRefused(t *testing.T) {
 		}
 	}
 	a, err := r.bootThroughChoice(t)
-	if err == nil {
-		stopApp(t, a)
-		t.Fatal("a home with no record, no key and nothing to restore from was started")
+	if err != nil {
+		t.Fatalf("the refusal ended the start instead of bringing up its page: %v", err)
 	}
-	if !strings.Contains(err.Error(), "refusing FIRSTBOOT") || fileExists(r.ledgerPath) || fileExists(r.keyPath) {
-		t.Fatalf("the refusal does not name itself, or a record or a key was made: %v", err)
+	defer stopApp(t, a)
+	if why, safe := a.SafeMode(); !safe || !strings.Contains(why, "refusing FIRSTBOOT") || fileExists(r.ledgerPath) || fileExists(r.keyPath) {
+		t.Fatalf("the refusal does not name itself, or a record or a key was made: %v %q", safe, why)
 	}
 }
 

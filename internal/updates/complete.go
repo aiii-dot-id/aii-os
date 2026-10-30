@@ -117,7 +117,7 @@ func (c *Checker) completeInstall(ctx context.Context, exePath string) error {
 	if err != nil {
 		return fail("the release %s does not carry this platform's archive: %w", current, err)
 	}
-	archive, err := c.verifiedArchive(ctx, archiveURL, sigURL, name, current, root)
+	archive, _, err := c.verifiedArchive(ctx, tgt, release, archiveURL, sigURL, name, current, root)
 	if err != nil {
 		return fail("%w", err)
 	}

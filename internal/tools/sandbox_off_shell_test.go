@@ -68,7 +68,7 @@ func TestWithTheSandboxOffTheShellsWallAdmitsAPathOutsideEveryRoot(t *testing.T)
 //     reads the command's text and cannot see what grep -r, find or tar
 //     does inside a folder, so "grep -r key /" would have read the key;
 //   - a directory changed into: "cd <the folder above the home> && cat
-//     vega/data/credentials/k.key" names no kept place as the wall reads
+//     example/data/credentials/k.key" names no kept place as the wall reads
 //     it, from the home, and opens one in the shell;
 //   - a relative path that walks up out of where the call runs: "cd sub
 //     && cat ../data/credentials/k.key" reads, from the home, as a path
@@ -149,10 +149,10 @@ func TestWithTheSandboxOffTheShellsWallStillKeepsTheSubstrate(t *testing.T) {
 		t.Errorf("a walk up out of the working directory: %q", why)
 	}
 	// The whole call, not only the wall's reading of it.
-	if res := shellIn(t, g.r, nil, "cd "+inQuotes(g.base)+" && cat vega/data/credentials/k.key"); !res.Refused || res.ReasonCode != ReasonShellWall || strings.Contains(res.Output, "KEPT") {
+	if res := shellIn(t, g.r, nil, "cd "+inQuotes(g.base)+" && cat example/data/credentials/k.key"); !res.Refused || res.ReasonCode != ReasonShellWall || strings.Contains(res.Output, "KEPT") {
 		t.Fatalf("a cd above the home and a relative path into the data directory: %+v", res)
 	}
-	if res := shellIn(t, g.r, g.base, "cat vega/data/credentials/k.key"); !res.Refused || res.ReasonCode != ReasonPathRefused || strings.Contains(res.Output, "KEPT") {
+	if res := shellIn(t, g.r, g.base, "cat example/data/credentials/k.key"); !res.Refused || res.ReasonCode != ReasonPathRefused || strings.Contains(res.Output, "KEPT") {
 		t.Fatalf("a working directory above the home: %+v", res)
 	}
 	// $HOME and ~ stay unresolvable to the check, so they stay refused.
@@ -160,5 +160,30 @@ func TestWithTheSandboxOffTheShellsWallStillKeepsTheSubstrate(t *testing.T) {
 		if why := g.r.shellRefusal(command); why == "" {
 			t.Errorf("%q must stay refused", command)
 		}
+	}
+}
+
+func TestAnAbsoluteWordOfAnInlineProgramIsToldNoCwd(t *testing.T) {
+	keepsPlaces(t, false)
+	g := newOffRig(t)
+	g.r.SetSandboxOff(true)
+	look := g.r.policy.Look()
+	program := "python3 - <<'PY'\nfrom pathlib import Path\np = Path('.')\nprint(p / 'x')\nPY"
+	why, named, literal := g.r.shellWallWord(look, g.home, program)
+	if literal != "/" || named != "/" || !strings.Contains(why, holdsSubstrateWhy) || strings.Contains(why, "name a folder") {
+		t.Fatalf("the program's / was not refused as a literal word that holds the home: %q %q %q", why, named, literal)
+	}
+	if whyFrom, _ := g.r.shellWallFrom(look, g.home, program); whyFrom != why {
+		t.Fatalf("the rule's decision changed: %q, was %q", whyFrom, why)
+	}
+	res := shellIn(t, g.r, nil, program)
+	if !res.Refused || res.ReasonCode != ReasonShellWall || !strings.HasSuffix(res.Error, literalWordWords) ||
+		strings.Contains(res.Error, "cwd") || strings.Contains(res.Error, "if that is text") {
+		t.Fatalf("the refusal of an absolute literal word names a cwd, or another line: %+v", res)
+	}
+	plain := shellIn(t, g.r, nil, "grep -r KEPT /")
+	if !plain.Refused || plain.ReasonCode != ReasonShellWall || !strings.Contains(plain.Error, "name a folder that does neither, or use read, grep or ls") ||
+		strings.Contains(plain.Error, "inline program") {
+		t.Fatalf("a word of the command itself is told otherwise: %+v", plain)
 	}
 }

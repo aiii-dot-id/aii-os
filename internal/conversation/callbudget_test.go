@@ -44,8 +44,8 @@ func TestTheCallCeilingBoundsAWideBatchThatRoundsCannotBound(t *testing.T) {
 	if false {
 		t.Fatal("a run stopped by its call budget is UNFINISHED and must say so")
 	}
-	if !strings.Contains(res.Spoken, "20 call(s) in the final batch were not executed") {
-		t.Fatalf("the ending must name what was not run: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "20 call(s) in the final batch were not executed") {
+		t.Fatalf("the ending must name what was not run: %q", res.Said())
 	}
 }
 
@@ -155,8 +155,8 @@ func TestAResidentTurnEndsAtItsCallLimitWithAnAnswer(t *testing.T) {
 		t.Errorf("the call past the limit was not answered in the approved words:\n%s", all)
 	}
 	want := "here is where it stands\n\n[This turn reached its limit of 3 tool calls and was finished without further tools. Ask again to continue.]"
-	if !strings.HasSuffix(res.Spoken, want) {
-		t.Errorf("the turn ends %q; want it to end %q", res.Spoken, want)
+	if !strings.HasSuffix(res.Said(), want) {
+		t.Errorf("the turn ends %q; want it to end %q", res.Said(), want)
 	}
 	if !res.ExhaustedCallBudget || res.ContinuedAtCap || res.ContinuedAtPressure || res.ContinuedAtTokenBudget {
 		t.Errorf("the ending is not a hard ceiling that nothing continues: %+v", res)

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func TestSandboxRootsApplyOnEdit(t *testing.T) {
 	if err := os.MkdirAll(extra, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.setSandboxRoots([]string{extra}); err != nil {
+	if err := a.changeSandboxRoot(extra, true); err != nil {
 		t.Fatalf("an operator root edit applies directly: %v", err)
 	}
 	_, got := a.toolReg.Roots()
@@ -192,9 +193,54 @@ func TestSandboxRootsApplyOnEdit(t *testing.T) {
 	}
 }
 
+// A page that has not heard of a removal must not put the removed root
+// back. Each act names one root and is applied to the list the runtime
+// holds; the whole list as a page last saw it is never taken.
+func TestAnAddFromAnOlderListDoesNotPutBackARemovedRoot(t *testing.T) {
+	a, client := newSandboxApp(t)
+	notes := filepath.Join(filepath.Dir(client), "notes")
+	if err := os.MkdirAll(notes, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.changeSandboxRoot(client, true); err != nil {
+		t.Fatal(err)
+	}
+	_, held := a.toolReg.Roots()
+	if len(held) != 1 {
+		t.Fatalf("rig: the first root was not applied: %v", held)
+	}
+	granted := held[0]
+	// One page removes the client's root. A second page still lists it,
+	// and there the operator adds another.
+	if err := a.changeSandboxRoot(granted, false); err != nil {
+		t.Fatalf("removing a held root: %v", err)
+	}
+	if err := a.changeSandboxRoot(notes, true); err != nil {
+		t.Fatalf("adding a root from a page with an older list: %v", err)
+	}
+	_, held = a.toolReg.Roots()
+	if len(held) != 1 || slices.Contains(held, granted) {
+		t.Fatalf("A REMOVED ROOT IS GRANTED AGAIN: the roots are %v after %q was removed and one other added", held, granted)
+	}
+	if len(a.cfg.Tools.ExtraRoots) != 1 || slices.Contains(a.cfg.Tools.ExtraRoots, granted) {
+		t.Fatalf("the saved roots are %v, want only the one added", a.cfg.Tools.ExtraRoots)
+	}
+	// An act that would change nothing is refused, so the page that sent
+	// it learns its list was old.
+	if err := a.changeSandboxRoot(granted, false); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("removing a root that is not held: %v, want a refusal that says nothing was changed", err)
+	}
+	if err := a.changeSandboxRoot(notes, true); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("adding a root that is already held: %v, want a refusal that says nothing was changed", err)
+	}
+	if _, held = a.toolReg.Roots(); len(held) != 1 {
+		t.Fatalf("a refused act changed the roots: %v", held)
+	}
+}
+
 func TestSubstratePathsStillRefuse(t *testing.T) {
 	a, _ := newSandboxApp(t)
-	if err := a.setSandboxRoots([]string{filepath.Dir(a.cfg.Identity.LedgerPath)}); err == nil {
+	if err := a.changeSandboxRoot(filepath.Dir(a.cfg.Identity.LedgerPath), true); err == nil {
 		t.Fatal("the structural wall must refuse exposing the identity substrate — a wall, not a ceremony")
 	}
 }
@@ -207,7 +253,7 @@ func TestSettingsStayLiveOnlyAfterPersistence(t *testing.T) {
 	}
 	a.cfg.SourcePath = filepath.Join(blocker, "config.json")
 
-	if err := a.setSandboxRoots([]string{extra}); err == nil {
+	if err := a.changeSandboxRoot(extra, true); err == nil {
 		t.Fatal("sandbox persistence failure reported success")
 	}
 	if _, roots := a.toolReg.Roots(); len(roots) != 0 {

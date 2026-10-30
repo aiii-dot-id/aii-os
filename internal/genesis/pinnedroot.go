@@ -2,27 +2,37 @@ package genesis
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
+	"sync"
 
-	"github.com/aiii-dot-id/aii-os/internal/crypto"
-	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
+	"github.com/aiii-dot-id/aii-os/internal/rootlist"
 )
 
 //go:embed ring0_root_pubkey.json
 var pinnedRootJSON []byte
 
+var pinnedRootList = []rootlist.Entry{
+	{Envelope: pinnedRootJSON},
+}
+
+var pinnedRoots = sync.OnceValue(func() *rootlist.List { return mustParseRoots(pinnedRootList) })
+
 func PinnedRoot() *publicKeyEnvelope { return pinnedRoot() }
 
-func pinnedRoot() *publicKeyEnvelope { return mustParseRoot(pinnedRootJSON) }
+func PinnedRoots() *rootlist.List { return pinnedRoots() }
+
+func pinnedRoot() *publicKeyEnvelope { return pinnedRoots().Current() }
 
 func mustParseRoot(raw []byte) *publicKeyEnvelope {
-	var env publicKeyEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		panic(fmt.Sprintf("genesis: embedded pinned root unparseable — broken build: %v", err))
-	}
-	if err := sigenvelope.ValidatePublicKeyEnvelopeShape(&env, crypto.ProfileRoot); err != nil {
+	return mustParseRoots([]rootlist.Entry{{Envelope: raw}}).Current()
+}
+
+func mustParseRoots(entries []rootlist.Entry) *rootlist.List {
+	l, err := rootlist.Parse(ring0RootKeyType, entries)
+	if err != nil {
 		panic(fmt.Sprintf("genesis: embedded pinned root invalid — broken build: %v", err))
 	}
-	return &env
+	return l
 }
+
+const ring0RootKeyType = "ring0"

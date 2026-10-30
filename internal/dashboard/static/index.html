@@ -58,11 +58,11 @@
       <section class="view on" id="view-chat">
         <div class="expert-bar" id="expert-bar" hidden>
           <div class="expert-row" aria-live="polite" aria-atomic="false">
-            <label class="expert-toggle"><input type="checkbox" data-expert> Expert</label>
+            <label class="expert-toggle" data-expert-label title="Shows the technical operator&rsquo;s controls: on Chat, the switch that sends your notices to you off the dashboard while no page is open; in Settings &rarr; Dashboard, the public name&rsquo;s route, its relay and port, and the direct addresses. Showing or hiding them changes nothing else."><input type="checkbox" data-expert> <span data-expert-words>Show technical controls</span></label>
             <span class="config-result bad" data-expert-said hidden></span>
             <p class="route-line" data-route-line hidden></p>
           </div>
-          <div class="expert-panel" data-expert-panel hidden></div>
+          <div class="expert-panel" data-expert-panel data-technical="notices" hidden></div>
         </div>
         <div id="chat-substrate-wrap" class="chat-substrate" style="display:none">
           <div class="substrate-controls">
@@ -92,6 +92,7 @@
               <input type="password" id="fb-apikey" placeholder="Paste your API key">
               <a class="fb-sub" id="fb-subscribe" style="display:none" target="_blank" rel="noopener"></a>
               <p class="fb-meet" id="fb-meet" data-inert="firstboot instruction copy; static text, shown not wired">You are about to meet your AI identity. Your first conversation is important. You can decide on a name and introduce yourself. Your relationship begins here.</p>
+              <p class="fb-meet" data-fb-notes>Notes that other AI agents kept on this machine (by default Claude Code, the Claude desktop app and Codex, or the stores set in genesis.agent_memory in config.json) are copied into your identity&rsquo;s home at birth, for them to read, and you are told what was copied. Nothing else in those folders is copied, and a note that holds what looks like a key or a token is left out. To leave the notes out, set genesis.agent_memory.off in config.json before you click Birth.</p>
               <div style="margin-top:18px"><button class="btn" id="fb-birth" style="width:100%">Birth</button></div>
               <div class="fb-result" id="fb-result" role="status"></div>
               <div style="margin-top:22px;border-top:1px solid var(--line);padding-top:14px">

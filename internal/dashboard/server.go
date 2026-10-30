@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"strings"
 	"sync"
@@ -30,6 +32,8 @@ import (
 var staticFS embed.FS
 
 const shippedPrefix = "/shipped/"
+
+const plainPrefix = "/plain/"
 
 type Server struct {
 	voiceControlsFailed atomic.Uint64
@@ -56,6 +60,8 @@ type Server struct {
 
 	auth atomic.Pointer[accessPolicy]
 
+	servingKey atomic.Pointer[[]byte]
+
 	refusedPause func(time.Duration)
 
 	refused refusalGate
@@ -64,6 +70,15 @@ type Server struct {
 	foreignHosts, badOrigins minuteLines
 
 	serviceWorkers minuteLines
+
+	keylessLines minuteLines
+
+	carriedLines minuteLines
+
+	mux     *http.ServeMux
+	reaches map[string]reach
+
+	tickets ticketStore
 
 	strangerBodyWait time.Duration
 
@@ -104,9 +119,15 @@ type Server struct {
 
 	channelSessions atomic.Int64
 
+	channelAttempts atomic.Uint64
+
+	lookupIP func(ctx context.Context, network, host string) ([]netip.Addr, error)
+
 	accessCode        atomic.Pointer[accessCode]
 	accessCodeSeconds atomic.Int64
 	now               func() time.Time
+
+	machineAddrs func() ([]net.Addr, error)
 
 	accessCodeSpent func()
 	hostsMu         sync.RWMutex
@@ -155,122 +176,11 @@ func New(host string, port int, handler *WSHandler) *Server {
 		startedAt:    time.Now(),
 	}
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-
-		shippedOnly := false
-		if p == shippedPrefix[:len(shippedPrefix)-1] {
-			http.Redirect(w, r, shippedPrefix, http.StatusFound)
-			return
-		}
-		if rest, ok := strings.CutPrefix(p, shippedPrefix); ok {
-			p, shippedOnly = "/"+rest, true
-		}
-		if p == "/" {
-			p = "/index.html"
-		}
-		var ctype string
-		switch path.Ext(p) {
-		case ".html":
-			ctype = "text/html; charset=utf-8"
-		case ".js":
-			ctype = "text/javascript; charset=utf-8"
-		case ".css":
-			ctype = "text/css; charset=utf-8"
-		case ".png":
-
-			ctype = "image/png"
-			shippedOnly = true
-		default:
-			http.NotFound(w, r)
-			return
-		}
-
-		var data []byte
-		ok := false
-		if !shippedOnly || path.Ext(p) == ".css" {
-			data, ok = s.overlayAsset(p)
-		}
-		if !ok {
-
-			var err error
-			data, err = staticFS.ReadFile("static" + p)
-			if err != nil {
-				if p == "/index.html" {
-
-					http.Error(w, "cannot read index.html", http.StatusInternalServerError)
-					return
-				}
-				http.NotFound(w, r)
-				return
-			}
-		}
-
-		w.Header().Set("Content-Type", ctype)
-		w.Header().Set("Content-Security-Policy", uiCSP)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		referrerPolicy := "no-referrer"
-		if p == "/index.html" {
-
-			referrerPolicy = "same-origin"
-		}
-		w.Header().Set("Referrer-Policy", referrerPolicy)
-
-		w.Header().Set("Cache-Control", "no-cache")
-
-		sum := sha256.Sum256(data)
-		w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
-
-		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
-	})
-
-	mux.HandleFunc("GET /sections/{id}/{path...}", s.handleSectionFile)
-
-	mux.HandleFunc("GET /p/{id}/{path...}", s.handleProjectFile)
-
-	mux.HandleFunc("GET /w", privateRoute(s.handleWorldFile))
-
-	mux.HandleFunc("POST /upload", privateRoute(s.handleUpload))
-
-	mux.HandleFunc("POST /restore/upload", privateRoute(s.handleRestoreUpload))
-	mux.HandleFunc("POST /speech/say", privateRoute(s.handleSpeechSay))
-
-	mux.HandleFunc("POST /database/export", privateRoute(s.handleDatabaseExport))
-	mux.HandleFunc("GET /speech/say/{id}", privateRoute(s.handleSpeechPlay))
-	mux.HandleFunc("GET /speech/heard", privateRoute(s.handleSpeechHeard))
-
-	mux.HandleFunc("GET /overlay/replacements", privateRoute(s.handleOverlayReplacements))
-	mux.HandleFunc("POST /overlay/set-aside", privateRoute(s.handleOverlaySetAside))
-
-	mux.HandleFunc("GET /overlay/scripts", privateRoute(s.handleOverlayScripts))
-	mux.HandleFunc("GET /overlay/scripts/file", privateRoute(s.handleOverlayScriptFile))
-	mux.HandleFunc("POST /overlay/scripts/approve", privateRoute(s.handleOverlayScriptApprove))
-
-	mux.HandleFunc("GET /auth/token", privateRoute(s.handleAccessToken))
-	mux.HandleFunc("POST /auth/token", privateRoute(s.handleAccessToken))
-
-	mux.HandleFunc("GET /auth/link", privateRoute(s.handleAccessCodeLink))
-	mux.HandleFunc("GET /auth/link.js", privateRoute(s.handleAccessCodeLinkJS))
-
-	mux.HandleFunc("POST /auth/launcher", privateRoute(s.handleLauncherLink))
-	mux.HandleFunc("POST /auth/rotate", privateRoute(s.handleRotateAccessToken))
-	mux.HandleFunc("POST /auth/require", privateRoute(s.handleRequireAccessToken))
-
-	mux.HandleFunc("GET /interaction/detail", privateRoute(s.serveInteractionDetail))
-	mux.HandleFunc("GET /interaction/thinking", privateRoute(s.serveInteractionThinking))
-
-	mux.HandleFunc("GET /record", privateRoute(s.serveRecord))
-	mux.HandleFunc("GET /record/payload", privateRoute(s.serveRecordPayload))
-
-	mux.HandleFunc("GET /sent", privateRoute(s.serveSent))
-	mux.HandleFunc("GET /sent/body", privateRoute(s.serveSentBody))
-	mux.HandleFunc("GET /ws", s.handleWS)
-	mux.HandleFunc("GET /oauth/callback", privateRoute(s.handleOAuthCallback))
-
-	mux.HandleFunc("POST /hooks/{plugin}/{path...}", s.handleWebhook)
-	mux.HandleFunc("GET /hooks/{plugin}/{path...}", s.handleWebhook)
+	s.mux, s.reaches = http.NewServeMux(), map[string]reach{}
+	for _, rt := range s.routes() {
+		s.reaches[rt.pattern] = rt.asks
+		s.mux.HandleFunc(rt.pattern, s.walled(rt.asks, rt.serve))
+	}
 
 	if host == "" {
 		host = "127.0.0.1"
@@ -279,7 +189,7 @@ func New(host string, port int, handler *WSHandler) *Server {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", s.port))
 	s.server = &http.Server{
 		Addr:    addr,
-		Handler: s.requests.track(s.unsignedRate(s.hostGate(s.noServiceWorker(mux)))),
+		Handler: s.requests.track(s.boundStrangerBody(s.unsignedRate(s.hostGate(s.noServiceWorker(s.mux))))),
 
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
@@ -290,12 +200,162 @@ func New(host string, port int, handler *WSHandler) *Server {
 	return s
 }
 
-func privateRoute(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		next(w, r)
+type route struct {
+	pattern string
+	asks    reach
+	serve   http.HandlerFunc
+}
+
+func (s *Server) routes() []route {
+	return []route{
+
+		{"GET /", reachFrame, s.serveFrame},
+
+		{"GET /sections/{id}/{path...}", reachSection, s.handleSectionFile},
+
+		{"GET /p/{id}/{path...}", reachBrowser, s.handleProjectFile},
+
+		{"GET /w", reachBrowser, s.handleWorldFile},
+
+		{"POST /upload", reachPage, s.handleUpload},
+
+		{"POST /restore/upload", reachPage, s.handleRestoreUpload},
+
+		{"POST /speech/say", reachPage, s.handleSpeechSay},
+		{"GET /speech/say/{id}", reachMinted, s.handleSpeechPlay},
+		{"GET /speech/heard", reachPage, s.handleSpeechHeard},
+
+		{"POST /database/export", reachBrowser, s.handleDatabaseExport},
+
+		{"POST /backups/download", reachBrowser, s.handleSnapshotDownload},
+
+		{"GET /overlay/replacements", reachPage, s.handleOverlayReplacements},
+		{"POST /overlay/set-aside", reachPage, s.handleOverlaySetAside},
+
+		{"GET /overlay/scripts", reachPage, s.handleOverlayScripts},
+		{"GET /overlay/scripts/file", reachPage, s.handleOverlayScriptFile},
+		{"POST /overlay/scripts/approve", reachPage, s.handleOverlayScriptApprove},
+
+		{"GET /auth/token", reachDoor, s.handleAccessToken},
+		{"POST /auth/token", reachDoor, s.handleAccessToken},
+
+		{"GET /auth/link", reachDoor, s.handleAccessCodeLink},
+		{"GET /auth/link.js", reachDoor, s.handleAccessCodeLinkJS},
+
+		{"POST /auth/launcher", reachDoor, s.handleLauncherLink},
+		{"POST /auth/rotate", reachPage, s.handleRotateAccessToken},
+		{"POST /auth/require", reachPage, s.handleRequireAccessToken},
+
+		{"POST /auth/ticket", reachPage, s.handleTicket},
+
+		{"GET /interaction/detail", reachPage, s.serveInteractionDetail},
+		{"GET /interaction/thinking", reachPage, s.serveInteractionThinking},
+
+		{"GET /record", reachPage, s.serveRecord},
+		{"GET /record/payload", reachPage, s.serveRecordPayload},
+
+		{"GET /sent", reachPage, s.serveSent},
+		{"GET /sent/body", reachPage, s.serveSentBody},
+
+		{"GET " + WorkExportRoute, reachPage, s.serveWorkExport},
+
+		{"GET /ws", reachSocket, s.handleWS},
+
+		{"GET " + install.ServingRoute, reachOutside, s.handleServing},
+		{"GET /oauth/callback", reachOutside, s.handleOAuthCallback},
+
+		{"POST /hooks/{plugin}/{path...}", reachHook, s.handleWebhook},
+		{"GET /hooks/{plugin}/{path...}", reachHook, s.handleWebhook},
 	}
+}
+
+func (s *Server) serveFrame(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+
+	shippedOnly, plain := false, false
+	for _, prefix := range []string{shippedPrefix, plainPrefix} {
+		if p == prefix[:len(prefix)-1] {
+			http.Redirect(w, r, prefix, http.StatusFound)
+			return
+		}
+	}
+	if rest, ok := strings.CutPrefix(p, shippedPrefix); ok {
+		p, shippedOnly = "/"+rest, true
+	} else if rest, ok := strings.CutPrefix(p, plainPrefix); ok {
+		p, plain = "/"+rest, true
+	}
+	if p == "/" {
+		p = "/index.html"
+	}
+	var ctype string
+	switch path.Ext(p) {
+	case ".html":
+		ctype = "text/html; charset=utf-8"
+	case ".js":
+		ctype = "text/javascript; charset=utf-8"
+	case ".css":
+		ctype = "text/css; charset=utf-8"
+	case ".png":
+
+		ctype = "image/png"
+		shippedOnly = true
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	var data []byte
+	ok, compressible := false, false
+	w.Header().Add("Vary", "Cookie")
+	if !plain && (!shippedOnly || path.Ext(p) == ".css") && tokenAuthorizedUnder(s.auth.Load(), r) {
+		data, ok = s.overlayAsset(p)
+	}
+	if !ok {
+
+		var err error
+		data, err = staticFS.ReadFile("static" + p)
+		if err != nil {
+			if p == "/index.html" {
+
+				http.Error(w, "cannot read index.html", http.StatusInternalServerError)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
+		compressible = ctype != "image/png"
+	}
+
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Security-Policy", uiCSP)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	referrerPolicy := "no-referrer"
+	if p == "/index.html" {
+
+		referrerPolicy = "same-origin"
+	}
+	w.Header().Set("Referrer-Policy", referrerPolicy)
+
+	w.Header().Set("Cache-Control", "no-cache")
+
+	if compressible {
+		w.Header().Add("Vary", "Accept-Encoding")
+		gz := gzipOf(p, data)
+		useGzip, acceptable := negotiateGzip(r.Header.Values("Accept-Encoding"), gz != nil)
+		if !acceptable {
+			http.Error(w, "this file is sent only as itself or gzip, and the request accepts neither", http.StatusNotAcceptable)
+			return
+		}
+		if useGzip {
+			data = gz
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+	}
+
+	sum := sha256.Sum256(data)
+	w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
+
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -363,7 +423,7 @@ func (s *Server) OperatorActiveWithin(d time.Duration) bool {
 
 func isOperatorAct(msgType string) bool {
 	switch msgType {
-	case "query", "probe", "":
+	case "query", "probe", "hello", "":
 		return false
 	}
 	return true
@@ -417,10 +477,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		if s.wsOriginAllowed(r) && s.guessed(r) {
 			s.credentialRefused(r)
-		} else if s.badOrigins.own(refusalLinesAMinute, func(n uint64) {
+		} else if s.badOrigins.own(s.refusalLines(), func(n uint64) {
 			logsink.Warn("dashboard.refusal", "%d more session(s) refused for their origin or sign-in in the last minute", n)
 		}) {
-			logsink.Warn("dashboard.refusal", "refused: origin %q host %q failed auth", r.Header.Get("Origin"), r.Host)
+			logsink.Warn("dashboard.refusal", "refused: origin %q host %q failed auth: %s", peerSaid(r.Header.Get("Origin"), refusalPeerTextBytes), peerSaid(r.Host, refusalPeerTextBytes), s.sessionLacks(admitted, r))
 		}
 		http.Error(w, "unauthorized", http.StatusForbidden)
 		return
@@ -442,6 +502,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	socket.SetReadLimit(maxVoiceFrameBytes)
 
 	ctx := r.Context()
+
+	if !s.admitHello(ctx, socket, admitted, r) {
+		return
+	}
 
 	conn, release, alive := s.chooseCarrier(ctx, socket, r, &s.channelSessions)
 	if !alive {
@@ -467,7 +531,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.CloseNow()
 		return
 	}
-	cl := &wsClient{interactionVersion: r.URL.Query().Get("interaction_version"), interactionRequests: make(chan ClientMessage, 1), addr: r.RemoteAddr, agent: r.UserAgent(), secretsOK: privateConnection(r), policy: admitted}
+	cl := &wsClient{interactionVersion: r.URL.Query().Get("interaction_version"), interactionRequests: make(chan ClientMessage, 1), addr: r.RemoteAddr, agent: r.UserAgent(), secretsOK: privateConnection(r), origin: requestScheme(r) + "://" + r.Host, policy: admitted}
 	s.wsConns[conn] = cl
 	s.wsMu.Unlock()
 	s.jobsMu.Unlock()
@@ -585,12 +649,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case "presence":
 
 			continue
+		case "hello":
+
+			continue
 		case "probe":
 			s.wsProbe(ctx, conn, msg)
 		case "chat":
 
 			h := s.currentHandler()
-			s.runOperatorRequest(WithAttachments(ctx, msg.Attachments), conn, h, msg.Message, msg.RequestOptions, nil, msg.RequestID)
+
+			typed := interaction.WithSaid(WithAttachments(ctx, msg.Attachments), interaction.SaidTyped)
+			s.runOperatorRequest(typed, conn, h, msg.Message, msg.RequestOptions, nil, msg.RequestID)
 
 		case "ask":
 			s.wsAsk(ctx, conn, msg)
@@ -653,21 +722,24 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.queryDiscover(ctx, conn, h, msg)
 			case "speech_lists":
 				s.querySpeechLists(ctx, conn, h, msg)
-			case "dashboard_token":
-				s.queryDashboardToken(ctx, conn, h, msg)
 			case "continuity":
 				s.queryContinuity(ctx, conn, h)
 			case "logs":
 				s.queryLogs(ctx, conn, h, msg)
+			case "spend":
+				s.querySpend(ctx, conn, h, msg)
 			default:
-				s.sendError(ctx, conn, "unknown query: "+msg.Query)
+				s.sendErrorFor(ctx, conn, msg.RequestID, "unknown query: "+msg.Query)
 			}
 
-		case "sandbox_set":
-			s.wsSandboxSet(ctx, conn, msg)
+		case "sandbox_add", "sandbox_remove":
+			s.wsSandboxChange(ctx, conn, msg)
 
 		case "sandbox_switch":
 			s.wsSandboxSwitch(ctx, conn, msg)
+
+		case "agent_notes_copy":
+			s.wsAgentNotesCopy(ctx, conn, msg)
 
 		case "project":
 			s.wsProject(ctx, conn, msg)
@@ -741,9 +813,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.wsProviderEdit(ctx, conn, msg)
 
 		default:
-			s.sendError(ctx, conn, "unknown message type: "+msg.Type)
+
+			s.sendErrorFor(ctx, conn, msg.RequestID, askedForWhatIsGone(msg.Type))
 		}
 	}
+}
+
+func askedForWhatIsGone(what string) string {
+	return "This page and the running program are different versions, and the page asked for something the program does not do (" + what + "). Reload the page."
 }
 
 type wsClient struct {
@@ -757,6 +834,8 @@ type wsClient struct {
 	policy *accessPolicy
 
 	secretsOK bool
+
+	origin string
 
 	vmu   sync.Mutex
 	voice *connVoice

@@ -20,11 +20,7 @@ func (e *Engine) verbMeasure(ctx context.Context, args map[string]any) (string, 
 
 	if family, ok := args["family"].(string); ok && strings.TrimSpace(family) != "" {
 		family = strings.TrimSpace(family)
-		limit := 20
-		if n, ok := numArg(args["limit"]); ok && n > 0 {
-			limit = int(n)
-		}
-		r, err := e.store.FamilyAttempts(family, limit)
+		r, err := e.store.FamilyAttempts(family, 20)
 		if err != nil {
 			return "", fmt.Errorf("measure family: %w", err)
 		}

@@ -38,6 +38,9 @@ type opDescriptor struct {
 	operatorConfirms bool
 	primary          bool
 	context          bool
+
+	published   bool
+	unconfirmed string
 }
 
 func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.Discovery {
@@ -52,6 +55,7 @@ func (d *opDescriptor) discovery(plugin, version, tier, operation string) tools.
 	disc.Examples = append([]string(nil), d.examples...)
 	disc.OperatorConfirms = d.operatorConfirms
 	disc.Primary = d.primary
+	disc.Published, disc.UnconfirmedByDesign = d.published, d.unconfirmed
 	return disc
 }
 
@@ -295,7 +299,21 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 	if delivery != nil && accepted.Error == "" && !delivery.Accept(accepted, nil) {
 		return tools.Result{Error: "calibration acknowledgement does not match delivery", ReasonCode: "CALIBRATION_ACK_REFUSED"}, nil
 	}
+	accepted.AnsweredRefused = accepted.Error == "" && answerSaysRefused(accepted.Output)
 	return accepted, nil
+}
+
+func answerSaysRefused(output string) bool {
+	var members map[string]json.RawMessage
+	if json.Unmarshal([]byte(output), &members) != nil {
+		return false
+	}
+	raw, ok := members["refused"]
+	if !ok {
+		return false
+	}
+	var refused bool
+	return json.Unmarshal(raw, &refused) == nil && refused
 }
 
 func (t *operationTool) acceptResult(res tools.Result) tools.Result {

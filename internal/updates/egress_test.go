@@ -30,8 +30,8 @@ func TestTheDownloadRefusesOffGitHubAndPlaintextURLs(t *testing.T) {
 	// transport error. This is what makes removing the guard CALL (not
 	// just the function) a detectable regression.
 	c := newTestChecker(nil, t.TempDir(), nil)
-	c.hostAllowlist = gitHubReleaseHost // the production fence, for this assertion
-	if _, err := c.download(context.Background(), "https://evil.example/a.tar.gz"); err == nil || !strings.Contains(err.Error(), "egress") {
+	c.hostAllowlist = releaseHost // the production fence, for this assertion
+	if _, err := c.download(context.Background(), defaultSource(t), "https://evil.example/a.tar.gz"); err == nil || !strings.Contains(err.Error(), "egress") {
 		t.Fatalf("download() did not fence an off-GitHub URL at the egress guard: %v", err)
 	}
 
@@ -58,11 +58,11 @@ func TestTheDownloadClientRefusesARedirectOffGitHub(t *testing.T) {
 	defer redir.Close()
 
 	c := newTestChecker(nil, t.TempDir(), nil)
-	c.hostAllowlist = gitHubReleaseHost // the production fence, for this assertion
+	c.hostAllowlist = releaseHost // the production fence, for this assertion
 	// Bypass the first-hop allowlist to isolate the redirect check: call
-	// the client directly the way download() would, then assert the hop
-	// was refused.
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", redir.URL, nil)
+	// the client directly the way download() would, with the default
+	// source it would carry, then assert the hop was refused.
+	req, _ := http.NewRequestWithContext(withSource(context.Background(), defaultSource(t)), "GET", redir.URL, nil)
 	_, err := c.httpClient.Do(req)
 	if err == nil {
 		t.Fatal("a redirect to a loopback address was followed")

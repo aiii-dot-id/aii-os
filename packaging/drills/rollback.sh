@@ -16,10 +16,10 @@
 # internal/updates (TestTwoProcessesInterleavedOnOneProgramKeepTheOriginalRecovery).
 set -eu
 . "$(dirname "$0")/lib.sh"
-usage_if_asked "${1:-}" "Plants aii.previous (a runnable, byte-distinguishable copy), a tombstone attempts=1, removes the marker, boots; expects 'rolled back to previous binary', the on-disk binary to hash as the backup, the tombstone gone, and a healthy fresh boot. Restores the original bytes after, waiting for THAT boot too. macOS: SKIP (a bundle has no boot-time rollback)."
+usage_if_asked "${1:-}" "Plants aii.previous (a runnable, byte-distinguishable copy), a tombstone attempts=1, removes the marker, boots; expects 'rolled back to previous binary', the on-disk binary to hash as the backup, the tombstone gone, and a healthy fresh boot. Restores the original bytes after, waiting for THAT boot too. macOS: SKIP (a bundle is rolled back by exchanging two sealed bundles, which this drill does not plant)."
 need
 case "$(uname -s)" in
-  Darwin) record SKIP "macOS updates swap the .app bundle, which has no boot-time rollback: the previous bundle is kept beside it (.aii-os-previous.app) for an operator"; exit 0 ;;
+  Darwin) record SKIP "macOS rolls back by exchanging the kept .app (.aii-os-previous.app) with the installed one; this drill plants a bare binary's state; the bundle's rollback is driven end to end on two signed bundles by internal/updates (TestARealSignedBundleThatNeverFinishesABootIsExchangedBackSealed)"; exit 0 ;;
 esac
 exe=$(command -v "$AII"); case "$exe" in /*) ;; *) exe="$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")";; esac
 [ -w "$exe" ] || die "the binary $exe is not writable by this user — run as the owner"

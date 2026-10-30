@@ -121,6 +121,12 @@ func TestTheContinuitySurfaceIsAdvertisedAndIsNotATool(t *testing.T) {
 	if v := lookupVerb("continuity"); v == nil || v.Params != nil {
 		t.Fatalf("continuity must be an absorbed operation with no schema of its own: %+v", v)
 	}
+	descOf := func(verb, param string) string {
+		props, _ := lookupVerb(verb).Params["properties"].(map[string]any)
+		p, _ := props[param].(map[string]any)
+		d, _ := p["description"].(string)
+		return d
+	}
 	enumOf := func(verb, param string) []string {
 		props, _ := lookupVerb(verb).Params["properties"].(map[string]any)
 		p, _ := props[param].(map[string]any)
@@ -131,8 +137,8 @@ func TestTheContinuitySurfaceIsAdvertisedAndIsNotATool(t *testing.T) {
 		if !slices.Contains(enumOf("work", "action"), action) {
 			t.Errorf("work does not advertise %s: a mode that is routed and not advertised cannot be discovered", action)
 		}
-		if !strings.Contains(lookupVerb("work").Description, action) {
-			t.Errorf("the work charter prose does not name %s", action)
+		if !strings.Contains(descOf("work", "action"), action) {
+			t.Errorf("work's action words do not name %s", action)
 		}
 	}
 	if !slices.Contains(enumOf("recall", "source"), "continuity") {

@@ -1,0 +1,163 @@
+{
+  "task": "subagent-asks-no-operator",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Spawn a sub-agent to write the first word",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "spawn",
+                  "goal": "Write the first word of each file under inbox/ into inbox/words.txt, one per line."
+                }
+              }
+            ]
+          },
+          {
+            "text": "A sub-agent is on it."
+          }
+        ]
+      },
+      {
+        "on": "Your sub-goal:",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/c.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "inbox/words.txt",
+                  "content": "alpha\nbeta\ngamma\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "served: inbox/words.txt holds alpha, beta and gamma."
+          }
+        ]
+      },
+      {
+        "on": "your sub-agent finished",
+        "steps": [
+          {
+            "text": "Done: inbox/words.txt holds alpha, beta and gamma."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "F1: the child turns to an operator who is not there",
+    "fails": [
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Spawn a sub-agent to write the first word",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "spawn",
+                  "goal": "Write the first word of each file under inbox/ into inbox/words.txt, one per line."
+                }
+              }
+            ]
+          },
+          {
+            "text": "A sub-agent is on it."
+          }
+        ]
+      },
+      {
+        "on": "Your sub-goal:",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "send",
+                "args": {
+                  "message": "Should the words go one per line, or on one line?"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/c.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "inbox/words.txt",
+                  "content": "alpha\nbeta\ngamma\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "served: inbox/words.txt holds alpha, beta and gamma."
+          }
+        ]
+      },
+      {
+        "on": "your sub-agent finished",
+        "steps": [
+          {
+            "text": "Done."
+          }
+        ]
+      }
+    ]
+  }
+}

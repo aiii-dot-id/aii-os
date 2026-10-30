@@ -1,25 +1,37 @@
 package store
 
 import (
+	"github.com/aiii-dot-id/aii-os/internal/hold"
+
 	"context"
 	"database/sql"
 	"sync/atomic"
 )
 
 type frozenState struct {
-	on     atomic.Bool
-	reason atomic.Value
+	on      atomic.Bool
+	reason  atomic.Value
+	waiting atomic.Bool
 }
 
-type FrozenError struct{ Reason string }
+type FrozenError struct {
+	Reason  string
+	Waiting bool
+}
 
 func (e *FrozenError) Error() string {
+	if e.Waiting {
+		return "the projection is frozen: " + e.Reason + " (DEGRADED: it is queryable, and not writable " + hold.While + ")"
+	}
 	return "the projection is frozen: " + e.Reason + " (SAFE: it is queryable, not writable)"
 }
 
-func (s *Store) SetFrozen(on bool, reason string) {
+func (s *Store) SetFrozen(on bool, reason string) { s.SetHold(on, hold.Safe(reason)) }
+
+func (s *Store) SetHold(on bool, h hold.Hold) {
 	if on {
-		s.frozen.reason.Store(reason)
+		s.frozen.reason.Store(h.Reason)
+		s.frozen.waiting.Store(h.Waiting)
 	}
 	s.frozen.on.Store(on)
 }
@@ -34,7 +46,7 @@ func (s *Store) Frozen() (string, bool) {
 
 func (s *Store) frozenErr() error {
 	if r, on := s.Frozen(); on {
-		return &FrozenError{Reason: r}
+		return &FrozenError{Reason: r, Waiting: s.frozen.waiting.Load()}
 	}
 	return nil
 }

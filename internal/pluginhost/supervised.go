@@ -79,6 +79,8 @@ func startSupervisedWASM(ctx context.Context, res *packagefmt.Result, variant *p
 		ReadyRemedy:    startup.Remedy(res.Manifest.ID),
 		VerifyArtifact: verify,
 		ExitMeaning:    supervisor.WorkerExitMeaning,
+		Backoff:        supervisor.Backoff{MaxRestarts: opts.bounds().RestartAttempts},
+		StopGrace:      opts.bounds().StopBudget(),
 	}, supervisorDispatcher(binding))
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -118,10 +120,25 @@ func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, vari
 	}
 
 	files := nativeFiles{inherited: len(image.ExtraFiles())}
+	if opts.NativeView != nil {
+		files.view = opts.NativeView()
+	}
+	if opts.WallStartSeconds != nil {
+		files.startSeconds = opts.WallStartSeconds()
+	}
 	if rt != nil {
 		files.own = append(files.own, rt.root)
 	} else {
 		files.own = append(files.own, dir)
+	}
+
+	files.read = append(files.read, dir, modelsDir)
+	if rt != nil {
+		files.read = append(files.read, rt.root)
+	}
+	if opts.PluginDataDir != "" {
+		files.private = pluginStorageDir(opts.PluginDataDir, res.Manifest.ID)
+		files.read = append(files.read, pluginLegacyReadPath(opts.PluginDataDir, res.Manifest.ID, files.private))
 	}
 	if opts.NativePlaces != nil {
 		places, perr := opts.NativePlaces()
@@ -131,14 +148,6 @@ func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, vari
 			return nil, "", false, fmt.Errorf("plugin %s: its native child is not started: %w", res.Manifest.ID, perr)
 		}
 		files.places = places
-		files.read = append(files.read, dir, modelsDir)
-		if rt != nil {
-			files.read = append(files.read, rt.root)
-		}
-		if opts.PluginDataDir != "" {
-			files.private = pluginStorageDir(opts.PluginDataDir, res.Manifest.ID)
-			files.read = append(files.read, pluginLegacyReadPath(opts.PluginDataDir, res.Manifest.ID, files.private))
-		}
 	}
 	argv, containment, cerr := containArgv(ctx, image.Argv(), profile, files)
 	if cerr != nil {
@@ -162,6 +171,8 @@ func startSupervisedNativeWith(ctx context.Context, res *packagefmt.Result, vari
 		RLimitASBytes:   opts.MemoryMax[res.Manifest.ID],
 		ExtraFiles:      image.ExtraFiles(),
 		VerifyArtifact:  verify,
+		Backoff:         supervisor.Backoff{MaxRestarts: opts.bounds().RestartAttempts},
+		StopGrace:       opts.bounds().StopBudget(),
 	}
 
 	sessionMode := servesSessionLane(res.Manifest)

@@ -35,14 +35,25 @@ type Rhythm struct {
 
 	outcomes          OutcomeIntake
 	lastOutcomeIntake time.Time
+	tools             ToolOutcomeIntake
+	lastToolIntake    time.Time
 
 	conversation ConversationProbe
 }
 
 type OutcomeIntake interface {
-	OutcomesPending() bool
+	OutcomesPendingSince() (bool, time.Time)
 	ObserveOutcomes(ctx context.Context) error
 }
+
+type ToolOutcomeIntake interface {
+	ToolOutcomesPending() (bool, time.Time)
+	ObserveToolOutcomes(ctx context.Context) error
+}
+
+func (r *Rhythm) SetToolOutcomes(t ToolOutcomeIntake) { r.tools = t }
+
+func (r *Rhythm) ToolOutcomesWired() bool { return r.tools != nil }
 
 func (r *Rhythm) SetOutcomes(o OutcomeIntake) { r.outcomes = o }
 
@@ -143,7 +154,28 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 
 	ranAny := false
 	spacing := r.Spacing()
-	if r.outcomes != nil && now.Sub(r.lastOutcomeIntake) >= spacing && r.outcomes.OutcomesPending() {
+	outPending, outOldest := false, time.Time{}
+	if r.outcomes != nil && now.Sub(r.lastOutcomeIntake) >= spacing {
+		outPending, outOldest = r.outcomes.OutcomesPendingSince()
+	}
+	toolPending, toolOldest := false, time.Time{}
+	if r.tools != nil && now.Sub(r.lastToolIntake) >= spacing {
+		toolPending, toolOldest = r.tools.ToolOutcomesPending()
+	}
+	if toolPending && outPending && !toolOldest.Before(outOldest) {
+		toolPending = false
+	}
+	if toolPending {
+		r.lastToolIntake = now
+		if err := r.tools.ObserveToolOutcomes(ctx); err != nil {
+			logsink.Warn("rhythm.refusal", "%v", err)
+			r.decision("tool_outcomes", "skip", err.Error())
+		} else {
+			logsink.Info("rhythm.pass", "tool outcome intake ran (capacity)")
+			r.decision("tool_outcomes", "run", "a tool outcome stood unobserved")
+			ranAny = true
+		}
+	} else if outPending {
 		r.lastOutcomeIntake = now
 		if err := r.outcomes.ObserveOutcomes(ctx); err != nil {
 			logsink.Warn("rhythm.refusal", "%v", err)

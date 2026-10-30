@@ -192,6 +192,7 @@ func TestAnApprovalIsTakenOnlyFromTheOperatorsSignedInBrowser(t *testing.T) {
 	s.AllowHost("example.test:8443")
 	s.SetUIOverlay(dir)
 	digest := digestOf(t, filepath.Join(dir, "custom.js"))
+	var key string // the page key the sign-in below answers
 	post := func(cookie *http.Cookie, origin, ctype, body string) (int, string) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "http://example.test:8443/overlay/scripts/approve", strings.NewReader(body))
@@ -201,6 +202,7 @@ func TestAnApprovalIsTakenOnlyFromTheOperatorsSignedInBrowser(t *testing.T) {
 		r.Header.Set("Content-Type", ctype)
 		if cookie != nil {
 			r.AddCookie(cookie)
+			r.Header.Set(pageKeyHeader, key)
 		}
 		s.server.Handler.ServeHTTP(w, r)
 		return w.Code, w.Body.String()
@@ -218,8 +220,9 @@ func TestAnApprovalIsTakenOnlyFromTheOperatorsSignedInBrowser(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.server.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, site+"/auth/token", strings.NewReader(token)))
 	cookie := findCookie(w.Result().Cookies(), "aii_token_8443")
-	if cookie == nil {
-		t.Fatal("signing in set no cookie")
+	key = w.Header().Get(pageKeyHeader)
+	if cookie == nil || key == "" {
+		t.Fatal("signing in set no cookie, or answered no page key")
 	}
 	for _, tc := range []struct {
 		name       string

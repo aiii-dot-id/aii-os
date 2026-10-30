@@ -39,7 +39,7 @@ func TestHeldMailProtocolCorrelatesReadCorrectionAndRefusal(t *testing.T) {
 		c.CloseNow()
 		t.Fatal("unauthenticated operator interface accepted")
 	}
-	c, err := dialWSToken(addr, s.accessHash())
+	c, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatal(err)
 	}

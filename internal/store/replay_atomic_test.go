@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 )
 
@@ -13,10 +14,14 @@ import (
 // placeholder crypto fields are honest here.
 func probeEvent(seq uint64, typ ledger.EventType, ring int, payload map[string]any) ledger.Event {
 	raw, _ := json.Marshal(payload)
+	prev := ""
+	if seq > 1 {
+		prev = fmt.Sprintf("prev-%d", seq)
+	}
 	return ledger.Event{
-		Seq: seq, Prev: fmt.Sprintf("prev-%d", seq),
+		Seq: seq, Prev: prev,
 		Timestamp: "2026-08-20T00:00:00Z", Type: typ,
-		Ring: ring, Payload: raw, Content: fmt.Sprintf("hash-%d", seq),
+		Ring: ring, Payload: raw, Content: crypto.ContentHash(raw),
 		Sig: "sig",
 	}
 }

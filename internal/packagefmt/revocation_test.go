@@ -202,7 +202,8 @@ func TestRevocationEpochGuardLifecycle(t *testing.T) {
 	if snap := set.lookup(keyTypePublisherCertifier); snap.err != nil {
 		t.Fatalf("first-seen epoch must be accepted: %v", snap.err)
 	}
-	if guard.accepts != 1 || guard.epochs[keyTypePublisherCertifier] != 1 {
+	mark := EpochMark(f.certifier)
+	if guard.accepts != 1 || guard.epochs[mark] != 1 {
 		t.Fatalf("first-seen acceptance not recorded: %+v", guard)
 	}
 
@@ -220,7 +221,7 @@ func TestRevocationEpochGuardLifecycle(t *testing.T) {
 	if snap := set.lookup(keyTypePublisherCertifier); snap.err != nil {
 		t.Fatalf("advanced epoch must be accepted: %v", snap.err)
 	}
-	if guard.epochs[keyTypePublisherCertifier] != 3 {
+	if guard.epochs[mark] != 3 {
 		t.Fatalf("high-water mark did not advance: %+v", guard.epochs)
 	}
 
@@ -404,5 +405,37 @@ func TestLoadRevocationStatusMissingDir(t *testing.T) {
 	set := LoadRevocationStatus(filepath.Join(t.TempDir(), "no-such-dir"), f.roots, nil)
 	for _, root := range []string{keyTypePublisherCertifier, keyTypeReviewer, keyTypePlatformRelease} {
 		expectAbsent(t, set, root, "missing")
+	}
+}
+
+// A VERIFIED PACKAGE IS ASKED AGAIN WITH NO BYTES (Result.Recheck): the
+// signed objects it was proved from, kept, through the same chain under the
+// roots as they stand now. Unchanged roots answer as before; a revoked
+// publisher certificate, manifest signature, attestation or platform proof
+// refuses with the revocation's reason, and a missing snapshot makes the
+// tier unavailable, as Verify would say of the same bytes. An unsigned
+// package has nothing to revoke.
+func TestARecheckTestsTheKeptEvidenceAgainstTheRootsNow(t *testing.T) {
+	f := fixtures(t)
+	clean := f.rootsRevoking(t, statusFileCertifier, f.statusCertifier)
+	t0, t1, t2, t3 := mustVerify(t, f.t0Pkg(t), clean), mustVerify(t, f.t1Pkg(t), clean), mustVerify(t, f.t2Pkg(t), clean), mustVerify(t, f.t3Pkg(t), clean)
+	for _, r := range []*Result{t0, t1, t2, t3} {
+		if err := r.Recheck(clean); err != nil {
+			t.Errorf("%s under the roots it was verified by: %v", r.Tier, err)
+		}
+	}
+	revoked := func(name string, r *Result, roots TrustRoots) {
+		t.Helper()
+		t.Log(name)
+		expectReason(t, r.Recheck(roots), ReasonTrustPayloadRevoked)
+	}
+	revoked("T1, its certificate", t1, f.rootsRevoking(t, statusFileCertifier, f.statusRevokeCert))
+	revoked("T1, its release", t1, f.rootsRevoking(t, statusFileCertifier, f.statusRevokeManifest))
+	revoked("T2, its certificate", t2, f.rootsRevoking(t, statusFileCertifier, f.statusRevokeCert))
+	revoked("T2, its attestation", t2, f.rootsRevoking(t, statusFileReviewer, f.statusRevokeAttestation))
+	revoked("T3, its proof", t3, f.rootsRevoking(t, statusFilePlatform, f.statusRevokePlatform))
+	expectReason(t, t1.Recheck(f.rootsWithStatus(t, map[string][]byte{statusFileReviewer: f.statusReviewer, statusFilePlatform: f.statusPlatform}, nil)), ReasonRevocationStatusUnavailable)
+	if err := t0.Recheck(f.rootsRevoking(t, statusFileCertifier, f.statusRevokeCert)); err != nil {
+		t.Errorf("an unsigned package has nothing to revoke: %v", err)
 	}
 }

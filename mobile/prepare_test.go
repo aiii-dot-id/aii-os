@@ -21,7 +21,7 @@ func TestMobileStartSeedsTheDocumentsAndKeepsALog(t *testing.T) {
 	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := Start(path, home)
+	rt, err := Start(path, home, newTestKeystore())
 	if err != nil {
 		t.Fatal(err)
 	}

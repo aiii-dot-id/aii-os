@@ -62,6 +62,10 @@ func AsIdentityKey(kp *crypto.KeyPair) IdentityKey { return keyPairAdapter{kp} }
 const envelopeExpiry = 100 * 365 * 24 * time.Hour
 
 func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore, ledgerDir string) (canonical []byte, env *PublicKeyEnvelope, err error) {
+	return EnsureIdentityEnvelopeUnder(Unguarded{}, key, store, ledgerDir)
+}
+
+func EnsureIdentityEnvelopeUnder(guard FileGuard, key IdentityKey, store EnvelopeStore, ledgerDir string) (canonical []byte, env *PublicKeyEnvelope, err error) {
 	ids, born, firstWitnessed, err := store.WitnessEnrollment()
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the record's witness enrollment: %w", err)
@@ -83,6 +87,31 @@ func EnsureIdentityEnvelope(key IdentityKey, store EnvelopeStore, ledgerDir stri
 			return nil, nil, fmt.Errorf("%w: the record names %s, the receipt pending beside the ledger names %s", ErrEnrollmentForked, ids[0], pending.IdentityID)
 		}
 	}
+
+	fileCanonical, fileEnv, fileID, ferr := readEnvelopeFile(ledgerDir, key)
+	switch {
+	case ferr != nil && len(ids) == 0:
+		return nil, nil, fmt.Errorf("the witness envelope beside the ledger: %w", ferr)
+	case ferr != nil:
+		logsink.Warn("witness.refusal", "the witness envelope beside the ledger is not this identity's (%v) — it is rewritten with the envelope %s names", ferr, evidence)
+	case fileCanonical != nil && (len(ids) == 0 || fileID == ids[0]):
+		cacheEnvelope(store, fileCanonical)
+		return fileCanonical, fileEnv, nil
+	case fileCanonical != nil:
+		logsink.Warn("witness.refusal", "the witness envelope beside the ledger names %s, %s names %s — it is rewritten with the envelope %s names", fileID, evidence, ids[0], evidence)
+	}
+
+	canonical, env, err = envelopeFromStoreOrRecord(key, store, ids, born, firstWitnessed, evidence)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := guard.WitnessFiles(func() error { return writeEnvelopeFile(ledgerDir, key, canonical) }); err != nil {
+		return nil, nil, fmt.Errorf("keep the witness envelope beside the ledger (%s): %w", EnvelopeFileName, err)
+	}
+	return canonical, env, nil
+}
+
+func envelopeFromStoreOrRecord(key IdentityKey, store EnvelopeStore, ids []string, born, firstWitnessed time.Time, evidence string) (canonical []byte, env *PublicKeyEnvelope, err error) {
 	existing, err := store.LoadWitnessEnvelope()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load witness envelope: %w", err)

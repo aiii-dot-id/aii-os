@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/publicname"
@@ -211,6 +212,56 @@ func TestARestartFindsTheNameInTheRecordAndServesItAgain(t *testing.T) {
 	}
 }
 
+// A START UNDER ANOTHER CERTIFICATE AUTHORITY ORDERS AT ONCE. A manager
+// that holds another CA's certificate (certificate.acme_directory changed
+// since it issued) owes an order, and the start that wires the name places
+// it then: the old CA's certificate, a staging one under a production
+// directory, was served until the daily pass, up to a day. A manager that
+// holds its own CA's certificate is asked for nothing.
+func TestAStartUnderAnotherCertificateAuthorityOrdersAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	pub := &publicnametest.Publisher{Zone: "example.test"}
+	var managers []*publicnametest.Manager
+	cfg := birthNamed(t, dir)
+	app := bootNamed(t, cfg, pub, &managers)
+	if _, err := app.pn.Claim(); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, app, publicname.StatusIssued)
+	stopApp(t, app)
+
+	for _, owed := range []bool{false, true} {
+		var held []*publicnametest.Manager
+		again := *cfg
+		next := New(&again)
+		next.pn.NewPublisher = func(publicname.Settings) (publicname.NamePublisher, error) { return pub, nil }
+		next.pn.NewCertManager = publicnametest.Holding[publicname.CertificateManager](&held, owed)
+		if err := startLiveForTest(next); err != nil {
+			t.Fatalf("boot: %v", err)
+		}
+		ensures := func() (n int) {
+			for _, m := range held {
+				m.Mu.Lock()
+				n += m.Ensures
+				m.Mu.Unlock()
+			}
+			return n
+		}
+		if owed {
+			waitFor(t, "the order owed under another CA", func() bool { return ensures() == 1 })
+		} else if n := ensures(); n != 0 {
+			t.Errorf("a start that holds its own CA's certificate ordered: %d", n)
+		}
+		waitStatus(t, next, publicname.StatusIssued)
+		for _, m := range held {
+			if m.OrderOwed() {
+				t.Errorf("owed=%v: an order is still owed after the start", owed)
+			}
+		}
+		stopApp(t, next)
+	}
+}
+
 func TestTheDailyPassRenewsAndAFailureIsToldWithDaysLeft(t *testing.T) {
 	dir := t.TempDir()
 	pub := &publicnametest.Publisher{Zone: "example.test"}
@@ -278,6 +329,88 @@ func TestTheDailyPassRenewsAndAFailureIsToldWithDaysLeft(t *testing.T) {
 	if !told {
 		t.Fatal("the operator was not told in the outbox")
 	}
+}
+
+// A BOOT INTO SAFE SERVES THE NAME THE RECORD HOLDS. It used to
+// drop it: the held certificate was not served, the card said no name was
+// claimed, and neither the renewal nor the route ran, so an operator away
+// from the machine lost the one way in that leaving SAFE needs. Here the
+// record fails its verification at the second start; the name is served
+// under its certificate, the renewal's pass runs with no TIME, and the
+// route owner looks at the service, which is what keeps a relay too.
+func TestABootIntoSafeServesTheHeldNameAndKeepsItsRenewalAndRoute(t *testing.T) {
+	dir := t.TempDir()
+	pub := &publicnametest.Publisher{Zone: "example.test"}
+	var managers []*publicnametest.Manager
+	cfg := birthNamed(t, dir)
+	live := bootNamed(t, cfg, pub, &managers)
+	claimed, err := live.pn.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, live, publicname.StatusIssued)
+	stopApp(t, live)
+	tamperChain(t, cfg.Identity.KeyPath, cfg.Identity.LedgerPath)
+	_, readsBefore, _ := pub.Asked()
+	before := recordAndDatabase(t, cfg)
+
+	cfg2 := *cfg
+	app := New(&cfg2)
+	app.pn.NewPublisher = func(publicname.Settings) (publicname.NamePublisher, error) { return pub, nil }
+	app.pn.NewCertManager = publicnametest.Managers[publicname.CertificateManager](&managers)
+	if err := startLiveForTest(app); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	defer stopApp(t, app)
+	if _, safe := app.SafeMode(); !safe {
+		t.Fatal("the tampered record did not boot SAFE")
+	}
+	if st := app.pn.State(); st.Name != claimed.Name {
+		t.Fatalf("SAFE shows the name %q, want %q (status %q)", st.Name, claimed.Name, st.Status)
+	}
+	waitStatus(t, app, publicname.StatusIssued)
+	if got := servedCert(t, app.dashboard.BoundAddr(), claimed.Name); got.VerifyHostname(claimed.Name) != nil {
+		t.Fatal("SAFE does not serve the public certificate for the name")
+	}
+	m := managers[len(managers)-1]
+	waitFor(t, "the renewal pass in SAFE", func() bool {
+		m.Mu.Lock()
+		defer m.Mu.Unlock()
+		return m.Renews > 0
+	})
+	waitFor(t, "the route owner's look in SAFE", func() bool {
+		_, reads, _ := pub.Asked()
+		return reads > readsBefore
+	})
+	// The name served, renewed and routed, and nothing written to the
+	// record or the database: its writes are under tls/public alone.
+	stopApp(t, app)
+	if after := recordAndDatabase(t, cfg); after != before {
+		t.Fatalf("A BOOT INTO SAFE THAT SERVED ITS NAME CHANGED THE RECORD OR THE DATABASE: %v, then %v", before, after)
+	}
+}
+
+func TestTheRenewalKeepsItsPromiseInASafeEnteredWhileLive(t *testing.T) {
+	dir := t.TempDir()
+	pub := &publicnametest.Publisher{Zone: "example.test"}
+	var managers []*publicnametest.Manager
+	app := publicNameApp(t, dir, pub, &managers)
+	defer stopApp(t, app)
+	if _, err := app.pn.Claim(); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, app, publicname.StatusIssued)
+	firer, ok := app.pn.AlarmOwner().(cognitive.SafeFirer)
+	if !ok {
+		t.Fatal("the renewal's owner is held under SAFE: it keeps no promise there")
+	}
+	firer.OnSafeAlarm(context.Background(), "certificate.renewal", "wall", 0, "")
+	m := managers[0]
+	waitFor(t, "the renewal pass under SAFE", func() bool {
+		m.Mu.Lock()
+		defer m.Mu.Unlock()
+		return m.Renews > 0
+	})
 }
 
 func TestANetworkBindClaimsItsNameWithoutAButton(t *testing.T) {

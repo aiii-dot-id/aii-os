@@ -38,6 +38,8 @@ type ActivePlugin struct {
 
 	schemaBound int
 
+	bounds ChildBounds
+
 	inFlight opGate
 
 	teardown sync.Mutex
@@ -138,6 +140,10 @@ type Options struct {
 
 	NativePlaces func() ([]*firewall.Rule, error)
 
+	NativeView func() []string
+
+	WallStartSeconds func() int
+
 	Roots packagefmt.TrustRoots
 
 	Broker *broker.Host
@@ -162,6 +168,8 @@ type Options struct {
 	StartupCeiling time.Duration
 
 	MaxInputSchemaBytes int
+
+	Bounds ChildBounds
 
 	StreamMax map[string]int
 
@@ -350,8 +358,6 @@ func (ap *ActivePlugin) isAuthorized() bool {
 var redirectSwapped = func() {}
 
 var ErrHandOverBusy = errors.New("the release serving keeps serving: its operation in flight did not finish within the hand-over's bound, and two releases never run this plugin's work at once")
-
-const HandOverBudget = 30 * time.Second
 
 var ErrRetirementBusy = errors.New("retirement waits for an admitted invocation to finish")
 
@@ -608,8 +614,10 @@ func walkMembers(pkgPath string, res *packagefmt.Result, held map[string][]byte,
 	return held
 }
 
+const ToolPrefix = "pl_"
+
 func toolName(pluginID, method string) (string, error) {
-	name := "pl_" + sanitizeToken(pluginID) + "_" + sanitizeToken(method)
+	name := ToolPrefix + sanitizeToken(pluginID) + "_" + sanitizeToken(method)
 	if len(name) > maxToolNameBytes {
 		return "", &ToolNameError{PluginID: pluginID, Name: name,
 			Reason: fmt.Sprintf("%d bytes exceeds the %d-byte provider tool-name ceiling", len(name), maxToolNameBytes)}

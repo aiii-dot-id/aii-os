@@ -132,13 +132,13 @@ func TestALongResultsExcerptKeepsOnlyAToolsClosingLine(t *testing.T) {
 		{"ordinary output is not kept", head + "\nthe last line of a log", "characters]"},
 		{"nor a bracketed line too long to be a tool's", head + "\n[" + strings.Repeat("y", 500) + "]", "characters]"},
 	} {
-		got := toolExcerpt("shell", "{}", c.result)
+		got := toolExcerpt("shell", "{}", c.result, TranscriptResultLimit)
 		if !strings.HasSuffix(got, c.wantSuffix) {
 			t.Errorf("%s: the excerpt ends …%q, want it to end %q", c.name, got[max(0, len(got)-80):], c.wantSuffix)
 		}
 	}
 	// A result the excerpt holds whole is as it was.
-	if got := toolExcerpt("shell", "{}", "short\n[exit status 1]"); got != "→ shell({})\n← short\n[exit status 1]" {
+	if got := toolExcerpt("shell", "{}", "short\n[exit status 1]", TranscriptResultLimit); got != "→ shell({})\n← short\n[exit status 1]" {
 		t.Errorf("a short result's excerpt changed: %q", got)
 	}
 }

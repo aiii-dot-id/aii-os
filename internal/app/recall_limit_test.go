@@ -113,10 +113,8 @@ func TestHeardHistoryHonoursTheLimitThroughTheHost(t *testing.T) {
 	if len(p.Rows) != 50 || !strings.Contains(note, "limit=80 is over the most one recall returns, and was read as 50.") {
 		t.Fatalf("limit 80 gave %d rows, or the host did not say it was read as 50: %q", len(p.Rows), note)
 	}
-	// The schema names the host setting, not a fixed page size. A change
-	// through the settings door reaches the next model call without restart.
-	if !strings.Contains(recallLimitDescription(t), "heard: the host's speech.heard_history.page_rows") {
-		t.Fatal("the recall schema does not name the host's heard-page setting")
+	if d := recallLimitDescription(t); !strings.Contains(d, "a listing's own page size") || strings.Contains(d, "heard 20") {
+		t.Fatalf("the recall schema states a fixed listing page: %s", d)
 	}
 	for _, tc := range []struct{ configured, want int }{{0, 20}, {3, 3}, {7, 7}, {50, 50}, {0, 20}} {
 		state, err := a.applyConfigChange(map[string]any{"speech.heard_history.page_rows": tc.configured})

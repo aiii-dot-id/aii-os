@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/project"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 // Project focus may move while work remains alive. A spawn keeps its bound
@@ -46,7 +48,15 @@ func TestSpawnProjectFollowsBoundParentAcrossFocusSwitch(t *testing.T) {
 			}
 			spawn := func(ctx context.Context, goal string) identity.SubagentRequest {
 				t.Helper()
-				args, err := json.Marshal(map[string]any{"action": "spawn", "goal": goal, "parent_work_session_id": "forged-parent", "project_id": "forged-project"})
+				// A forged parent or project is not an argument of work: the
+				// call is refused before anything runs (UNKNOWN_ARGUMENT).
+				forged, _ := json.Marshal(map[string]any{"action": "spawn", "goal": goal, "parent_work_session_id": "forged-parent", "project_id": "forged-project"})
+				var refused llm.ToolCall
+				refused.ID, refused.Type, refused.Function.Name, refused.Function.Arguments = "forged-"+goal, "function", "work", string(forged)
+				if obs := a.executeToolCall(ctx, refused); !obs.Refused || obs.ReasonCode != tools.ReasonUnknownArgument || !strings.Contains(obs.Text, "work does not take parent_work_session_id, project_id;") {
+					t.Fatalf("a forged parent and project were not refused: %+v", obs)
+				}
+				args, err := json.Marshal(map[string]any{"action": "spawn", "goal": goal})
 				if err != nil {
 					t.Fatal(err)
 				}

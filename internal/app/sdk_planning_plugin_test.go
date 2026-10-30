@@ -383,7 +383,7 @@ func planningPackageFixtureVersion(t *testing.T, dir, archive, version string) c
 	}
 	defer z.Close()
 	tr := tar.NewReader(z)
-	spec := packagetest.PackageSpec{Root: "id.aeon.planning-" + version, InstallFiles: map[string][]byte{}}
+	spec := packagetest.PackageSpec{InstallFiles: map[string][]byte{}}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -394,6 +394,11 @@ func planningPackageFixtureVersion(t *testing.T, dir, archive, version string) c
 		}
 		if h.Typeflag == tar.TypeDir {
 			continue
+		}
+		if spec.Root == "" {
+			// The package's own root, <id>-<version>: the id is the
+			// package's word, not a copy in this tree.
+			spec.Root, _, _ = strings.Cut(h.Name, "/")
 		}
 		if h.Typeflag != tar.TypeReg || h.Size > 32<<20 || !strings.HasPrefix(h.Name, spec.Root+"/") {
 			t.Fatal("unexpected package member", h.Name)
@@ -423,7 +428,7 @@ func planningPackageFixtureVersion(t *testing.T, dir, archive, version string) c
 		t.Fatal(err)
 	}
 	tmp := t.TempDir()
-	b := compatBuild{pluginID: "id.aeon.planning", worker: filepath.Join(dir, "aii-plugin-worker"), t0: unsigned, v1: filepath.Join(tmp, "planning-"+version+".aiiospkg"), root: filepath.Join(tmp, "platform-root.pub.json"), status: filepath.Join(tmp, packagetest.StatusFilePlatform)}
+	b := compatBuild{pluginID: strings.TrimSuffix(spec.Root, "-"+version), worker: filepath.Join(dir, "aii-plugin-worker"), t0: unsigned, v1: filepath.Join(tmp, "planning-"+version+".aiiospkg"), root: filepath.Join(tmp, "platform-root.pub.json"), status: filepath.Join(tmp, packagetest.StatusFilePlatform)}
 	root, err := json.Marshal(role.Env)
 	if err != nil {
 		t.Fatal(err)

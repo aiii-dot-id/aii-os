@@ -23,10 +23,12 @@ run(() => {
     { id: 'ask-2', kind: 'clarify', from: 'identity', text: 'Which week?', proposed: '2026-09-12T16:00:01Z' },
     { id: 'ask-3', kind: 'connect', from: 'identity', text: 'I need your email.', connector: 'email', proposed: '2026-09-12T16:00:02Z' },
     { id: 'act-9', kind: 'confirm', from: 'org.example.uid', plugin: 'org.example.uid', operation: 'enroll', text: 'Enroll Quinn', args: { name: 'Quinn' }, proposed: '2026-09-12T16:00:03Z' },
-    { id: 'act-10', kind: 'confirm', from: 'org.example.uid', plugin: 'org.example.uid', operation: 'enroll', text: 'Enroll Jim', args: { name: 'Jim' }, proposed: '2026-09-12T16:00:04Z' },
+    { id: 'act-10', kind: 'confirm', from: 'org.example.uid', plugin: 'org.example.uid', operation: 'enroll', text: 'Enroll Guest', args: { name: 'Guest' }, proposed: '2026-09-12T16:00:04Z' },
+    { id: 'ask-4', kind: 'word', from: 'host', text: 'At turn 41 you said: "yes, record it".', proposed: '2026-09-12T16:00:05Z' },
+    { id: 'ask-5', kind: 'word', from: 'host', text: 'At turn 42 you said: "and the mornings".', proposed: '2026-09-12T16:00:06Z' },
   ]);
   const cards = document.querySelectorAll('.msg.ask');
-  assert(cards.length === 5, 'five cards');
+  assert(cards.length === 7, 'seven cards');
   assert(!document.querySelector('input[type="password"]'), 'no card carries a credential field');
   document.querySelector('[data-ask-id="ask-1"] [data-ask-choice="window"]').click();
   assert(frames.some(f => f.type === 'ask' && f.ask.id === 'ask-1' && f.ask.answer === 'chose' && f.ask.choice === 'window'), 'a choice answers through the page');
@@ -42,8 +44,16 @@ run(() => {
   assert(frames.some(f => f.type === 'plugin' && f.plugin.action === 'confirm' && f.plugin.id === 'org.example.uid' && f.plugin.act === 'act-9'), 'a confirm card answers through the plugin route');
   document.querySelector('[data-ask-id="act-10"] [data-ask-act="always"]').click();
   assert(frames.some(f => f.type === 'plugin' && f.plugin.action === 'always' && f.plugin.id === 'org.example.uid' && f.plugin.act === 'act-10'), 'Always answers through the plugin route as its own word');
+  const word = document.querySelector('[data-ask-id="ask-4"]');
+  assert(word.querySelector('.who').textContent === 'Confirm your spoken words' && word.querySelector('.ask-text').textContent.includes('"yes, record it"'), 'the word card shows the spoken words under its own heading');
+  assert(!word.querySelector('input') && word.querySelectorAll('button').length === 2, 'the word card is answered by two buttons and takes no typing');
+  word.querySelector('[data-ask-answer="confirm"]').click();
+  assert(frames.some(f => f.type === 'ask' && f.ask.id === 'ask-4' && f.ask.answer === 'confirm'), 'These are my words answers confirm');
+  assert(word.querySelector('.ask-note').textContent === 'You confirmed them' && word.querySelectorAll('button:not([disabled])').length === 0, 'a confirmed word card settles and says so');
+  document.querySelector('[data-ask-id="ask-5"] [data-ask-answer="no"]').click();
+  assert(frames.some(f => f.type === 'ask' && f.ask.id === 'ask-5' && f.ask.answer === 'no'), 'No answers no');
   renderAsks([]);
-  assert(document.querySelectorAll('.msg.ask.closed').length === 5, 'cards gone from the list close in place');
+  assert(document.querySelectorAll('.msg.ask.closed').length === 7, 'cards gone from the list close in place');
 });
 </script>`
 	modules := map[string][]byte{}
@@ -60,6 +70,5 @@ run(() => {
 	modules["/presence.js"] = []byte(`export function setThinking() {} export function toolPulse() {} export function renderPresence() {}`)
 	modules["/app.js"] = []byte(`export function toast() {}`)
 	modules["/views/model-picker.js"] = []byte(`export function fillModelPicker() {}`)
-	modules["/pending.js"] = []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`)
 	runPageInEngines(t, page, modules)
 }

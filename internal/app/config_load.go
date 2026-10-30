@@ -9,6 +9,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -18,9 +19,11 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/oswall"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
+	"github.com/aiii-dot-id/aii-os/internal/updates"
 )
 
 func LoadConfig(path string) (*Config, error) {
@@ -36,6 +39,7 @@ func LoadConfig(path string) (*Config, error) {
 	logsink.Info("config.start", "no config found — creating the default, FIRSTBOOT")
 	cfg = defaultConfig()
 	cfg.SourcePath = loadedFrom
+
 	if _, err := saveConfig(cfg); err != nil {
 		return nil, fmt.Errorf("cannot write default config: %w", err)
 	}
@@ -59,6 +63,26 @@ func readConfigBytes(path string) ([]byte, error) {
 }
 
 func decodeConfig(loadedFrom string, data []byte) (*Config, error) {
+	cfg, said, err := decodeConfigSaying(loadedFrom, data)
+	for _, sentence := range said {
+		logsink.Warn("config.decision", "%s: %s", loadedFrom, sentence)
+	}
+	return cfg, err
+}
+
+func decodeConfigSaying(loadedFrom string, data []byte) (cfg *Config, said []string, err error) {
+	c, said, err := decodeConfigRules(loadedFrom, data)
+	if err != nil {
+		return nil, said, err
+	}
+	c.stated, err = json.Marshal(c)
+	if err != nil {
+		return nil, said, fmt.Errorf("marshal config: %w", err)
+	}
+	return c, said, nil
+}
+
+func decodeConfigRules(loadedFrom string, data []byte) (_ *Config, said []string, _ error) {
 
 	cfg := *defaultConfig()
 
@@ -66,10 +90,10 @@ func decodeConfig(loadedFrom string, data []byte) (*Config, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("cannot parse config: %w", err)
+		return nil, said, fmt.Errorf("cannot parse config: %w", err)
 	}
 	if len(bytes.TrimSpace(data[decoder.InputOffset():])) != 0 {
-		return nil, fmt.Errorf("cannot parse config: trailing data")
+		return nil, said, fmt.Errorf("cannot parse config: trailing data")
 	}
 
 	agency := namedInSection(data, "agency")
@@ -79,151 +103,184 @@ func decodeConfig(loadedFrom string, data []byte) (*Config, error) {
 	if !agency["subagent_max_tool_rounds"] && (cfg.Agency.MaxToolRounds.Unlimited || cfg.Agency.MaxToolRounds.N > 0) && cfg.Agency.SubagentMaxToolRounds.Above(cfg.Agency.MaxToolRounds) {
 		cfg.Agency.SubagentMaxToolRounds = cfg.Agency.MaxToolRounds
 	}
-	for _, said := range applyRuled(&cfg) {
-		logsink.Warn("config.decision", "%s: %s", loadedFrom, said)
-	}
+	said = append(said, applyRuled(&cfg)...)
 
 	cfg.SourcePath = loadedFrom
 	if !store.ValidDatabaseFormat(cfg.Identity.DBFormat) {
-		return nil, fmt.Errorf("identity.db_format must be empty, sqlite, or zstd")
+		return nil, said, fmt.Errorf("identity.db_format must be empty, sqlite, or zstd")
 	}
 	if err := validMeaningChoice(cfg.Memory.MeaningSource); err != nil {
-		return nil, fmt.Errorf("%s: %w", meaningSourceKey, err)
+		return nil, said, fmt.Errorf("%s: %w", meaningSourceKey, err)
 	}
 	if _, err := cfg.Plugins.Runtime.startupCeiling(); err != nil {
-		return nil, fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
+		return nil, said, fmt.Errorf("plugins.runtime.max_startup_ms: %w", err)
 	}
 	if cfg.Plugins.Runtime.SlowStorageCallMs < 0 {
-		return nil, fmt.Errorf("plugins.runtime.slow_storage_call_ms must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("plugins.runtime.slow_storage_call_ms must be zero (take the default) or positive")
 	}
 	if err := validHardwareQueryMs(cfg.Plugins.Runtime.HardwareQueryMs); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validMaxMemories(cfg.Plugins.Runtime.MaxMemories); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validReplacedMemoryDays(cfg.Plugins.Runtime.ReplacedMemoryDays); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if cfg.Plugins.Runtime.MaxInputSchemaBytes < 0 {
-		return nil, fmt.Errorf("plugins.runtime.max_input_schema_bytes must be zero (take the default, %d) or positive", pluginhost.DefaultMaxInputSchemaBytes)
+		return nil, said, fmt.Errorf("plugins.runtime.max_input_schema_bytes must be zero (take the default, %d) or positive", pluginhost.DefaultMaxInputSchemaBytes)
 	}
 	if cfg.Plugins.Runtime.MaxInflightReceipts < 0 {
-		return nil, fmt.Errorf("plugins.runtime.max_inflight_receipts must be zero (take the default, %d) or positive", broker.DefaultMaxInflightReceipts)
+		return nil, said, fmt.Errorf("plugins.runtime.max_inflight_receipts must be zero (take the default, %d) or positive", broker.DefaultMaxInflightReceipts)
 	}
 	if err := validRefusedRetryMax(cfg.LLM.RefusedRetryMaxSeconds); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validLogMaxBytes(cfg.Logs.MaxBytes); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validLogMaxTotalBytes(cfg.Logs.MaxTotalBytes, cfg.Logs.MaxBytes); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validGenesisPatience(cfg.Genesis); err != nil {
-		return nil, err
+		return nil, said, err
+	}
+	if err := validWitnessAskAgain("witness_server.ask_again_seconds", cfg.Witness); err != nil {
+		return nil, said, err
 	}
 	if err := validStartNumbers(&cfg); err != nil {
-		return nil, err
+		return nil, said, err
+	}
+	if _, err := updates.APIBase(cfg.Updates.APIURL); err != nil {
+		return nil, said, fmt.Errorf("updates.api_url: %w", err)
+	}
+	if err := validAgentMemory(cfg.Genesis.AgentMemory); err != nil {
+		return nil, said, err
 	}
 	if cfg.Dashboard.StopDrainSeconds < 0 {
-		return nil, fmt.Errorf("dashboard.stop_drain_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("dashboard.stop_drain_seconds must be zero (take the default) or positive")
 	}
 
 	if cfg.Dashboard.ICEServers != nil {
 		if err := dashboard.CheckICEServers(*cfg.Dashboard.ICEServers); err != nil {
-			return nil, err
+			return nil, said, err
 		}
 	}
 	if cfg.Dashboard.Files.MaxBytes < 0 || cfg.Dashboard.Files.MaxPerMessage < 0 {
-		return nil, fmt.Errorf("dashboard.files.max_bytes and dashboard.files.max_per_message must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("dashboard.files.max_bytes and dashboard.files.max_per_message must be zero (take the default) or positive")
 	}
 	for _, ext := range cfg.Dashboard.Files.Types {
 		if len(ext) < 2 || ext[0] != '.' || strings.ContainsAny(ext[1:], `./\ `) {
-			return nil, fmt.Errorf("dashboard.files.types: %q is not an extension: write each with its dot, as in \".pdf\"", ext)
+			return nil, said, fmt.Errorf("dashboard.files.types: %q is not an extension: write each with its dot, as in \".pdf\"", ext)
 		}
 	}
 	if r := cfg.Plugins.Runtime; r.AdmissionMemoryReserveBytes < 0 || r.AdmissionMemoryBudgetBytes < 0 || r.MaxConcurrentStarts < 0 {
-		return nil, fmt.Errorf("plugins.runtime: admission_memory_reserve_bytes, admission_memory_budget_bytes and max_concurrent_starts must not be negative")
+		return nil, said, fmt.Errorf("plugins.runtime: admission_memory_reserve_bytes, admission_memory_budget_bytes and max_concurrent_starts must not be negative")
 	}
 	for id, resource := range cfg.Plugins.Resources {
 		if _, err := resource.startupTimeout(); err != nil {
-			return nil, fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
+			return nil, said, fmt.Errorf("plugins.resources.%s.startup_timeout_ms: %w", id, err)
 		}
 	}
 
 	if level := cfg.Plugins.Autoload; level != "" {
 		if _, _, ok := autoloadTier(level); !ok {
-			return nil, fmt.Errorf("plugins.autoload: %q is not a level (none, T0, T1, T2, T3)", level)
+			return nil, said, fmt.Errorf("plugins.autoload: %q is not a level (none, T0, T1, T2, T3)", level)
 		}
 	}
 
 	if err := validateVoiceMode(cfg.Speech.Mode); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if err := validVoiceOpenWait(cfg.Speech.OpenWaitSeconds); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 
 	if err := validateSpeakerPolicy(cfg.Speech.Speakers); err != nil {
-		return nil, fmt.Errorf("speech.speakers: %w", err)
+		return nil, said, fmt.Errorf("speech.speakers: %w", err)
 	}
 	if err := validHeardHistory(cfg.Speech.HeardHistory); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	if _, err := disabledTools(cfg.Tools.Disabled); err != nil {
-		return nil, err
+		return nil, said, err
+	}
+	if err := validWallPaths(cfg); err != nil {
+		return nil, said, err
 	}
 
 	if err := validateDashboardOrigin(cfg.Dashboard.Origin); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 	switch {
 	case cfg.Prompt.RecentTurns <= 0:
-		return nil, fmt.Errorf("prompt.recent_turns must be positive")
+		return nil, said, fmt.Errorf("prompt.recent_turns must be positive")
 	case cfg.Memory.BackfillSeconds < 0:
-		return nil, fmt.Errorf("memory.backfill_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.backfill_seconds must be zero (take the default) or positive")
 	case cfg.Memory.BackfillRows < 0:
-		return nil, fmt.Errorf("memory.backfill_rows must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.backfill_rows must be zero (take the default) or positive")
 	case cfg.Memory.BackfillLocalSeconds < 0:
-		return nil, fmt.Errorf("memory.backfill_local_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.backfill_local_seconds must be zero (take the default) or positive")
 	case cfg.Memory.ConversationVectorWindow < 0:
-		return nil, fmt.Errorf("memory.conversation_vector_window must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.conversation_vector_window must be zero (take the default) or positive")
 	case cfg.Memory.EmbedCueSeconds < 0:
-		return nil, fmt.Errorf("memory.embed_cue_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.embed_cue_seconds must be zero (take the default) or positive")
 	case cfg.Memory.EmbedMemorySeconds < 0:
-		return nil, fmt.Errorf("memory.embed_memory_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.embed_memory_seconds must be zero (take the default) or positive")
 	case cfg.Memory.SourceCheckRetrySeconds < 0:
-		return nil, fmt.Errorf("memory.source_check_retry_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.source_check_retry_seconds must be zero (take the default) or positive")
 	case cfg.Memory.ReplyHoldSeconds < 0:
-		return nil, fmt.Errorf("memory.reply_hold_seconds must be zero (take the default) or positive")
+		return nil, said, fmt.Errorf("memory.reply_hold_seconds must be zero (take the default) or positive")
 	case cfg.Maintenance.OnDemandSpacingSeconds < 0 || cfg.Maintenance.OnDemandSpacingSeconds > 86400:
-		return nil, fmt.Errorf("maintenance.on_demand_spacing_seconds must be zero (take the default, 600) or between 1 and 86400")
+		return nil, said, fmt.Errorf("maintenance.on_demand_spacing_seconds must be zero (take the default, 600) or between 1 and 86400")
+	case cfg.Maintenance.RestoreUploadIdleSeconds < 0 || cfg.Maintenance.RestoreUploadIdleSeconds > 86400:
+		return nil, said, fmt.Errorf("maintenance.restore_upload_idle_seconds must be zero (take the default, 120) or between 1 and 86400")
 	case cfg.Prompt.PulseIntervalSeconds < 0:
-		return nil, fmt.Errorf("prompt.pulse_interval_seconds cannot be negative")
+		return nil, said, fmt.Errorf("prompt.pulse_interval_seconds cannot be negative")
 	case cfg.Agency.MaxSubagentDepth < 0:
-		return nil, fmt.Errorf("agency.max_subagent_depth cannot be negative")
+		return nil, said, fmt.Errorf("agency.max_subagent_depth cannot be negative")
 	case cfg.Agency.MaxParallelSubagents < 0:
-		return nil, fmt.Errorf("agency.max_parallel_subagents cannot be negative")
+		return nil, said, fmt.Errorf("agency.max_parallel_subagents cannot be negative")
 	case cfg.Agency.SubagentMaxMints <= 0:
-		return nil, fmt.Errorf("agency.subagent_max_mints must be positive")
+		return nil, said, fmt.Errorf("agency.subagent_max_mints must be positive")
 	}
 
 	held, err := holdCognition(&cfg)
 	if err != nil {
-		return nil, err
+		return nil, said, err
 	}
-	for _, said := range held {
-		logsink.Warn("config.decision", "%s: %s", loadedFrom, said)
-	}
+	said = append(said, held...)
 	if err := validCognition(cfg); err != nil {
-		return nil, err
+		return nil, said, err
 	}
 
-	for _, said := range holdOverrides(&cfg) {
-		logsink.Warn("config.decision", "%s: %s", loadedFrom, said)
+	said = append(said, holdOverrides(&cfg)...)
+	return &cfg, said, nil
+}
+
+func validWallPaths(cfg Config) error {
+	lists := []struct {
+		key   string
+		paths []string
+		under string
+	}{
+		{"tools.shell_wall_devices", cfg.Tools.ShellWallDevices, "/dev/"},
+		{"plugins.native_view", cfg.Plugins.NativeView, ""},
 	}
-	return &cfg, nil
+	for _, l := range lists {
+		for _, p := range l.paths {
+			if !strings.HasPrefix(p, "/") || path.Clean(p) != p {
+				return fmt.Errorf("%s: %q is not an absolute path written plainly (no \".\", \"..\" or trailing slash)", l.key, p)
+			}
+			if l.under != "" && !strings.HasPrefix(p, l.under) {
+				return fmt.Errorf("%s: %q is not a device under %s", l.key, p, l.under)
+			}
+		}
+	}
+	if s := cfg.Tools.WallStartSeconds; s < 0 || s > oswall.MaxStartSeconds {
+		return fmt.Errorf("tools.wall_start_seconds must be zero (take the default, %d) or between 1 and %d", oswall.DefaultStartSeconds, oswall.MaxStartSeconds)
+	}
+	return nil
 }
 
 func holdOverrides(cfg *Config) (said []string) {
@@ -432,20 +489,91 @@ type retiredConfigKey struct {
 	Path   string
 	Sample string
 	Fate   string
+	Now    string
 }
 
 var retiredConfigKeys = [...]retiredConfigKey{
 
-	{"agency.heuristic_nudges", "true", "dropped: the prose it switched was deleted"},
-	{"agency.breadth_nudge", "false", "dropped: the prose it switched was deleted"},
-	{"agency.plan_nudge", "true", "dropped: the prose it switched was deleted"},
-	{"agency.planning_brief", "false", "dropped: the prose it switched was deleted"},
+	{Path: "agency.heuristic_nudges", Sample: "true", Fate: "dropped: the prose it switched was deleted"},
+	{Path: "agency.breadth_nudge", Sample: "false", Fate: "dropped: the prose it switched was deleted"},
+	{Path: "agency.plan_nudge", Sample: "true", Fate: "dropped: the prose it switched was deleted"},
+	{Path: "agency.planning_brief", Sample: "false", Fate: "dropped: the prose it switched was deleted"},
 
-	{"tools.bash_timeout_seconds", "300", "read as tools.shell_timeout_seconds"},
+	{Path: "tools.bash_timeout_seconds", Sample: "300", Fate: "read as tools.shell_timeout_seconds", Now: "shell_timeout_seconds"},
 
-	{"plugins.grants.<id>.roots", `[{"name":"work","path":"/tmp/work","write":true}]`, "dropped: grants nothing; the rest of the grant applies"},
+	{Path: "plugins.grants.<id>.roots", Sample: `[{"name":"work","path":"/tmp/work","write":true}]`, Fate: "dropped: grants nothing; the rest of the grant applies"},
 
-	{"dashboard.auth_token_sha256", `"0000000000000000000000000000000000000000000000000000000000000000"`, "retired by the first boot that reads it: a fresh token is minted and the file saved without it (dashboard_auth.go)"},
+	{Path: "dashboard.auth_token_sha256", Sample: `"0000000000000000000000000000000000000000000000000000000000000000"`, Fate: "retired by the first boot that reads it: a fresh token is minted and the file saved without it (dashboard_auth.go)"},
+}
+
+func unheld(base []byte, held map[string]string) []byte {
+	if len(held) == 0 {
+		return base
+	}
+	d, err := parseJSONDoc(base)
+	if err != nil {
+		return base
+	}
+	for path := range held {
+		if !strings.HasPrefix(path, "overrides.") {
+			removeAt(d, strings.Split(path, "."), 1)
+		}
+	}
+	return d.compact()
+}
+
+func configStated(data []byte) ([]byte, error) {
+	cfg, _, err := decodeConfigSaying("", data)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.stated, nil
+}
+
+func stateContacts(file, next *jsonDoc) {
+	if c := next.member("contacts"); c != nil && file.member("contacts") == nil {
+		file.set("contacts", c)
+	}
+}
+
+func stateLogDir(file, next *jsonDoc) bool {
+	logs := file.member("logs")
+	dir := next.member("logs").member("dir")
+	if !logs.isObject() || logs.member("dir") != nil || dir == nil {
+		return false
+	}
+	logs.members["dir"] = dir
+	logs.keys = append([]string{"dir"}, logs.keys...)
+	return true
+}
+
+func carryRetired(file, next *jsonDoc) {
+	for _, k := range retiredConfigKeys {
+		if k.Now != "" {
+			carryRetiredAt(file, next, strings.Split(k.Path, "."), k.Now)
+		}
+	}
+}
+
+func carryRetiredAt(file, next *jsonDoc, path []string, now string) {
+	if !file.isObject() {
+		return
+	}
+	if len(path) == 1 {
+		if file.member(path[0]) != nil && file.member(now) == nil {
+			if v := next.member(now); v != nil {
+				file.set(now, v)
+			}
+		}
+		return
+	}
+	keys := []string{path[0]}
+	if path[0] == "<id>" {
+		keys = slices.Clone(file.keys)
+	}
+	for _, k := range keys {
+		carryRetiredAt(file.member(k), next.member(k), path[1:], now)
+	}
 }
 
 func (c *AgencyConfig) UnmarshalJSON(data []byte) error {
@@ -482,17 +610,33 @@ func (c *AgencyConfig) UnmarshalJSON(data []byte) error {
 }
 
 func saveConfig(cfg *Config) (bool, error) {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	next, err := json.Marshal(cfg)
 	if err != nil {
 		return false, fmt.Errorf("marshal: %w", err)
 	}
+	base := cfg.stated
+	if base == nil {
+		if base, err = json.Marshal(defaultConfig()); err != nil {
+			return false, fmt.Errorf("marshal: %w", err)
+		}
+	}
+	base = unheld(base, cfg.cognitionHeld)
 	path := cfg.SourcePath
 	if path == "" {
 		path = install.ConfigPathIn("")
 	}
+	data, err := fileWithChanges(path, base, next, configStated, carryRetired, stateContacts, func(file, next *jsonDoc) { stateLogDir(file, next) })
+	if err != nil {
+		return false, err
+	}
 	published, err := writeFileAtomic(path, data)
 	if published {
+		cfg.stated = next
+
 		cfg.cognitionHeld = nil
+		if written, _, derr := decodeConfigSaying(path, data); derr == nil {
+			cfg.cognitionHeld = written.cognitionHeld
+		}
 	}
 	return published, err
 }

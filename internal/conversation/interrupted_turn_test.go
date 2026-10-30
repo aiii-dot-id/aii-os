@@ -153,6 +153,29 @@ func TestAProvidersAnswerIsNamedToTheIdentityByItsStatus(t *testing.T) {
 	}
 }
 
+func TestAProvidersFailureWhileAnsweringIsNamedToTheIdentity(t *testing.T) {
+	failed := &llm.StreamFailure{Text: `{"type":"overloaded_error","message":"Overloaded; see https://provider.example/status"}`}
+	client := &failAfterSpeech{err: &llm.CallError{Err: fmt.Errorf("decode anthropic response: %w", failed)}}
+	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil,
+		testBounds(Config{MaxIterations: limits.Of(4)}))
+	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	if err == nil {
+		t.Fatal("a turn the provider failed must still report its error")
+	}
+	if res.Interrupted != "the model provider failed while answering" {
+		t.Fatalf("the identity is told %q", res.Interrupted)
+	}
+	if got := FailureCause(err); got != "the model provider failed while answering" {
+		t.Fatalf("a failed turn's cause is %q", got)
+	}
+	// The stop is still asked first.
+	stopped, cancel := context.WithCancelCause(context.Background())
+	cancel(StoppedByOperator)
+	if got := interruptCause(stopped, failed); got != "stopped by the operator" {
+		t.Errorf("a stopped turn whose stream also failed is told %q", got)
+	}
+}
+
 func TestACancelledTurnIsToldWhatCancelledIt(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -277,7 +300,7 @@ func TestAnEmptyReplyIsToldAsTheModelsAndNotTheSubstrates(t *testing.T) {
 	// And where a closing call is read with no response at all, that is
 	// not the model's either.
 	var empty emptyReply
-	if _, _, err := finalResponse(nil, "at the round limit"); err == nil || errors.As(err, &empty) {
+	if _, _, _, err := finalResponse(nil, "at the round limit"); err == nil || errors.As(err, &empty) {
 		t.Fatalf("A CLOSING CALL WITH NO RESPONSE IS TYPED AS THE MODEL'S EMPTY REPLY: %v", err)
 	}
 }

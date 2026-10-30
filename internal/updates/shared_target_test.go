@@ -36,7 +36,11 @@ type sharedRelease struct {
 
 func newSharedRelease(t *testing.T, binary string) *sharedRelease {
 	t.Helper()
-	const ver = "9.9.9"
+	return newSharedReleaseAt(t, binary, "9.9.9")
+}
+
+func newSharedReleaseAt(t *testing.T, binary, ver string) *sharedRelease {
+	t.Helper()
 	archive := releaseArchive(t, []byte(binary))
 	signer := newTestReleaseSigner(t)
 	trust := t.TempDir()
@@ -187,7 +191,7 @@ func TestASecondIdentityFindsTheUpdateAlreadyInstalled(t *testing.T) {
 // healthy boot retires; and only then does B's update go through.
 func TestAnotherIdentitysPendingUpdateIsNeitherReplacedNorRetired(t *testing.T) {
 	rel := newSharedRelease(t, "new binary")
-	newer := newSharedRelease(t, "newer binary")
+	newer := newSharedReleaseAt(t, "newer binary", "9.9.10")
 	// B verifies the newer release, signed under its own root.
 	exe, dirA, dirB := program(t), rel.identity(t), newer.identity(t)
 	ownerA := ownerForTest(t, dirA)
@@ -216,7 +220,14 @@ func TestAnotherIdentitysPendingUpdateIsNeitherReplacedNorRetired(t *testing.T) 
 		t.Error("B's next start was reported to roll back A's update")
 	}
 	if err := requireSettledAt(dirB, exe); err != nil {
-		t.Errorf("B's data waits on A's update: %v", err)
+		t.Errorf("B is told A's update is B's to settle: %v", err)
+	}
+	// What B keeps and holds while the program's update is unsettled, B
+	// keeps and holds whoever applied it: A's rollback would move B back
+	// too. The wider read says so, and names A.
+	var anothers *AnothersUpdateError
+	if err := unsettledBesideAt(dirB, exe); !errors.As(err, &anothers) || anothers.Owner != ownerA || !errors.Is(err, ErrBootRecoveryPending) {
+		t.Errorf("B'S DATA AND CONFIGURATION DO NOT WAIT ON THE UPDATE THAT WOULD MOVE B BACK: %v", err)
 	}
 	// B's boot that never finishes: its rollback check runs twice with no
 	// marker between — the shape of a failed boot. Still not B's.
@@ -237,6 +248,9 @@ func TestAnotherIdentitysPendingUpdateIsNeitherReplacedNorRetired(t *testing.T) 
 	if err := requireSettledAt(dirA, exe); !errors.Is(err, ErrBootRecoveryPending) {
 		t.Errorf("A's data paths must wait for A's boot to complete: %v", err)
 	}
+	if err := unsettledBesideAt(dirA, exe); !errors.Is(err, ErrBootRecoveryPending) || errors.As(err, &anothers) {
+		t.Errorf("A's own update, asked of the program: %v", err)
+	}
 	pending = readEvidence(t, exe, dirA)
 	bootHealthy(dirB, exe)
 	untouched("B's healthy boot during A's first boot")
@@ -245,6 +259,9 @@ func TestAnotherIdentitysPendingUpdateIsNeitherReplacedNorRetired(t *testing.T) 
 	writeBootMarkerAt(dirA, exe)
 	if exists(tgt.backup) || exists(tgt.record) {
 		t.Fatal("A's healthy boot did not retire A's update")
+	}
+	if err := unsettledBesideAt(dirB, exe); err != nil {
+		t.Errorf("B still waits after A's update settled: %v", err)
 	}
 	if err := newer.checker(dirB).applyTo(context.Background(), exe); err != nil {
 		t.Fatalf("once A's update is retired, B's update must go through: %v", err)

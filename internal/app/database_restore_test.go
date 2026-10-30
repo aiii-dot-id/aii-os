@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,7 +65,7 @@ func TestDatabaseCompressionSurvivesNewMachineRestore(t *testing.T) {
 			r := newRestoreRig(t)
 			t.Chdir(r.dir)
 			r.cfg.Identity.DBFormat = "zstd"
-			var sealed []byte
+			var sealed, downloaded []byte
 			var snapshot dashboard.ContinuitySnapshot
 			var snapshotPath, identity string
 			const conversation = "runtime data that ledger replay cannot reconstruct"
@@ -94,6 +95,22 @@ func TestDatabaseCompressionSurvivesNewMachineRestore(t *testing.T) {
 				}
 				snapshotPath = filepath.Join(a.backupsDir(a.configSnapshot()), snapshot.Name)
 				identity = a.keyPair.Fingerprint()
+				rc, size, err := continuityDoor(a).Download(snapshot.Name)
+				if !encrypted {
+					if err == nil {
+						rc.Close()
+						t.Fatal("A SNAPSHOT IN THE CLEAR WAS HANDED OVER FOR DOWNLOAD")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				downloaded, err = io.ReadAll(rc)
+				rc.Close()
+				if err != nil || int64(len(downloaded)) != size {
+					t.Fatalf("the download is not the snapshot's %d bytes: %d %v", size, len(downloaded), err)
+				}
 			}()
 			for _, preference := range []string{"", "zstd"} {
 				label := preference
@@ -109,11 +126,7 @@ func TestDatabaseCompressionSurvivesNewMachineRestore(t *testing.T) {
 						t.Fatal(err)
 					}
 					if encrypted {
-						raw, err := os.ReadFile(snapshotPath)
-						if err != nil {
-							t.Fatal(err)
-						}
-						if err := a.continuity.NewMachineUpload(snapshot.Name, "", bytes.NewReader(raw)); err != nil {
+						if err := a.continuity.NewMachineUpload(snapshot.Name, "", bytes.NewReader(downloaded)); err != nil {
 							t.Fatal(err)
 						}
 					} else {

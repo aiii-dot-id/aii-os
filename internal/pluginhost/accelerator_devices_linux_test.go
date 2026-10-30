@@ -5,6 +5,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -40,6 +41,12 @@ func TestLinuxVulkanDeviceAdmission(t *testing.T) {
 			}
 		})
 	}
+	t.Run("no device nodes", func(t *testing.T) {
+		got, err := linuxAcceleratorDevices(vulkan, fstest.MapFS{"sda": {Mode: fs.ModeDevice}})
+		if got != nil || err == nil || !strings.Contains(err.Error(), "software/CPU substitution is not device admission") {
+			t.Fatalf("a Vulkan profile on a host without Vulkan devices: %v, %v", got, err)
+		}
+	})
 	if _, err := linuxAcceleratorDevices(&AcceleratorProfile{Backend: "cpu+unknown"}, fixture()); err == nil {
 		t.Fatal("unknown composition admitted")
 	}
@@ -105,6 +112,49 @@ func TestLinuxVulkanDeviceAdmission(t *testing.T) {
 	})
 }
 
+// THE NULL DEVICE AT NVIDIA'S DISPLAY NODE, FOR AN NVIDIA VULKAN CHILD ONLY.
+// NVIDIA's Vulkan driver crashes where its display node is missing
+// (nvidiaDisplayStandIn has the measurement), so such a child is shown the
+// null device there. A child with no Vulkan part, a Vulkan child on other
+// hardware, and a child with no profile are shown nothing at that node.
+func TestOnlyAVulkanChildOnNVIDIAIsShownTheNullDeviceAtTheDisplayNode(t *testing.T) {
+	char := fs.ModeDevice | fs.ModeCharDevice | 0666
+	nvidia := fstest.MapFS{"dri/renderD128": {Mode: char}, "nvidia0": {Mode: char}, "nvidiactl": {Mode: char},
+		"nvidia-uvm": {Mode: char}, "nvidia-modeset": {Mode: char}}
+	other := fstest.MapFS{"dri/renderD128": {Mode: char}}
+	for _, row := range []struct {
+		backend string
+		dev     fstest.MapFS
+		want    []string
+	}{
+		{"vulkan", nvidia, []string{"/dev/nvidia-modeset"}},
+		{"cpu+vulkan", nvidia, []string{"/dev/nvidia-modeset"}},
+		{"vulkan+cpu", nvidia, []string{"/dev/nvidia-modeset"}},
+		{"cuda+vulkan", nvidia, []string{"/dev/nvidia-modeset"}},
+		{"vulkan+cuda", nvidia, []string{"/dev/nvidia-modeset"}},
+		{"cuda", nvidia, nil},
+		{"cpu", nvidia, nil},
+		{"metal", nvidia, nil},
+		{"vulkan", other, nil},
+		{"cpu+vulkan", other, nil},
+	} {
+		profile := &AcceleratorProfile{Backend: row.backend}
+		devices, err := linuxAcceleratorDevices(profile, row.dev)
+		if err != nil {
+			t.Fatalf("%s: %v", row.backend, err)
+		}
+		if slices.Contains(devices, "/dev/nvidia-modeset") {
+			t.Errorf("%s: NVIDIA's display device itself is admitted: %v", row.backend, devices)
+		}
+		if got := nvidiaDisplayStandIn(profile, devices); !slices.Equal(got, row.want) {
+			t.Errorf("backend %q on %d device nodes: the null device is shown at %v, want %v", row.backend, len(devices), got, row.want)
+		}
+	}
+	if got := nvidiaDisplayStandIn(nil, []string{"/dev/nvidia0", "/dev/nvidiactl"}); got != nil {
+		t.Errorf("a child with no profile is shown the null device at %v", got)
+	}
+}
+
 type failingDeviceFS struct{}
 
 func (failingDeviceFS) Open(string) (fs.File, error) { return nil, fs.ErrPermission }
@@ -126,9 +176,21 @@ func TestLinuxVulkanProfileKeepsTheWall(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("unchanged"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// NVIDIA's display device is never admitted. Where the driver is
+	// NVIDIA's, the null device stands at its node ($4 = null), and
+	// nothing is there otherwise (nvidiaDisplayStandIn).
+	standIns := nvidiaDisplayStandIn(profile, devices)
+	display := "absent"
+	if slices.Contains(standIns, nvidiaDisplayNode) {
+		display = "null"
+	}
 	script := `test ! -e /dev/dri/card0 && test ! -e /dev/input &&
-test ! -e /dev/snd && test ! -e /dev/nvidia-modeset &&
-test ! -e /dev/nvidia-uvm || exit 31
+test ! -e /dev/snd && test ! -e /dev/nvidia-uvm || exit 31
+if test "$3" = null; then
+  test "$(stat -L -c %t:%T /dev/nvidia-modeset)" = "$(stat -L -c %t:%T /dev/null)" || exit 36
+else
+  test ! -e /dev/nvidia-modeset || exit 36
+fi
 if (echo modified > "$1") 2>/dev/null; then exit 32; fi
 if test -s /etc/shadow; then exit 33; fi
 if test -d /root/.ssh && test -n "$(ls -A /root/.ssh 2>/dev/null)"; then exit 34; fi
@@ -138,7 +200,7 @@ exec vulkaninfo --summary`
 	if err != nil {
 		t.Fatal(err)
 	}
-	argv, wall, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script, "probe", sentinel, network}, profile, nativeFiles{})
+	argv, wall, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script, "probe", sentinel, network, display}, profile, nativeFiles{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +210,11 @@ exec vulkaninfo --summary`
 	for _, device := range devices {
 		if !strings.Contains(wall.Description, device) {
 			t.Fatalf("admitted device not disclosed: %s", device)
+		}
+	}
+	for _, node := range standIns {
+		if !strings.Contains(wall.Description, fmt.Sprintf(nvidiaDisplayStandInWords, node)) {
+			t.Fatalf("the null device at %s is not said on the containment line: %s", node, wall.Description)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -164,5 +231,5 @@ exec vulkaninfo --summary`
 	if err != nil || string(raw) != "unchanged" {
 		t.Fatalf("root write protection lost: %v", err)
 	}
-	t.Logf("admitted %v; network namespace isolated; filesystem/credential masks retained\n%s", devices, out)
+	t.Logf("admitted %v; the null device at %v; network namespace isolated; filesystem/credential masks retained\n%s", devices, standIns, out)
 }

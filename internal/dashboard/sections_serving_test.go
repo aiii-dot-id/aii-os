@@ -297,3 +297,23 @@ func TestSectionsAndLayoutOverWS(t *testing.T) {
 		t.Fatalf("SAFE sections answer must be empty with the reason, got %+v %q", m.Sections, m.Message)
 	}
 }
+
+func TestThePagePolicyIsTheOneTheDocumentsDescribe(t *testing.T) {
+	const want = "default-src 'none'; " +
+		"script-src 'self'; " +
+		"worker-src 'none'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"style-src-elem 'self'; " +
+		"style-src-attr 'unsafe-inline'; " +
+		"img-src 'self'; " +
+		"media-src 'self' blob:; " +
+		"connect-src 'self'; " +
+		"frame-src 'self'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'none'; " +
+		"form-action 'self'; " +
+		"object-src 'none'"
+	if uiCSP != want {
+		t.Fatalf("the page's policy changed, and the texts that describe it did not:\n got %q\nwant %q", uiCSP, want)
+	}
+}

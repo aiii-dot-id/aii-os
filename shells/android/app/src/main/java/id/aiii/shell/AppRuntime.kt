@@ -65,7 +65,7 @@ object AppRuntime : mobile.WakeScheduler {
         Thread {
             val result = try {
                 val home = appContext!!.filesDir.absolutePath
-                val r = if (from == null) mobile.Mobile.start("$home/config.json", home) else from.restart()
+                val r = if (from == null) mobile.Mobile.start("$home/config.json", home, DeviceKeystore) else from.restart()
                 r.setWakeScheduler(this@AppRuntime)
                 ForegroundBridge.init(appContext!!)
                 r.setForegroundNeedListener(ForegroundBridge)

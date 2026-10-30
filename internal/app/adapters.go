@@ -8,6 +8,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aiii-dot-id/aii-os/internal/agentmemory"
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
@@ -31,6 +33,8 @@ import (
 type ringAuthority struct {
 	gate *prompt.Gate
 	st   *store.Store
+
+	about func() int
 }
 
 func (r ringAuthority) AuthorityPreamble() (string, error) {
@@ -50,12 +54,13 @@ func (r ringAuthority) AuthorityPrefixWithin(reserve int) (string, int, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("load identity projection: %w", err)
 	}
-	ring2Text := prompt.RenderRing2(identity.Ring2)
+	ring2Text := prompt.RenderRing2(identity.Ring2, identity.Ring2EvidenceChars)
 	parts := []string{"# Facility prompt"}
 	if rendered := prompt.RenderSelfModel(identity.SelfModel); rendered != "" {
 		parts = append(parts, rendered)
 	}
-	text, seam := r.gate.SystemWithin(strings.Join(parts, "\n\n"), identity.Charter, ring2Text, reserve)
+	operator := prompt.RenderWhoYouWorkWith(identity.OperatorName, identity.AboutOperator, prompt.OperatorBeliefsMaxChars(r.about))
+	text, seam := r.gate.SystemWithin(strings.Join(parts, "\n\n"), identity.Charter, operator, ring2Text, reserve)
 	return text, seam, nil
 }
 
@@ -303,6 +308,12 @@ func (l *ledgerAdapter) admit(eventType ledger.EventType, ring int, payload any,
 	return evt, nil
 }
 
+func (l *ledgerAdapter) WitnessFiles(fn func() error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return fn()
+}
+
 type statePinner interface {
 	PinAt(ctx context.Context, seq uint64, hash string) (*store.Pin, error)
 }
@@ -337,6 +348,11 @@ func (l *ledgerAdapter) capture(ctx context.Context, tailDst string) (_ ledger.C
 		return ledger.Capture{}, nil, err
 	}
 	snapshotStep("tail-copied")
+
+	if _, err := witness.CaptureFiles(filepath.Dir(l.Ledger.Path()), filepath.Dir(tailDst)); err != nil {
+		os.Remove(tailDst)
+		return ledger.Capture{}, nil, err
+	}
 	pin, err := pinner.PinAt(ctx, c.LastSeq, c.LastHash)
 	if err != nil {
 		os.Remove(tailDst)
@@ -424,7 +440,7 @@ func (t appTranscript) TranscriptResultExcerptLimit() int {
 	if t.frozen() {
 		return 0
 	}
-	return store.TranscriptResultLimit
+	return t.st.ToolResultRunes()
 }
 
 type appToolExecutor struct{ a *App }
@@ -432,7 +448,15 @@ type appToolExecutor struct{ a *App }
 func (x appToolExecutor) Execute(ctx context.Context, call llm.ToolCall) conversation.Observation {
 	started := time.Now()
 	obs := x.a.executeToolCall(ctx, call)
-	obs.Text = observedText(obs.Text)
+
+	var note string
+	obs.Text, note = observedTextAndNote(obs.Text)
+	if note != "" {
+		if obs.HostNote != "" {
+			note = obs.HostNote + "\n" + note
+		}
+		obs.HostNote = note
+	}
 	if ctx.Err() == nil {
 		obs.Text += x.a.failureContext(ctx, call.Function.Name, obs)
 	}
@@ -450,10 +474,18 @@ func (x appToolExecutor) Execute(ctx context.Context, call llm.ToolCall) convers
 const notUTF8Note = "[this result held bytes that are not UTF-8 text; each run of them is shown as \uFFFD. Text in another encoding reads whole once the command writes it as UTF-8; a file that is not text does not read as text]"
 
 func observedText(s string) string {
-	if utf8.ValidString(s) {
-		return s
+	text, note := observedTextAndNote(s)
+	if note == "" {
+		return text
 	}
-	return strings.ToValidUTF8(s, "\uFFFD") + "\n" + notUTF8Note
+	return text + "\n" + note
+}
+
+func observedTextAndNote(s string) (string, string) {
+	if utf8.ValidString(s) {
+		return s, ""
+	}
+	return strings.ToValidUTF8(s, "\uFFFD"), notUTF8Note
 }
 
 func (x appToolExecutor) ParallelSafe(call llm.ToolCall) bool {
@@ -472,7 +504,39 @@ func (x appToolExecutor) ParallelSafe(call llm.ToolCall) bool {
 type appToolDefiner struct{ a *App }
 
 func (d appToolDefiner) ToolDefinitions(turn conversation.Checkpoint) []llm.ToolDefinition {
+	if safe, told := d.a.turnSafe(); told {
+		return d.a.toolDefinitionsIn(turn, safe)
+	}
 	return d.a.toolDefinitions(turn)
+}
+
+type requestToolDefiner struct {
+	a    *App
+	safe bool
+}
+
+func (d requestToolDefiner) ToolDefinitions(turn conversation.Checkpoint) []llm.ToolDefinition {
+	return d.a.toolDefinitionsIn(turn, d.safe)
+}
+
+func (a *App) tellTurnSafe(safe *bool) func() {
+	a.turn.mu.Lock()
+	a.turn.requestSafe = safe
+	a.turn.mu.Unlock()
+	return func() {
+		a.turn.mu.Lock()
+		a.turn.requestSafe = nil
+		a.turn.mu.Unlock()
+	}
+}
+
+func (a *App) turnSafe() (safe, told bool) {
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	if a.turn.requestSafe == nil {
+		return false, false
+	}
+	return *a.turn.requestSafe, true
 }
 
 type appEmitter struct {
@@ -502,6 +566,14 @@ func (t toolDiscovererAdapter) Discover(depth int) []identity.ToolInfo {
 		out = append(out, identity.ToolInfo{Name: i.Name, Description: i.Description})
 	}
 	return out
+}
+
+func (t toolDiscovererAdapter) HomeDocs() []string {
+	home, _ := t.reg.Roots()
+	if _, err := os.Stat(filepath.Join(home, agentmemory.Folder, agentmemory.Index)); err != nil {
+		return nil
+	}
+	return []string{agentmemory.Pointer}
 }
 
 func pluginOperations(reg *tools.Registry) func() prompt.PluginOperations {
@@ -549,6 +621,9 @@ type witnessMinter struct {
 }
 
 func (m witnessMinter) MintWitnessed(receipt witness.WitnessReceipt, witnessKeyID string) (*ledger.Event, error) {
+	if receipt.ContextSHA256 != "" {
+		return nil, fmt.Errorf("the receipt for record %d: %w", receipt.LedgerOrdinal, witness.ErrLaterReceiptForm)
+	}
 	payload := map[string]any{
 		"receipt": store.WitnessReceiptPayload{
 			IdentityID:                     receipt.IdentityID,

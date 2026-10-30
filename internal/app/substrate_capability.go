@@ -25,11 +25,7 @@ type substrateCapability struct {
 	model     string
 	toolCalls capState
 	note      string
-
-	modalityURL      string
-	inputModalities  []string
-	outputModalities []string
-	checkedAt        time.Time
+	checkedAt time.Time
 }
 
 func (a *App) setSubstrateCapability(c substrateCapability) {
@@ -44,8 +40,5 @@ func (a *App) substrateCapabilityFor(provider, model string) substrateCapability
 	if a.providers.runtime.substrateCap.provider != provider || a.providers.runtime.substrateCap.model != model {
 		return substrateCapability{provider: provider, model: model}
 	}
-	c := a.providers.runtime.substrateCap
-	mods := a.modalities.last(c.modalityURL)
-	c.inputModalities, c.outputModalities = mods.in, mods.out
-	return c
+	return a.providers.runtime.substrateCap
 }

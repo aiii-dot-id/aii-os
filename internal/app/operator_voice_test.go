@@ -1,9 +1,11 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -53,14 +55,6 @@ func TestTheOperatorsVoicesAreReadWholeOrRefused(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S CHOICE REACHES THE RULE AT ONCE, AND THE RULE READS WHAT
-// THE HOST RECORDS. The observation here is recorded by the host's own
-// path from an engine's frame, so the rule is held to the fields that
-// path writes. Naming the speaker's UUID through the configuration lets
-// a spoken turn of an identified, enrolled speaker stand as the
-// operator's word; taking the name away ends it, with no restart either
-// way. The engine's enrolled name for the same speaker is not a name the
-// setting takes.
 func TestNamingTheOperatorsVoiceReachesTheStore(t *testing.T) {
 	const (
 		atDesk  = "6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f"
@@ -83,7 +77,8 @@ func TestNamingTheOperatorsVoiceReachesTheStore(t *testing.T) {
 	stands := func(seq uint64) bool {
 		t.Helper()
 		turn, err := a.store.LatestOperatorWord()
-		return err == nil && turn != nil && turn.TurnSeq == seq
+		var waiting *store.UnconfirmedSpeechError
+		return turn == nil && errors.As(err, &waiting) && waiting.TurnSeq == seq
 	}
 	seq := say("yes, record it", 7, knownUUIDObservation("vs-1", 20, 7, "t1", "quinn-desk", atDesk, "matched"))
 	if stands(seq) {
@@ -130,5 +125,48 @@ func TestNamingTheOperatorsVoiceReachesTheStore(t *testing.T) {
 	again := say("yes, record it", 12, knownUUIDObservation("vs-1", 25, 12, "t1", "quinn-desk", atDesk, "matched"))
 	if stands(again) {
 		t.Fatal("the name was taken away and a spoken turn still stands")
+	}
+}
+
+func TestTheYourVoiceCardListsTheVoicesHeardAndTheOnesNamed(t *testing.T) {
+	const (
+		theirs  = "6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f"
+		guest   = "9078c44a-6fbe-4f24-a20e-bd212f520530"
+		unheard = "b3a1f7d2-52c4-4e0b-8d19-7e6f5a4b3c2d"
+	)
+	a := newVoiceApp(t)
+	a.voiceSessions.Store("vs-1", &voiceHandle{id: "vs-1"})
+	heard := func(final int64, observed pluginhost.Event) {
+		t.Helper()
+		seq, err := a.store.AddConversationTurnSeq(roleParticipant, voiceMarker+"words")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.store.AnnotateTurn(seq, annotationVoice, voiceRefKey("vs-1", final), `{"session":"vs-1"}`); err != nil {
+			t.Fatal(err)
+		}
+		a.noteSpeakerObservation(decodeVoiceFrame(observed), false)
+	}
+	heard(7, knownUUIDObservation("vs-1", 20, 7, "t1", "op-desk", theirs, "matched"))
+	heard(8, uuidObservation("vs-1", 21, 8, "t2", guest))
+	voices := a.configState().Speech.Voices
+	if len(voices) != 2 || voices[0].UUID != guest || voices[1].UUID != theirs {
+		t.Fatalf("the voices the record heard, newest first: %+v", voices)
+	}
+	if v := voices[1]; !v.Enrolled || v.Mine || v.WhyNot != "" || v.Label != "Label op-desk" || !v.Heard {
+		t.Fatalf("an enrolled voice: %+v", v)
+	}
+	if v := voices[0]; v.Enrolled || v.WhyNot != voiceNotEnrolled {
+		t.Fatalf("a voice that is not enrolled does not say why it cannot count: %+v", v)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"speech.operator_speakers": []any{theirs, unheard}}); err != nil {
+		t.Fatalf("naming the operator's voices through the settings door: %v", err)
+	}
+	voices = a.configState().Speech.Voices
+	if len(voices) != 3 || !voices[1].Mine || voices[0].Mine || voices[2] != (dashboard.SpeakerVoice{UUID: unheard, Mine: true, WhyNot: voiceNotHeard}) {
+		t.Fatalf("the named voices: %+v", voices)
+	}
+	if why := a.store.OperatorVoiceWhyNot(`{"decision":"known","speaker_id":"op-desk","speaker_uuid":"` + theirs + `","continuity":"matched"}`); why != "" {
+		t.Fatalf("a voice named on the card does not reach the rule: %s", why)
 	}
 }

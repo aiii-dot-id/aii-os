@@ -1,0 +1,109 @@
+{
+  "task": "recall-by-paraphrase",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "storage locker is number 4417",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "boxes for the archive",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "archive"
+                }
+              }
+            ]
+          },
+          {
+            "text": "LOCKER: 4417\nDEPOT: Harbor Street"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "E2: a recall by words the record does not hold finds nothing, and the answer is lost",
+    "fails": [
+      2,
+      3
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "storage locker is number 4417",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "boxes for the archive",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "boxes unit kept"
+                }
+              }
+            ]
+          },
+          {
+            "text": "LOCKER: unknown\nDEPOT: unknown"
+          }
+        ]
+      }
+    ]
+  },
+  "absent": {
+    "on": "boxes for the archive",
+    "texts": [
+      "4417",
+      "Harbor Street"
+    ]
+  }
+}

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -69,15 +71,26 @@ func isPrivateIP(ip net.IP) bool {
 		cgnatNet.Contains(ip) || siteLocalNet.Contains(ip)
 }
 
-func guardedTransport(guard func(context.Context, string) error, transport http.RoundTripper) http.RoundTripper {
+func guardedTransport(dial DialGuard, transport http.RoundTripper) http.RoundTripper {
 	if transport != nil {
 		return transport
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return guardedDialContext(ctx, network, addr, guard)
+		return guardedDialContext(ctx, network, addr, dial)
 	}
 	return t
+}
+
+type DialGuard func(ctx context.Context, host string, addr netip.AddrPort) error
+
+func URLDialGuard(guard func(context.Context, string) error) DialGuard {
+	if guard == nil {
+		return nil
+	}
+	return func(ctx context.Context, _ string, addr netip.AddrPort) error {
+		return guard(ctx, "http://"+addr.String()+"/")
+	}
 }
 
 type ipAddrResolver interface {
@@ -86,7 +99,7 @@ type ipAddrResolver interface {
 
 var ipResolver ipAddrResolver = net.DefaultResolver
 
-func guardedDialContext(ctx context.Context, network, addr string, guard func(context.Context, string) error) (net.Conn, error) {
+func guardedDialContext(ctx context.Context, network, addr string, guard DialGuard) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("guarded dial: %w", err)
@@ -111,7 +124,7 @@ func guardedDialContext(ctx context.Context, network, addr string, guard func(co
 	}
 	for _, a := range addrs {
 		if !a.IP.IsGlobalUnicast() || isPrivateIP(a.IP) {
-			if guard == nil || guard(ctx, "http://"+net.JoinHostPort(a.IP.String(), port)+"/") != nil {
+			if guard == nil || guard(ctx, host, dialAddr(a.IP, port)) != nil {
 				return nil, fmt.Errorf("guarded dial: refusing non-public address %s for %s: %w", a.IP, host, ErrEgressBlocked)
 			}
 		}
@@ -129,13 +142,29 @@ func guardedDialContext(ctx context.Context, network, addr string, guard func(co
 	return nil, firstErr
 }
 
+func dialAddr(ip net.IP, port string) netip.AddrPort {
+	a, ok := netip.AddrFromSlice(ip)
+	p, err := strconv.ParseUint(port, 10, 16)
+	if !ok || err != nil {
+		return netip.AddrPort{}
+	}
+	return netip.AddrPortFrom(a.Unmap(), uint16(p))
+}
+
 func GuardedClient(timeout time.Duration, guard func(context.Context, string) error, transport http.RoundTripper) *http.Client {
+	if guard == nil {
+		guard = FetchGuard
+	}
+	return GuardedClientDialing(timeout, guard, URLDialGuard(guard), transport)
+}
+
+func GuardedClientDialing(timeout time.Duration, guard func(context.Context, string) error, dial DialGuard, transport http.RoundTripper) *http.Client {
 	if guard == nil {
 		guard = FetchGuard
 	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: guardedTransport(guard, transport),
+		Transport: guardedTransport(dial, transport),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")

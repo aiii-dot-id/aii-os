@@ -709,12 +709,14 @@ func asksSettings(method string, params []byte) bool {
 }
 
 type PublishedTool struct {
-	Name         string         `json:"name"`
-	Summary      string         `json:"summary"`
-	Input        map[string]any `json:"input"`
-	Effects      string         `json:"effects"`
-	Capabilities []string       `json:"capabilities"`
-	Family       string         `json:"family,omitempty"`
+	Name                string         `json:"name"`
+	Summary             string         `json:"summary"`
+	Input               map[string]any `json:"input"`
+	Effects             string         `json:"effects"`
+	Capabilities        []string       `json:"capabilities"`
+	Family              string         `json:"family,omitempty"`
+	OperatorConfirms    bool           `json:"operator_confirms,omitempty"`
+	UnconfirmedByDesign string         `json:"unconfirmed_by_design,omitempty"`
 }
 
 type Publisher interface {

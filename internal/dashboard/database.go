@@ -20,17 +20,7 @@ type DatabaseState struct {
 }
 
 func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
-	if !s.tokenAuthorized(r) {
-		http.Error(w, "dashboard authentication required", http.StatusUnauthorized)
-		return
-	}
-	if origin := r.Header.Get("Origin"); origin != "" && !sameSiteAs(origin, r.Host) {
-		http.Error(w, "request came from another site", http.StatusForbidden)
-		return
-	}
-
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
-		http.Error(w, "request came from another site", http.StatusForbidden)
+	if !s.downloadAdmitted(w, r) {
 		return
 	}
 	h := s.currentHandler()
@@ -44,13 +34,34 @@ func (s *Server) handleDatabaseExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	w.Header().Set("Content-Type", "application/vnd.sqlite3")
-	w.Header().Set("Content-Disposition", `attachment; filename="aii-export.db"`)
+	serveDownload(w, file, size, "application/vnd.sqlite3", "aii-export.db", "database export")
+}
+
+func (s *Server) downloadAdmitted(w http.ResponseWriter, r *http.Request) bool {
+	if !s.tokenAuthorized(r) {
+		http.Error(w, "dashboard authentication required", http.StatusUnauthorized)
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" && !sameSiteAs(origin, r.Host) {
+		http.Error(w, "request came from another site", http.StatusForbidden)
+		return false
+	}
+
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		http.Error(w, "request came from another site", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func serveDownload(w http.ResponseWriter, file io.Reader, size int64, contentType, name, what string) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	if n, err := io.Copy(w, file); err != nil || n != size {
 		if err == nil {
 			err = io.ErrUnexpectedEOF
 		}
-		logsink.Warn("dashboard.error", "database export download interrupted: %v", err)
+		logsink.Warn("dashboard.error", "%s download interrupted: %v", what, err)
 	}
 }

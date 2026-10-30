@@ -61,7 +61,7 @@ func TestRelayAuthenticationSurvivesRefusedReloadAndValidRotation(t *testing.T) 
 	}}
 	defer transport.CloseIdleConnections()
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Transport: transport, Jar: jar, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: &pageKeyed{base: transport}, Jar: jar, Timeout: 5 * time.Second}
 	// The public host is the dashboard's actual origin, not the relay's host.
 	origin := a.dashboard.Origin()
 	request := func(method, token string, want int) {
@@ -159,6 +159,11 @@ func TestRelayAuthenticationSurvivesRefusedReloadAndValidRotation(t *testing.T) 
 	if a.dashboard.AccessTokenRequired() {
 		t.Fatal("retry of the same file after relay completion was treated as already applied")
 	}
+	// The rotated credential saved again, from the configuration in force:
+	// a save writes what it changes from what the file states.
+	rotate = a.configSnapshot()
+	rotate.Dashboard.RequireToken = true
+	rotate.Dashboard.AccessToken = "fixture-rotated-token"
 	if _, err := saveConfig(&rotate); err != nil {
 		t.Fatal(err)
 	}

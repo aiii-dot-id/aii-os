@@ -19,7 +19,11 @@ import (
 // in the slot the same id is an update and the door takes it.
 func TestANewPluginUnderAHostWordIsRefusedAtInstallAndAnInstalledOneIsUpdated(t *testing.T) {
 	dir := t.TempDir()
-	pkgBytes := []byte("bytes of a release under a reserved id")
+	// A real package: Install verifies what it fetched before it places it.
+	pkgBytes, err := os.ReadFile(buildResponderVer(t, t.TempDir(), "host.example", "1.0.1", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
 	url, sha := servePackage(t, pkgBytes)
 	catDir, _, root := signedCatalogDir(t, dir, plugincatalog.Index{Version: 1, Plugins: []plugincatalog.CatalogEntry{
 		{ID: "host.example", Version: "1.0.1", Tier: "T1", Packages: []plugincatalog.CatalogPackage{{Platform: "*", Arch: "*", URL: url, SHA256: sha, Size: int64(len(pkgBytes))}}},
@@ -29,7 +33,7 @@ func TestANewPluginUnderAHostWordIsRefusedAtInstallAndAnInstalledOneIsUpdated(t 
 	app.pkgFetch = loopbackFetcher()
 	t.Chdir(dir)
 
-	err := app.InstallFromCatalog(context.Background(), "host.example")
+	err = app.InstallFromCatalog(context.Background(), "host.example")
 	var r *CatalogInstallRefusal
 	if !errors.As(err, &r) || r.Reason != "reserved_id" || r.Cleanup != nil || !strings.Contains(err.Error(), `begins with "host"`) {
 		t.Fatalf("a new plugin under a host word: want a clean reserved_id refusal, got %v", err)

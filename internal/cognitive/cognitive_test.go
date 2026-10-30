@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,8 @@ type mockStore struct {
 	lifetimeTicks  int64
 	unprocessedCnt int
 	edges          []store.Edge
+	edgesErr       error // EdgesTouching's answer, when set
+	edgeReads      int   // how many times EdgesTouching was asked
 	standings      map[string]string
 	stamped        map[string]int64
 	tensions       []store.TensionPair
@@ -47,6 +50,8 @@ type mockStore struct {
 	// selfModelMaxTokens is the portrait budget the store would admit
 	// under (0: 2000, the store's default).
 	selfModelMaxTokens int
+	// aboutErr fails AboutOperator.
+	aboutErr error
 }
 
 type retiredAsk struct {
@@ -255,10 +260,34 @@ func (m *mockStore) LifetimeTicks() (int64, error) {
 	return m.lifetimeTicks, nil
 }
 
-func (m *mockStore) ListEdgesForBelief(beliefID string) ([]store.Edge, error) {
+// AboutOperator answers as the store does: the relationship, and the
+// Ring 3 beliefs it SHAPED_BY, in the fixture's order.
+func (m *mockStore) AboutOperator() (store.AboutOperator, error) {
+	if m.aboutErr != nil {
+		return store.AboutOperator{}, m.aboutErr
+	}
+	if m.relationship == nil {
+		return store.AboutOperator{}, nil
+	}
+	about := store.AboutOperator{RelationshipID: m.relationship.ID, Name: m.relationship.CounterpartName}
+	for _, b := range m.beliefs {
+		for _, e := range m.edges {
+			if b.Ring == 3 && e.FromID == m.relationship.ID && e.ToID == b.ID && e.EdgeType == "SHAPED_BY" {
+				about.Beliefs = append(about.Beliefs, store.OperatorBelief{ID: b.ID, Statement: b.Statement})
+			}
+		}
+	}
+	return about, nil
+}
+
+func (m *mockStore) EdgesTouching(ids []string) ([]store.Edge, error) {
+	if m.edgesErr != nil {
+		return nil, m.edgesErr
+	}
+	m.edgeReads++
 	var result []store.Edge
 	for _, e := range m.edges {
-		if e.FromID == beliefID || e.ToID == beliefID {
+		if slices.Contains(ids, e.FromID) || slices.Contains(ids, e.ToID) {
 			result = append(result, e)
 		}
 	}
@@ -1611,39 +1640,6 @@ func TestSelfModelEvidenceReachesThePeopleWhoSpoke(t *testing.T) {
 	}
 }
 
-func TestAnOperatorModelLandsWhenThePassMinted(t *testing.T) {
-	st := &mockStore{
-		unprocessedCnt: 3,
-		experiences: []store.Experience{
-			{ID: "e1", Content: "Quinn asked what I think and read the answer", Raw: 1, Provenance: "operator"},
-			{ID: "e2", Content: "he corrected a number without ceremony", Raw: 1, Provenance: "operator"},
-			{ID: "e3", Content: "and thanked the correction", Raw: 1},
-		},
-	}
-	rw := &mockRingWriter{}
-	rw.SetRingSection(ring.Ring3, "operator", "Quinn reads the surface, not the schema.")
-	llm := &mockLLM{override: `{"operations": [{"op": "upsert", "id": "n1", "statement": "Quinn reads what is rendered", "confidence": 0.6, "evidence": ["e1", "e2"]}],
-		"ring3_view": "You believe Quinn reads what is rendered.",
-		"operator": "Quinn asks what you think and reads the answer; a correction from him is plain and costs nothing."}`}
-	c := NewConsolidate(st, llm, &mockLedger{st: st}, rw, ConsolidateConfig{Threshold: 3})
-	if err := c.Execute(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got := rw.section(ring.Ring3, "operator"); !strings.Contains(got, "asks what you think") {
-		t.Fatalf("the operator model did not land in Ring 3: %q", got)
-	}
-	if !strings.Contains(llm.lastUser, "Quinn reads the surface, not the schema.") {
-		t.Fatalf("the prior operator model was not read back into the pass:\n%s", llm.lastUser)
-	}
-}
-
-func TestAnOperatorModelWithNothingMintedIsNotKept(t *testing.T) {
-	_, rw, _ := consolidateWith(t, `{"operations": [], "ring3_view": "nothing new", "operator": "Quinn is patient."}`)
-	if got := rw.section(ring.Ring3, "operator"); got != "" {
-		t.Fatalf("an operator model with no belief behind it was kept: %q", got)
-	}
-}
-
 func TestBriefPromptLeavesTheFrameToTheComposer(t *testing.T) {
 	if strings.Contains(morningBriefPrompt(DefaultBriefMaxChars), "Here is what I believe") {
 		t.Fatal("the brief prompt still hands the model a first-person opener to echo")
@@ -1690,36 +1686,6 @@ func TestSelfModelMustCiteThePeopleOnTheTable(t *testing.T) {
 	for _, want := range []string{"x_quinn", "rel1", "people"} {
 		if !strings.Contains(corrective, want) {
 			t.Fatalf("the corrective round does not name the people left out (%q):\n%s", want, corrective)
-		}
-	}
-}
-
-func TestTheOperatorModelInstructionNamesItsAddressee(t *testing.T) {
-	consolidateSystemPrompt := consolidatePrompt(DefaultRing3MaxChars, DefaultConsolidateMaxOps)
-	field := consolidateSystemPrompt[strings.Index(consolidateSystemPrompt, `"operator": "<`):]
-	field = field[:strings.Index(field, "\n")]
-	if strings.Contains(field, "second person") {
-		t.Errorf("the operator field still says \"second person\" without saying to whom: %s", field)
-	}
-	if !strings.Contains(field, "written to the identity") {
-		t.Errorf("the operator field does not say whom it is written to: %s", field)
-	}
-	for _, want := range []string{
-		`"you" is always the identity`,
-		"named in the third person",
-		"by their name",
-		"never addressed",
-	} {
-		if !strings.Contains(consolidateSystemPrompt, want) {
-			t.Errorf("the consolidate prompt does not say %q of the operator model", want)
-		}
-	}
-	tool := consolidationTool()
-	props := tool.Function.Parameters["properties"].(map[string]any)
-	desc := props["operator"].(map[string]any)["description"].(string)
-	for _, want := range []string{`"you" is the identity`, "third person", "never addressed"} {
-		if !strings.Contains(desc, want) {
-			t.Errorf("the tool's operator description does not say %q: %s", want, desc)
 		}
 	}
 }

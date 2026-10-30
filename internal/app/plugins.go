@@ -47,8 +47,9 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 		return measureSelectionResources(ctx, a.configSnapshot().Plugins.Runtime.hardwareQuery())
 	}
 	opts.SelectionPolicy = pluginAdmissionPolicy(cfg)
+
 	opts.StorageUpgradeReady = func() error {
-		return updates.RequireSettledBootUpdate(identityDataDir(a.configSnapshot().Identity.LedgerPath))
+		return updates.UnsettledBesideProgram(identityDataDir(a.configSnapshot().Identity.LedgerPath))
 	}
 	opts.LegacyStorageOwners = func(ctx context.Context) ([]string, error) {
 		var ids []string
@@ -63,6 +64,10 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 		}
 		return ids, nil
 	}
+
+	opts.NativeView = func() []string { return a.configSnapshot().Plugins.NativeView }
+
+	opts.WallStartSeconds = func() int { return a.configSnapshot().Tools.WallStartSeconds }
 	opts.NativePlaces = func() ([]*firewall.Rule, error) {
 		current := a.configSnapshot()
 		active := a.activeConfig(current)
@@ -98,6 +103,8 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 	for _, line := range opts.Roots.Revocation.Describe() {
 		logsink.Info("plugins.decision", "%s", line)
 	}
+
+	a.catalog.SetLimits(a.catalogLimits)
 	a.catalog.Open(cfg.Plugins.CatalogDir, filepath.Join(filepath.Dir(cfg.Identity.LedgerPath), "plugins-catalog"), opts.Roots.PlatformRelease, a.effectiveCatalogURL)
 
 	opts.Facilities = hostFacilities()
@@ -164,7 +171,7 @@ func (a *App) buildPluginOptions(st *store.Store, toolReg *tools.Registry, door 
 
 			InSAFE: func() bool { return a.currentMode() == ModeSafe },
 
-			Sandbox: newPluginSandbox(toolReg, cfg.Identity.LedgerPath),
+			Sandbox: newPluginSandbox(toolReg, cfg),
 
 			OwnListener: a.ownListener,
 			Guard:       a.brokerGuard,
@@ -191,6 +198,8 @@ func pluginLimits(opts *pluginhost.Options, cfg Config) error {
 	}
 
 	opts.MaxInputSchemaBytes = cfg.Plugins.Runtime.MaxInputSchemaBytes
+
+	opts.Bounds = childBoundsOf(cfg)
 	opts.MemoryMax, opts.StreamMax, opts.FilesMax, opts.ReadyTimeout = nil, nil, nil, nil
 	if len(cfg.Plugins.Resources) > 0 {
 		opts.MemoryMax = make(map[string]uint64, len(cfg.Plugins.Resources))
@@ -297,6 +306,9 @@ func (a *App) runPluginSweep(ctx context.Context, packages, trust <-chan struct{
 }
 
 func (a *App) discoverPlugins() pluginfacility.Discovery {
+
+	a.slotsMu.Lock()
+	defer a.slotsMu.Unlock()
 	var out pluginfacility.Discovery
 	dirs, err := pluginDirs()
 	if err != nil {
@@ -493,8 +505,16 @@ func orphanedGrants(granted []string, wanted map[string]bool) []string {
 
 func (a *App) pluginSkipViews() []dashboard.PluginSkipView {
 	skips := a.pluginFacility().Skips()
+
+	carded := map[string]bool{}
+	for _, v := range a.startRows() {
+		carded[v.ID] = true
+	}
 	out := make([]dashboard.PluginSkipView, 0, len(skips))
 	for _, sk := range skips {
+		if sk.Kind == pluginfacility.SkipPolicy && carded[sk.ID] {
+			continue
+		}
 		out = append(out, dashboard.PluginSkipView{Kind: sk.Kind, Dir: sk.Dir, Package: sk.Package, ID: sk.ID, Tier: sk.Tier, Reason: sk.Reason})
 	}
 	return out
@@ -617,6 +637,8 @@ const (
 	lifeRetiring = "retiring"
 
 	lifeHeld = "held"
+
+	lifeUnstarted = "unstarted"
 )
 
 type pluginLifecycle struct {
@@ -646,6 +668,12 @@ func (a *App) RetryPlugin(id string) error {
 		return fmt.Errorf("plugins: refusing to retry %q — not a plain plugin id", id)
 	}
 
+	for _, v := range a.startRows() {
+		if v.ID == id && v.Phase == lifeUnstarted {
+			return &pluginStartRefusal{ID: id, Requirement: startNeedsOperator, Reason: v.Summary}
+		}
+	}
+
 	if acq := a.acquirer(); acq != nil {
 		acq.Reselect(id)
 	}
@@ -673,10 +701,32 @@ func (a *App) RetryPlugin(id string) error {
 	return nil
 }
 
+func (a *App) resumeDownloads(why string) {
+	var resumed []string
+	a.mode.mu.RLock()
+	if a.mode.mode != ModeSafe {
+		for _, acq := range []*pluginhost.Acquirer{a.acquirer(), a.lateModels} {
+			if acq != nil {
+				resumed = append(resumed, acq.Resume()...)
+			}
+		}
+	}
+	a.mode.mu.RUnlock()
+	if len(resumed) == 0 {
+		return
+	}
+	a.pluginFacility().Rejudge(pluginfacility.InputNetwork, why)
+	a.pluginsChanged()
+}
+
 type pendingMark struct{ phase, text, needs string }
 
 func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
 	byID := map[string]dashboard.PluginPendingView{}
+
+	for _, v := range a.startRows() {
+		byID[v.ID] = v
+	}
 
 	chosen := map[string]*dashboard.PluginSelectionView{}
 	serving := map[string]bool{}
@@ -693,7 +743,7 @@ func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
 				continue
 			}
 			v := dashboard.PluginPendingView{ID: st.PluginID, Version: st.Version, Phase: st.Phase, Summary: st.Summary(),
-				Attempt: st.Attempt, LastError: st.LastError, Remedy: st.Remedy,
+				Attempt: st.Attempt, LastError: st.LastError, Remedy: st.Remedy, Resumes: st.Resumes,
 				BytesPresent: st.BytesPresent, BytesTotal: st.BytesTotal, FilesPresent: st.FilesPresent, FilesTotal: st.FilesTotal,
 				RuntimeDeclared: st.RuntimeDeclared, RuntimePresent: st.RuntimePresent, RuntimeBytes: st.RuntimeBytes}
 			if !st.RetryAt.IsZero() {
@@ -715,7 +765,7 @@ func (a *App) pluginPendingViews() []dashboard.PluginPendingView {
 		}
 
 		if fetching, ok := byID[id]; ok && l.phase == lifeRefused {
-			pv.LastError, pv.Remedy, pv.Attempt = fetching.LastError, fetching.Remedy, fetching.Attempt
+			pv.LastError, pv.Remedy, pv.Resumes, pv.Attempt = fetching.LastError, fetching.Remedy, fetching.Resumes, fetching.Attempt
 			pv.BytesPresent, pv.BytesTotal, pv.FilesPresent, pv.FilesTotal = fetching.BytesPresent, fetching.BytesTotal, fetching.FilesPresent, fetching.FilesTotal
 			pv.RuntimeDeclared, pv.RuntimePresent, pv.RuntimeBytes = fetching.RuntimeDeclared, fetching.RuntimePresent, fetching.RuntimeBytes
 			pv.Models = fetching.Models

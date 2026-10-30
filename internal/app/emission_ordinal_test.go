@@ -14,7 +14,7 @@ func TestWorkFactsTakeTheirOrdinalFromEmissionNotCompletion(t *testing.T) {
 	// A session must exist before work can be updated.
 	var start llm.ToolCall
 	start.Function.Name = "work"
-	start.Function.Arguments = `{"action":"start","goal":"prove the ordinal"}`
+	start.Function.Arguments = `{"action":"start","description":"prove the ordinal"}`
 	start.EmissionOrdinal = 1
 	if obs := app.executeToolCall(context.Background(), start); obs.Failed {
 		t.Fatalf("could not start a work session: %s", obs.Text)

@@ -91,6 +91,20 @@ func linuxAcceleratorDevices(profile *AcceleratorProfile, dev fs.FS) ([]string, 
 	return devices, nil
 }
 
+const nvidiaDisplayNode = "/dev/nvidia-modeset"
+
+func nvidiaDisplayStandIn(profile *AcceleratorProfile, devices []string) []string {
+	if profile == nil || !slices.Contains(devices, "/dev/nvidiactl") {
+		return nil
+	}
+	for _, part := range strings.Split(profile.Backend, "+") {
+		if part == "vulkan" {
+			return []string{nvidiaDisplayNode}
+		}
+	}
+	return nil
+}
+
 func numberedDevice(name, prefix string) bool {
 	suffix, ok := strings.CutPrefix(name, prefix)
 	if !ok || suffix == "" {

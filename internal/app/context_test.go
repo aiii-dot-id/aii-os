@@ -25,7 +25,7 @@ func TestFacilityRequestAdmitsRealAuthorityContext(t *testing.T) {
 	rings := ring.NewManager()
 	_ = rings.SealSafePosture(strings.Repeat("constitution ", 40))
 	rings.Set(ring.Ring5, &ring.RingContent{Level: ring.Ring5, Content: "boundary"})
-	authority, err := (ringAuthority{prompt.NewGate(appRingSource{rm: rings}, 4096), projection}).AuthorityPreamble()
+	authority, err := (ringAuthority{gate: prompt.NewGate(appRingSource{rm: rings}, 4096), st: projection}).AuthorityPreamble()
 	if err != nil {
 		t.Fatal(err)
 	}

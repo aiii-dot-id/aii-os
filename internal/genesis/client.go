@@ -46,6 +46,11 @@ type Refusal struct {
 	Attempt, Attempts int
 }
 
+type NotAnsweredError struct{ Err error }
+
+func (e *NotAnsweredError) Error() string { return e.Err.Error() }
+func (e *NotAnsweredError) Unwrap() error { return e.Err }
+
 func (c *GenesisClient) getWithRetry(req *http.Request) (*http.Response, error) {
 	var lastErr error
 	var refused *tlsfault.Fault
@@ -101,9 +106,9 @@ func (c *GenesisClient) getWithRetry(req *http.Request) (*http.Response, error) 
 	}
 
 	if refused != nil && !errors.Is(lastErr, refused) {
-		return nil, fmt.Errorf("%w; before it, %w", lastErr, refused)
+		return nil, &NotAnsweredError{Err: fmt.Errorf("%w; before it, %w", lastErr, refused)}
 	}
-	return nil, lastErr
+	return nil, &NotAnsweredError{Err: lastErr}
 }
 
 func familyUnavailable(err error) bool {

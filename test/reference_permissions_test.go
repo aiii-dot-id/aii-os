@@ -26,7 +26,7 @@ func TestReferenceAllowsPermissionProbesWithoutExposingItsLog(t *testing.T) {
 	driver := filepath.Join(state, "go")
 	const script = `#!/bin/bash
 if [ "$*" = version ]; then echo 'go version permission-fixture'; exit 0; fi
-[ "$*" = 'test -v -race -count=1 -timeout 45m ./...' ] || exit 81
+[ "$*" = 'test -v -race -count=1 -timeout 90m ./...' ] || exit 81
 set -eu
 printf '%s' "$TMPDIR" > "$FIXTURE_STATE/tmpdir"
 touch "$TMPDIR/probe"

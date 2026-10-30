@@ -30,6 +30,7 @@ func TestEveryPrivateRouteAnswersUnderThePrivateHeaders(t *testing.T) {
 		{http.MethodGet, "/record/payload?seq=1&offset=0&length=1"},
 		{http.MethodGet, "/sent"},
 		{http.MethodGet, "/sent/body?id=1&part=body&head=1"},
+		{http.MethodGet, "/work/export"},
 		{http.MethodGet, "/oauth/callback"},
 	} {
 		r := httptest.NewRequest(route.method, "http://"+host+route.path, strings.NewReader(""))

@@ -15,7 +15,7 @@ func TestVoiceStableSpeakerIDSurvivesHost(t *testing.T) {
 	for _, tc := range []struct{ name, id, label string }{
 		{"first duplicate label", "quinn-one", "Quinn"},
 		{"second duplicate label", "quinn-two", "Quinn"},
-		{"renamed same identity", "quinn-one", "Jim"},
+		{"renamed same identity", "quinn-one", "Guest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newVoiceApp(t)

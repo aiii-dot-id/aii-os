@@ -39,7 +39,7 @@ func (e *turnError) Unwrap() error { return e.err }
 func unrecorded(err error) error { return &turnError{err: err} }
 
 func turnStarted(ctx context.Context, r conversation.Result) bool {
-	return r.ToolCallsUsed > 0 || r.Spoken != "" || (r.Usage.Calls > 0 && ctx.Err() != nil)
+	return r.ToolCallsUsed > 0 || r.Spoken != "" || len(r.Notes) > 0 || (r.Usage.Calls > 0 && ctx.Err() != nil)
 }
 
 func (a *App) operatorTurn(ctx context.Context, msg string) (string, error) {
@@ -61,9 +61,12 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 	ctx, cancel := a.beginCancellableTurn(ctx)
 	defer cancel()
 
-	if err := a.recordConversation(ctx, role, fact); err != nil {
+	ref, err := a.recordConversationRef(ctx, role, fact)
+	if err != nil {
 		return "", unrecorded(fmt.Errorf("record the fact: %w", err))
 	}
+
+	a.tagSpokenTurn(ref.Sequence, fact)
 
 	result, err := a.think(ctx, llm.Message{Role: "user", Content: fact}, true)
 	if err != nil {
@@ -76,6 +79,7 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 	}
 	if strings.TrimSpace(spoken) == "" {
 
+		a.recordLoopNotes(ctx, "", result.Notes)
 		return "", nil
 	}
 
@@ -107,15 +111,18 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	if n := len(history); n > 0 && history[n-1].Role == "user" && history[n-1].Content != current.Content && strings.HasPrefix(history[n-1].Content, current.Content) {
 		current = history[n-1]
 	}
-	reserve, err := a.promptReserveFor(ctx, current, omitted+len(history)-1)
+
+	safe := a.readSafe()
+	reserve, err := a.promptReserveForIn(ctx, safe.holds, current, omitted+len(history)-1)
 	if err != nil {
 		return conversation.Result{}, fmt.Errorf("request estimate: %w", err)
 	}
 	contextSections := a.pluginContext(ctx, current.Content)
-	p, err := a.composer.ComposeTurnWithContext(workState, facts, a.safeTurnSection(), reserve, contextSections)
+	p, err := a.composeTurn(safe, workState, facts, reserve, contextSections)
 	if err != nil {
 		return conversation.Result{}, fmt.Errorf("compose: %w", err)
 	}
+	defer a.tellTurnSafe(&safe.holds)()
 
 	recordPluginContextComposition(ctx, p, contextSections)
 
@@ -143,7 +150,7 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	a.noteYield(result.Yielded)
 
 	if why := a.noteTurnShape(capReasonOf(result), interaction.TurnID(ctx)); why != "" {
-		result.Spoken = result.NothingContinues(why)
+		result.Notes = result.NothingContinues(why)
 	}
 	return result, nil
 }

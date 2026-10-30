@@ -66,9 +66,10 @@ func (s *Store) PendingTurnEvents(ctx context.Context) (_ []TurnEvent, retErr er
 		return nil, err
 	}
 	defer func() { retErr = errors.Join(retErr, tx.Close()) }()
-	rows, err := tx.QueryContext(ctx, `SELECT id,channel,address,body,received_ms FROM inbound i
-	 WHERE COALESCE(previously_seen,0)=0 AND NOT EXISTS (`+arrivalTaken+`)
-	 ORDER BY received_ms,id LIMIT ?`, interaction.MaxPageRows+1)
+	rows, err := tx.QueryContext(ctx, `SELECT id,channel,address,body,received_ms FROM (
+	 SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.channel ORDER BY i.received_ms,i.id) AS turn_rank FROM inbound i
+	 WHERE COALESCE(previously_seen,0)=0 AND NOT EXISTS (`+arrivalTaken+`))
+	 ORDER BY turn_rank,received_ms,id LIMIT ?`, interaction.MaxPageRows+1)
 	if err != nil {
 		return nil, err
 	}

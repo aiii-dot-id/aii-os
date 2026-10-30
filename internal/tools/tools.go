@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"sync"
@@ -51,12 +55,54 @@ type Result struct {
 	Interrupted bool
 
 	ExitStatus *int
+
+	AnsweredRefused bool
 }
 
-func (r Result) Failed() bool { return r.Error != "" || r.Interrupted }
+func (r Result) Failed() bool {
+	return r.Error != "" || r.Interrupted || r.AnsweredRefused || r.ExitStatus != nil && *r.ExitStatus != 0
+}
 
 func Refusal(code, msg string) Result {
 	return Result{Error: msg, ReasonCode: code, Refused: true}
+}
+
+const (
+	ReasonNotFound        = "NOT_FOUND"
+	ReasonPermission      = "PERMISSION_DENIED"
+	ReasonNotADirectory   = "NOT_A_DIRECTORY"
+	ReasonIsADirectory    = "IS_A_DIRECTORY"
+	ReasonNotAFile        = "NOT_A_FILE"
+	ReasonCancelled       = "CANCELLED"
+	ReasonIO              = "IO_ERROR"
+	ReasonArgumentInvalid = "ARGUMENT_INVALID"
+	ReasonEditNoMatch     = "EDIT_NO_MATCH"
+	ReasonEditNoChange    = "EDIT_NO_CHANGE"
+	ReasonEditNotUnique   = "EDIT_NOT_UNIQUE"
+)
+
+func failedOn(err error) Result {
+	return Result{Error: err.Error(), ReasonCode: osReason(err)}
+}
+
+func failed(code, msg string) Result { return Result{Error: msg, ReasonCode: code} }
+
+func osReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ReasonNotFound
+	case errors.Is(err, fs.ErrPermission):
+		return ReasonPermission
+	case errors.Is(err, syscall.ENOTDIR):
+		return ReasonNotADirectory
+	case errors.Is(err, syscall.EISDIR):
+		return ReasonIsADirectory
+	case errors.Is(err, errNotRegular):
+		return ReasonNotAFile
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return ReasonCancelled
+	}
+	return ReasonIO
 }
 
 const (
@@ -151,15 +197,35 @@ type Registry struct {
 
 	shellWallOuter func() ([]*firewall.Rule, error)
 
-	safeSource func() (string, bool)
+	shellWallSettings func() ShellWallSettings
+
+	shellUTF8 func() bool
+
+	webFetchCeiling func() int
+
+	safeSource func() (hold.Hold, bool)
 
 	observeMu     sync.RWMutex
 	fetchObserver func(url string)
 }
 
-var safeContinues = map[string]bool{"read": true, "grep": true, "ls": true}
+var safeContinues = []string{"read", "grep", "ls"}
 
-func (r *Registry) SetSafeSource(fn func() (string, bool)) { r.safeSource = fn }
+func continuesInSafe(name, source string) bool {
+	return source == "builtin" && slices.Contains(safeContinues, name)
+}
+
+func SafeContinues() []string { return slices.Clone(safeContinues) }
+
+func (r *Registry) SetSafeSource(fn func() (string, bool)) {
+	if fn == nil {
+		r.safeSource = nil
+		return
+	}
+	r.safeSource = func() (hold.Hold, bool) { reason, safe := fn(); return hold.Safe(reason), safe }
+}
+
+func (r *Registry) SetHoldSource(fn func() (hold.Hold, bool)) { r.safeSource = fn }
 
 func (r *Registry) SetShellWallPlaces(fn func() ([]*firewall.Rule, error)) {
 	r.regMu.Lock()
@@ -167,10 +233,46 @@ func (r *Registry) SetShellWallPlaces(fn func() ([]*firewall.Rule, error)) {
 	r.shellWallOuter = fn
 }
 
+func (r *Registry) SetShellWallSettings(fn func() ShellWallSettings) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.shellWallSettings = fn
+}
+
+func (r *Registry) SetShellWindowsUTF8(fn func() bool) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.shellUTF8 = fn
+}
+
+func (r *Registry) ShellWindowsUTF8() bool {
+	r.regMu.RLock()
+	fn := r.shellUTF8
+	r.regMu.RUnlock()
+	return fn == nil || fn()
+}
+
+func (r *Registry) SetWebFetchMaxBytes(fn func() int) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.webFetchCeiling = fn
+}
+
+func (r *Registry) webFetchMaxBytes() int {
+	r.regMu.RLock()
+	fn := r.webFetchCeiling
+	r.regMu.RUnlock()
+	if fn == nil {
+		return 0
+	}
+	return fn()
+}
+
 func (r *Registry) shellWallData() (shellWall, error) {
 	r.regMu.RLock()
 	roots := append([]string(nil), r.extraRoots...)
 	outer := r.shellWallOuter
+	settings := r.shellWallSettings
 	r.regMu.RUnlock()
 	kept := r.policy.PlaceRules()
 	if outer != nil {
@@ -180,7 +282,11 @@ func (r *Registry) shellWallData() (shellWall, error) {
 		}
 		kept = append(kept, more...)
 	}
-	return shellWall{kept: dedupePlaces(kept), roots: roots, boundary: r.policy.Boundary()}, nil
+	w := shellWall{kept: dedupePlaces(kept), roots: roots, boundary: r.policy.Boundary()}
+	if settings != nil {
+		w.settings = settings()
+	}
+	return w, nil
 }
 
 func dedupePlaces(rules []*firewall.Rule) []*firewall.Rule {
@@ -198,6 +304,14 @@ func dedupePlaces(rules []*firewall.Rule) []*firewall.Rule {
 		out = append(out, r)
 	}
 	return out
+}
+
+func (r *Registry) inSafe() bool {
+	if r.safeSource == nil {
+		return false
+	}
+	_, safe := r.safeSource()
+	return safe
 }
 
 type Timeouts struct {
@@ -288,14 +402,14 @@ type builtin struct {
 
 func (r *Registry) builtins(canShell, canWrite bool) []builtin {
 	return []builtin{
-		{&ReadTool{maxBytes: 51200, held: r.heldRead}, true},
+		{&ReadTool{held: r.heldRead}, true},
 		{&WriteTool{deny: func(ctx context.Context, p string) bool { return r.walkDenied(ctx, "write", p) }, kept: r.keptAsMade, held: r.heldAt}, canWrite},
 		{&EditTool{held: r.heldAt, read: r.heldRead}, canWrite},
-		{&ShellTool{timeout: r.timeouts.shell(), sandbox: r.sandbox, wall: r.shellWallData}, canShell},
+		{&ShellTool{timeout: r.timeouts.shell(), sandbox: r.sandbox, wall: r.shellWallData, windowsUTF8: r.ShellWindowsUTF8}, canShell},
 		{&GrepTool{deny: func(ctx context.Context, p string) bool { return r.walkDenied(ctx, "grep", p) }}, true},
 		{&LsTool{deny: func(ctx context.Context, p string) bool { return r.walkDenied(ctx, "ls", p) }}, true},
 
-		{&WebFetchTool{maxBytes: 100000, timeout: r.timeouts.webFetch(), onFetch: r.NotifyFetch}, true},
+		{&WebFetchTool{maxBytes: r.webFetchMaxBytes, timeout: r.timeouts.webFetch(), onFetch: r.NotifyFetch}, true},
 	}
 }
 
@@ -318,6 +432,8 @@ func (r *Registry) EndLeftJobs(wait time.Duration) (int, error) {
 	if r.shell == nil {
 		return 0, nil
 	}
+
+	defer r.shell.endWall()
 	return r.shell.left.end(wait)
 }
 
@@ -448,8 +564,14 @@ func (r *Registry) SetExtraRoots(roots []string) {
 		logsink.Warn("tools.refusal", "REFUSED grant %q — it would expose the identity's own substrate", abs)
 	}
 	r.regMu.Lock()
+	was := r.extraRoots
 	r.extraRoots = resolved
 	r.regMu.Unlock()
+	for _, root := range was {
+		if !slices.Contains(resolved, root) {
+			releaseGrant(root, append([]string{r.sandbox}, resolved...))
+		}
+	}
 }
 
 func (r *Registry) ExtraRootsMoved(roots []string) bool {
@@ -498,7 +620,7 @@ func (r *Registry) RootRejectionReason(path string) string {
 		return rule.Reason + " — refused"
 	}
 	if rootExposesSubstrate(abs, r.sandbox, places) {
-		return "would expose the identity's own substrate (ledger, keys, config, data, the running program, or home) — refused"
+		return "would expose the identity's own substrate (ledger, keys, config, data, logs, the running program, or home) — refused"
 	}
 	return ""
 }
@@ -540,10 +662,20 @@ var ErrOutsideSandbox = errors.New("outside sandbox")
 type SubstrateError struct{ Rule *firewall.Rule }
 
 func (e *SubstrateError) Error() string {
-	if e.Rule.Kind == firewall.KindUnasked || e.Rule.Kind == firewall.KindUnplaced {
+	if e.Rule.Kind == firewall.KindUnplaced {
 		return e.Rule.Reason
 	}
 	return fmt.Sprintf("protected path (%s: %s)", e.Rule.ID, e.Rule.Reason)
+}
+
+func refused(rule *firewall.Rule, err error) error {
+	if err != nil {
+		return err
+	}
+	if rule != nil {
+		return &SubstrateError{Rule: rule}
+	}
+	return nil
 }
 
 func (r *Registry) Admit(op, path string) (dir, rel string, err error) {
@@ -552,10 +684,7 @@ func (r *Registry) Admit(op, path string) (dir, rel string, err error) {
 
 func (r *Registry) admitAs(policy *firewall.Policy, op, path string) (dir, rel string, err error) {
 	dir, rel, err = r.admit(policy, op, path)
-	if denied, ok := err.(*SubstrateError); ok {
-		denied.Rule = r.asTold(denied.Rule)
-	}
-	return dir, rel, err
+	return dir, rel, r.asTold(err)
 }
 
 type Gate interface {
@@ -580,12 +709,13 @@ func (g lookGate) Held(file os.FileInfo, by *os.File) error {
 	return g.r.heldBy(g.policy, "", file, by)
 }
 
-func (r *Registry) asTold(rule *firewall.Rule) *firewall.Rule {
-	if rule.Kind != firewall.KindUnasked {
-		return rule
+func (r *Registry) asTold(err error) error {
+	unchecked, ok := err.(*firewall.UncheckedError)
+	if !ok {
+		return err
 	}
-	told := *rule
-	told.Reason = r.said(rule)
+	told := *unchecked
+	told.Reason = r.said(unchecked)
 	return &told
 }
 
@@ -594,10 +724,7 @@ func (r *Registry) Held(file os.FileInfo, by *os.File) error {
 }
 
 func (r *Registry) heldBy(policy *firewall.Policy, tool string, file os.FileInfo, by *os.File) error {
-	if rule := policy.KeptAsFor(tool, file, by); rule != nil {
-		return &SubstrateError{Rule: r.asTold(rule)}
-	}
-	return nil
+	return r.asTold(refused(policy.KeptAsFor(tool, file, by)))
 }
 
 func (r *Registry) heldAt(ctx context.Context, path string, file os.FileInfo, by *os.File) error {
@@ -614,10 +741,7 @@ func (r *Registry) heldAs(ctx context.Context, tool, path string, file os.FileIn
 			return err
 		}
 	}
-	if rule := r.substrateDenied(policy, tool, path); rule != nil {
-		return &SubstrateError{Rule: r.asTold(rule)}
-	}
-	return nil
+	return r.asTold(r.substrateDenied(policy, tool, path))
 }
 
 func (r *Registry) heldRead(ctx context.Context, path string, file os.FileInfo, by *os.File) error {
@@ -665,10 +789,7 @@ func (r *Registry) wallOf(ctx context.Context) *firewall.Policy {
 }
 
 func (r *Registry) keptAsMade(ctx context.Context, path string) error {
-	if rule := r.substrateDenied(r.wallOf(ctx), "write", path); rule != nil {
-		return &SubstrateError{Rule: r.asTold(rule)}
-	}
-	return nil
+	return r.asTold(r.substrateDenied(r.wallOf(ctx), "write", path))
 }
 
 func (r *Registry) admit(policy *firewall.Policy, op, path string) (dir, rel string, err error) {
@@ -681,8 +802,8 @@ func (r *Registry) admit(policy *firewall.Policy, op, path string) (dir, rel str
 	if dir = r.holder(resolved); dir == "" {
 		return "", "", ErrOutsideSandbox
 	}
-	if rule := r.substrateDenied(policy, op, abs); rule != nil {
-		return "", "", &SubstrateError{Rule: rule}
+	if err := r.substrateDenied(policy, op, abs); err != nil {
+		return "", "", err
 	}
 	var inside bool
 	if rel, inside = relativeWithin(dir, resolved); !inside {
@@ -710,9 +831,9 @@ func (r *Registry) undoTarget(s firewall.Stop) string {
 	return ""
 }
 
-func (r *Registry) undoTargets(rule *firewall.Rule) []string {
+func (r *Registry) undoTargets(unchecked *firewall.UncheckedError) []string {
 	var links []string
-	for _, s := range rule.Stops {
+	for _, s := range unchecked.Stops {
 		if t := r.undoTarget(s); t != "" && !slices.Contains(links, t) {
 			links = append(links, t)
 		}
@@ -720,12 +841,12 @@ func (r *Registry) undoTargets(rule *firewall.Rule) []string {
 	return links
 }
 
-func (r *Registry) undo(policy *firewall.Policy, rule *firewall.Rule, path string) (link, rel string, wall *firewall.Policy, ok bool) {
+func (r *Registry) undo(policy *firewall.Policy, unchecked *firewall.UncheckedError, path string) (link, rel string, wall *firewall.Policy, ok bool) {
 	at, err := os.Lstat(r.rooted(path))
 	if err != nil || at.Mode()&os.ModeSymlink == 0 {
 		return "", "", nil, false
 	}
-	targets := r.undoTargets(rule)
+	targets := r.undoTargets(unchecked)
 	for _, t := range targets {
 		if l, err := os.Lstat(t); err == nil && os.SameFile(at, l) {
 			link = t
@@ -750,8 +871,8 @@ func (r *Registry) undo(policy *firewall.Policy, rule *firewall.Rule, path strin
 	return link, rel, wall, err == nil
 }
 
-func (r *Registry) said(rule *firewall.Rule) string {
-	text := rule.Reason
+func (r *Registry) said(unchecked *firewall.UncheckedError) string {
+	text := unchecked.Reason
 	var told []string
 	tell := func(clause string) {
 		if !slices.Contains(told, clause) {
@@ -759,9 +880,9 @@ func (r *Registry) said(rule *firewall.Rule) string {
 			text += clause
 		}
 	}
-	for _, s := range rule.Stops {
+	for _, s := range unchecked.Stops {
 		if target := r.undoTarget(s); target != "" {
-			if _, _, _, ok := r.undo(r.policy, rule, target); ok {
+			if _, _, _, ok := r.undo(r.policy, unchecked, target); ok {
 				rel, _ := relativeWithin(r.sandbox, target)
 				tell("; " + rel + ", in your home, is a link that leads where the host cannot look: deleting it clears this")
 				continue
@@ -780,8 +901,8 @@ func (r *Registry) admitOwn(policy *firewall.Policy, op, path string) (dir, rel 
 		return dir, rel, err
 	}
 	abs := r.rooted(path)
-	if rule := r.substrateDenied(policy, op, abs); rule != nil {
-		return "", "", &SubstrateError{Rule: r.asTold(rule)}
+	if err := r.substrateDenied(policy, op, abs); err != nil {
+		return "", "", r.asTold(err)
 	}
 	resolved := resolveForContainment(abs)
 	return filepath.Dir(resolved), filepath.Base(resolved), nil
@@ -920,6 +1041,28 @@ func (e *DispatchRefusedError) Error() string { return e.Detail }
 
 const ReasonArgumentsRequired = "ARGUMENTS_REQUIRED"
 
+const ReasonUnknownArgument = "UNKNOWN_ARGUMENT"
+
+const unknownArgumentWords = "%s does not take %s; nothing ran. It takes: %s."
+
+func UnknownArguments(schema, args map[string]any) []string {
+	props, _ := schema["properties"].(map[string]any)
+	var unknown []string
+	for k := range args {
+		if _, ok := props[k]; !ok {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+func UnknownArgumentRefusal(tool string, unknown []string, schema map[string]any) Result {
+	props, _ := schema["properties"].(map[string]any)
+	takes := slices.Sorted(maps.Keys(props))
+	return Refusal(ReasonUnknownArgument, fmt.Sprintf(unknownArgumentWords, tool, strings.Join(unknown, ", "), strings.Join(takes, ", ")))
+}
+
 var ErrUnknownTool = errors.New("unknown tool")
 
 type dispatchOwned interface{ DispatchOwner() any }
@@ -981,8 +1124,8 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 			return &DispatchRefusedError{Code: ReasonOperatorDisabled, Detail: "tool disabled by operator"}
 		}
 		if r.safeSource != nil && source != "" && source != "builtin" {
-			if reason, safe := r.safeSource(); safe {
-				return &DispatchRefusedError{Code: ReasonSafeSuspended, Detail: "SAFE: " + reason}
+			if h, safe := r.safeSource(); safe {
+				return &DispatchRefusedError{Code: ReasonSafeSuspended, Detail: h.Name() + ": " + h.Reason}
 			}
 		}
 		return nil
@@ -1001,9 +1144,19 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 		return Refusal(ReasonArgumentsRequired, msg), nil
 	}
 
-	if r.safeSource != nil && ok && (source != "builtin" || !safeContinues[name]) {
-		if reason, safe := r.safeSource(); safe {
-			return Refusal(ReasonSafeSuspended, fmt.Sprintf("refused: I am in safe mode — %s. Only read-only tools continue while SAFE holds.", reason)), nil
+	if model && t != nil && source == "builtin" {
+		if unknown := UnknownArguments(t.Parameters(), args); len(unknown) > 0 {
+			r.malformedCalls.Add(1)
+			return UnknownArgumentRefusal(name, unknown, t.Parameters()), nil
+		}
+	}
+
+	if r.safeSource != nil && ok && !continuesInSafe(name, source) {
+		if h, safe := r.safeSource(); safe {
+			if h.Waiting {
+				return Refusal(ReasonSafeSuspended, fmt.Sprintf("refused: this start is DEGRADED — %s. Only read-only tools continue %s.", h.Reason, hold.While)), nil
+			}
+			return Refusal(ReasonSafeSuspended, fmt.Sprintf("refused: I am in safe mode — %s. Only read-only tools continue while SAFE holds.", h.Reason)), nil
 		}
 	}
 
@@ -1021,9 +1174,9 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 			args[key] = resolved
 			_, rel, err := r.admitOwn(look, name, resolved)
 
-			if denied, ok := err.(*SubstrateError); ok && denied.Rule.Kind == firewall.KindUnasked &&
+			if unchecked, ok := err.(*firewall.UncheckedError); ok &&
 				name == "write" && key == "file_path" && args["action"] == "delete" && source == "builtin" {
-				if link, undone, wall, ok := r.undo(look, denied.Rule, resolved); ok {
+				if link, undone, wall, ok := r.undo(look, unchecked, resolved); ok {
 					resolved, args[key] = link, link
 					rel, err = undone, nil
 
@@ -1058,10 +1211,14 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 			return *refused, nil
 		}
 		if cmd, ok := args["command"].(string); ok {
-			if why, outside := r.shellWallFrom(look, base, cmd); why != "" {
+			if why, outside, literal := r.shellWallWord(look, base, cmd); why != "" {
+
+				hint := literalWordHint(literal)
+				if literal == "" {
+					hint = slashSearchHint(cmd, outside) + cdHint(cmd, outside, base) + notAPathHint(cmd, outside)
+				}
 				return Refusal(ReasonShellWall, "access denied: "+why+
-					" (best-effort check; run under a container for a hard boundary)"+
-					slashSearchHint(cmd, outside)+cdHint(cmd, outside, base)+notAPathHint(cmd, outside)), nil
+					" (best-effort check; run under a container for a hard boundary)"+hint), nil
 			}
 		}
 	}
@@ -1164,7 +1321,7 @@ func (r *Registry) observePathSuspicion(name, resolved string) {
 
 func (r *Registry) CountMalformed() { r.malformedCalls.Add(1) }
 
-func (r *Registry) substrateDenied(policy *firewall.Policy, tool, path string) *firewall.Rule {
+func (r *Registry) substrateDenied(policy *firewall.Policy, tool, path string) error {
 
 	policy = policy.Look()
 
@@ -1176,8 +1333,8 @@ func (r *Registry) substrateDenied(policy *firewall.Policy, tool, path string) *
 	resolved := resolveForContainment(abs)
 
 	for _, form := range distinct(resolved, abs) {
-		if rule := policy.CoveredFor(tool, form); rule != nil {
-			return rule
+		if err := refused(policy.CoveredFor(tool, form)); err != nil {
+			return err
 		}
 	}
 
@@ -1187,7 +1344,7 @@ func (r *Registry) substrateDenied(policy *firewall.Policy, tool, path string) *
 
 	for _, form := range distinct(resolved, abs, path) {
 		if v := policy.Check(tool, form); !v.Allowed {
-			return v.Rule
+			return refused(v.Rule, v.Err)
 		}
 	}
 	return nil
@@ -1211,7 +1368,7 @@ func (r *Registry) walkDenied(ctx context.Context, tool, path string) bool {
 	if policy.Check(tool, path).Allowed {
 		return false
 	}
-	if policy.CoveredFor(tool, path) != nil {
+	if rule, err := policy.CoveredFor(tool, path); rule != nil || err != nil {
 		return true
 	}
 	return !r.inExtraRoot(path)
@@ -1228,7 +1385,7 @@ func (r *Registry) floorRefusal(policy *firewall.Policy, tokens []shellToken, c 
 			if tok.fragment {
 				continue
 			}
-			if v := policy.Check("bash", tok.text); !v.Allowed && v.Rule.Pattern == denied {
+			if v := policy.Check("bash", tok.text); !v.Allowed && v.Rule != nil && v.Rule.Pattern == denied {
 				c.text = tok.text
 				break
 			}
@@ -1248,7 +1405,11 @@ func (r *Registry) floorRefusal(policy *firewall.Policy, tokens []shellToken, c 
 		" does not expand, or in a file the command names)"
 }
 
-type globbed struct{ text, glob string }
+type globbed struct {
+	text, glob string
+
+	literal bool
+}
 
 func (g globbed) said() string {
 	if g.glob == "" {
@@ -1317,17 +1478,39 @@ func referencesHome(cmd string) bool {
 	return false
 }
 
+const ownLogWord = "log"
+
+func ownLogCommand(cmd string) bool {
+	if strings.ContainsAny(cmd, ";&|<>()`$\\\n") {
+		return false
+	}
+	words := strings.Fields(cmd)
+	return len(words) >= 2 && words[0] == "aii" && words[1] == ownLogWord
+}
+
 func (r *Registry) shellWallFrom(policy *firewall.Policy, base, cmd string) (why, outside string) {
+	why, outside, _ = r.shellWallWord(policy, base, cmd)
+	return why, outside
+}
+
+func (r *Registry) shellWallWord(policy *firewall.Policy, base, cmd string) (why, outside, literal string) {
 	if referencesHome(cmd) {
-		return "the command references ~ or $HOME, which this check cannot resolve — write the path out in full (the sandbox is " + r.sandbox + ")", ""
+		return "the command references ~ or $HOME, which this check cannot resolve — write the path out in full (the sandbox is " + r.sandbox + ")", "", ""
 	}
 
 	tokens := r.shellTokens(base, cmd)
+	if ownLogCommand(cmd) {
+		tokens = slices.DeleteFunc(tokens, func(t shellToken) bool { return t.text == ownLogWord })
+	}
+
+	if shellWallKeepsPlaces() {
+		tokens = slices.DeleteFunc(tokens, func(t shellToken) bool { return t.code })
+	}
 	off := r.SandboxOff()
 
 	for _, tok := range tokens {
 		if rule := firewall.Unplaced(from(base, tok.text)); rule != nil {
-			return rule.Reason, ""
+			return rule.Reason, "", literalWord(tok.text, tok.literal)
 		}
 	}
 
@@ -1336,24 +1519,24 @@ func (r *Registry) shellWallFrom(policy *firewall.Policy, base, cmd string) (why
 		if tok.fragment || tok.cut && !tok.name || r.inExtraRoot(from(base, tok.text)) {
 			continue
 		}
-		checks = append(checks, globbed{text: tok.text})
+		checks = append(checks, globbed{text: tok.text, literal: tok.literal})
 		if !tok.literal {
 			for _, m := range r.expandGlobsFrom(base, []string{tok.text}) {
-				checks = append(checks, globbed{m, tok.text})
+				checks = append(checks, globbed{text: m, glob: tok.text})
 			}
 		}
 	}
 
 	for _, c := range checks {
 		if v := policy.Check("bash", c.text); !v.Allowed {
-			if v.Rule.Kind == firewall.KindUnasked {
-				return r.said(v.Rule), ""
+			if v.Err != nil {
+				return r.asTold(v.Err).Error(), "", ""
 			}
 
 			if v.Rule.Path != "" {
-				return c.said() + " is inside " + filepath.Base(v.Rule.Path) + ", which the host keeps: " + v.Rule.Reason, ""
+				return c.said() + " is inside " + filepath.Base(v.Rule.Path) + ", which the host keeps: " + v.Rule.Reason, "", literalWord(c.text, c.literal)
 			}
-			return r.floorRefusal(policy, tokens, c, v.Rule.Pattern, base), ""
+			return r.floorRefusal(policy, tokens, c, v.Rule.Pattern, base), "", literalWord(c.text, c.literal)
 		}
 	}
 
@@ -1370,11 +1553,11 @@ func (r *Registry) shellWallFrom(policy *firewall.Policy, base, cmd string) (why
 			continue
 		}
 		if !off {
-			return f + " is outside the sandbox " + r.sandbox + readFrom(r.sandbox, base), f
+			return f + " is outside the sandbox " + r.sandbox + readFrom(r.sandbox, base), f, literalWord(f, tok.literal)
 		}
 
 		if !isRooted(f) && escapeShaped(f) {
-			return f + " leaves " + base + " by a relative path: a path outside your home and granted roots is written in full", f
+			return f + " leaves " + base + " by a relative path: a path outside your home and granted roots is written in full", f, literalWord(f, tok.literal)
 		}
 	}
 
@@ -1383,11 +1566,11 @@ func (r *Registry) shellWallFrom(policy *firewall.Policy, base, cmd string) (why
 		if tok.fragment {
 			continue
 		}
-		refs = append(refs, globbed{text: tok.text})
+		refs = append(refs, globbed{text: tok.text, literal: tok.literal})
 
 		if !tok.literal && (!tok.cut || tok.name || off && isRooted(tok.text)) {
 			for _, m := range r.expandGlobsFrom(base, []string{tok.text}) {
-				refs = append(refs, globbed{m, tok.text})
+				refs = append(refs, globbed{text: m, glob: tok.text})
 			}
 		}
 	}
@@ -1395,36 +1578,69 @@ func (r *Registry) shellWallFrom(policy *firewall.Policy, base, cmd string) (why
 		tok := ref.text
 		abs := from(base, tok)
 		for _, form := range []string{resolveForContainment(abs), abs} {
-			if rule := policy.Covered(form); rule != nil {
-				if rule.Kind == firewall.KindUnasked {
-					return r.said(rule), ""
-				}
-				return ref.said() + " is inside " + filepath.Base(rule.Path) + ", which the host keeps: " + rule.Reason, ""
+			rule, err := policy.Covered(form)
+			if err != nil {
+				return r.asTold(err).Error(), "", ""
+			}
+			if rule != nil {
+				return ref.said() + " is inside " + filepath.Base(rule.Path) + ", which the host keeps: " + rule.Reason, "", literalWord(ref.text, ref.literal)
 			}
 		}
 
 		if !r.inExtraRoot(abs) {
 			if v := policy.CheckFileIdentity("shell", abs); !v.Allowed {
-				return ref.said() + " reaches the protected name " + v.Rule.Pattern + "; the sandbox is " + r.sandbox, ""
+				return ref.said() + " reaches the protected name " + v.Rule.Pattern + "; the sandbox is " + r.sandbox, "", literalWord(ref.text, ref.literal)
 			}
 		}
 
 		if off && !invocationExempt(tok) && r.holdsSubstrate(abs) {
-			return ref.said() + " " + holdsSubstrateWhy + ", and this check cannot see what a command does inside a folder: name a folder that does neither, or use read, grep or ls, which ask about every file they reach", tok
+
+			if ref.literal {
+				return ref.said() + " " + holdsSubstrateWhy, tok, tok
+			}
+			return ref.said() + " " + holdsSubstrateWhy + ", and this check cannot see what a command does inside a folder: name a folder that does neither, or use read, grep or ls, which ask about every file they reach", tok, ""
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
+
+var shellWallKeepsPlaces = wallKeepsPlaces
+
+func literalWord(word string, literal bool) string {
+	if !literal {
+		return ""
+	}
+	return word
+}
+
+func literalWordHint(word string) string {
+	switch {
+	case word == "":
+		return ""
+	case isRooted(word):
+		return literalWordWords
+	}
+	return literalWordRelativeWords
+}
+
+const (
+	literalWordWords         = "\nThat word is inside an inline program: write it another way, or save the program as a file and run that."
+	literalWordRelativeWords = "\nThat word is inside an inline program: write it another way, give the call a cwd under your work folder, or save the program as a file and run that."
+)
 
 const holdsSubstrateWhy = "holds your home or a place the host keeps (or lies in one)"
 
 var searchPrograms = map[string]bool{"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true, "ack": true}
 
 func slashSearchHint(cmd, refused string) string {
-	if !strings.HasPrefix(refused, "/") {
+	return searchHintFor(wordsHolding(cmd, refused), refused, spelledRoot(refused))
+}
+
+func searchHintFor(words []string, refused string, spelled bool) string {
+	if !strings.HasPrefix(refused, "/") && !spelled {
 		return ""
 	}
-	for _, w := range wordsHolding(cmd, refused) {
+	for _, w := range words {
 		if searchPrograms[strings.TrimSuffix(filepath.Base(w), ".exe")] {
 			if w == refused {
 
@@ -1461,15 +1677,25 @@ func cdHint(cmd, refused, base string) string {
 }
 
 func notAPathHint(cmd, refused string) string {
-	if !strings.HasPrefix(refused, "/") || slashSearchHint(cmd, refused) != "" {
+	if slashSearchHint(cmd, refused) != "" || !textHintOffered(shellWordsQuoted(cmd, refused), refused, spelledRoot(refused)) {
 		return ""
 	}
-	if strings.Trim(refused, "/") != "" {
-		if slices.Contains(wordsHolding(cmd, refused), refused) {
-			return ""
+	return "\nif that is text and not a path (a division, a string in a program, a JSON body), this check cannot tell: put the program or the text in a file with the write tool and name the file in the command"
+}
+
+func textHintOffered(words []shellWord, refused string, spelled bool) bool {
+	if !strings.HasPrefix(refused, "/") && !spelled {
+		return false
+	}
+	if strings.Trim(refused, "/") == "" {
+		return true
+	}
+	for _, w := range words {
+		if w.text == refused && !(spelled && w.quoted) {
+			return false
 		}
 	}
-	return "\nif that is text and not a path (a division, a string in a program, a JSON body), this check cannot tell: put the program or the text in a file with the write tool and name the file in the command"
+	return true
 }
 
 func (r *Registry) expandGlobs(tokens []string) []string {
@@ -1552,7 +1778,11 @@ func (r *Registry) Names() []string {
 }
 
 func (r *Registry) ToolDefinitions(room int) []wire.ToolDefinition {
-	names, _ := r.PromptNames(room)
+	return r.ToolDefinitionsIn(room, r.inSafe())
+}
+
+func (r *Registry) ToolDefinitionsIn(room int, safe bool) []wire.ToolDefinition {
+	names, _ := r.PromptNamesIn(room, safe)
 	defs := make([]wire.ToolDefinition, 0, len(names))
 	for _, name := range names {
 		t, ok := r.lookup(name)

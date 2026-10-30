@@ -30,7 +30,12 @@ type pendingReceipt struct {
 	writtenAt     time.Time
 }
 
+var ErrLaterReceiptForm = errors.New("the witness receipt signs a context digest: a later version's form, which this version neither keeps beside the ledger nor mints")
+
 func writePendingReceipt(ledgerDir string, r WitnessReceipt, now time.Time) error {
+	if r.ContextSHA256 != "" {
+		return fmt.Errorf("%w (record %d)", ErrLaterReceiptForm, r.LedgerOrdinal)
+	}
 	raw, err := json.Marshal(pendingReceipt{
 		IdentityID:    r.IdentityID,
 		LedgerOrdinal: r.LedgerOrdinal,
@@ -66,6 +71,10 @@ func readPendingReceipt(ledgerDir string) (*pendingReceipt, error) {
 		return nil, fmt.Errorf("%s malformed: it names %s at %d (%s), its receipt %s at %d (%s)",
 			PendingReceiptFileName, p.IdentityID, p.LedgerOrdinal, p.LedgerHash, r.IdentityID, r.LedgerOrdinal, r.LedgerHash)
 	}
+
+	if r.ContextSHA256 != "" {
+		return nil, fmt.Errorf("%s: %w", PendingReceiptFileName, ErrLaterReceiptForm)
+	}
 	if p.writtenAt, err = time.Parse(time.RFC3339Nano, p.WrittenAt); err != nil {
 		return nil, fmt.Errorf("%s malformed: written_at: %w", PendingReceiptFileName, err)
 	}
@@ -82,7 +91,8 @@ func retirePendingReceipt(ledgerDir string) error {
 func sameReceipt(a, b WitnessReceipt) bool {
 	return a.IdentityID == b.IdentityID && a.LedgerOrdinal == b.LedgerOrdinal && a.LedgerHash == b.LedgerHash &&
 		a.PreviousWitnessedLedgerOrdinal == b.PreviousWitnessedLedgerOrdinal &&
-		a.PreviousWitnessedLedgerHash == b.PreviousWitnessedLedgerHash && a.WitnessedAt == b.WitnessedAt
+		a.PreviousWitnessedLedgerHash == b.PreviousWitnessedLedgerHash && a.WitnessedAt == b.WitnessedAt &&
+		a.ContextSHA256 == b.ContextSHA256
 }
 
 func (a *Anchorer) SettlePending() error {
@@ -90,6 +100,9 @@ func (a *Anchorer) SettlePending() error {
 		return nil
 	}
 	dir := filepath.Dir(a.ledger.Path())
+	if err := a.parked(dir); err != nil {
+		return err
+	}
 	p, err := readPendingReceipt(dir)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPendingReceiptRefused, err)
@@ -102,7 +115,7 @@ func (a *Anchorer) SettlePending() error {
 	last := a.lastReceipt
 	a.mu.Unlock()
 	if last != nil && sameReceipt(*last, r) {
-		if err := retirePendingReceipt(dir); err != nil {
+		if err := a.retireReceipt(dir, r); err != nil {
 			return fmt.Errorf("the receipt for record %d is in the record and its copy beside the ledger could not be retired: %w", r.LedgerOrdinal, err)
 		}
 		logsink.Info("witness.decision", "the receipt pending beside the ledger (record %d) is in the record — retired", r.LedgerOrdinal)
@@ -116,7 +129,7 @@ func (a *Anchorer) SettlePending() error {
 		return fmt.Errorf("mint the receipt pending beside the ledger (record %d): %w", r.LedgerOrdinal, err)
 	}
 	a.anchored(r)
-	if err := retirePendingReceipt(dir); err != nil {
+	if err := a.retireReceipt(dir, r); err != nil {
 		return fmt.Errorf("the receipt for record %d is in the record and its copy beside the ledger could not be retired: %w", r.LedgerOrdinal, err)
 	}
 	at := uint64(0)
@@ -166,6 +179,10 @@ func (a *Anchorer) standsUnder(heads *HeadVerifier, r WitnessReceipt) error {
 		}
 		return hash, true
 	}
+
+	if r.ContextSHA256 != "" {
+		return fmt.Errorf("the receipt for record %d: %w", r.LedgerOrdinal, ErrLaterReceiptForm)
+	}
 	end := a.ledger.Last()
 	place := headPlace{seq: end.Seq + 1, prev: end.Hash, hashAt: hashAt}
 	err := heads.verifyReceipt(place, headReceipt{
@@ -177,7 +194,7 @@ func (a *Anchorer) standsUnder(heads *HeadVerifier, r WitnessReceipt) error {
 		WitnessedAt:                    r.WitnessedAt,
 		WitnessKeyID:                   r.WitnessSignature.KeyID,
 		WitnessSigB64:                  r.WitnessSignature.SigB64,
-	})
+	}, nil)
 	if readErr != nil {
 		return fmt.Errorf("record %d, which the receipt attests, does not read back: %w", r.LedgerOrdinal, readErr)
 	}
@@ -269,17 +286,9 @@ func retirePendingRequest(ledgerDir string) error {
 }
 
 func (a *Anchorer) requestToSendAgain(dir string) *pendingRequest {
+
 	p, err := readPendingRequest(dir)
-	if err != nil {
-		aside := PendingRequestPath(dir) + ".unreadable"
-		if rerr := os.Rename(PendingRequestPath(dir), aside); rerr != nil {
-			logsink.Error("witness.error", "the bookmark kept beside the ledger does not read (%v) and could not be set aside (%v): this pass bookmarks the record's end without it", err, rerr)
-			return nil
-		}
-		logsink.Error("witness.error", "the bookmark kept beside the ledger does not read (%v): set aside as %s. Which bookmark the witness last took is not known here, and this pass bookmarks the record's end", err, filepath.Base(aside))
-		return nil
-	}
-	if p == nil {
+	if err != nil || p == nil {
 		return nil
 	}
 	a.mu.Lock()
@@ -309,7 +318,33 @@ func (a *Anchorer) holdsAsSent(p *pendingRequest, end ledger.Boundary) bool {
 }
 
 func (a *Anchorer) retireRequest(dir string) {
-	if err := retirePendingRequest(dir); err != nil {
+	if err := a.guard().WitnessFiles(func() error { return retirePendingRequest(dir) }); err != nil {
 		logsink.Warn("witness.error", "the bookmark kept beside the ledger could not be retired (the next pass sends it again, and the witness answers it as before): %v", err)
 	}
+}
+
+func (a *Anchorer) keepReceipt(dir string, r WitnessReceipt) error {
+	now := time.Now()
+	return a.guard().WitnessFiles(func() error {
+		if err := writePendingReceipt(dir, r, now); err != nil {
+			return err
+		}
+		if err := retirePendingRequest(dir); err != nil {
+			logsink.Warn("witness.error", "the bookmark kept beside the ledger could not be retired (the next pass sends it again, and the witness answers it as before): %v", err)
+		}
+		return nil
+	})
+}
+
+func (a *Anchorer) retireReceipt(dir string, r WitnessReceipt) error {
+	return a.guard().WitnessFiles(func() error {
+		p, err := readPendingReceipt(dir)
+		if err != nil {
+			return err
+		}
+		if p == nil || !sameReceipt(p.Receipt, r) {
+			return nil
+		}
+		return retirePendingReceipt(dir)
+	})
 }

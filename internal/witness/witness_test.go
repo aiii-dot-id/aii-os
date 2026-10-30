@@ -40,6 +40,17 @@ type fakeWitness struct {
 	manifest       []byte // served at /witness/pubkey/manifest when set; 404 otherwise
 	during         func() // runs inside every bookmark's round trip, before the answer (slowly)
 	statuses       int    // how many times /status was asked
+	// oneEnrolmentPerKey makes the witness hold one enrolment for an
+	// identity signing key, as server 0.5.0 does: a bookmark for an
+	// identity it does not know, under a key another identity holds, is
+	// refused key_already_enrolled with that identity's id, envelope and
+	// receipt (evidence, when set, rewrites that body before it leaves).
+	oneEnrolmentPerKey bool
+	evidence           func(body map[string]any)
+	// contextRequired makes the witness refuse to enrol an identity it does
+	// not know from a request that carries no context (server 0.5.0 in
+	// its strict mode).
+	contextRequired bool
 }
 
 // slowly makes the witness slow: fn runs inside every bookmark's round
@@ -52,9 +63,10 @@ func (fw *fakeWitness) slowly(fn func()) {
 }
 
 type anchorState struct {
-	ordinal int64
-	hash    string
-	receipt WitnessReceipt
+	ordinal  int64
+	hash     string
+	receipt  WitnessReceipt
+	envelope json.RawMessage // the identity's envelope, as the bookmark that enrolled it carried it
 }
 
 func newFakeWitness(t *testing.T) *fakeWitness {
@@ -74,6 +86,15 @@ func newFakeWitness(t *testing.T) *fakeWitness {
 		}},
 	}
 	fw := &fakeWitness{state: map[string]*anchorState{}, witnessKp: kp, witnessEnv: env, sawIdentityIDs: map[string]int{}}
+	startFakeWitness(t, fw)
+	return fw
+}
+
+// startFakeWitness serves fw: its key, the key's hash, its manifest, its
+// status and its bookmarks.
+func startFakeWitness(t *testing.T, fw *fakeWitness) {
+	t.Helper()
+	env, keyID := fw.witnessEnv, fw.witnessEnv.KeyID
 	mux := http.NewServeMux()
 	mux.HandleFunc("/witness/pubkey/hash", func(w http.ResponseWriter, r *http.Request) {
 		writeTestJSON(w, map[string]string{
@@ -106,7 +127,6 @@ func newFakeWitness(t *testing.T) *fakeWitness {
 	})
 	fw.server = httptest.NewServer(mux)
 	t.Cleanup(fw.server.Close)
-	return fw
 }
 
 func (fw *fakeWitness) handleBookmark(t *testing.T, w http.ResponseWriter, r *http.Request) {
@@ -147,9 +167,30 @@ func (fw *fakeWitness) handleBookmark(t *testing.T, w http.ResponseWriter, r *ht
 	}
 
 	st, found := fw.state[req.IdentityID]
+	if !found && fw.oneEnrolmentPerKey {
+		for id, other := range fw.state {
+			theirs, _ := fw.identityMLDsa(t, other.envelope)
+			if theirs.PublicKeyB64 != ml.PublicKeyB64 {
+				continue
+			}
+			body := map[string]any{"error": "identity signing key is already enrolled", "code": codeKeyAlreadyEnrolled,
+				"receipt": other.receipt, "registered_identity_id": id, "registered_identity_public_key": other.envelope}
+			if fw.evidence != nil {
+				fw.evidence(body)
+			}
+			w.WriteHeader(http.StatusConflict)
+			writeTestJSON(w, body)
+			return
+		}
+	}
+	if !found && fw.contextRequired {
+		w.WriteHeader(http.StatusConflict)
+		writeTestJSON(w, map[string]any{"error": "witness context is required for first enrolment", "code": codeContextRequired})
+		return
+	}
 	if !found {
 		receipt := fw.signReceipt(t, req, -1, ZeroLedgerHash)
-		fw.state[req.IdentityID] = &anchorState{req.LedgerOrdinal, req.LedgerHash, receipt}
+		fw.state[req.IdentityID] = &anchorState{req.LedgerOrdinal, req.LedgerHash, receipt, req.IdentityPublicKey}
 		w.WriteHeader(201)
 		writeTestJSON(w, receipt)
 		return
@@ -161,10 +202,15 @@ func (fw *fakeWitness) handleBookmark(t *testing.T, w http.ResponseWriter, r *ht
 		return
 	}
 	if req.LedgerOrdinal <= st.ordinal {
-		// The REAL conflict body shape: witnessd writeJSONError renders
-		// {"error": message} (server.go:377-378), message from store.go:375.
+		// The REAL conflict body shape (ai3-witnessd 0.4.0): the message
+		// as before, its code, rollback behind the row and fork at it, and
+		// the witness's last receipt for the identity beside them.
+		code := codeRollback
+		if req.LedgerOrdinal == st.ordinal {
+			code = codeFork
+		}
 		w.WriteHeader(http.StatusConflict)
-		writeTestJSON(w, map[string]string{"error": conflictMsgRollbackFork})
+		writeTestJSON(w, map[string]any{"error": conflictMsgRollbackFork, "code": code, "receipt": st.receipt})
 		return
 	}
 	receipt := fw.signReceipt(t, req, st.ordinal, st.hash)
@@ -385,17 +431,18 @@ func TestEnvelopeStableAcrossRestart(t *testing.T) {
 		t.Fatalf("one identity expected across restarts, saw %d", n)
 	}
 
-	// Fresh envelope store + a second timestamp (RFC3339 is second-granular;
-	// synthesis in the SAME second yields identical bytes by coincidence —
-	// cross the boundary to show the real hazard: re-synthesis after any
-	// time gap mints a NEW witness identity)
 	time.Sleep(1100 * time.Millisecond)
-	a3 := NewAnchorer(New(fw.server.URL, ""), lg, AsIdentityKey(kp), &memEnvelopeStore{}, &memReceiptStore{}, testMinter{lg, kp}, 3, "")
+	fresh := &memEnvelopeStore{}
+	appendRecords(t, lg, kp, 3)
+	a3 := NewAnchorer(New(fw.server.URL, ""), lg, AsIdentityKey(kp), fresh, &recordStore{lg: lg}, testMinter{lg, kp}, 3, "")
 	if err := a3.CheckAndAnchor(); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(fw.sawIdentityIDs); n != 2 {
-		t.Fatalf("re-synthesized envelope must mint a second identity (why persistence is load-bearing), saw %d", n)
+	if n := len(fw.sawIdentityIDs); n != 1 {
+		t.Fatalf("A FRESH STORE MINTED A SECOND WITNESS IDENTITY OVER THE ENVELOPE BESIDE THE LEDGER: the witness saw %d", n)
+	}
+	if !bytes.Equal(fresh.saved, envelopes.saved) {
+		t.Fatal("the fresh store was not given the envelope beside the ledger as its cache")
 	}
 }
 

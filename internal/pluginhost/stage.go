@@ -45,6 +45,8 @@ type Selection struct {
 
 	Needs string
 
+	Basis string
+
 	Startup StartupAllowance
 
 	variant *packagefmt.Variant
@@ -72,7 +74,7 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 	m := res.Manifest
 
 	host := currentHost(opts)
-	rels := []string{AcceleratorFile, ModelsFile, RuntimesFile, SettingsFile}
+	rels := []string{AcceleratorFile, ModelsFile, RuntimesFile, SettingsFile, EmbeddingsFile}
 	for _, v := range m.Variants {
 		if v.Platform == host.platform && v.Arch == host.arch && v.Topology == host.topology {
 			rels = append(rels, v.Entrypoint)
@@ -243,6 +245,9 @@ func SelectContext(ctx context.Context, pkgPath string, res *packagefmt.Result, 
 		delete(held, v.Entrypoint)
 	}
 	sel.artifactBytes, sel.held = artifactBytes, held
+	if emb, err := admitEmbeddings(pkgPath, res, held, m); err == nil && emb != nil {
+		sel.Basis = emb.Basis()
+	}
 	return sel, nil
 }
 

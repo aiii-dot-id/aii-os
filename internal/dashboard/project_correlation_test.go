@@ -50,7 +50,7 @@ func TestProjectActionsEchoTheRequestID(t *testing.T) {
 		t.Fatalf("after create: got %q, want projects", msg.Type)
 	}
 	if msg.RequestID != "42" {
-		t.Fatalf("the success answer does not wear the request id: %q (D72)", msg.RequestID)
+		t.Fatalf("the success answer does not wear the request id: %q", msg.RequestID)
 	}
 
 	// A refused action answers with an error wearing the id.
@@ -63,7 +63,7 @@ func TestProjectActionsEchoTheRequestID(t *testing.T) {
 		t.Fatalf("after refused create: got %q, want error", msg.Type)
 	}
 	if msg.RequestID != "43" {
-		t.Fatalf("the refusal does not wear the request id: %q (D72)", msg.RequestID)
+		t.Fatalf("the refusal does not wear the request id: %q", msg.RequestID)
 	}
 
 	// The plain projects query is correlated the same way.

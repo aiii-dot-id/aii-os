@@ -28,6 +28,7 @@ func thinkingServer(t *testing.T, records map[uint64]ThinkingRecord, fail error)
 		r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 		if mutate == nil || mutate(r) {
 			r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+			r.Header.Set(pageKeyHeader, pageKeyFor(s))
 		}
 		w := httptest.NewRecorder()
 		s.server.Handler.ServeHTTP(w, r)
@@ -102,6 +103,7 @@ func TestTheThinkingRouteIsTheOperatorsAlone(t *testing.T) {
 	s.AllowHost("127.0.0.1:8180")
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8180/interaction/thinking?turn=7", nil)
 	r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+	r.Header.Set(pageKeyHeader, pageKeyFor(s))
 	w := httptest.NewRecorder()
 	s.server.Handler.ServeHTTP(w, r)
 	if w.Code != http.StatusServiceUnavailable {

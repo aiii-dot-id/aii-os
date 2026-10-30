@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -158,22 +157,13 @@ func speechInfo(e providerEntry) *dashboard.ProviderSpeech {
 }
 
 func scaffoldProviders() []byte {
-	reg := *embeddedRegistry()
-	reg.OAuth = nil
-
-	reg.ModelCapabilities = cloneCapabilities(reg.ModelCapabilities)
-	for model, row := range reg.ModelCapabilities {
-		row.Images = nil
-		reg.ModelCapabilities[model] = row
+	file := struct {
+		Providers []providerEntry `json:"providers"`
+	}{}
+	for _, e := range embeddedRegistry().Providers {
+		file.Providers = append(file.Providers, entryChoices(e))
 	}
-	reg.Providers = slices.Clone(reg.Providers)
-	for i := range reg.Providers {
-		reg.Providers[i].Speech = nil
-
-		reg.Providers[i].VendorKeyEnv = ""
-		reg.Providers[i].Formerly = nil
-	}
-	data, err := json.MarshalIndent(&reg, "", "  ")
+	data, err := json.MarshalIndent(&file, "", "  ")
 	if err != nil {
 		return embeddedProviders
 	}
@@ -281,15 +271,7 @@ func (a *App) addShippedSpeechService(name, apiKey string) error {
 		return fmt.Errorf("%s is already in providers.json; its key is edited under Providers", name)
 	}
 
-	raw, err := json.Marshal(shipped)
-	if err != nil {
-		return err
-	}
-	var e providerEntry
-	if err := json.Unmarshal(raw, &e); err != nil {
-		return err
-	}
-	e.Speech, e.EffortLevels, e.CatalogueAuthor = nil, nil, ""
+	e := entryChoices(*shipped)
 	e.APIKey = strings.TrimSpace(apiKey)
 	return a.setProvider(e, false)
 }

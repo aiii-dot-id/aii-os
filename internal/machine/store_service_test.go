@@ -152,6 +152,41 @@ func TestAJobThatEndsClearsItsPendingUntilTryAgain(t *testing.T) {
 	l.needUntil(need, NeedPresent, 10*time.Second)
 }
 
+func TestAnEndTheNetworkMadeIsSaidAsSuch(t *testing.T) {
+	slot := slotIn(t, t.TempDir(), "identity-a")
+	f := newFetches()
+	at := func(time.Duration) <-chan time.Time { c := make(chan time.Time, 1); c <- time.Now(); return c }
+	r := newStoreRig(t, "", f, Options{store: storeOptions{after: at}})
+	cut := f.model("cut.bin", []byte("behind a link that is down"))
+	gone := f.model("gone.bin", []byte("not there"))
+	f.mu.Lock()
+	f.fail[cut.URL] = &pluginhost.NetworkError{Cause: errors.New("dial tcp: connect: network is unreachable")}
+	delete(f.bodies, gone.URL) // the server answers 404
+	f.mu.Unlock()
+	l := r.link(newKey(t), slot)
+	cutNeed := NeedParams{Plugin: "org.example.cut", Works: []pluginhost.StoreWork{viewWork(cut)}}
+	if res := l.needUntil(cutNeed, NeedEnded, 10*time.Second); !res.WaitsOnNetwork || f.count(cut.URL) != pluginhost.MaxDownloadAttempts {
+		t.Fatalf("five attempts the network failed: %+v, after %d fetches", res, f.count(cut.URL))
+	}
+	goneNeed := NeedParams{Plugin: "org.example.gone", Works: []pluginhost.StoreWork{viewWork(gone)}}
+	if res := l.needUntil(goneNeed, NeedEnded, 10*time.Second); res.WaitsOnNetwork {
+		t.Fatalf("a 404 is answered as the network's end: %+v", res)
+	}
+	both := NeedParams{Plugin: "org.example.both", Works: []pluginhost.StoreWork{viewWork(cut), viewWork(gone)}}
+	if res, err := l.need(both); err != nil || res.State != NeedEnded || res.WaitsOnNetwork {
+		t.Fatalf("one answer among the ends is the whole end: %+v, %v", res, err)
+	}
+	f.mu.Lock()
+	delete(f.fail, cut.URL)
+	f.mu.Unlock()
+	cutNeed.Retry = true
+	if res, err := l.need(cutNeed); err != nil || res.State == NeedEnded {
+		t.Fatalf("the identity's ask with Retry: %+v, %v", res, err)
+	}
+	cutNeed.Retry = false
+	l.needUntil(cutNeed, NeedPresent, 10*time.Second)
+}
+
 // A KILLED SERVICE RESUMES FROM ITS PARTIAL. The download stops halfway
 // when the service does; the next service, with no identity asking,
 // resumes the pending entry from the bytes already on disk.
@@ -485,6 +520,144 @@ func TestAStoreThatCannotBeWrittenRefusesNeedsUntilPlacedElsewhere(t *testing.T)
 	l.needUntil(need, NeedPresent, 10*time.Second)
 }
 
+// unmountedStore is a store placed at <root>/<volume>/plugins holding one
+// published view, whose volume is then taken away: its directory renamed
+// aside, as an unmount leaves its mount point's parent without it. mount
+// puts it back. url is the address of its view's one model.
+type unmountedStore struct {
+	dir, volume, away, url string
+	work                   pluginhost.StoreWork
+}
+
+func newUnmountedStore(t *testing.T, root, volume string, f *fetches, name string) unmountedStore {
+	t.Helper()
+	u := unmountedStore{volume: filepath.Join(root, volume), away: filepath.Join(root, volume+"-away")}
+	u.dir = filepath.Join(u.volume, "plugins")
+	m := f.model(name, []byte("material on the volume "+volume))
+	u.work, u.url = viewWork(m), m.URL
+	w, err := plugstore.OpenWriter(u.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pluginhost.EnsureEntry(t.Context(), w, u.work, f.fetch, pluginhost.Adoption{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	if err := os.Rename(u.volume, u.away); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func (u unmountedStore) mount(t *testing.T) {
+	t.Helper()
+	if err := os.Rename(u.away, u.volume); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// startOnUnmounted starts a service whose recorded store is u's, its volume
+// not there, with one more entry pending for a slot that refers to it.
+func startOnUnmounted(t *testing.T, f *fetches, u unmountedStore, slot string, pending pluginhost.StoreWork, draining ...string) *storeRig {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "machine")
+	if err := ensureOwnerOnlyDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	st := State{Store: u.dir, Draining: draining,
+		Refs:    []Ref{{Slot: slot, Plugin: "org.example.waits", Entry: pending.Entry}},
+		Pending: []Pending{{Entry: pending.Entry, Since: time.Now().UTC().Format(time.RFC3339), Work: pending}}}
+	if err := saveState(filepath.Join(dir, stateFileName), st); err != nil {
+		t.Fatal(err)
+	}
+	return newStoreRig(t, dir, f, Options{})
+}
+
+func TestAStoreWhoseVolumeIsNotThereIsOpenedAtTheNextNeed(t *testing.T) {
+	root := t.TempDir()
+	slot := slotIn(t, root, "identity-a")
+	f := newFetches()
+	u := newUnmountedStore(t, root, "volume", f, "on-the-volume.bin")
+	waits := viewWork(f.model("waits.bin", []byte("pending when the service stopped")))
+	r := startOnUnmounted(t, f, u, slot, waits)
+	l := r.link(newKey(t), slot)
+	need := NeedParams{Plugin: "org.example.volume", Works: []pluginhost.StoreWork{u.work}}
+	_, err := l.need(need)
+	var ref *Refusal
+	if !isRefusal(err, ReasonNoStore) || !errors.As(err, &ref) || ref.Remedy != remedyStoreUnmounted {
+		t.Fatalf("a need while the store's volume is not there: want %s saying %q, got %v", ReasonNoStore, remedyStoreUnmounted, err)
+	}
+	if _, err := os.Lstat(u.volume); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the service made the missing volume's directory %s (%v)", u.volume, err)
+	}
+	u.mount(t)
+	if res := l.needUntil(need, NeedPresent, 10*time.Second); res.Store != u.dir {
+		t.Fatalf("the need once the volume is there answers the store %s, want %s", res.Store, u.dir)
+	}
+	// The opening resumes the pending entry, which is fetched; the store's
+	// own material is not, counted once that fetch is over.
+	waitFor(t, "the entry pending before the start brought once the store opened", func() bool { return r.published(waits.Entry) })
+	if n := f.count(u.url); n != 1 {
+		t.Fatalf("the store's own material was fetched again once its volume was there: %d fetches, want the 1 that made it", n)
+	}
+}
+
+// AND AT THE NEXT COLLECTION PASS, with no identity asking.
+func TestAStoreWhoseVolumeIsNotThereIsOpenedAtTheNextPass(t *testing.T) {
+	root := t.TempDir()
+	slot := slotIn(t, root, "identity-a")
+	f := newFetches()
+	u := newUnmountedStore(t, root, "volume", f, "on-the-volume.bin")
+	waits := viewWork(f.model("waits.bin", []byte("pending when the service stopped")))
+	r := startOnUnmounted(t, f, u, slot, waits)
+	r.collect()
+	if _, err := os.Lstat(u.volume); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a pass made the missing volume's directory %s (%v)", u.volume, err)
+	}
+	u.mount(t)
+	r.collect()
+	waitFor(t, "the pending entry brought once a pass opened the store", func() bool {
+		r.srv.store.mu.Lock()
+		open := r.srv.store.w != nil
+		r.srv.store.mu.Unlock()
+		return open && r.published(waits.Entry)
+	})
+}
+
+func TestNamingAnotherPlaceKeepsAStoreThatWasNotOpenedDraining(t *testing.T) {
+	root := t.TempDir()
+	slot := slotIn(t, root, "identity-a")
+	f := newFetches()
+	current := newUnmountedStore(t, root, "volume-a", f, "on-volume-a.bin")
+	earlier := newUnmountedStore(t, root, "volume-b", f, "on-volume-b.bin")
+	waits := viewWork(f.model("waits.bin", []byte("pending when the service stopped")))
+	r := startOnUnmounted(t, f, current, slot, waits, earlier.dir)
+	l := r.link(newKey(t), slot)
+	next := filepath.Join(root, "elsewhere", "plugins")
+	raw, err := l.ask(MsgStorePlace, PlaceParams{Dir: next})
+	if err != nil {
+		t.Fatalf("store.place: %v", err)
+	}
+	var placed PlaceResult
+	if err := json.Unmarshal(raw, &placed); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{earlier.dir, current.dir}
+	if !slices.Equal(placed.Draining, want) || !slices.Equal(r.diskState().Draining, want) {
+		t.Fatalf("draining after store.place: answered %v, recorded %v; want %v", placed.Draining, r.diskState().Draining, want)
+	}
+	current.mount(t)
+	r.collect()
+	l.needUntil(NeedParams{Plugin: "org.example.moved", Works: []pluginhost.StoreWork{current.work}}, NeedPresent, 10*time.Second)
+	waitFor(t, "the entry pending before the start brought in the new place", func() bool { return r.published(waits.Entry) })
+	if n := f.count(current.url); n != 1 {
+		t.Fatalf("the unopened store's material was fetched again once its volume was there (%d fetches, want the 1 that made it); it was not drained", n)
+	}
+	if got := r.diskState().Draining; !slices.Contains(got, earlier.dir) {
+		t.Fatalf("a store whose volume is still not there left the record: draining %v", got)
+	}
+}
+
 func TestTheWriterWaitsForRoomOnTheStoresVolume(t *testing.T) {
 	slot := slotIn(t, t.TempDir(), "identity-a")
 	f := newFetches()
@@ -535,6 +708,54 @@ func TestDamageReportedInANeedIsRepaired(t *testing.T) {
 	}
 	if n := f.count(m.URL); n != 2 {
 		t.Fatalf("the repair fetched %d times in all, want 2 (the first and the repair)", n)
+	}
+}
+
+func TestARepairsDownloadResumesAndCountsWhatItBrings(t *testing.T) {
+	slot := slotIn(t, t.TempDir(), "identity-a")
+	f := newFetches()
+	at := func(time.Duration) <-chan time.Time { c := make(chan time.Time, 1); c <- time.Now(); return c }
+	r := newStoreRig(t, "", f, Options{store: storeOptions{after: at}})
+	body := bytes.Repeat([]byte("a model reported damaged, "), 8)
+	m := f.model("long.bin", body)
+	work := viewWork(m)
+	l := r.link(newKey(t), slot)
+	need := NeedParams{Plugin: "org.example.long", Works: []pluginhost.StoreWork{work}}
+	l.needUntil(need, NeedPresent, 10*time.Second)
+	blob := filepath.Join(r.storeDir(), blobEntry(m))
+	if err := os.Chmod(blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	damaged := bytes.ToUpper(body)
+	if err := os.WriteFile(blob, damaged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.cut[m.URL] = true
+	f.mu.Unlock()
+	need.Damaged = []string{work.Entry}
+	if _, err := l.need(need); err != nil {
+		t.Fatal(err)
+	}
+	need.Damaged = nil
+	l.needUntil(need, NeedPresent, 10*time.Second)
+	got, err := os.ReadFile(filepath.Join(r.storeDir(), work.Entry, m.Name))
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("the view's file after the repair: %q, %v", got, err)
+	}
+	f.mu.Lock()
+	offsets := append([]int64(nil), f.offsets[m.URL][1:]...)
+	f.mu.Unlock()
+	if len(offsets) <= pluginhost.MaxDownloadAttempts {
+		t.Fatalf("the repair took %d transfers; the test wants more than the rule's %d", len(offsets), pluginhost.MaxDownloadAttempts)
+	}
+	for i := 1; i < len(offsets); i++ {
+		if offsets[i] <= offsets[i-1] {
+			t.Fatalf("the repair's transfers began at %v: each must resume where the last stopped", offsets)
+		}
+	}
+	if _, err := os.Stat(blob + plugstore.PartialSuffix); err == nil {
+		t.Fatal("the repair's partial is left beside the mended blob")
 	}
 }
 
@@ -721,4 +942,70 @@ func TestARetryBeforeTheEndCallbackKeepsItsPendingRecord(t *testing.T) {
 	}
 	close(finish)
 	l.needUntil(need, NeedPresent, 10*time.Second)
+}
+
+func TestAModelAskedWhileItsViewIsBroughtJoinsThatViewsJob(t *testing.T) {
+	root := t.TempDir()
+	a, b := slotIn(t, root, "identity-a"), slotIn(t, root, "identity-b")
+	f := newFetches()
+	gate := make(chan struct{})
+	asked := make(chan string, 8)
+	f.before = func(ctx context.Context, url string, offset int64) error {
+		select {
+		case asked <- url:
+		default:
+		}
+		select {
+		case <-gate:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	r := newStoreRig(t, "", f, Options{})
+	base := f.model("base.bin", bytes.Repeat([]byte("base"), 300))
+	late := f.model("late.bin", bytes.Repeat([]byte("late"), 300))
+	names := []string{base.Name, late.Name}
+	entry := "v/" + plugstore.ViewKey(modelsDigest, names)
+	view := func(models ...pluginhost.ModelDecl) NeedParams {
+		return NeedParams{Plugin: "org.example.voice", Works: []pluginhost.StoreWork{{Entry: entry,
+			View: &pluginhost.ViewWork{ModelsSHA256: modelsDigest, Names: names, Models: models}}}}
+	}
+	running, lateNeed := view(base), view(late)
+	la, lb := r.link(newKey(t), a), r.link(newKey(t), b)
+	if got, err := la.need(running); err != nil || got.State != NeedPending {
+		t.Fatalf("the running view's need: want pending, got %+v, %v", got, err)
+	}
+	select {
+	case url := <-asked:
+		if url != base.URL {
+			t.Fatalf("rig: the view's job asked for %s first, want %s", url, base.URL)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("rig: the view's job never asked for its model")
+	}
+	if got, err := lb.need(lateNeed); err != nil || got.State != NeedPending {
+		t.Fatalf("the late model's need while the view's job runs: want pending, got %+v, %v", got, err)
+	}
+	var job []string
+	for _, p := range r.diskState().Pending {
+		if p.Entry == entry && p.Work.View != nil {
+			for _, d := range p.Work.View.Models {
+				job = append(job, d.Name)
+			}
+		}
+	}
+	slices.Sort(job)
+	if !slices.Equal(job, names) {
+		t.Fatalf("A NEED FOR A VIEW WHOSE JOB WAS RUNNING DID NOT JOIN IT: the entry's job brings %v, want both %v", job, names)
+	}
+	close(gate)
+	la.needUntil(running, NeedPresent, 10*time.Second)
+	lb.needUntil(lateNeed, NeedPresent, 10*time.Second)
+	if n := f.count(late.URL); n != 1 {
+		t.Fatalf("the late model was fetched %d times, want once", n)
+	}
+	if !pluginhost.EntryPresent(r.srv.store.w, view(base, late).Works[0]) {
+		t.Fatal("the view does not hold both models once both needs are answered present")
+	}
 }

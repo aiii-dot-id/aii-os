@@ -197,3 +197,27 @@ func TestASecondReplyOfAKindOnADayIsToldAlready(t *testing.T) {
 		t.Fatalf("a reply was said not to be written:\n%s", logs.String())
 	}
 }
+
+// A CODE THIS PROGRAM DOES NOT KNOW IS QUOTED WITH THE WORDS. A refusal in
+// the witness's own form is not recognised for its code alone when its
+// words are the witness's older ones (witness.ConflictError.Unrecognised):
+// the notice quoting only the words would show the operator a rollback's
+// sentence beside "words this program does not know". It quotes the code
+// that decided it, and says the kind as a code or words.
+func TestAnUnrecognisedCodeIsQuotedWithTheWords(t *testing.T) {
+	ce := &witness.ConflictError{Message: "witness bookmark rollback or fork", Code: "rollback_behind_a_restore", WitnessForm: true}
+	if !ce.Unrecognised() {
+		t.Fatal("rig: the code was to be one this program does not know")
+	}
+	_, said := unrecognisedWitnessReply("https://witness.invalid", ce, time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC))
+	if !strings.Contains(said, "witness bookmark rollback or fork (code rollback_behind_a_restore)") {
+		t.Fatalf("THE NOTICE DOES NOT QUOTE THE CODE THAT DECIDED IT: %q", said)
+	}
+	if !strings.Contains(said, "with a code or words this program does not know") {
+		t.Fatalf("the notice does not say the reply's kind as a code or words: %q", said)
+	}
+	_, said = unrecognisedWitnessReply("https://witness.invalid", &witness.ConflictError{Message: "words", WitnessForm: true}, time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC))
+	if strings.Contains(said, "(code") {
+		t.Fatalf("a reply with no code is quoted with one: %q", said)
+	}
+}

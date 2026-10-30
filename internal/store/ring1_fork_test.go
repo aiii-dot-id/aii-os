@@ -183,3 +183,50 @@ func TestARelationshipIsRing1sWhenItIsTheUnsupersededOperatorsWhateverAnEntryNam
 		t.Errorf("the relationship as the entry left it: %+v %v", rel, err)
 	}
 }
+
+// THE OTHER CURRENT RELATIONSHIPS are every unsuperseded row but Ring 1's,
+// oldest first: the Identity page shows them whole beside the charter. A
+// superseded row is not among them, an operator's or a peer's, and the
+// relationship as held says what superseded it (the notice of a mint reads
+// that to say where the text is read whole).
+func TestOtherCurrentRelationshipsLeaveOutRing1sAndTheSuperseded(t *testing.T) {
+	s := testStore(t)
+	foundingOperator(t, s)
+	if err := s.Materialize(operatorEvent(2, "rel-second", "rel-founding")); err != nil {
+		t.Fatal(err)
+	}
+	peer := func(seq uint64, id, name, supersedes string) {
+		t.Helper()
+		p := map[string]any{"id": id, "counterpart_name": name, "counterpart_role": "peer", "relationship_type": "peer", "charter_text": "we compare notes with " + name}
+		if supersedes != "" {
+			p["supersedes"] = supersedes
+		}
+		b, _ := json.Marshal(p)
+		if err := s.Materialize(&ledger.Event{Seq: seq, Type: ledger.EventRelationshipUpsert, Ring: 1, Timestamp: "2026-08-24T09:00:00Z", Payload: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	peer(3, "rel-ola", "Ola", "")
+	peer(4, "rel-rue-was", "Rue", "")
+	peer(5, "rel-rue", "Rue", "rel-rue-was")
+	peer(6, "rel-tam", "Tam", "")
+	got, err := s.OtherCurrentRelationships()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	if strings.Join(ids, " ") != "rel-ola rel-rue rel-tam" {
+		t.Fatalf("the other current relationships are %v, want rel-ola rel-rue rel-tam", ids)
+	}
+	if got[1].CounterpartName != "Rue" || got[1].CounterpartRole != "peer" || got[1].CharterText != "we compare notes with Rue" || got[1].CreatedSeq != 5 {
+		t.Errorf("a relationship is not read whole: %+v", got[1])
+	}
+	for id, want := range map[string]string{"rel-founding": "rel-second", "rel-rue-was": "rel-rue", "rel-ola": "", "rel-second": ""} {
+		if rel, _, err := s.RelationshipAsHeld(id); err != nil || rel == nil || rel.SupersededBy != want {
+			t.Errorf("%s as held: %+v %v; want superseded by %q", id, rel, err, want)
+		}
+	}
+}

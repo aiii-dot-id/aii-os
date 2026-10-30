@@ -96,7 +96,7 @@ func TestAnOperatorActIsConfirmedOnceAndBoundToItsArguments(t *testing.T) {
 	}
 
 	// A different label is a different act; the ceiling holds.
-	other := map[string]any{"session_id": "vs-1", "finals": []any{3.0, 5.0, 8.0}, "label": "Jim"}
+	other := map[string]any{"session_id": "vs-1", "finals": []any{3.0, 5.0, 8.0}, "label": "Guest"}
 	if r, _ := app.toolReg.Execute(ctx, tool, other); strings.Contains(r.Output, actID) {
 		t.Fatal("changed arguments are a different act")
 	}
@@ -112,7 +112,7 @@ func TestAnOperatorActIsConfirmedOnceAndBoundToItsArguments(t *testing.T) {
 	state, _ = app.applyConfigChange(map[string]any{})
 	var otherID string
 	for _, a := range state.Plugins.Installed[0].Acts {
-		if a.Args["label"] == "Jim" {
+		if a.Args["label"] == "Guest" {
 			otherID = a.ID
 		}
 	}
@@ -154,6 +154,11 @@ func TestAnOperatorActIsConfirmedOnceAndBoundToItsArguments(t *testing.T) {
 	var resultExcerpt string
 	if err := app.store.DB().QueryRow(`SELECT content FROM conversations WHERE kind='tool_result' AND turn_id=?`, "operator_act_"+actID).Scan(&resultExcerpt); err != nil || !strings.Contains(resultExcerpt, `"echoed":true`) {
 		t.Fatalf("linked guest result lost: %q %v", resultExcerpt, err)
+	}
+	var callWhy, resultWhy string
+	if err := app.store.DB().QueryRow(`SELECT COALESCE(json_extract(c.details,'$.session_reason'),''), COALESCE(json_extract(r.details,'$.session_reason'),'')
+		FROM conversations c JOIN conversations r ON r.source_id=c.source_id AND r.kind='tool_result' WHERE c.kind='tool_call' AND c.turn_id=?`, "operator_act_"+actID).Scan(&callWhy, &resultWhy); err != nil || callWhy != "operator_act" || resultWhy != "operator_act" {
+		t.Fatalf("an operator act's call says %q and its result %q (%v), want operator_act for both", callWhy, resultWhy, err)
 	}
 	var denied string
 	for _, tr := range turns {

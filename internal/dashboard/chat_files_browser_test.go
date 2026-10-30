@@ -28,7 +28,8 @@ run(async assert=>{
  renderInteractionPages(pages,()=>{},false);
  const inner=document.getElementById('thread-inner');
  const reply=inner.querySelector('[data-turn-id="a"] .body');
- const sources=Array.from(inner.querySelectorAll('img,a')).map(e=>e.getAttribute('src')||e.getAttribute('href'));
+ // A picture's address waits in data-file until it comes into view and is given a ticket.
+ const sources=Array.from(inner.querySelectorAll('img,a')).map(e=>e.getAttribute('src')||e.dataset.file||e.getAttribute('href'));
  assert(sources.every(s=>s.startsWith('/w?p=')),'the page drew something that is not a file of the folder: '+sources.join(' '));
  assert(!inner.innerHTML.includes('elsewhere.example/a.png"')&&!sources.some(s=>s.includes('elsewhere')||s.includes('data:')),'an address was drawn');
  const drawn=Array.from(reply.querySelectorAll('figure.shown-image,figure .shown-missing')).length;
@@ -127,6 +128,20 @@ run(async assert=>{
  takeFiles([new File(['\x89PNG....'],'proof.png',{type:'image/png'}),new File(['\x89PNG....'],'proof.png',{type:'image/png'})]);
  await until(()=>chips().length===2&&chips()[0].textContent.includes('the model will be shown it')&&chips()[1].textContent.includes('already has the 1 pictures one request takes'),'the second picture past the count one request takes: '+chips().map(c=>c.textContent).join(' | '));
  chips()[1].querySelector('.attach-drop').click();
+ chips()[0].querySelector('.attach-drop').click();
+ // A PDF's, a sound's or a video's chip says the same, from what the model takes and what this host sends of the kind.
+ window.fetch=(f=>async(url,init)=>String(url).includes('brief.pdf')?new Response(JSON.stringify({path:'uploads/brief.pdf',name:'brief.pdf',bytes:9,image:false}),{status:200,headers:{'Content-Type':'application/json'}})
+  :String(url).includes('note.ogg')?new Response(JSON.stringify({path:'uploads/note.ogg',name:'note.ogg',bytes:9,image:false}),{status:200,headers:{'Content-Type':'application/json'}}):f(url,init))(window.fetch);
+ for(const [takes,text] of [[[],'to the folder only: nobody has said this model takes PDFs'],[[{kind:'pdf',state:'no',types:['application/pdf']}],'to the folder only: this model does not take PDFs'],
+   [[{kind:'pdf',state:'yes',types:['application/pdf']}],'the model will be shown it'],[[{kind:'pdf',state:'yes',not_sent:true}],'to the folder only: this host does not send application/pdf in this provider\'s dialect']]){
+  S.config={llm:{images_shown:'yes',capabilities:{takes}}};
+  takeFiles([new File(['%PDF-1.7'],'brief.pdf',{type:'application/pdf'})]);
+  await until(()=>chips().length===1&&chips()[0].textContent.includes(text),'the PDF\'s chip says '+text+': '+(chips()[0]&&chips()[0].textContent));
+  chips()[0].querySelector('.attach-drop').click();
+ }
+ S.config={llm:{capabilities:{takes:[{kind:'audio',state:'yes',types:['audio/wav','audio/mpeg']}]}}};
+ takeFiles([new File(['OggS'],'note.ogg',{type:'audio/ogg'})]);
+ await until(()=>chips().length===1&&chips()[0].textContent.includes('this host does not send audio/ogg in this provider\'s dialect'),'the sound\'s chip of a type the dialect does not write: '+(chips()[0]&&chips()[0].textContent));
  chips()[0].querySelector('.attach-drop').click();
  S.config={llm:{images_shown:'yes'}};
  takeFiles([new File(['MZ'],'tool.exe')]);

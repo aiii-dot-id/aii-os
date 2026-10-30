@@ -73,6 +73,21 @@ func TestFilesAttachedToAMessageAreToldAfterItsWordsAndNeverWrittenIntoThem(t *t
 	}
 }
 
+func TestTheMessageATurnAnswersIsReadAsItIsSent(t *testing.T) {
+	app, _ := promptCacheApp(t)
+	p := addContextProbe(t, app, `{"text":"","detail_route":""}`)
+	attachedTurn(t, app, attachedWords, attachedPaths)
+
+	want := attachedWords + "\n\n[your operator attached a file: uploads/letter.docx]\n[your operator attached a file: uploads/proof.png]"
+	_, args := p.snapshot()
+	if len(args) != 1 {
+		t.Fatalf("the plugin context was read %d times for one turn", len(args))
+	}
+	if got, _ := args[0]["query"].(string); !strings.HasPrefix(got, want) {
+		t.Fatalf("the turn read the message it answers as %q, want it as sent, beginning %q", got, want)
+	}
+}
+
 // SAFE keeps its conversation in the transient transcript; a file
 // attached there is told the same way.
 func TestFilesAttachedInSafeModeAreToldTheSameWay(t *testing.T) {

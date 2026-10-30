@@ -50,6 +50,8 @@ run(()=>{
  assert(inner.querySelectorAll('[data-turn-id]').length===2,'local input invented history');
  toolEventLive('read','live arguments');assert(inner.querySelectorAll('[data-turn-id]').length===2,'live response invented history');
  S.chatConnectionLost();assert(document.getElementById('chat-pending').textContent.includes('unconfirmed'),'loss concealed pending input');
+ const lost=document.querySelector('[data-request-id="local-1"]');assert(lost.open&&lost.querySelector('summary').textContent.endsWith('your text is kept below')&&lost.querySelector('.body').textContent==='unacknowledged input','a lost message said its text was kept and left it closed: '+lost.open+' '+lost.querySelector('summary').textContent);
+ lost.open=false;S.chatConnectionLost();assert(!lost.open,'a reconnect that failed again reopened a message the operator had closed');
  S.chatAcknowledged('local-1','accepted');assert(document.querySelector('[data-request-id="local-1"]'),'lost-socket ack retired an unconfirmed message');
  assert(sendChat('a new submission'),'second send failed');S.chatAcknowledged('local-2','accepted');assert(document.querySelector('[data-request-id="local-2"]'),'admission pretended to be recording');
  S.chatReceipt('local-2',{ref:{identity:'fixture',source:'recorded',incarnation:'host',id:'actual'}});assert(!document.querySelector('[data-request-id="local-2"]'),'real recording did not retire pending notice');

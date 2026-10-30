@@ -92,7 +92,7 @@ func Birth(cfg *BirthConfig) (*BirthResult, error) {
 	var envMeta struct {
 		PayloadSHA256 string `json:"payload_sha256"`
 	}
-	if err := json.Unmarshal(cfg.Ring0Bundle, &envMeta); err != nil {
+	if err := sigenvelope.Decode(cfg.Ring0Bundle, &envMeta); err != nil {
 		return nil, fmt.Errorf("read verified Ring 0 envelope metadata: %w", err)
 	}
 	ring0Provenance := "platform_bundle"

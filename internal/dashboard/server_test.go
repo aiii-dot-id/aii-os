@@ -72,7 +72,7 @@ func TestHistoryReplayOnConnect(t *testing.T) {
 // request ids distinguish the readback from an unrelated broadcast.
 func TestForegroundProbeAndHistoryReadback(t *testing.T) {
 	h := &WSHandler{
-		GetStats:    func() (*StatsResponse, error) { return &StatsResponse{Name: "Vega"}, nil },
+		GetStats:    func() (*StatsResponse, error) { return &StatsResponse{Name: "Example"}, nil },
 		RecentTurns: func() ([]HistoryTurn, error) { return []HistoryTurn{{Role: "resident", Content: "latest"}}, nil },
 		TurnActive:  func() bool { return true },
 	}
@@ -98,7 +98,7 @@ func TestForegroundProbeAndHistoryReadback(t *testing.T) {
 		t.Fatalf("history readback = %+v", got)
 	}
 	sendMsg(t, conn, ClientMessage{Type: "query", Query: "status", RequestID: "status-1"})
-	if got := drainUntil(t, conn, "status"); got.RequestID != "status-1" || got.Stats == nil || got.Stats.Name != "Vega" {
+	if got := drainUntil(t, conn, "status"); got.RequestID != "status-1" || got.Stats == nil || got.Stats.Name != "Example" {
 		t.Fatalf("status readback = %+v", got)
 	}
 	s.BroadcastSystemLine("one question was withdrawn")

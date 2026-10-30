@@ -26,7 +26,7 @@ function panelHTML() {
   if (asks.length) {
     html += '<div class="sp-card sp-asks"><h3 class="sp-h">WAITING ON YOU</h3>';
     asks.forEach(a => {
-      const label = a.kind === 'confirm' ? 'confirm ' + (a.operation || '') : a.kind;
+      const label = a.kind === 'confirm' ? 'confirm ' + (a.operation || '') : a.kind === 'word' ? 'your words' : a.kind;
       html += '<div class="sp-kv"><span>' + esc(label) + '</span><b>' + esc((a.text || '').slice(0, 80)) + '</b></div>';
     });
     html += '<div class="store-hint">answer in the thread</div></div>';

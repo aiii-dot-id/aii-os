@@ -38,6 +38,7 @@ type machineryRig struct {
 	home, person, ext, cfgDir     string
 	kept, made, dirs, stems       []string
 	logs                          []string
+	control                       string
 	inHome, inRoot, granted, open string
 }
 
@@ -81,6 +82,7 @@ func newMachineryRig(t *testing.T) *machineryRig {
 		g.home = real(home)
 		// The configuration outside the slot, its set-aside copies beside it.
 		cfg.SourcePath = filepath.Join(g.cfgDir, "config.json")
+		keep(cfg.SourcePath + configKeptUnder + "0.2.1")
 		keep(cfg.SourcePath + configBeforeUpdate)
 		keep(cfg.SourcePath + configRolledBack)
 		// What the configuration names for the host to run or trust.
@@ -105,10 +107,12 @@ func newMachineryRig(t *testing.T) *machineryRig {
 			t.Fatal(err)
 		}
 		put(string(state), cfg.Machine.Dir, "state.json")
-		// The logs, outside the slot: read stays open, a write is refused.
+		// The logs, outside the slot: read stays open, a write is refused,
+		// but for the identity's switch beside the configuration.
 		cfg.Logs.Dir = filepath.Join(g.ext, "logs")
-		g.logs = append(g.logs, put("LOG LINE MARK\n", cfg.Logs.Dir, "aii.log"),
-			put("LOG LINE MARK\n", filepath.Dir(LogControlPathIn(identityHomeFromConfig(cfg.SourcePath))), "control.json"))
+		control := LogControlPathIn(identityHomeFromConfig(cfg.SourcePath))
+		g.logs = append(g.logs, put("LOG LINE MARK\n", cfg.Logs.Dir, "aii.log"), put("LOG LINE MARK\n", filepath.Dir(control), "aii.log"))
+		g.control = put("{}\n", control)
 	})
 
 	// What the updater keeps beside the program, by the updater's own
@@ -192,7 +196,7 @@ func (g *machineryRig) shell(t *testing.T, command string, cwd any) tools.Result
 func TestWithTheSandboxOffTheHostsOwnMachineryStaysClosed(t *testing.T) {
 	g := newMachineryRig(t)
 	a := g.a
-	if err := a.setSandboxRoots([]string{g.granted}); err != nil {
+	if err := a.changeSandboxRoot(g.granted, true); err != nil {
 		t.Fatal(err)
 	}
 	quoted := func(path string) string { return `"` + path + `"` }
@@ -342,6 +346,11 @@ func TestWithTheSandboxOffTheHostsOwnMachineryStaysClosed(t *testing.T) {
 		}
 	}
 
+	// The identity's switch is theirs to write, with the sandbox off too.
+	if res := g.call(t, "write", map[string]any{"file_path": g.control, "content": `{"level":"debug"}` + "\n"}); res.Error != "" || !strings.Contains(res.Output, "Wrote") {
+		t.Errorf("the identity writes their switch %s: %+v", g.control, res)
+	}
+
 	// What the operator had put within reach is as it was.
 	if res := g.call(t, "read", map[string]any{"file_path": g.inHome}); !strings.Contains(res.Output, "in the home") {
 		t.Errorf("a trust root kept in the home is as it was with the sandbox on: %+v", res)
@@ -356,7 +365,7 @@ func TestWithTheSandboxOffTheHostsOwnMachineryStaysClosed(t *testing.T) {
 	// What the identity is told.
 	floorOff := a.rings.GetContent(ring.Ring5)
 	for _, shown := range []string{"your program's update files", "the files that start your program", "your operator's trust roots and worker program",
-		"credentials your host borrows", "the machine service's link and stores", "your host's temporary files", "your host's logs"} {
+		"credentials your host borrows", "the machine service's link and stores", "your host's temporary files"} {
 		if strings.Count(floorOff, "**"+shown+"**") != 1 {
 			t.Errorf("the floor names %q once with the sandbox off:\n%s", shown, floorOff)
 		}

@@ -27,19 +27,22 @@ func (a *App) chooseBoot() (bootChoice, error) {
 	if continuity.JournalledRestore(continuitySettingsOf(a.configSnapshot())) {
 		return bootLive, nil
 	}
-
-	if continuity.RestoringOnNewMachine(continuitySettingsOf(a.configSnapshot())) {
-		return bootFirstboot, nil
-	}
 	for _, path := range []string{a.cfg.Identity.LedgerPath, filepath.Join("data", "ledger.jsonl")} {
 		if artifact, err := ledger.RecordArtifact(path); err != nil {
 			return 0, fmt.Errorf("inspect identity record before FIRSTBOOT: %w", err)
 		} else if artifact != "" {
 
-			if path == a.cfg.Identity.LedgerPath && fileExists(a.cfg.Identity.KeyPath) {
+			if path == a.cfg.Identity.LedgerPath {
 				return bootLive, nil
 			}
-			return 0, fmt.Errorf("refusing FIRSTBOOT: %w: record survives at %s — recovery required, not a new birth", ledger.ErrRecordExists, artifact)
+
+			return 0, a.choiceHere(fmt.Errorf("refusing FIRSTBOOT: %w: record survives at %s, and the configuration names %s; this start does not choose, and is not a new birth", ledger.ErrRecordExists, artifact, a.cfg.Identity.LedgerPath))
+		}
+	}
+
+	if continuity.RestoringOnNewMachine(continuitySettingsOf(a.configSnapshot())) {
+		if database, err := present(a.cfg.Identity.DBPath); err == nil && !database {
+			return bootFirstboot, nil
 		}
 	}
 	ev, err := a.identityEvidence()
@@ -51,7 +54,8 @@ func (a *App) chooseBoot() (bootChoice, error) {
 		return bootLive, nil
 	}
 	if ev != "" {
-		return 0, fmt.Errorf("refusing FIRSTBOOT: no ledger at %s but this container holds identity evidence (%s) — an existing identity failed to load; recovery required, not a new birth", a.cfg.Identity.LedgerPath, ev)
+
+		return 0, a.choiceHere(fmt.Errorf("refusing FIRSTBOOT: no ledger at %s but this container holds identity evidence (%s) — an existing identity failed to load, and there is no record here to start it from; not a new birth", a.cfg.Identity.LedgerPath, ev))
 	}
 	return bootFirstboot, nil
 }
@@ -129,4 +133,34 @@ func aBackupFile(dir string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func (a *App) choiceHere(refusal error) error {
+	cfg := a.configSnapshot()
+	home, err := filepath.Abs(".")
+	if err != nil {
+		return errors.Join(refusal, err)
+	}
+	c := IdentityChoice{Home: home, Why: refusal.Error()}
+	for _, f := range []struct {
+		key, was string
+		here     func(string) bool
+	}{
+		{"ledger_path", cfg.Identity.LedgerPath, func(p string) bool { found, err := ledger.RecordArtifact(p); return err == nil && found != "" }},
+		{"db_path", cfg.Identity.DBPath, fileExists},
+		{"key_path", cfg.Identity.KeyPath, fileExists},
+	} {
+		files := IdentityFiles{Key: f.key, Was: f.was}
+		seen := map[string]bool{}
+		for _, p := range []string{f.was, filepath.Join("data", filepath.Base(f.was))} {
+			abs, err := filepath.Abs(p)
+			if err != nil || seen[abs] || !f.here(p) {
+				continue
+			}
+			seen[abs] = true
+			files.Found = append(files.Found, abs)
+		}
+		c.Files = append(c.Files, files)
+	}
+	return &IdentityChoiceRefusal{Choice: c, err: refusal}
 }

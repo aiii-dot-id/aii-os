@@ -444,13 +444,13 @@ func TestTheProbeReadsTheOperatorsWindow(t *testing.T) {
 
 	const window = 4
 	fac := b.facility(window)
-	if fac.OutcomesPending() {
+	if p, _ := fac.OutcomesPendingSince(); p {
 		t.Fatalf("the first window of %d records holds no outcome, yet one is reported pending", window)
 	}
 	if got, _ := b.st.OutcomeCursor(); got != window {
 		t.Fatalf("after an empty window the cursor reads %d, want %d", got, window)
 	}
-	if !fac.OutcomesPending() {
+	if p, _ := fac.OutcomesPendingSince(); !p {
 		t.Fatalf("record %d is an outcome inside the second window and was not found", end.Seq)
 	}
 	if got, _ := b.st.OutcomeCursor(); got != window {

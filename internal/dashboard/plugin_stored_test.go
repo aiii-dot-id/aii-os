@@ -14,16 +14,20 @@ import (
 )
 
 // dialOperator opens the page's own connection (the interaction version it
-// declares included) with the session cookie given, or none.
-func dialOperator(addr, cookie string) (*websocket.Conn, error) {
+// declares included) with the session cookie given, or none, and sends the
+// page key given as its first message.
+func dialOperator(addr, cookie string, key ...string) (*websocket.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	h := http.Header{"Origin": []string{"https://" + addr}}
 	if cookie != "" {
 		_, port, _ := net.SplitHostPort(addr)
-		h.Set("Cookie", "aii_token_"+port+"="+cookie)
+		h.Set("Cookie", tlsCookieName(port)+"="+cookie)
 	}
 	conn, _, err := websocket.Dial(ctx, "wss://"+addr+"/ws?interaction_version=1", &websocket.DialOptions{HTTPClient: testClient, HTTPHeader: h})
+	if err == nil && len(key) > 0 {
+		err = sendHello(ctx, conn, key[0])
+	}
 	return conn, err
 }
 
@@ -68,7 +72,7 @@ func TestWhatAPluginStoredIsReadAndRemovedThroughTheOperatorsSessionOnly(t *test
 			t.Fatalf("a connection with the cookie %q was opened: what a plugin stored could be asked for without the operator's session", cookie)
 		}
 	}
-	conn, err := dialOperator(addr, s.accessHash())
+	conn, err := dialOperator(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatalf("the operator's session was refused: %v", err)
 	}

@@ -166,7 +166,9 @@ func TestEditTool(t *testing.T) {
 }
 
 func TestShellTool(t *testing.T) {
-	r := NewRegistry("", nil, Timeouts{})
+	// A home of its own: the working folder is the package's source, and a
+	// walled shell labels its home.
+	r := NewRegistry(t.TempDir(), nil, Timeouts{})
 
 	result, err := r.Execute(context.Background(), "shell", map[string]any{
 		"command": "echo 'hello from bash'",
@@ -432,7 +434,7 @@ func TestExpandGlobsNoCommandExecution(t *testing.T) {
 
 // Finding 10: web_fetch reached localhost and cloud-metadata endpoints.
 func TestWebFetchSSRFGuard(t *testing.T) {
-	wf := &WebFetchTool{maxBytes: 1000}
+	wf := &WebFetchTool{maxBytes: func() int { return 1000 }}
 	// Vectors the guard MUST refuse: loopback (name and IP), link-local
 	// (incl. the cloud-metadata address), RFC1918/ULA space, non-http
 	// schemes, and embedded credentials.

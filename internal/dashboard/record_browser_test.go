@@ -21,6 +21,8 @@ const recordPageShell = `<!doctype html><html lang="en"><head><meta charset="utf
 <link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/layout.css"></head>
 <body><div class="views" id="views"></div><script type="module" src="/__driver.js"></script></body></html>`
 
+// itself would set and the page key its sign-in would answer, kept where the
+// page keeps it.
 func runRecordInEngines(t *testing.T, s *Server, start, driver string, w, h int) {
 	t.Helper()
 	engines := resolveEngines()
@@ -47,7 +49,7 @@ func runRecordInEngines(t *testing.T, s *Server, start, driver string, w, h int)
 					if r.URL.Path == "/__harness.js" {
 						io.WriteString(rw, harnessJS)
 					} else {
-						io.WriteString(rw, driver)
+						io.WriteString(rw, "localStorage.setItem('aii.signin', '"+pageKeyFor(s)+"');\n"+driver)
 					}
 					return
 				case "/":
@@ -58,11 +60,12 @@ func runRecordInEngines(t *testing.T, s *Server, start, driver string, w, h int)
 						io.WriteString(rw, start)
 						return
 					}
-					fmt.Fprintf(rw, `<!doctype html><body style="margin:0"><iframe src="/phone" width="%d" height="%d" style="border:0;display:block"></iframe></body>`, w, h)
+					fmt.Fprintf(rw, `<!doctype html><body style="margin:0"><script>localStorage.setItem('aii.signin', '%s')</script><iframe src="/phone" width="%d" height="%d" style="border:0;display:block"></iframe></body>`, pageKeyFor(s), w, h)
 					return
 				case "/phone":
 					in := r.Clone(r.Context())
 					in.URL.Path = "/"
+					in.Header.Del("Accept-Encoding")
 					rec := httptest.NewRecorder()
 					s.server.Handler.ServeHTTP(rec, in)
 					for k, v := range rec.Header() {

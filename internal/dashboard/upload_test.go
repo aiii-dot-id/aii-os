@@ -221,6 +221,7 @@ func TestAnUploadNeedsTheSessionAndARunningIdentity(t *testing.T) {
 	}
 	ok := upload(s, "notes.txt", []byte("x"), func(r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+		r.Header.Set(pageKeyHeader, pageKeyFor(s))
 	})
 	if ok.Code != http.StatusOK {
 		t.Errorf("the right token: %d %s", ok.Code, ok.Body.String())

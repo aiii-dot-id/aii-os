@@ -85,6 +85,10 @@ func TestAReplyTheRecordRefusedIsReturnedWithTheFailure(t *testing.T) {
 	t.Run("continuation", func(t *testing.T) {
 		a := replyRecordApp(t)
 		logs := logsink.CaptureForTest(t)
+		// The leg resumes the active session, as a queued leg does.
+		if err := a.store.StartWorkSession(t.Context(), "ws_d2", "d2 work"); err != nil {
+			t.Fatal(err)
+		}
 		a.continueCappedTurn("ws_d2", 1, capDeclared, "")
 		if got := outboxReply(t, a, "wake_cont_"); got != "noted" {
 			t.Errorf("continuation: the operator's outbox holds %q, want the leg's answer", got)

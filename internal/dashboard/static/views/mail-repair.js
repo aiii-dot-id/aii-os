@@ -1,5 +1,5 @@
 import { S } from '../state.js';
-import { esc } from '../util.js';
+import { cardHead, esc } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
@@ -32,7 +32,7 @@ export function mailRepairDisconnected() {
 }
 export function mailRepairHTML() {
   const disabled = pending.waiting() ? ' disabled' : '';
-  return '<div class="card"><h3>HELD MAIL</h3><p>Correct one historical message using a recipient and channel already in your current contacts. This queues that message on the chosen channel; it does not change contacts or claim delivery. Messages already attempted or of uncertain effect cannot be repaired here.</p>' +
+  return '<div class="card">' + cardHead('HELD MAIL', 'Messages to people held undelivered because their recipient or channel could not be resolved; one never attempted can be given a recipient and channel from your contacts and queued, one attempted, parked or of uncertain effect cannot.') + '<p>Correct one historical message using a recipient and channel already in your current contacts. This queues that message on the chosen channel; it does not change contacts or claim delivery. Messages already attempted or of uncertain effect cannot be repaired here.</p>' +
     '<p data-mail-notice data-announce>' + esc(notice) + '</p><button class="btn" data-mail-refresh' + disabled + '>Refresh from first page</button>' +
     (state.next ? '<button class="btn" data-mail-next' + disabled + '>Next page</button>' : '') +
     state.messages.map((m, i) => '<section data-held-message><h4>' + esc(m.id) + '</h4><p>Recorded recipient: ' + esc(m.recipient) + '; requested channel: ' + esc(m.channel || 'none') + '. ' + esc(m.reason) + '</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(m.preview) + '</pre>' +

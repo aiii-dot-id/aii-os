@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -48,12 +49,22 @@ type ProjectPort interface {
 
 var ErrProjectSafe = errors.New("project mutation refused in SAFE")
 
+type heldRefusal struct {
+	base error
+	said string
+}
+
+func (e *heldRefusal) Error() string { return e.said }
+func (e *heldRefusal) Unwrap() error { return e.base }
+
 func (e *Engine) verbProject(ctx context.Context, args map[string]any) (string, error) {
 	action, _ := args["action"].(string)
 	switch action {
 	case "create", "update", "close", "select", "deselect", "evidence", "waive":
-		if reason := e.safeModeReason(); reason != "" {
-			return "", fmt.Errorf("%w: project.%s cannot change project files or focus while SAFE holds (%s)", ErrProjectSafe, action, reason)
+		if h := e.heldBy(); h.Waiting {
+			return "", &heldRefusal{base: ErrProjectSafe, said: fmt.Sprintf("project mutation refused: project.%s cannot change project files or focus %s (%s)", action, hold.While, h.Reason)}
+		} else if h.Reason != "" {
+			return "", fmt.Errorf("%w: project.%s cannot change project files or focus while SAFE holds (%s)", ErrProjectSafe, action, h.Reason)
 		}
 	}
 	if e.projects == nil {
@@ -195,9 +206,6 @@ func (e *Engine) verbProject(ctx context.Context, args map[string]any) (string, 
 		}
 		if store.EvidenceVerifiedTier(class) {
 
-			if subID, _ := ctx.Value(SubagentWorkSession{}).(string); subID != "" {
-				return "", fmt.Errorf("a worker seat cannot mark a project acceptance item %q — only the primary seat verifies; record worker_report_only and let the primary seat verify from its own reads", class)
-			}
 			if strings.TrimSpace(ref) == "" {
 				return "", fmt.Errorf("a %s observation needs ref= — the durable pointer to the check you read back; a verified item is not a bare claim", class)
 			}

@@ -3,13 +3,79 @@
 package fileperm
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func CreateTempForReplacement(path string) (*os.File, error) {
+
+	path = filepath.Clean(path)
+	label, err := LabelOf(path)
+	if errors.Is(err, os.ErrNotExist) || err == nil && label == "" {
+		return os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read replacement label: %w", err)
+	}
+	var creationLabel string
+	for _, class := range []Label{LabelKept, LabelReadable, LabelIdentity} {
+		explicitFileLabel := strings.Replace(labelSDDL[class], ";OICI;", ";;", 1)
+		if label == labelSDDL[class] || label == labelInheritedSDDL(class, false) || label == explicitFileLabel {
+			creationLabel = explicitFileLabel
+			break
+		}
+	}
+	if creationLabel == "" {
+		return nil, fmt.Errorf("replacement has an unsupported mandatory label: %q", label)
+	}
+	f, err := createTempWithLabel(path, creationLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := setLabelHandle(windows.Handle(f.Fd()), label); err != nil {
+		return nil, errors.Join(fmt.Errorf("restore replacement label flags: %w", err), f.Close(), os.Remove(f.Name()))
+	}
+	return f, nil
+}
+
+func createTempWithLabel(path, label string) (*os.File, error) {
+	sd, err := windows.SecurityDescriptorFromString(label)
+	if err != nil {
+		return nil, fmt.Errorf("prepare replacement label: %w", err)
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(sa))
+
+	for range 10000 {
+		name := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp-"+rand.Text())
+		wide, err := windows.UTF16PtrFromString(longPath(name))
+		if err != nil {
+			return nil, err
+		}
+		h, err := windows.CreateFile(wide, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.WRITE_OWNER,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+			&sa, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+		runtime.KeepAlive(sd)
+		if errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+			continue
+		}
+		if err != nil {
+			return nil, &os.PathError{Op: "create replacement", Path: name, Err: err}
+		}
+		return os.NewFile(uintptr(h), name), nil
+	}
+	return nil, &os.PathError{Op: "create replacement", Path: path, Err: os.ErrExist}
+}
 
 func RestrictToOwner(f *os.File) error {
 

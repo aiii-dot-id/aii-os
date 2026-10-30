@@ -89,7 +89,7 @@ func TestTheRingsFillingTheWindowLeaveTheFacilityItsReserve(t *testing.T) {
 		{ID: "e3", Content: "NOTED-e3 I answered with the log", Raw: 1},
 	}}
 	dream := cognitive.NewDream(queue, model, &reserveDoor{}, nil, cognitive.DreamConfig{Threshold: 1})
-	dream.SetAuthority(ringAuthority{gate, st})
+	dream.SetAuthority(ringAuthority{gate: gate, st: st})
 
 	if err := dream.Execute(context.Background()); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestTheRouteToMoreRoomIsTrueOfTheBudgetInForce(t *testing.T) {
 		}
 		model := &windowModel{ceiling: budget}
 		dream := cognitive.NewDream(&reserveDreamStore{raw: []store.Experience{{ID: "e1", Content: "NOTED-e1 the build passed", Raw: 1}}}, model, &reserveDoor{}, nil, cognitive.DreamConfig{Threshold: 1})
-		dream.SetAuthority(ringAuthority{a.promptGate, st})
+		dream.SetAuthority(ringAuthority{gate: a.promptGate, st: st})
 		if err := dream.Execute(context.Background()); err != nil {
 			t.Fatal(err)
 		}

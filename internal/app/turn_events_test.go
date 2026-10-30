@@ -121,6 +121,39 @@ func TestTurnEventsBoundAndFrameTheActualBatch(t *testing.T) {
 	}
 }
 
+func TestTurnEventsOneChannelDoesNotTakeTheBlock(t *testing.T) {
+	a, _ := promptCacheApp(t)
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("flood-%02d", i)
+		if _, err := a.store.RecordInbound(id, "telegram", "stranger", "again"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.store.DB().Exec(`UPDATE inbound SET received_ms=? WHERE id=?`, 1000+i, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.store.RecordInbound("quiet", "mail", "friend", "QUIET_CHANNEL_4_14"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.DB().Exec(`UPDATE inbound SET received_ms=9000 WHERE id='quiet'`); err != nil {
+		t.Fatal(err)
+	}
+	var parts []string
+	if err := a.appendPendingEvents(t.Context(), &parts, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.composedEvents) != interaction.MaxPageRows || !strings.Contains(a.composedEventText, "More pending") {
+		t.Fatalf("the block is full and says more remain: %d event(s)", len(a.composedEvents))
+	}
+	last := a.composedEvents[len(a.composedEvents)-1]
+	if last.Arrival == nil || last.Arrival.ID != "quiet" {
+		t.Fatalf("the other channel's arrival is not in this turn's block, shown last as the newest: %+v", last.Arrival)
+	}
+	if strings.Index(a.composedEventText, "QUIET_CHANNEL_4_14") < strings.Index(a.composedEventText, "flood-48") {
+		t.Fatal("the block does not show what it carries oldest first")
+	}
+}
+
 func TestTurnEventsDeliveryExcerptKeepsValidUTF8(t *testing.T) {
 	a, _ := promptCacheApp(t)
 	if err := a.store.AddOutboxMessage("unicode-delivery", "peer", "friend", "sent", nil); err != nil {
@@ -212,7 +245,8 @@ func pendingEvents(t *testing.T, a *App) []store.TurnEvent {
 	return rows
 }
 
-// fixtureModel answers every model request with f and keeps each body.
+// fixtureModel answers every model request with f and keeps each body;
+// when the test fails, it logs every request it received (logOnFailure).
 func fixtureModel(t *testing.T, a *App, f func(n int, w http.ResponseWriter)) *contScript {
 	t.Helper()
 	obs := &contScript{}
@@ -222,11 +256,12 @@ func fixtureModel(t *testing.T, a *App, f func(n int, w http.ResponseWriter)) *c
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		n := obs.add(string(body))
+		n := obs.addAt(r.Method+" "+r.URL.Path, string(body))
 		w.Header().Set("Content-Type", "application/json")
 		f(n, w)
 	}))
 	t.Cleanup(srv.Close)
+	obs.logOnFailure(t)
 	a.llmSwap.Swap(llm.New(&llm.ClientConfig{Endpoint: srv.URL, Model: "fake", MaxOutputTokens: 4096, Retries: -1, TimeoutSeconds: 5}))
 	return obs
 }
@@ -299,6 +334,10 @@ func TestEveryWokenTurnCarriesAndAcknowledgesPendingEvents(t *testing.T) {
 				waitUntil(t, func() bool { return !a.TurnActive() }, "the arrival's wake turn to finish")
 			case "continuation":
 				own = "[budget checkpoint — continuation 1]"
+				// The leg resumes the active session, as a queued leg does.
+				if err := a.store.StartWorkSession(t.Context(), "ws_l12", "l12 work"); err != nil {
+					t.Fatal(err)
+				}
 				a.continueCappedTurn("ws_l12", 1, capDeclared, "")
 			}
 			req := requestWith(t, obs, own)

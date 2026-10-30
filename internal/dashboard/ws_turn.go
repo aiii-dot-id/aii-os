@@ -2,7 +2,10 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 )
 
 func (s *Server) wsProbe(ctx context.Context, conn carrier, msg ClientMessage) {
@@ -18,22 +21,39 @@ func (s *Server) wsAsk(ctx context.Context, conn carrier, msg ClientMessage) {
 
 	h := s.currentHandler()
 	if msg.Ask == nil || h.AnswerAsk == nil {
-		s.sendError(ctx, conn, "ask: nothing to answer")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "ask: nothing to answer")
 		return
 	}
 	text, settle, err := h.AnswerAsk(*msg.Ask)
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+		s.queryAsks(ctx, conn, h)
 		return
 	}
 	s.BroadcastAsks()
+	said := interaction.SaidAnswer
+	if msg.Ask.Answer == "said" {
+		said = interaction.SaidTyped
+	}
 	if text != "" {
-		s.runOperatorMessage(ctx, conn, h, text, func(r ChatRecording) {
+		requestID := msg.RequestID
+		s.runOperatorMessage(withRefusalOnReceipt(interaction.WithSaid(ctx, said)), conn, h, text, func(r ChatRecording) {
 			if settle != nil {
 				settle(r.Error == nil)
 			}
+			if r.Error == nil {
+				return
+			}
+			if s.client(conn) != nil {
+				s.sendErrorFor(ctx, conn, requestID, answerNotRecorded(r.Error.Message))
+			}
+			s.BroadcastAsks()
 		})
 	}
+}
+
+func answerNotRecorded(why string) string {
+	return "your answer was not recorded (" + why + "), so the question is still open."
 }
 
 func (s *Server) wsCancel(ctx context.Context, conn carrier) {
@@ -58,6 +78,12 @@ func (s *Server) wsGenesis(ctx context.Context, conn carrier, msg ClientMessage)
 	}
 	response, err := h.HandleGenesis(ctx, msg.Genesis)
 	if err != nil {
+
+		var refused *RestoreNewRefusal
+		if errors.As(err, &refused) {
+			s.sendError(ctx, conn, refused.Text)
+			return
+		}
 		s.sendError(ctx, conn, fmt.Sprintf("genesis failed: %v", err))
 		return
 	}

@@ -44,7 +44,7 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	newStr, _ := args["new_string"].(string)
 
 	if path == "" || oldStr == "" {
-		return Result{Error: "file_path and old_string are required"}, nil
+		return Refusal(ReasonArgumentsRequired, "file_path and old_string are required"), nil
 	}
 	if t.window != nil {
 		t.window("gate", path)
@@ -52,7 +52,7 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (Result, er
 
 	f, st, err := openRegular(path)
 	if err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 	if t.read != nil {
 		if kept := t.read(ctx, path, st, f); kept != nil {
@@ -63,31 +63,31 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	data, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 
 	content := string(data)
 	if !strings.Contains(content, oldStr) {
 		if numberedLines(oldStr) {
-			return Result{Error: "old_string not found in file: every line of it begins with a line number and a tab, " +
-				"the prefix read shows and the file does not hold; reissue the edit with the text after each tab"}, nil
+			return failed(ReasonEditNoMatch, "old_string not found in file: every line of it begins with a line number and a tab, "+
+				"the prefix read shows and the file does not hold; reissue the edit with the text after each tab"), nil
 		}
-		return Result{Error: "old_string not found in file"}, nil
+		return failed(ReasonEditNoMatch, "old_string not found in file"), nil
 	}
 
 	if oldStr == newStr {
-		return Result{Error: "old_string and new_string are identical — this edit would change nothing; " +
-			"reissue it with the replacement text, or use read to check the file first"}, nil
+		return failed(ReasonEditNoChange, "old_string and new_string are identical — this edit would change nothing; "+
+			"reissue it with the replacement text, or use read to check the file first"), nil
 	}
 
 	if n := strings.Count(content, oldStr); n > 1 {
-		return Result{Error: fmt.Sprintf("old_string appears %d times in %s — this edit would silently take the first; "+
-			"include surrounding lines so the anchor is unique", n, path)}, nil
+		return failed(ReasonEditNotUnique, fmt.Sprintf("old_string appears %d times in %s — this edit would silently take the first; "+
+			"include surrounding lines so the anchor is unique", n, path)), nil
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
 	if err := ctx.Err(); err != nil {
-		return Result{Error: fmt.Sprintf("edit cancelled before anything was written: %v", err)}, nil
+		return failed(ReasonCancelled, fmt.Sprintf("edit cancelled before anything was written: %v", err)), nil
 	}
 
 	var held func(string, os.FileInfo, *os.File) error
@@ -96,16 +96,15 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	}
 	if err := rewriteSameFile(path, []byte(newContent), st, held); err != nil {
 
-		var kept *SubstrateError
-		if errors.As(err, &kept) {
+		if heldKept(err) {
 			return Refusal(ReasonPathRefused, "access denied: "+err.Error()), nil
 		}
 
 		var emptied *emptiedError
 		if !errors.As(err, &emptied) {
-			return Result{Error: err.Error()}, nil
+			return failedOn(err), nil
 		}
-		return Result{Error: editFailure(path, emptied, rewriteSameFile(path, data, st, held))}, nil
+		return failed(ReasonIO, editFailure(path, emptied, rewriteSameFile(path, data, st, held))), nil
 	}
 
 	return Result{Output: fmt.Sprintf("Edited %s", path)}, nil

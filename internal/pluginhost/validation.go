@@ -394,7 +394,8 @@ func (ap *ActivePlugin) checkLanes(embedDeadline func(kind string) time.Duration
 				deadline = embedDeadline(kind)
 			}
 			res, err := call(ctx, MethodEmbed, map[string]any{"kind": kind, "text": text}, deadline)
-			return src.answer(ctx, res, err)
+			got, err := src.answer(ctx, res, err, utf8.RuneCountInString(text))
+			return got.Vector, err
 		}
 	}
 	return lanes

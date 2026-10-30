@@ -1,0 +1,209 @@
+{
+ "about": "The client's decision for each refusal a witness can answer a bookmark with. The bodies follow ai3-witnessd 0.4.0's error table (the deployed server) and 0.5.0's new codes with the words of the witness design's refusal table (revision 8); the three 0.5.0 refusals that carry evidence are met with the server's own bodies in testdata/witness-context-v1/vectors.json (vectors_test.go), and once the server's own refusal vectors exist (its testdata/witness-refusals), their bodies replace these byte for byte and the decisions stay. Decisions: integrity (SAFE's), cadence (pacing), key_already_enrolled (no fresh enrolment for this envelope; the registered one adopted on its evidence, R1, or the refusal stands for the run and the operator is told), context_required (the refusal stands for the run and the operator is told: this version sends no context), unrecognised (told, nothing latched; this is also the decision for the 0.5.0 codes that answer only a request carrying a context, which this version never sends), not_a_conflict (the pass fails as a transport failure does).",
+ "vectors": [
+  {
+   "name": "a rollback, by its code",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"rollback\",\"receipt\":{\"identity_id\":\"did:aiii:identity:sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"previous_witnessed_ledger_ordinal\":4,\"previous_witnessed_ledger_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ledger_ordinal\":9,\"ledger_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"witnessed_at\":\"2026-10-22T12:00:00Z\",\"witness_signature\":{\"signature_profile\":\"AIII-PQ-SIGNATURE-V1-FAST\",\"alg\":\"ML-DSA-87\",\"key_id\":\"aiii_witness_vector\",\"public_key_fingerprint\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"signature_input_sha256\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"sig_b64\":\"AAAA\"}}}",
+   "decision": "integrity"
+  },
+  {
+   "name": "a fork, by its code",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"fork\",\"receipt\":{\"identity_id\":\"did:aiii:identity:sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"previous_witnessed_ledger_ordinal\":4,\"previous_witnessed_ledger_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ledger_ordinal\":9,\"ledger_hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"witnessed_at\":\"2026-10-22T12:00:00Z\",\"witness_signature\":{\"signature_profile\":\"AIII-PQ-SIGNATURE-V1-FAST\",\"alg\":\"ML-DSA-87\",\"key_id\":\"aiii_witness_vector\",\"public_key_fingerprint\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"signature_input_sha256\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"sig_b64\":\"AAAA\"}}}",
+   "decision": "integrity"
+  },
+  {
+   "name": "another identity key, by its code",
+   "status": 409,
+   "body": "{\"error\":\"identity public key does not match registered witness identity\",\"code\":\"identity_key_mismatch\"}",
+   "decision": "integrity"
+  },
+  {
+   "name": "the cadence, by its code",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark cadence below hosted minimum\",\"code\":\"cadence\"}",
+   "decision": "cadence"
+  },
+  {
+   "name": "a code that never comes with a 409",
+   "status": 409,
+   "body": "{\"error\":\"Method not allowed\",\"code\":\"method_not_allowed\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a code this client does not know, in a rollback's words",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"rollback_behind_a_restore\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a code this client does not know, in the cadence's words",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark cadence below hosted minimum\",\"code\":\"pacing\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a rollback's code in other words",
+   "status": 409,
+   "body": "{\"error\":\"the bookmark is behind the witness's row\",\"code\":\"rollback\"}",
+   "decision": "integrity"
+  },
+  {
+   "name": "the cadence's code in a rollback's words",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"cadence\"}",
+   "decision": "cadence"
+  },
+  {
+   "name": "a rollback or fork in words alone (0.3.0)",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\"}",
+   "decision": "integrity"
+  },
+  {
+   "name": "another identity key in words alone (0.3.0)",
+   "status": 409,
+   "body": "{\"error\":\"identity public key does not match registered witness identity\"}",
+   "decision": "integrity"
+  },
+  {
+   "name": "the cadence in words alone (0.3.0)",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark cadence below hosted minimum\"}",
+   "decision": "cadence"
+  },
+  {
+   "name": "words this client does not know, with no code",
+   "status": 409,
+   "body": "{\"error\":\"witness state advanced after reconstruction\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "an empty code is no code",
+   "status": 409,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"\"}",
+   "decision": "integrity"
+  },
+  {
+   "name": "a code with no words is not the witness's form",
+   "status": 409,
+   "body": "{\"code\":\"fork\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a gateway's page",
+   "status": 409,
+   "body": "<html><body>409 Conflict</body></html>",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a request the witness could not read",
+   "status": 400,
+   "body": "{\"error\":\"invalid request\",\"code\":\"bad_request\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "a signature that does not verify",
+   "status": 400,
+   "body": "{\"error\":\"identity signature verification failed\",\"code\":\"bad_signature\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "a request too large",
+   "status": 413,
+   "body": "{\"error\":\"request body too large\",\"code\":\"too_large\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "a method not allowed",
+   "status": 405,
+   "body": "{\"error\":\"Method not allowed\",\"code\":\"method_not_allowed\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "a request for another host",
+   "status": 421,
+   "body": "{\"error\":\"misdirected request\",\"code\":\"misdirected_request\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "too many requests",
+   "status": 429,
+   "body": "{\"error\":\"rate limited\",\"code\":\"rate_limited\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "the witness unavailable",
+   "status": 503,
+   "body": "{\"error\":\"witness unavailable\",\"code\":\"unavailable\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "a rollback's code at a status that is not 409",
+   "status": 400,
+   "body": "{\"error\":\"witness bookmark rollback or fork\",\"code\":\"rollback\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "another enrolment holds this key, by its code",
+   "status": 409,
+   "body": "{\"error\":\"identity signing key is already enrolled\",\"code\":\"key_already_enrolled\"}",
+   "decision": "key_already_enrolled"
+  },
+  {
+   "name": "a context required for first enrolment, by its code",
+   "status": 409,
+   "body": "{\"error\":\"witness context is required for first enrolment\",\"code\":\"context_required\"}",
+   "decision": "context_required"
+  },
+  {
+   "name": "a context that does not match the stored receipt",
+   "status": 409,
+   "body": "{\"error\":\"witness context does not match the stored receipt\",\"code\":\"context_mismatch\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "an expected head that does not match",
+   "status": 409,
+   "body": "{\"error\":\"witness head does not match the expected destination head\",\"code\":\"expected_head_mismatch\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a context that targets another signing key",
+   "status": 409,
+   "body": "{\"error\":\"witness context targets a different signing key\",\"code\":\"target_key_mismatch\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a handover from a predecessor not trusted",
+   "status": 409,
+   "body": "{\"error\":\"handover predecessor is not trusted\",\"code\":\"handover_unrecognized\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a handover whose proof did not verify",
+   "status": 409,
+   "body": "{\"error\":\"handover predecessor proof did not verify\",\"code\":\"handover_unverified\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a handover that does not continue",
+   "status": 409,
+   "body": "{\"error\":\"handover does not preserve identity and forward continuity\",\"code\":\"handover_mismatch\"}",
+   "decision": "unrecognised"
+  },
+  {
+   "name": "a signature that does not verify, at 401 (0.5.0)",
+   "status": 401,
+   "body": "{\"error\":\"identity signature verification failed\",\"code\":\"bad_signature\"}",
+   "decision": "not_a_conflict"
+  },
+  {
+   "name": "the key-enrolled code at a status that is not 409",
+   "status": 400,
+   "body": "{\"error\":\"identity signing key is already enrolled\",\"code\":\"key_already_enrolled\"}",
+   "decision": "not_a_conflict"
+  }
+ ]
+}

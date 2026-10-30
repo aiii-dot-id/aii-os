@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/config"
 )
@@ -32,6 +34,10 @@ type providerEntry struct {
 	EffortLevels []string `json:"effort_levels,omitempty"`
 
 	CatalogueAuthor string `json:"catalogue_author,omitempty"`
+
+	CapabilityList *string `json:"capability_list,omitempty"`
+
+	CapabilityCatalogue *string `json:"capability_catalogue,omitempty"`
 
 	VendorKeyEnv string `json:"vendor_key_env,omitempty"`
 	URL          string `json:"url"`
@@ -110,9 +116,21 @@ type modelCapability struct {
 
 	Effort []string `json:"effort"`
 
+	Input  map[string]bool `json:"input,omitempty"`
+	Output map[string]bool `json:"output,omitempty"`
+	Tools  *bool           `json:"tools,omitempty"`
+
 	Images *bool `json:"images,omitempty"`
 
-	ImageTokens    int   `json:"image_tokens,omitempty"`
+	Source string `json:"source,omitempty"`
+	AsOf   string `json:"as_of,omitempty"`
+
+	spelled     *bool
+	spelledBoth bool
+
+	ImageTokens int `json:"image_tokens,omitempty"`
+
+	FileTokens     int   `json:"file_tokens,omitempty"`
 	ImageMaxBytes  int64 `json:"image_max_bytes,omitempty"`
 	ImagesMaxBytes int64 `json:"images_max_bytes,omitempty"`
 	ImageMaxSide   int   `json:"image_max_side,omitempty"`
@@ -126,6 +144,8 @@ type providerRegistry struct {
 
 	Providers []providerEntry `json:"providers"`
 
+	CapabilityLookup capabilityLookup `json:"capability_lookup,omitzero"`
+
 	ModelCapabilities map[string]modelCapability `json:"model_capabilities,omitempty"`
 
 	DialectEffortFloor map[string][]string `json:"dialect_effort_floor,omitempty"`
@@ -133,6 +153,8 @@ type providerRegistry struct {
 	lent map[string]*lentFacts
 
 	broken []brokenEntry
+
+	stated []byte
 
 	eff *effectiveCaps
 }
@@ -190,6 +212,49 @@ func fillEmbeddedCatalogueAuthors(reg *providerRegistry) {
 			reg.lentTo(e.Name).author = true
 		}
 	}
+}
+
+func fillEmbeddedCapabilitySources(reg *providerRegistry) {
+	for i := range reg.Providers {
+		e := &reg.Providers[i]
+		shipped := entryNamed(embeddedRegistry(), e.Name)
+		if shipped == nil {
+			continue
+		}
+		if e.CapabilityList == nil && shipped.CapabilityList != nil && sameOrigin(capabilityListAt(*shipped.CapabilityList, "m"), e.URL) {
+			list := *shipped.CapabilityList
+			e.CapabilityList = &list
+			reg.lentTo(e.Name).list = true
+		}
+		if e.CapabilityCatalogue == nil && shipped.CapabilityCatalogue != nil && !e.Local {
+			catalogue := *shipped.CapabilityCatalogue
+			if reg.ModelCatalogueURL != nil {
+				catalogue = *reg.ModelCatalogueURL
+			}
+			e.CapabilityCatalogue = &catalogue
+			reg.lentTo(e.Name).catalogue = true
+		}
+	}
+}
+
+func validateCapabilitySources(e providerEntry) error {
+	if c := e.CapabilityCatalogue; c != nil && *c != "" {
+		if e.Local {
+			return fmt.Errorf("provider %q is local, so its model names never go to a public catalogue: remove its capability_catalogue %q", e.Name, *c)
+		}
+		if !validProviderURL(*c) {
+			return fmt.Errorf("provider %q has capability_catalogue %q, which is not an http(s) address", e.Name, *c)
+		}
+	}
+	if l := e.CapabilityList; l != nil && *l != "" {
+		if at := capabilityListAt(*l, "m"); !validProviderURL(at) {
+			return fmt.Errorf("provider %q has capability_list %q, which is not an http(s) address", e.Name, *l)
+		}
+		if !sameOrigin(capabilityListAt(*l, "m"), e.URL) {
+			return fmt.Errorf("provider %q has capability_list %q away from its own address %q; its credential goes only there", e.Name, *l, e.URL)
+		}
+	}
+	return nil
 }
 
 func fillEmbeddedVendorKeyEnv(reg *providerRegistry) {
@@ -357,7 +422,9 @@ type lentFacts struct {
 	options                        map[string]string
 	oauth                          string
 	effort, author, speech, keyEnv bool
+	list, catalogue                bool
 	route                          lentRoute
+	facts                          map[string]json.RawMessage
 }
 
 type lentRoute struct {
@@ -392,6 +459,7 @@ func cloneLent(in map[string]*lentFacts) map[string]*lentFacts {
 	for name, l := range in {
 		c := *l
 		c.options = maps.Clone(l.options)
+		c.facts = maps.Clone(l.facts)
 		out[name] = &c
 	}
 	return out
@@ -419,12 +487,19 @@ func (r *providerRegistry) operatorView() *providerRegistry {
 		if l.author {
 			e.CatalogueAuthor = ""
 		}
+		if l.list {
+			e.CapabilityList = nil
+		}
+		if l.catalogue {
+			e.CapabilityCatalogue = nil
+		}
 		if l.keyEnv {
 			e.VendorKeyEnv = ""
 		}
 		if l.speech {
 			e.Speech = nil
 		}
+		takeBackFacts(e, l)
 
 		if rt := l.route; rt.toURL != "" {
 			if e.APIType == rt.toType && e.URL == rt.toURL {
@@ -458,15 +533,56 @@ func (r *providerRegistry) operatorView() *providerRegistry {
 	return &cp
 }
 
-func (r *providerRegistry) modelCatalogueURL() string {
-	base := embeddedRegistry().ModelCatalogueURL
-	if r != nil && r.ModelCatalogueURL != nil {
-		base = r.ModelCatalogueURL
+type capabilityLookup struct {
+	TimeoutSeconds    int   `json:"timeout_seconds,omitempty"`
+	KeepHours         int   `json:"keep_hours,omitempty"`
+	CatalogueMaxBytes int64 `json:"catalogue_max_bytes,omitempty"`
+}
+
+func (r *providerRegistry) capabilityLookup() capabilityLookup {
+	l := embeddedRegistry().CapabilityLookup
+	if r != nil {
+		mine := r.CapabilityLookup
+		l.TimeoutSeconds = cmp.Or(mine.TimeoutSeconds, l.TimeoutSeconds)
+		l.KeepHours = cmp.Or(mine.KeepHours, l.KeepHours)
+		l.CatalogueMaxBytes = cmp.Or(mine.CatalogueMaxBytes, l.CatalogueMaxBytes)
 	}
-	if base == nil {
+	return l
+}
+
+func (l capabilityLookup) timeout() time.Duration {
+	return cmp.Or(time.Duration(l.TimeoutSeconds)*time.Second, defaultCapabilityTimeout)
+}
+
+func (l capabilityLookup) keep() time.Duration {
+	return cmp.Or(time.Duration(l.KeepHours)*time.Hour, defaultCapabilityKeep)
+}
+
+func (l capabilityLookup) catalogueMaxBytes() int64 {
+	return cmp.Or(l.CatalogueMaxBytes, defaultCatalogueMaxBytes)
+}
+
+func validateCapabilityLookup(l capabilityLookup) error {
+	for _, b := range []struct {
+		name      string
+		v, lo, hi int64
+	}{
+		{"timeout_seconds", int64(l.TimeoutSeconds), 1, 120},
+		{"keep_hours", int64(l.KeepHours), 1, 24 * 30},
+		{"catalogue_max_bytes", l.CatalogueMaxBytes, 4 << 10, 16 << 20},
+	} {
+		if b.v != 0 && (b.v < b.lo || b.v > b.hi) {
+			return fmt.Errorf("capability_lookup.%s: %d is outside %d to %d (0 or absent takes the default)", b.name, b.v, b.lo, b.hi)
+		}
+	}
+	return nil
+}
+
+func catalogueFor(e providerEntry) string {
+	if e.Local || e.CapabilityCatalogue == nil {
 		return ""
 	}
-	return strings.TrimRight(*base, "/")
+	return strings.TrimRight(*e.CapabilityCatalogue, "/")
 }
 
 func (a *App) loadProviders() (*providerRegistry, error) {
@@ -510,10 +626,18 @@ func decodeProviders(path string, data []byte) (*providerRegistry, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("%s is invalid: trailing JSON data", path)
 	}
+	if err := validateCapabilityLookup(file.CapabilityLookup); err != nil {
+		return nil, fmt.Errorf("%s is invalid: %w", path, err)
+	}
+	if err := validateCapabilities(file.ModelCapabilities); err != nil {
+		return nil, fmt.Errorf("%s is invalid: %w", path, err)
+	}
+	foldImages(file.ModelCapabilities)
 	reg, err := admitEntries(file.providerRegistry, file.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("%s is invalid: %w", path, err)
 	}
+	reg.stated, _ = json.Marshal(withBrokenEntries(reg.operatorView()))
 	return reg, nil
 }
 
@@ -544,26 +668,49 @@ func validateEntries(reg *providerRegistry) error {
 		if err := validateRole(e); err != nil {
 			return err
 		}
+		if err := validateCapabilitySources(*e); err != nil {
+			return err
+		}
 	}
 	return nil
 }
+
+var providerAPITypes = []string{"openai", "anthropic", "gemini", "responses"}
+
+const unknownAPITypeRefusal = "provider %q has unknown api_type %q (want openai, anthropic, gemini or responses)"
 
 func normalizeProviderAPIType(e *providerEntry) error {
 	if e.APIType == "" {
 		e.APIType = "openai"
 	}
-	if e.APIType != "openai" && e.APIType != "anthropic" && e.APIType != "gemini" {
-		return fmt.Errorf("provider %q has unknown api_type %q (want openai, anthropic or gemini)", e.Name, e.APIType)
+	if !slices.Contains(providerAPITypes, e.APIType) {
+		return fmt.Errorf(unknownAPITypeRefusal, e.Name, e.APIType)
 	}
 	return nil
 }
 
 func saveProvidersFile(path string, reg *providerRegistry) (bool, error) {
-	data, err := json.MarshalIndent(withBrokenEntries(reg.operatorView()), "", "  ")
+	next, err := json.Marshal(withBrokenEntries(reg.operatorView()))
 	if err != nil {
 		return false, err
 	}
-	return writeFileAtomic(path, data)
+	data, err := fileWithChanges(path, reg.stated, next, providersStated)
+	if err != nil {
+		return false, err
+	}
+	published, err := writeFileAtomic(path, data)
+	if published {
+		reg.stated = next
+	}
+	return published, err
+}
+
+func providersStated(data []byte) ([]byte, error) {
+	reg, err := decodeProviders(ProvidersFileName, data)
+	if err != nil {
+		return nil, err
+	}
+	return reg.stated, nil
 }
 
 func (a *App) setProvider(e providerEntry, keepAPIKey bool) error {
@@ -606,6 +753,13 @@ func (a *App) setProviderWith(e providerEntry, keepAPIKey, fromCard, keepEmbeddi
 				e.Local = reg.Providers[i].Local
 				e.CatalogueAuthor = reg.Providers[i].CatalogueAuthor
 				e.ReplayReasoning = reg.Providers[i].ReplayReasoning
+
+				if l := reg.lent[e.Name]; l == nil || !l.list {
+					e.CapabilityList = reg.Providers[i].CapabilityList
+				}
+				if l := reg.lent[e.Name]; l == nil || !l.catalogue {
+					e.CapabilityCatalogue = reg.Providers[i].CapabilityCatalogue
+				}
 
 				if l := reg.lent[e.Name]; l == nil || !l.keyEnv {
 					e.VendorKeyEnv = reg.Providers[i].VendorKeyEnv
@@ -670,9 +824,22 @@ func (a *App) setProviderWith(e providerEntry, keepAPIKey, fromCard, keepEmbeddi
 		if fromCard {
 
 			if l := reg.lent[e.Name]; l != nil {
-				l.keyEnv = false
+				l.keyEnv, l.list, l.catalogue = false, false, false
+
+				if shipped := entryNamed(embeddedRegistry(), e.Name); len(l.facts) > 0 && (shipped == nil || !atShippedAddress(e, *shipped)) {
+					if lent, ok := l.facts["api_key_env"]; ok {
+						if i := slices.IndexFunc(reg.Providers, func(p providerEntry) bool { return p.Name == e.Name }); i >= 0 {
+							if raw, _ := json.Marshal(reg.Providers[i].APIKeyEnv); bytes.Equal(raw, lent) {
+								reg.Providers[i].APIKeyEnv = ""
+							}
+						}
+					}
+					l.facts = nil
+				}
 			}
 			fillEmbeddedVendorKeyEnv(reg)
+			fillEmbeddedCapabilitySources(reg)
+			fillEmbeddedFacts(reg)
 		}
 		return nil
 	})
@@ -1007,6 +1174,7 @@ func embeddedRegistry() *providerRegistry {
 
 			embedReg = providerRegistry{}
 		}
+		foldImages(embedReg.ModelCapabilities)
 	})
 	return &embedReg
 }
@@ -1044,11 +1212,11 @@ func newEffectiveCaps(reg *providerRegistry) *effectiveCaps {
 			if v.CacheRetentions == nil {
 				v.CacheRetentions = base.CacheRetentions
 			}
-			if v.Images == nil {
-				v.Images = base.Images
-			}
 			if v.ImageTokens == 0 {
 				v.ImageTokens = base.ImageTokens
+			}
+			if v.FileTokens == 0 {
+				v.FileTokens = base.FileTokens
 			}
 			if v.ImageMaxBytes == 0 {
 				v.ImageMaxBytes = base.ImageMaxBytes
@@ -1147,7 +1315,84 @@ func copyModelCapability(c modelCapability) modelCapability {
 		v := *c.Images
 		c.Images = &v
 	}
+	c.Input, c.Output = maps.Clone(c.Input), maps.Clone(c.Output)
+	if c.Tools != nil {
+		v := *c.Tools
+		c.Tools = &v
+	}
 	return c
+}
+
+var (
+	inputKinds  = []string{"image", "pdf", "audio", "video"}
+	outputKinds = []string{"text", "image", "audio", "video"}
+)
+
+func (c modelCapability) takes(kind string) *bool {
+	if v, ok := c.Input[kind]; ok {
+		return &v
+	}
+	return nil
+}
+
+func foldImages(rows map[string]modelCapability) {
+	for model, row := range rows {
+		if row.Images == nil {
+			continue
+		}
+		row.Input = maps.Clone(row.Input)
+		if row.Input == nil {
+			row.Input = map[string]bool{}
+		}
+		_, row.spelledBoth = row.Input["image"]
+		row.spelled = row.Images
+		row.Input["image"], row.Images = *row.Images, nil
+		rows[model] = row
+	}
+}
+
+func (c modelCapability) MarshalJSON() ([]byte, error) {
+	type fields modelCapability
+	if v, ok := c.Input["image"]; ok && c.spelled != nil && *c.spelled == v {
+		images := v
+		c.Images = &images
+		if !c.spelledBoth {
+			c.Input = maps.Clone(c.Input)
+			delete(c.Input, "image")
+			if len(c.Input) == 0 {
+				c.Input = nil
+			}
+		}
+	}
+	return json.Marshal(fields(c))
+}
+
+func (c modelCapability) gives(kind string) *bool {
+	if v, ok := c.Output[kind]; ok {
+		return &v
+	}
+	return nil
+}
+
+func validateCapabilities(rows map[string]modelCapability) error {
+	for _, model := range slices.Sorted(maps.Keys(rows)) {
+		row := rows[model]
+		for _, side := range []struct {
+			name  string
+			kinds []string
+			said  map[string]bool
+		}{{"input", inputKinds, row.Input}, {"output", outputKinds, row.Output}} {
+			for _, kind := range slices.Sorted(maps.Keys(side.said)) {
+				if !slices.Contains(side.kinds, kind) {
+					return fmt.Errorf("model_capabilities[%q].%s: %q is not a kind (want %s)", model, side.name, kind, strings.Join(side.kinds, ", "))
+				}
+			}
+		}
+		if v, ok := row.Input["image"]; ok && row.Images != nil && *row.Images != v {
+			return fmt.Errorf("model_capabilities[%q]: \"images\" and \"input.image\" disagree", model)
+		}
+	}
+	return nil
 }
 
 func cloneOAuth(in map[string]oauth.Provider) map[string]oauth.Provider {

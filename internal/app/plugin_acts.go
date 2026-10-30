@@ -13,6 +13,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -285,11 +286,10 @@ func (a *App) alwaysAct(ctx context.Context, pluginID, actID string) error {
 		return err
 	}
 	defer a.broadcastActs()
-	standing := append([]string(nil), a.configSnapshot().Plugins.Grants[pluginID].AutoConfirm...)
-	if !hasOperation(standing, act.Operation) {
-		standing = append(standing, act.Operation)
+	werr := a.addAutoConfirm(pluginID, act.Operation)
+	if errors.Is(werr, errStandingHeld) {
+		werr = nil
 	}
-	_, werr := a.applyConfigChange(map[string]any{"plugins.grants." + pluginID + ".auto_confirm": standing})
 	if werr != nil {
 		logsink.Warn("act.error", "the operator's ALWAYS for %s of %s was not written: %v", act.Operation, act.Plugin, werr)
 		rerr := a.runAct(ctx, act, "confirmed — the standing confirmation was NOT written ("+werr.Error()+"), so the next call asks again")
@@ -302,12 +302,76 @@ func (a *App) alwaysAct(ctx context.Context, pluginID, actID string) error {
 	return a.runAct(ctx, act, "confirmed, and always from now on (until revoked on the Plugins page):")
 }
 
+var errStandingHeld = errors.New("is already confirmed without asking; nothing was changed")
+
+func (a *App) addAutoConfirm(pluginID, operation string) error {
+	published, err := func() (bool, error) {
+		a.cfgMu.Lock()
+		defer a.cfgMu.Unlock()
+		g := a.cfg.Plugins.Grants[pluginID]
+		if hasOperation(g.AutoConfirm, operation) {
+			return false, fmt.Errorf("%s of %s %w", operation, pluginID, errStandingHeld)
+		}
+		candidate := *a.cfg
+		grants := copyGrants(candidate.Plugins.Grants)
+		g.AutoConfirm = append(slices.Clone(g.AutoConfirm), operation)
+		grants[pluginID] = g
+		candidate.Plugins.Grants = grants
+		return a.persistLocked(&candidate, saveConfig)
+	}()
+	if published {
+		a.publishGrants(a.configSnapshot())
+	}
+	if err != nil {
+		return fmt.Errorf("always: %w", err)
+	}
+	return nil
+}
+
+func (a *App) revokeAutoConfirm(pluginID, operation string) error {
+	defer a.broadcastActs()
+	published, err := func() (bool, error) {
+		a.cfgMu.Lock()
+		defer a.cfgMu.Unlock()
+		g, listed := a.cfg.Plugins.Grants[pluginID]
+		if !listed || !hasOperation(g.AutoConfirm, operation) {
+			return false, fmt.Errorf("%s of %s is not confirmed without asking, so there is nothing to revoke; nothing was changed", operation, pluginID)
+		}
+		candidate := *a.cfg
+		grants := copyGrants(candidate.Plugins.Grants)
+		g.AutoConfirm = slices.DeleteFunc(slices.Clone(g.AutoConfirm), func(op string) bool { return op == operation })
+		if len(g.AutoConfirm) == 0 {
+			g.AutoConfirm = nil
+		}
+		if grantEmpty(g) {
+			delete(grants, pluginID)
+		} else {
+			grants[pluginID] = g
+		}
+		if len(grants) == 0 {
+			grants = nil
+		}
+		candidate.Plugins.Grants = grants
+		return a.persistLocked(&candidate, saveConfig)
+	}()
+	if published {
+		a.publishGrants(a.configSnapshot())
+		logsink.Info("act.decision", "the operator REVOKED the standing confirmation of %s of %s: its next call asks again", operation, pluginID)
+	}
+	if err != nil {
+		return fmt.Errorf("revoke: %w", err)
+	}
+	return nil
+}
+
 func (a *App) broadcastActs() {
 	if a.dashboard != nil {
 		a.dashboard.BroadcastConfig()
 		a.dashboard.BroadcastAsks()
 	}
 }
+
+const actAnsweredRefused = "its answer says it refused; what it said is in the act's result"
 
 func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 	if act.Session != "" {
@@ -336,14 +400,14 @@ func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 	started := time.Now()
 	res, err := a.toolReg.Execute(pluginhost.WithOperatorAct(ctx, stamp), act.Tool, act.Args)
 	a.emitToolEvent("call", act.Tool, string(raw))
-	failed := err != nil || res.Error != ""
+	failed := err != nil || res.Failed()
 	duration := time.Since(started).Milliseconds()
 	text := res.Text()
 	if err != nil {
 		text = err.Error()
 	}
 	text = observedText(text)
-	durable, recordErr := record.recordToolDoneObservedDurable(turn, 1, act.Tool, string(raw), conversation.Observation{Text: text, Failed: failed, DurationMS: &duration, SessionReason: "operator act"})
+	durable, recordErr := record.recordToolDoneObservedDurable(turn, 1, act.Tool, string(raw), conversation.Observation{Text: text, Failed: failed, DurationMS: &duration, SessionReason: "operator_act"})
 	if !durable {
 		recordErr = errors.Join(recordErr, a.recordActResultFallback(ctx, act, text, recordErr))
 	}
@@ -353,10 +417,15 @@ func (a *App) runAct(ctx context.Context, act *pendingAct, word string) error {
 		logsink.Warn("act.error", "the operator CONFIRMED %s of %s (%s) — the dispatch failed: %v", act.Operation, act.Plugin, act.ID, err)
 		noticeErr := a.recordActOutcome(ctx, act, word+", and the operation failed", "")
 		return errors.Join(fmt.Errorf("act %s ran and failed: %v", act.ID, err), recordErr, noticeErr)
-	case res.Error != "":
-		logsink.Warn("act.refusal", "the operator CONFIRMED %s of %s (%s) — the operation refused: %s", act.Operation, act.Plugin, act.ID, res.Error)
+	case res.Error != "" || res.AnsweredRefused:
+		said := res.Error
+		if said == "" {
+
+			said = actAnsweredRefused
+		}
+		logsink.Warn("act.refusal", "the operator CONFIRMED %s of %s (%s) — the operation refused: %s", act.Operation, act.Plugin, act.ID, said)
 		noticeErr := a.recordActOutcome(ctx, act, word+", and the operation refused", "")
-		return errors.Join(fmt.Errorf("act %s ran and was refused: %s", act.ID, res.Error), recordErr, noticeErr)
+		return errors.Join(fmt.Errorf("act %s ran and was refused: %s", act.ID, said), recordErr, noticeErr)
 	default:
 		logsink.Info("act.end", "the operator CONFIRMED %s of %s (%s) — ran once (%d bytes)", act.Operation, act.Plugin, act.ID, len(res.Text()))
 		return errors.Join(recordErr, a.recordActOutcome(ctx, act, word, ""))

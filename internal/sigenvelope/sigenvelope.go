@@ -71,11 +71,8 @@ func profileAccepted(profile string, accepted []string) bool {
 
 func VerifyPayload(bundleBytes []byte, pubkey *PublicKeyEnvelope, expectedKind string, acceptedProfiles ...string) (json.RawMessage, error) {
 
-	if _, err := canonicaljson.CanonicalizeV1(bundleBytes); err != nil {
-		return nil, fmt.Errorf("parse bundle: %w", err)
-	}
 	var bundle Envelope
-	if err := json.Unmarshal(bundleBytes, &bundle); err != nil {
+	if err := Decode(bundleBytes, &bundle); err != nil {
 		return nil, fmt.Errorf("parse bundle: %w", err)
 	}
 
@@ -190,6 +187,14 @@ func VerifyPayload(bundleBytes []byte, pubkey *PublicKeyEnvelope, expectedKind s
 	}
 
 	return bundle.Payload, nil
+}
+
+func Decode(raw []byte, out any) error {
+	canonical, err := canonicaljson.CanonicalizeV1(raw)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(canonical, out)
 }
 
 var ErrOutsideWindow = errors.New("key envelope outside its validity window")

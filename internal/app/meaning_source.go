@@ -128,7 +128,7 @@ func (a *App) pickFor(cfg *Config, offered []*pluginhost.ActivePlugin, entry pro
 		}
 		var gone meaningPick
 		if safe {
-			gone = off(meaningOffSafe, "the vectors are made by a plugin (%s), and no plugin is asked while the identity is in SAFE", id)
+			gone = off(meaningOffSafe, "the vectors are made by a plugin (%s), and no plugin is asked %s", id, a.whileHeld())
 		} else {
 			gone = off(meaningOffNotRunning, "the plugin chosen to make the vectors, %s, is not running (the dashboard's Plugins view), and nothing else is asked in its place", id)
 		}
@@ -176,7 +176,7 @@ func (a *App) pickFor(cfg *Config, offered []*pluginhost.ActivePlugin, entry pro
 	case len(stopped) > 0:
 
 		if safe {
-			pick = off(meaningOffSafe, "the vectors are made by a plugin (%s), and no plugin is asked while the identity is in SAFE", stopped[0])
+			pick = off(meaningOffSafe, "the vectors are made by a plugin (%s), and no plugin is asked %s", stopped[0], a.whileHeld())
 		} else {
 			pick = off(meaningOffNotRunning, "the plugin that made the vectors kept, %s, is not running (the dashboard's Plugins view), and nothing else is asked in its place", stopped[0])
 		}
@@ -196,7 +196,7 @@ func (a *App) pickFor(cfg *Config, offered []*pluginhost.ActivePlugin, entry pro
 		pick = provider
 		pick.derived = meaningChoiceProvider
 	case safe:
-		pick = off(meaningOffSafe, "no provider's embeddings model is named, and a plugin that makes vectors does not run while the identity is in SAFE")
+		pick = off(meaningOffSafe, "no provider's embeddings model is named, and a plugin that makes vectors does not run %s", a.whileHeld())
 	default:
 		pick = off(meaningOffNoSource, "%s", memory.NoSource)
 	}
@@ -280,7 +280,7 @@ func (a *App) pickPlugin(cfg *Config, ap *pluginhost.ActivePlugin) meaningPick {
 
 func (a *App) pluginSourceRefused(cfg *Config, ap *pluginhost.ActivePlugin) *meaningOff {
 	if _, safe := a.SafeMode(); safe {
-		return &meaningOff{Kind: meaningOffSafe, Detail: fmt.Sprintf("the vectors are made by a plugin (%s), and no plugin is asked while the identity is in SAFE", ap.ID)}
+		return &meaningOff{Kind: meaningOffSafe, Detail: fmt.Sprintf("the vectors are made by a plugin (%s), and no plugin is asked %s", ap.ID, a.whileHeld())}
 	}
 
 	if g, granted := cfg.Plugins.Grants[ap.ID]; granted && !grantEmpty(g) {
@@ -391,7 +391,8 @@ func (a *App) startSourceCheck(ap *pluginhost.ActivePlugin, check *sourceCheck) 
 		defer cancel()
 		source := a.pluginSourceOf(ap)
 		check.err = ap.Embeddings.Probe(ctx, func(ctx context.Context, kind, text string) ([]float32, error) {
-			return source.turn(ctx, kind, text, false)
+			got, err := source.turn(ctx, kind, text, false)
+			return got.Vector, err
 		})
 		if check.err == nil {
 			logsink.Info("memory.decision", "the source of vectors %s returned its publisher's vectors for all %d probes (basis %s, floor %.2f)",
@@ -503,23 +504,31 @@ func (s pluginSource) Epoch() any { return s.ap }
 func (s pluginSource) MayContinue() bool { return !s.a.voiceHoldsBackfill() }
 
 func (s pluginSource) Embed(ctx context.Context, kind memory.Kind, inputs []string) (string, [][]float32, error) {
+	basis, vectors, _, err := s.EmbedRead(ctx, kind, inputs)
+	return basis, vectors, err
+}
+
+func (s pluginSource) Tells() bool { return s.ap.Embeddings.Tells() }
+
+func (s pluginSource) EmbedRead(ctx context.Context, kind memory.Kind, inputs []string) (string, [][]float32, []int, error) {
 	basis := s.ap.Embeddings.Basis()
 	arg := pluginhost.EmbedKindMemory
 	if kind == memory.KindCue {
 		arg = pluginhost.EmbedKindCue
 	}
 	vectors := make([][]float32, 0, len(inputs))
+	read := make([]int, 0, len(inputs))
 	for _, text := range inputs {
 		if err := s.admitted(); err != nil {
-			return basis, nil, err
+			return basis, nil, nil, err
 		}
-		v, err := s.turn(ctx, arg, text, true)
+		got, err := s.turn(ctx, arg, text, true)
 		if err != nil {
-			return basis, nil, err
+			return basis, nil, nil, err
 		}
-		vectors = append(vectors, v)
+		vectors, read = append(vectors, got.Vector), append(read, got.Read)
 	}
-	return basis, vectors, nil
+	return basis, vectors, read, nil
 }
 
 func (s pluginSource) deadline(kind string) time.Duration {
@@ -540,15 +549,15 @@ func (s pluginSource) admitted() error {
 	return nil
 }
 
-func (s pluginSource) turn(ctx context.Context, kind, text string, own bool) ([]float32, error) {
+func (s pluginSource) turn(ctx context.Context, kind, text string, own bool) (pluginhost.Embedded, error) {
 	g := s.a.gateOf(s.ap)
 	if err := g.take(ctx, kind == pluginhost.EmbedKindCue, s.deadline(kind)); err != nil {
-		return nil, &waitedBehind{plugin: s.ap.ID, kind: kind, err: err}
+		return pluginhost.Embedded{}, &waitedBehind{plugin: s.ap.ID, kind: kind, err: err}
 	}
 	defer g.release()
 	if own {
 		if err := s.admitted(); err != nil {
-			return nil, err
+			return pluginhost.Embedded{}, err
 		}
 	}
 	v, err := s.ask(ctx, kind, text)
@@ -677,31 +686,34 @@ func (e *waitedBehind) Error() string {
 
 func (e *waitedBehind) Unwrap() error { return e.err }
 
-func (s pluginSource) whose(ctx context.Context, kind, text string, failed error) ([]float32, error) {
+func (s pluginSource) whose(ctx context.Context, kind, text string, failed error) (pluginhost.Embedded, error) {
 	fault := ofTheText(failed)
 	var own textFault
 	if !errors.As(fault, &own) || own.ends {
-		return nil, fault
+		return pluginhost.Embedded{}, fault
 	}
 	probe, ok := s.probe(ctx, kind)
 	if !ok {
-		return nil, fault
+		return pluginhost.Embedded{}, fault
 	}
 	if probe.Outcome != pluginfacility.CheckPassed {
 		logsink.Warn("memory.refusal", "the source of vectors %s failed a %s and then its own %s (%s): the failure is the source's, and nothing is set aside", s.ap.ID, kind, probe.Name, probe.Outcome)
-		return nil, fmt.Errorf("%w; its own %s, asked after it, %s, so the failure is the source's and nothing is set aside", failed, probe.Name, probe.Words)
+		return pluginhost.Embedded{}, fmt.Errorf("%w; its own %s, asked after it, %s, so the failure is the source's and nothing is set aside", failed, probe.Name, probe.Words)
 	}
-	v, err := s.ask(ctx, kind, text)
+	got, err := s.ask(ctx, kind, text)
 	if err != nil {
-		return nil, ofTheText(err)
+		return pluginhost.Embedded{}, ofTheText(err)
 	}
-	return v, nil
+	return got, nil
 }
 
 func (s pluginSource) probe(ctx context.Context, kind string) (pluginhost.CheckResult, bool) {
 	for _, c := range s.ap.Embeddings.ProbeChecks() {
 		if c.Kind == kind {
-			lanes := pluginhost.CheckLanes{Embed: s.ask}
+			lanes := pluginhost.CheckLanes{Embed: func(ctx context.Context, kind, text string) ([]float32, error) {
+				got, err := s.ask(ctx, kind, text)
+				return got.Vector, err
+			}}
 			return pluginhost.RunChecks(ctx, []packagefmt.Check{c}, lanes, nil)[0], true
 		}
 	}
@@ -731,17 +743,17 @@ func ofTheText(err error) error {
 	return err
 }
 
-func (s pluginSource) ask(ctx context.Context, kind, text string) ([]float32, error) {
+func (s pluginSource) ask(ctx context.Context, kind, text string) (pluginhost.Embedded, error) {
 	deadline := s.deadline(kind)
 	s.a.gateOf(s.ap).sent(deadline)
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
-	v, err := s.ap.Embeddings.Ask(ctx, s.a.toolReg, s.ap, kind, text)
+	got, err := s.ap.Embeddings.Ask(ctx, s.a.toolReg, s.ap, kind, text)
 	var failed *pluginhost.EmbedCallError
 	if errors.As(err, &failed) && failed.Said != "" {
 		logsink.Warn("memory.refusal", "the source of vectors %s gave no vector for a %s (%s); it said: %s", s.ap.ID, kind, failed.Kind, logsink.Preview(failed.Said))
 	}
-	return v, err
+	return got, err
 }
 
 const replyLapse = 10 * time.Minute

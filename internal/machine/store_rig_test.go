@@ -221,10 +221,13 @@ type fetches struct {
 	// half, when set, writes half of the address's bytes and then waits
 	// for the call's end.
 	half map[string]bool
+	// cut, when set, writes half of what is left of the address's bytes
+	// (at least one) and ends the call as a link that dropped does.
+	cut map[string]bool
 }
 
 func newFetches() *fetches {
-	return &fetches{bodies: map[string][]byte{}, calls: map[string]int{}, offsets: map[string][]int64{}, fail: map[string]error{}, half: map[string]bool{}}
+	return &fetches{bodies: map[string][]byte{}, calls: map[string]int{}, offsets: map[string][]int64{}, fail: map[string]error{}, half: map[string]bool{}, cut: map[string]bool{}}
 }
 
 func (f *fetches) fetch(ctx context.Context, url string, offset int64, w io.Writer) (int64, error) {
@@ -234,6 +237,7 @@ func (f *fetches) fetch(ctx context.Context, url string, offset int64, w io.Writ
 	body, ok := f.bodies[url]
 	fail := f.fail[url]
 	half := f.half[url]
+	cut := f.cut[url]
 	before := f.before
 	f.mu.Unlock()
 	if before != nil {
@@ -248,6 +252,13 @@ func (f *fetches) fetch(ctx context.Context, url string, offset int64, w io.Writ
 		return 0, &pluginhost.FetchStatusError{Status: 404}
 	}
 	rest := body[offset:]
+	if cut && len(rest) > 1 {
+		n, err := w.Write(rest[:len(rest)/2])
+		if err != nil {
+			return int64(n), err
+		}
+		return int64(n), &pluginhost.NetworkError{Cause: errors.New("read tcp: connection reset by peer")}
+	}
 	if half {
 		n, err := w.Write(rest[:len(rest)/2])
 		if err != nil {

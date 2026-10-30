@@ -191,7 +191,7 @@ function table() {
   return out.join('\n');
 }
 
-const stats = over => Object.assign({ name: 'Vega', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' }, over || {});
+const stats = over => Object.assign({ name: 'Example', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' }, over || {});
 const status = over => say({ type: 'status', stats: stats(over) });
 const config = over => Object.assign({ llm: { provider: 'Anthropic', model: 'm1' }, speech: {}, prompt: { max_tokens: 8000, recent_turns: 20 }, witness: {}, logs: {}, agency: {}, plugins: {}, updates: {}, restart_required: [],
   dashboard: { host: '127.0.0.1', port: 8181, tls: false, require_token: false }, secrets_ok: true }, over || {});
@@ -201,13 +201,13 @@ let authorized = true, tokenRefused = '';
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (url, opt = {}) => {
   if (url === '/auth/require' || url === '/auth/rotate') {
-    if (tokenRefused) return { ok: false, status: 403, text: async () => tokenRefused };
-    return { ok: true, status: 204 };
+    if (tokenRefused) return { ok: false, status: 403, text: async () => tokenRefused, headers: new Headers() };
+    return { ok: true, status: 204, headers: new Headers() };
   }
   if (url !== '/auth/token') return nativeFetch(url, opt);
-  if ((opt.method || 'GET') === 'GET') return { status: authorized ? 204 : 401, ok: authorized };
-  if (opt.body === 'right-token') { authorized = true; return { status: 204, ok: true }; }
-  return { status: 401, ok: false };
+  if ((opt.method || 'GET') === 'GET') return { status: authorized ? 204 : 401, ok: authorized, headers: new Headers() };
+  if (opt.body === 'right-token') { authorized = true; return { status: 204, ok: true, headers: new Headers() }; }
+  return { status: 401, ok: false, headers: new Headers() };
 };
 window.confirm = () => true;
 const goTo = view => click('.nav-item[data-view="' + view + '"]');
@@ -294,7 +294,7 @@ async function run() {
     () => say({ type: 'response', stream: true }), () => status(), () => say({ type: 'response', role: 'identity', message: 'Ready.' })], 1);
   click('#chat-notice button'); click('#chat-error button');
   $('msg-input').value = 'Hello?'; click('#send-btn');
-  await probe('a message the host did not accept', { at: '#chat-pending summary', msg: 'Not accepted — your text is kept here', want: 'polite', voice: 'announce',
+  await probe('a message the host did not accept', { at: '#chat-pending summary', msg: 'Not accepted — your text is kept below', want: 'polite', voice: 'announce',
     act: () => say({ type: 'chat_ack', request_id: idOf('chat'), message: 'refused' }) });
   click('#chat-pending button:last-of-type');
   $('msg-input').value = 'Still there?'; click('#send-btn');
@@ -333,14 +333,14 @@ async function run() {
   await writes('#announce across a streamed reply, each chunk carrying words', '#announce',
     Array.from({ length: 20 }, (_, i) => () => say({ type: 'response', stream: true, message: 'chunk ' + i + ' of the reply' })), 0);
   const reply = words(4, 'resident', 'The report is drafted and in Projects.');
-  await probe('a reply ends the turn', { at: '#thread-inner', msg: 'Vega: The report is drafted and in Projects.', want: 'polite', voice: 'announce',
+  await probe('a reply ends the turn', { at: '#thread-inner', msg: 'Example: The report is drafted and in Projects.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'response', role: 'identity', message: reply.content }) });
   await writes('#announce as that reply is read back into the conversation', '#announce', [() => readBack([...earlier, asked, reply])], 0);
   if (!norm($('thread-inner').textContent).includes(reply.content)) problems.push('the reply read back is not in the conversation: the rows above measured nothing');
-  await probe('a reply of more than one paragraph', { at: '#thread-inner', msg: 'Vega: I found it in the loader.… The rest is in the conversation.', want: 'polite', voice: 'announce',
+  await probe('a reply of more than one paragraph', { at: '#thread-inner', msg: 'Example: I found it in the loader.… The rest is in the conversation.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'response', role: 'identity', message: 'I found it in the loader.\n\nThe second paragraph says how, at length.' }) });
   const long = Array.from({ length: 60 }, () => 'abcdefghi').join(' ');
-  await probe('a reply whose first paragraph passes the bound', { at: '#thread-inner', msg: 'Vega: ' + long.slice(0, 399) + '… The rest is in the conversation.', want: 'polite', voice: 'announce',
+  await probe('a reply whose first paragraph passes the bound', { at: '#thread-inner', msg: 'Example: ' + long.slice(0, 399) + '… The rest is in the conversation.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'response', role: 'identity', message: long }) });
   const all = [...earlier, asked, reply, words(5, 'resident', 'I found it in the loader.\n\nThe second paragraph says how, at length.'), words(6, 'resident', long),
     words(7, 'resident', 'A reply given while this page was away.')];
@@ -358,7 +358,7 @@ async function run() {
     args: { to: 'sam@example.test', body: 'The draft, as written.' } };
   const connect = { id: 'k3', kind: 'connect', from: 'identity', connector: 'Calendar', text: 'I would like to see your week.' };
   const clarify = { id: 'k4', kind: 'clarify', from: 'identity', text: 'Which week do you mean?' };
-  await probe('an ask to choose', { at: '[data-ask-id="k1"] .ask-text', msg: 'Vega asks you to choose: Which report first?', want: 'polite', voice: 'announce',
+  await probe('an ask to choose', { at: '[data-ask-id="k1"] .ask-text', msg: 'Example asks you to choose: Which report first?', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose] }) });
   silent('the WAITING ON YOU card', '.sp-asks', 'lists the asks their cards said once, as they were made');
   await probe('an ask to confirm', { checks: [
@@ -366,9 +366,9 @@ async function run() {
     { name: 'an ask to confirm: an argument', at: '[data-ask-id="k2"] .act-arg', msg: 'The draft, as written.', want: 'silent' },
     { name: 'an ask to confirm: another argument', at: '[data-ask-id="k2"] .act-arg + .act-arg', msg: 'sam@example.test', want: 'silent' }],
     act: () => say({ type: 'asks', asks: [choose, confirm] }) });
-  await probe('an ask to connect', { at: '[data-ask-id="k3"] .ask-text', msg: 'Vega asks to connect Calendar: I would like to see your week.', want: 'polite', voice: 'announce',
+  await probe('an ask to connect', { at: '[data-ask-id="k3"] .ask-text', msg: 'Example asks to connect Calendar: I would like to see your week.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose, confirm, connect] }) });
-  await probe('an ask to clarify', { at: '[data-ask-id="k4"] .ask-text', msg: 'Vega asks: Which week do you mean?', want: 'polite', voice: 'announce',
+  await probe('an ask to clarify', { at: '[data-ask-id="k4"] .ask-text', msg: 'Example asks: Which week do you mean?', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose, confirm, connect, clarify] }) });
   await writes('#announce as the same asks are pushed again', '#announce', Array.from({ length: 3 }, () => () => say({ type: 'asks', asks: [choose, confirm, connect, clarify] })), 0);
   await writes('#announce as asks close', '#announce', [() => say({ type: 'asks', asks: [confirm, connect] }), () => say({ type: 'asks', asks: [] })], 0);
@@ -442,11 +442,11 @@ async function run() {
   section('messages');
   await probe('messages are read', { at: '[data-messages-notice]', msg: 'Read at', want: 'polite', voice: 'announce',
     act: () => say({ type: 'messages', request_id: idOf('query', f => f.query === 'messages'), messages: { read_ms: Date.now(), limit: 50, max_limit: 200, arrivals: [], open: [], delivered: [], notices: [], arrivals_total: 0, open_total: 0, delivered_total: 0, notices_total: 0, channels: [] } }) });
-  say({ type: 'sandbox', sandbox: { root: '/home/vega', extra_roots: [] } });
+  say({ type: 'sandbox', sandbox: { root: '/home/example', extra_roots: [] } });
   section('sandbox');
   $('sbx-add').value = '/work/project'; click('#sbx-grant');
   await probe('sandbox roots are saved', { at: '#settings-stack [role="status"], #settings-stack [data-announce]', msg: 'Sandbox roots saved.', want: 'polite', voice: 'announce',
-    act: () => say({ type: 'sandbox', request_id: idOf('sandbox_set'), sandbox: { root: '/home/vega', extra_roots: ['/work/project'] } }) });
+    act: () => say({ type: 'sandbox', request_id: idOf('sandbox_add'), sandbox: { root: '/home/example', extra_roots: ['/work/project'] } }) });
   section('storage');
   await probe('a database conversion is reported (Storage)', { at: '#settings-stack p[data-announce], #settings-stack p[role="status"]', msg: 'Conversion verified: the running database is unchanged.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'config', config: config({ database: { active: 'sqlite', preferred: '', can_export: false, notice: 'Conversion verified: the running database is unchanged.' } }) }) });
@@ -455,6 +455,13 @@ async function run() {
     { name: 'an update is available (Settings)', at: '[data-update-state]', msg: 'Update available: 1.1.0', want: 'polite', voice: 'announce' },
     { name: 'an update is available (sidebar chip)', at: '#nav-update-text', msg: 'Update 1.1.0', want: 'polite', voice: 'announce' }],
     act: () => say({ type: 'update_check', update: { enabled: true, current_version: '1.0.0', installed_version: '1.0.0', available_version: '1.1.0', automatic: false } }) });
+  await probe('the running release is withdrawn (sidebar chip)', { at: '#nav-update-text', msg: 'Release withdrawn', want: 'polite', voice: 'announce',
+    act: () => say({ type: 'update_check', update: { enabled: true, current_version: '1.0.0', installed_version: '1.0.0', running_withdrawn: true, automatic: false } }) });
+  // An available update is the way out of a withdrawn release: the chip
+  // offers it, and its tooltip says the release was withdrawn.
+  await probe('an update is available while the running release is withdrawn (sidebar chip)', { at: '#nav-update-text', msg: 'Update 1.1.0', want: 'polite', voice: 'announce',
+    act: () => say({ type: 'update_check', update: { enabled: true, current_version: '1.0.0', installed_version: '1.0.0', available_version: '1.1.0', running_withdrawn: true, automatic: false } }) });
+  if (!/withdrawn/.test(document.getElementById('nav-update').title)) problems.push('an update offered over a withdrawn release does not say in its tooltip that the release was withdrawn: ' + document.getElementById('nav-update').title);
   await probe('a new version is noticed (Chat notice)', { at: '#chat-notice span', msg: 'update 1.1.0 is available', want: 'polite', voice: 'announce',
     act: () => status({ update: { enabled: true, current_version: '1.0.0', available_version: '1.1.0', automatic: false } }) });
   await writes('#announce as status pushes leave the update chip as it was', '#announce',

@@ -67,3 +67,35 @@ func TestTheKeyFilePublisherPublishesOnlyAKeyAndNeverOverOne(t *testing.T) {
 		t.Fatalf("temp debris was left beside the keys: %v", entries)
 	}
 }
+
+// A KEY HOLDS NOTHING OF THE BYTES IT WAS PARSED FROM. Its callers wipe them:
+// an escrow's contents when its door returns, a key file unwrapped on a
+// phone. The public half was a slice of those bytes, so a key parsed from an
+// escrow and kept after the wipe (the new-machine restore holds it as the
+// identity's key) had a public key of zeros and another fingerprint.
+func TestAKeyParsedFromBytesIsTheKeyAfterTheyAreWiped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.sec")
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveKeyPair(kp, path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseKeyPair(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(data)
+	if parsed.Fingerprint() != kp.Fingerprint() {
+		t.Fatal("THE KEY CHANGED WHEN THE BYTES IT WAS READ FROM WERE WIPED")
+	}
+	sig, err := Sign(parsed, []byte("m"))
+	if err != nil || Verify(parsed.PublicKey, []byte("m"), sig) != nil {
+		t.Fatalf("the key does not sign and verify after the wipe: %v", err)
+	}
+}

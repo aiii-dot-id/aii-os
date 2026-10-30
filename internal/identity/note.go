@@ -20,7 +20,7 @@ const notedUnderTheOldName = "Noted, and kept out of DREAM and CONSOLIDATE. That
 
 func (e *Engine) verbNote(ctx context.Context, args map[string]any) (string, error) {
 	if e.inSafeMode() {
-		return "", fmt.Errorf("note refused: I am in safe mode — %s. Nothing is written to my record while SAFE holds.", e.safeModeReason())
+		return "", e.refusedHeld("note")
 	}
 	content, _ := args["_positional"].(string)
 	if content == "" {

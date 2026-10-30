@@ -19,12 +19,11 @@ func standingApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
 	rm := ring.NewManager()
 	_ = rm.SealSafePosture("test constitution")
 	rm.Set(ring.Ring5, &ring.RingContent{Level: ring.Ring5, Content: "test floor"})
 	reg := tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})
-	a := New(&Config{
+	a := newBareApp(t, &Config{
 		SourcePath: filepath.Join(t.TempDir(), "config.json"),
 		Prompt:     PromptConfig{MaxTokens: 32000, MaxToolResultChars: 32000},
 		Agency:     AgencyConfig{MaxToolRounds: limits.Of(2)},
@@ -33,6 +32,35 @@ func standingApp(t *testing.T) *App {
 	a.toolReg = reg
 	a.engine = identity.NewEngine(st, nil, rm, toolDiscovererAdapter{reg}, identity.Ports{})
 	return a
+}
+
+func TestStandingFixtureStopsItsSafeBeacon(t *testing.T) {
+	var beacon <-chan struct{}
+	var a *App
+	t.Cleanup(func() {
+		if a != nil {
+			a.stopSafeBeacon()
+			a.bgCancel()
+		}
+	})
+	t.Run("safe fixture", func(t *testing.T) {
+		a = standingApp(t)
+		a.enterSafe("fixture shutdown proof")
+		a.mode.mu.RLock()
+		beacon = a.mode.beaconStop
+		a.mode.mu.RUnlock()
+		if beacon == nil {
+			t.Fatal("SAFE did not start its beacon")
+		}
+		// Do not leak the negative-control beacon when this regression fails.
+		// The enclosing test's cleanup runs after the assertion below.
+		// The fixture must close it when this subtest ends, before that cleanup.
+	})
+	select {
+	case <-beacon:
+	default:
+		t.Fatal("the SAFE beacon outlived the fixture that started it")
+	}
 }
 
 func workCall(t *testing.T, a *App, args string) (string, bool) {

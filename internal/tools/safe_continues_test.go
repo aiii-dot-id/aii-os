@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
@@ -131,5 +132,98 @@ func TestSafeRefusesAPluginsOperationWhateverItsName(t *testing.T) {
 	safe = false
 	if res, err := r.Execute(context.Background(), "grep", map[string]any{}); err != nil || res.Output != "ran grep" {
 		t.Fatalf("out of SAFE the operation runs: %+v %v", res, err)
+	}
+}
+
+func TestSafeHandsTheModelExactlyWhatItsGateRuns(t *testing.T) {
+	r, home, _ := writeHome(t, map[string]string{"a.txt": "alpha"})
+	if err := r.RegisterDynamic(opTool{name: "pl_x_lookup", disc: Discovery{Operation: "x.lookup", Primary: true}}, "org.example.x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterDynamic(&namedTool{"pl_x_idle"}, "org.example.x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterHostOp(&namedTool{"pl_x_send"}, "org.example.x"); err != nil {
+		t.Fatal(err)
+	}
+	safe := false
+	r.SetSafeSource(func() (string, bool) { return "the record did not verify", safe })
+	const room = 1 << 10
+
+	// Out of SAFE: every builtin of this host and the one primary
+	// operation, as before SAFE had a say in the set.
+	before, _ := r.PromptNames(room)
+	want := append(r.Builtins(), "pl_x_lookup")
+	slices.Sort(want)
+	if !slices.Equal(before, want) {
+		t.Fatalf("out of SAFE the model's set moved:\n got %v\nwant %v", before, want)
+	}
+
+	file := filepath.Join(home, "a.txt")
+	args := map[string]map[string]any{
+		"read":        {"file_path": file},
+		"grep":        {"pattern": "alpha"},
+		"ls":          {},
+		"write":       {"file_path": filepath.Join(home, "b.txt"), "content": "x"},
+		"edit":        {"file_path": file, "old_string": "alpha", "new_string": "beta"},
+		"shell":       {"command": "echo ran"},
+		"web_fetch":   {"url": "http://127.0.0.1:1/"},
+		"pl_x_lookup": {},
+	}
+	safe = true
+	handed, _ := r.PromptNames(room)
+	var defs, listed []string
+	for _, d := range r.ToolDefinitions(room) {
+		defs = append(defs, d.Function.Name)
+	}
+	for _, info := range r.Discover(2) {
+		listed = append(listed, info.Name)
+	}
+	if !slices.Equal(defs, handed) || !slices.Equal(listed, handed) {
+		t.Fatalf("in SAFE the definitions and the tools organ's listing are not the model's set:\nset %v\ndefinitions %v\nlisting %v", handed, defs, listed)
+	}
+	if len(handed) == 0 {
+		t.Fatal("SAFE hands the model nothing: the read-only diagnostic surface continues")
+	}
+	// The brief counts the suspended operations unavailable and does not
+	// name them as callable now.
+	if b := r.Brief(); b.Total != 0 || len(b.Families) != 0 || b.Unavailable != 2 {
+		t.Fatalf("in SAFE the brief names an operation as callable, or miscounts: %+v", b)
+	}
+	for _, name := range before {
+		call, known := args[name]
+		if !known {
+			t.Fatalf("%s is handed to the model and this test has no call for it: add one", name)
+		}
+		res, err := r.Execute(context.Background(), name, call)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		refused := res.ReasonCode == ReasonSafeSuspended
+		switch offered := slices.Contains(handed, name); {
+		case offered && refused:
+			t.Errorf("%s is handed to the model in SAFE and SAFE refuses it: %+v", name, res)
+		case !offered && !refused:
+			t.Errorf("%s runs in SAFE and is not handed to the model: %+v", name, res)
+		}
+	}
+	// A withheld tool named anyway, as older history would, is still
+	// refused, typed; and what is not primary stays out.
+	if res, err := r.ExecuteModel(context.Background(), "pl_x_lookup", map[string]any{}); err != nil || res.ReasonCode != ReasonSafeSuspended || res.Output != "" {
+		t.Fatalf("a withheld operation called anyway must be refused with %s: %+v, %v", ReasonSafeSuspended, res, err)
+	}
+	if slices.Contains(handed, "pl_x_idle") || slices.Contains(handed, "pl_x_send") {
+		t.Fatalf("SAFE handed over an operation that is not primary, or the host's own: %v", handed)
+	}
+	if b, err := os.ReadFile(file); err != nil || string(b) != "alpha" {
+		t.Fatalf("a call made in SAFE changed the file: %q %v", b, err)
+	}
+
+	safe = false
+	if got, _ := r.PromptNames(room); !slices.Equal(got, before) {
+		t.Fatalf("when SAFE ends the model's set is %v, want %v", got, before)
+	}
+	if b := r.Brief(); b.Total != 2 || b.Unavailable != 0 {
+		t.Fatalf("when SAFE ends the brief does not name the operations again: %+v", b)
 	}
 }

@@ -63,7 +63,7 @@ func TestEachViewReadsAndDrawsWhatItAlwaysHas(t *testing.T) {
 	modules["/views/plugins.js"] = append(rec("renderPlugins"), []byte(`export function rejectPluginAction() { return false; }`)...)
 	modules["/views/record.js"] = rec("renderRecord")
 	modules["/views/projects.js"] = append(rec("renderProjects"), []byte("export function renderProjPill() {}\nexport function viewProject() {}\n")...)
-	modules["/views/settings.js"] = append(rec("renderSettings"), []byte("export function acceptSettingsConfig() {}\nexport function rejectSettingsConfig() {}\nexport function acceptProviderSave() {}\nexport function rejectProviderSave() {}\nexport function acceptSpeechLists() {}\nexport function rejectSpeechLists() {}\nexport function acceptDashboardToken() {}\nexport function settingsConnectionLost() {}\n")...)
+	modules["/views/settings.js"] = append(rec("renderSettings"), []byte("export function acceptSettingsConfig() {}\nexport function rejectSettingsConfig() {}\nexport function acceptProviderSave() {}\nexport function rejectProviderSave() {}\nexport function acceptSpeechLists() {}\nexport function rejectSpeechLists() {}\nexport function settingsConnectionLost() {}\n")...)
 	modules["/views/backups.js"] = stubModule("forgetBackupsSecrets")
 	modules["/announce.js"] = stubModule("announce")
 	runPageInEngines(t, viewsTablePage, modules)

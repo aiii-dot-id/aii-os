@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	configdir "github.com/aiii-dot-id/aii-os/config"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/fileperm"
 )
@@ -69,6 +68,8 @@ var ErrNotRunning = errors.New("not running")
 func SlotName(n int) string { return slotPrefix + strconv.Itoa(n) }
 
 func Port(n int) int { return basePort + n }
+
+const DefaultPort = basePort
 
 func Slots(root string) ([]int, error) {
 	dirs, err := SlotDirs(root)
@@ -190,19 +191,13 @@ func Create(root string, n int) (string, error) {
 }
 
 func writeConfig(dir string, port int) error {
-	var cfg map[string]any
-	if err := json.Unmarshal(configdir.Config, &cfg); err != nil {
-		return fmt.Errorf("embedded config is invalid: %w", err)
+	type dashboard struct {
+		Port         int  `json:"port"`
+		RequireToken bool `json:"require_token"`
 	}
-	dash, ok := cfg["dashboard"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("embedded config has no dashboard section")
-	}
-	dash["port"] = port
-
-	dash["require_token"] = true
-
-	delete(cfg, "identity")
+	cfg := struct {
+		Dashboard dashboard `json:"dashboard"`
+	}{dashboard{Port: port, RequireToken: true}}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

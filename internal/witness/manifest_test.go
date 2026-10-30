@@ -75,6 +75,20 @@ func manifestInput(artifactKind, canonicalization, profile, alg, keyID, fingerpr
 // returns the manifest bundle bytes (mutate = post-sign payload tampering).
 func buildManifest(t *testing.T, p *platformKeys, witnessEnv *PublicKeyEnvelope, mutate bool) []byte {
 	t.Helper()
+	return buildManifestCreated(t, p, witnessEnv, mutate, time.Now().UTC())
+}
+
+// buildManifestCreated is buildManifest with the creation time the
+// manifest's payload records named.
+func buildManifestCreated(t *testing.T, p *platformKeys, witnessEnv *PublicKeyEnvelope, mutate bool, created time.Time) []byte {
+	t.Helper()
+	return buildManifestWindow(t, p, witnessEnv, mutate, created, "", time.Now().UTC().Add(24*time.Hour))
+}
+
+// buildManifestWindow is buildManifestCreated with the validity window
+// named: notBefore "" for none.
+func buildManifestWindow(t *testing.T, p *platformKeys, witnessEnv *PublicKeyEnvelope, mutate bool, created time.Time, notBefore string, expires time.Time) []byte {
+	t.Helper()
 	// artifact_hash = canonical hash of the served witness envelope
 	// (the production signer's rule, mirrored by the hardened client)
 	envRaw, _ := json.Marshal(witnessEnv)
@@ -90,9 +104,12 @@ func buildManifest(t *testing.T, p *platformKeys, witnessEnv *PublicKeyEnvelope,
 		"artifact_hash":     artifactHash,
 		"key_id":            witnessEnv.KeyID,
 		"signature_profile": ProfileRoot,
-		"created_at":        time.Now().UTC().Format(time.RFC3339),
-		"expires_at":        time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+		"created_at":        created.UTC().Format(time.RFC3339),
+		"expires_at":        expires.UTC().Format(time.RFC3339),
 		"critical":          true,
+	}
+	if notBefore != "" {
+		payload["not_before"] = notBefore
 	}
 	if mutate {
 		payload["key_id"] = "some.other.key" // tampered AFTER signing below? no — payload is hashed pre-sign; see tamper path

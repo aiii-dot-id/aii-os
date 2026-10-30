@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
@@ -21,6 +22,8 @@ type WSHandler struct {
 
 	Sent SentSource
 
+	WorkExport func(ctx context.Context, since time.Time, session, project string, w io.Writer) error
+
 	Background func(work func()) bool
 
 	Speaker  string
@@ -36,10 +39,16 @@ type WSHandler struct {
 
 	RefusedPauses func() int
 
+	StrangerBodySeconds func() int
+
 	UnsignedRequests func() (perSecond, burst int)
 
+	PageTickets func() (seconds, most int)
+
+	RefusalLinesPerMinute func() int
+
 	Channels       func() ChannelSettings
-	SessionServers func() []ICEServer
+	SessionServers func() ([]ICEServer, time.Time)
 
 	AccessCodeOrigin func() string
 	HandleMessage    func(ctx context.Context, msg string) (string, error)
@@ -118,8 +127,6 @@ type WSHandler struct {
 
 	SpeakerPolicy func() *SpeakerPolicyState
 
-	DashboardToken func() string
-
 	RotateDashboardToken func() error
 
 	RequireDashboardToken func() error
@@ -161,9 +168,12 @@ type WSHandler struct {
 	GetWork func() (*WorkState, error)
 
 	GetSandbox func() (*SandboxState, error)
-	SetSandbox func(roots []string) error
+
+	ChangeSandbox func(root string, add bool) error
 
 	SetSandboxOff func(off, signedIn bool) error
+
+	CopyAgentNotes func(ctx context.Context) (string, error)
 
 	GetProjects func() ([]ProjectState, error)
 	ProjectAct  func(ProjectRequest) error
@@ -188,6 +198,8 @@ type WSHandler struct {
 
 	ListLogs func() ([]LogFileState, error)
 	TailLogs func(name string) (*LogTailState, error)
+
+	GetSpend func(days int) (*SpendView, error)
 }
 
 func (s *Server) SwapHandler(h *WSHandler) {

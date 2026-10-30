@@ -62,18 +62,21 @@ func (s *Server) wsConfigSet(ctx context.Context, conn carrier, cl *wsClient, ms
 func (s *Server) wsToolToggle(ctx context.Context, conn carrier, msg ClientMessage) {
 	h := s.currentHandler()
 	if h.SetToolFunc == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
 		return
 	}
 	if msg.Tool == "" {
-		s.sendError(ctx, conn, "tool_toggle requires tool")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "tool_toggle requires tool")
 		return
 	}
 	if err := h.SetToolFunc(msg.Tool, msg.Enabled); err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
 		return
 	}
-	s.sendMsg(ctx, conn, ServerMessage{Type: "tools", Tools: h.GetTools()})
+	tools := h.GetTools()
+	s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "tools", Tools: tools})
+	others := s.conns(func(c carrier, _ *wsClient) bool { return c != conn })
+	s.fanOut(ctx, others, ServerMessage{Type: "tools", Tools: tools})
 }
 
 func (s *Server) wsUpdateCheck(ctx context.Context, conn carrier, msg ClientMessage) {

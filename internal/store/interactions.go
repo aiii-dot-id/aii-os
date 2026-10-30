@@ -142,6 +142,12 @@ func (s *Store) appendInteractionTx(ctx context.Context, tx *sql.Tx, in Interact
 		return InteractionRef{}, false, err
 	}
 	if found != nil {
+
+		if said, err := saidOf(tx, found.Sequence); err != nil {
+			return InteractionRef{}, false, err
+		} else if said != markOf(in) {
+			return InteractionRef{}, false, &interaction.Error{Code: "INTERACTION_CONFLICT", Detail: "occurrence details differ"}
+		}
 		return *found, false, nil
 	}
 	if in.RelatedID != "" {
@@ -177,7 +183,22 @@ func (s *Store) appendInteractionTx(ctx context.Context, tx *sql.Tx, in Interact
 	if err != nil {
 		return InteractionRef{}, false, err
 	}
+	if mark := markOf(in); mark != "" {
+		if err = markSaid(ctx, tx, uint64(seq), mark); err != nil {
+			return InteractionRef{}, false, err
+		}
+	}
 	return InteractionRef{ID: in.ID, Sequence: uint64(seq), RecordedAt: now}, true, nil
+}
+
+func markOf(in InteractionInput) string {
+	switch {
+	case in.Role != interaction.Operator:
+		return ""
+	case in.Details.Said == "":
+		return saidAtNoDoor
+	}
+	return in.Details.Said
 }
 func (s *Store) RecordConversation(ctx context.Context, role, content, turn string, details interaction.Details) (InteractionRef, error) {
 	return s.RecordRelatedConversation(ctx, role, content, turn, "", details)
@@ -215,5 +236,12 @@ func (s *Store) matchInteractionInput(ctx context.Context, in InteractionInput) 
 			return false, err
 		}
 	}
-	return r.ID == in.ID && r.SessionID == session && r.ProjectID == in.ProjectID && r.TurnID == in.TurnID && r.RelatedID == in.RelatedID && r.Kind == in.Kind && r.Role == in.Role && r.Content == in.Content && r.Outcome == in.Outcome && r.OccurredAt == occurred && reflect.DeepEqual(r.Source, in.Source) && reflect.DeepEqual(r.Details, in.Details), nil
+
+	details := in.Details
+	details.Said = ""
+	said, err := saidOf(s.db, r.Sequence)
+	if err != nil {
+		return false, err
+	}
+	return r.ID == in.ID && r.SessionID == session && r.ProjectID == in.ProjectID && r.TurnID == in.TurnID && r.RelatedID == in.RelatedID && r.Kind == in.Kind && r.Role == in.Role && r.Content == in.Content && r.Outcome == in.Outcome && r.OccurredAt == occurred && reflect.DeepEqual(r.Source, in.Source) && reflect.DeepEqual(r.Details, details) && said == markOf(in), nil
 }

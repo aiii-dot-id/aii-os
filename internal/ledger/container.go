@@ -536,7 +536,7 @@ func (l *Ledger) Seal(head uint64) (retErr error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.frozenReason != "" {
-		return fmt.Errorf("seal refused — %w (SAFE): %s", ErrFrozen, l.frozenReason)
+		return fmt.Errorf("seal refused — %w (%s): %s", ErrFrozen, l.frozenName(), l.frozenReason)
 	}
 	if l.dirLock == nil {
 		return os.ErrClosed

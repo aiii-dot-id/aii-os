@@ -40,6 +40,12 @@ type Store struct {
 
 	anchorsAtStart atomic.Pointer[anchorsAtStart]
 
+	ring2EvidenceChars atomic.Int64
+
+	charterMaxTokens atomic.Int64
+
+	toolResultRunes atomic.Int64
+
 	reasoningSeen atomic.Bool
 
 	claimLimits map[string]int
@@ -51,12 +57,16 @@ type Store struct {
 	historicalProject        bool
 	historicalAnnotations    bool
 
+	unmarkedWords bool
+
 	historicalTurnMetrics bool
 
-	txh               *sql.Tx
-	schemaContext     context.Context
-	schemaReplay      bool
-	schemaStartup     bool
+	txh           *sql.Tx
+	schemaContext context.Context
+	schemaReplay  bool
+	schemaStartup bool
+
+	marksUnread       bool
 	schemaConversions map[string]RuntimeConversion
 
 	interactionOnce     sync.Once
@@ -170,6 +180,11 @@ func prepareSchemaStore(ctx context.Context, db *sql.DB, head *MirrorHead, sourc
 		notes = append(notes, s.ensureSidecars(rep.RebuildSidecars...)...)
 		if e := s.upgradeInteractionHistory(); e != nil {
 			return &SchemaError{Phase: "interaction history", Cause: e}
+		}
+		if note, e := s.markEarlierWords(); e != nil {
+			return &SchemaError{Phase: "operator words", Cause: e}
+		} else if note != "" {
+			notes = append(notes, note)
 		}
 		if note, e := s.carryToolStarts(held); e != nil {
 			return &SchemaError{Phase: "tool record", Cause: e}
@@ -295,6 +310,18 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, err
 	}
 	s.historicalInteractions = interactionColumns == 0
+	s.unmarkedWords = true
+	if !s.historicalInteractions {
+		var since uint64
+		err := db.QueryRow(lastMarkedTurn).Scan(&since)
+		if err == nil {
+			err = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversations WHERE `+unmarkedSince+`)`, since).Scan(&s.unmarkedWords)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	var sourceColumns int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('turn_metrics') WHERE name='source'`).Scan(&sourceColumns); err != nil {
 		db.Close()

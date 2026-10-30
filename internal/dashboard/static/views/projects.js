@@ -5,6 +5,9 @@ import { send, query } from '../ws.js';
 import { go } from '../app.js';
 import { pendingSlot } from '../pending.js';
 import { holdReloadWhile } from '../overlay.js';
+import { signedFetch, ticketed } from '../pagekey.js';
+import { recordedHTML } from './work-recorded.js';
+import { titlePlace } from '../waiting.js';
 
 export const createPending = pendingSlot();
 let newProjectDraft = { name: '', description: '' };
@@ -114,7 +117,7 @@ export function renderProjects() {
   const sp = $('proj-space');
   const p = viewedOf();
 
-  if (p) document.title = p.name + ' — AII OS';
+  titlePlace(p ? p.name : '');
 
   const editing = document.activeElement && document.activeElement.id;
   const edit = editing === 'focus-edit';
@@ -365,7 +368,7 @@ export function renderProjTab(p, ws, tab) {
         '<div class="ws-meta"><span class="chip">' + esc(w.status) + '</span></div>' +
 
         '<div class="ws-verdict' + (w.result ? '' : ' none') + '">' +
-        esc(w.result || 'no outcome recorded yet') + '</div></div>').join('') +
+        esc(w.result || 'no outcome recorded yet') + '</div>' + recordedHTML(w) + '</div>').join('') +
       '</div>';
   }
   return '';
@@ -393,13 +396,12 @@ export function aiiOpenFile(projectId, relPath) {
 
   const body = ov.querySelector('#fv-body');
   const mine = () => document.getElementById('file-viewer') === ov;
-  fetch(url).then(r => {
+  signedFetch(url).then(r => {
     if (!mine()) return null;
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const ct = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (ct.indexOf('image/') === 0) {
-      body.innerHTML = '<img src="' + esc(url) + '" alt="' + esc(relPath) + '">';
-      return null;
+      return ticketed('GET', url).then(address => { if (mine()) body.innerHTML = '<img src="' + esc(address) + '" alt="' + esc(relPath) + '">'; });
     }
     return r.text().then(text => { if (mine()) body.textContent = text; });
   }).catch(err => {

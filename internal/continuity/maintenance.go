@@ -21,6 +21,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
+	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/escrow"
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
@@ -153,7 +154,7 @@ func (r *Runtime) runMaintenance(ctx context.Context) {
 
 func passMade(made publishedSnapshot, onDemand bool) store.ContinuityStatus {
 	return store.ContinuityStatus{Outcome: store.ContinuityOK, Snapshot: made.Name, Record: made.Record,
-		OnDemand: onDemand, Encrypted: made.Encrypted, Unencrypted: made.Unencrypted}
+		OnDemand: onDemand, Encrypted: made.Encrypted, Unencrypted: made.Unencrypted, Signed: true}
 }
 
 func (r *Runtime) recordPass(st store.ContinuityStatus) {
@@ -251,6 +252,28 @@ func (r *Runtime) takeSnapshot(ctx context.Context, cfg Settings, dir string, on
 		names = append(names, witness.TailFileName)
 	}
 
+	for _, n := range witness.CapturedFileNames() {
+		if _, err := os.Lstat(filepath.Join(tmp, n)); err == nil {
+			names = append(names, n)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return none(fmt.Errorf("the captured %s: %w", n, err))
+		}
+	}
+	if archives, err := os.ReadDir(filepath.Join(tmp, witness.AbandonedDirName)); err == nil {
+		for _, e := range archives {
+			raw, err := os.ReadFile(filepath.Join(tmp, witness.AbandonedDirName, e.Name()))
+			if err != nil {
+				return none(fmt.Errorf("the captured %s/%s: %w", witness.AbandonedDirName, e.Name(), err))
+			}
+			if err := witness.CheckArchive(e.Name(), raw); err != nil {
+				return none(fmt.Errorf("the captured %s: %w", witness.AbandonedDirName, err))
+			}
+			names = append(names, witness.AbandonedDirName+"/"+e.Name())
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return none(fmt.Errorf("the captured %s: %w", witness.AbandonedDirName, err))
+	}
+
 	receipt := snapshotReceipt{
 		Identity:   r.w.DoorKey().Fingerprint(),
 		CapturedAt: stamp.Format(time.RFC3339),
@@ -268,6 +291,9 @@ func (r *Runtime) takeSnapshot(ctx context.Context, cfg Settings, dir string, on
 	names = append(names, snapshotReceiptName)
 	sums, err := writeSums(tmp, names)
 	if err != nil {
+		return none(fmt.Errorf("checksum list: %w", err))
+	}
+	if err := signSums(tmp, r.w.DoorKey(), receipt); err != nil {
 		return none(fmt.Errorf("checksum list: %w", err))
 	}
 	name := fmt.Sprintf("ledger-%s-seq%d", stamp.Format("20060102T150405Z"), at.LastSeq)
@@ -305,7 +331,7 @@ func (r *Runtime) takeSnapshot(ctx context.Context, cfg Settings, dir string, on
 		}
 	} else {
 		defer escrow.Wipe(key)
-		members := append(append([]string{}, names...), SnapshotSums)
+		members := append(append([]string{}, names...), SnapshotSums, escrow.SumsSigName)
 		sealed, err := os.CreateTemp(dir, SnapshotWorkPrefix+"*"+escrow.SnapshotSuffix+".tmp")
 		if err != nil {
 			return none(fmt.Errorf("encrypt: %w", err))
@@ -318,12 +344,14 @@ func (r *Runtime) takeSnapshot(ctx context.Context, cfg Settings, dir string, on
 			return none(fmt.Errorf("encrypt — not published: %w", err))
 		}
 		r.snapshotStep("encrypted:" + sealedPath)
-		sumsRaw, err := os.ReadFile(filepath.Join(tmp, SnapshotSums))
-		if err != nil {
-			return none(fmt.Errorf("encrypt — not published: %w", err))
+		for _, n := range []string{SnapshotSums, escrow.SumsSigName} {
+			raw, err := os.ReadFile(filepath.Join(tmp, n))
+			if err != nil {
+				return none(fmt.Errorf("encrypt — not published: %w", err))
+			}
+			h := sha256.Sum256(raw)
+			sums[n] = hex.EncodeToString(h[:])
 		}
-		sumsHash := sha256.Sum256(sumsRaw)
-		sums[SnapshotSums] = hex.EncodeToString(sumsHash[:])
 		if err := escrow.VerifySnapshot(sealedPath, key, members, sums); err != nil {
 			return none(fmt.Errorf("the encrypted snapshot does not verify — not published: %w", err))
 		}
@@ -495,6 +523,8 @@ func copyInto(r io.Reader, dst string) error {
 
 const SnapshotSums = escrow.SumsName
 
+const SnapshotSumsSig = escrow.SumsSigName
+
 func writeSums(dir string, names []string) (map[string]string, error) {
 	var b strings.Builder
 	sums := make(map[string]string, len(names)+1)
@@ -521,6 +551,33 @@ func writeSums(dir string, names []string) (map[string]string, error) {
 		return nil, err
 	}
 	return sums, nil
+}
+
+func signSums(dir string, kp *crypto.KeyPair, receipt snapshotReceipt) error {
+	if kp == nil {
+		return errors.New("the identity key is not open, so the list cannot be signed")
+	}
+	if err := escrow.SignSumsIn(dir, kp, receipt.LastSeq, receipt.LastHash); err != nil {
+		return err
+	}
+	return heldToKey(dir, kp, receipt)
+}
+
+func heldToKey(set string, kp *crypto.KeyPair, want snapshotReceipt) error {
+	if kp == nil {
+		return fmt.Errorf("%w: the identity key is not open here", escrow.ErrSumsSig)
+	}
+	signed, err := escrow.VerifySumsSig(set, kp.PublicKeyBytes())
+	if errors.Is(err, escrow.ErrUnsigned) {
+		return fmt.Errorf("%w (snapshots made before they were signed carry none), so nothing holds its database to the identity: restore a signed one, or this one by hand (the Restore procedure in the maintenance contract)", err)
+	}
+	if err != nil {
+		return err
+	}
+	if signed.LastSeq != want.LastSeq || signed.LastHash != want.LastHash {
+		return fmt.Errorf("%w: it signs record %d (%.12s) and its receipt names record %d (%.12s)", escrow.ErrSumsSig, signed.LastSeq, signed.LastHash, want.LastSeq, want.LastHash)
+	}
+	return nil
 }
 
 var backupSeqRe = regexp.MustCompile(`^ledger-([0-9]{8}T[0-9]{6}Z)-seq([0-9]+)(` + onDemandMark + `)?(\.tar\.age)?$`)

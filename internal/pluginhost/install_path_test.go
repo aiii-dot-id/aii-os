@@ -110,22 +110,19 @@ func TestTheReadyLineIsComparedWithItsSetByDeviceDomain(t *testing.T) {
 	}
 }
 
-// And at an activation: a child whose line names other domains than its set
-// declares is admitted all the same, with the difference on its readiness
-// and in the log.
 func TestAReadyLineThatDiffersFromItsSetStillActivates(t *testing.T) {
 	const id = "org.example.readiness-differs"
-	rig := newNativeRigWith(t, id, "ready-real", 20000, nil, func(p *AcceleratorProfile) { p.Backend = "vulkan" })
+	rig := newNativeRigWith(t, id, "ready-vulkan", 20000, nil, nil)
 	capture := logsink.CaptureForTest(t)
 	ap, err := Activate(context.Background(), rig.pkg, newRegistry(t), rig.opts)
 	if err != nil {
 		t.Fatalf("a difference decided the activation: %v", err)
 	}
 	defer func() { _ = ap.Deactivate(context.Background()) }()
-	if ap.Readiness == nil || !strings.Contains(ap.Readiness.Differs, "declares vulkan (on vulkan)") {
+	if ap.Readiness == nil || !strings.Contains(ap.Readiness.Differs, "the engine reports vulkan (on vulkan) where its set declares cpu (the processor alone)") {
 		t.Fatalf("the difference is not on the readiness: %+v", ap.Readiness)
 	}
-	if !capture.Contains("plugin " + id + ": the engine reports cpu") {
+	if !capture.Contains("plugin " + id + ": the engine reports vulkan") {
 		t.Fatalf("the difference is not in the log:\n%s", capture.String())
 	}
 }

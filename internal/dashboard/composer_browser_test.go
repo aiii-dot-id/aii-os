@@ -30,7 +30,6 @@ func chatModuleRig(t *testing.T) map[string][]byte {
 		"/presence.js":           []byte(`export function setThinking() {} export function toolPulse() {} export function renderPresence() {}`),
 		"/app.js":                []byte(`export const toasts = []; export function toast(m) { toasts.push(m); }`),
 		"/views/model-picker.js": []byte(`export function fillModelPicker() {}`),
-		"/pending.js":            []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`),
 	}
 }
 

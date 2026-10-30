@@ -13,7 +13,7 @@ import (
 
 func TestTheLauncherAsksTheServiceManagerAndNeverStartsTheIdentity(t *testing.T) {
 	const n = 90
-	if serving(install.Port(n)) {
+	if install.Serving(install.Port(n)) {
 		t.Skipf("port %d is in use on this host", install.Port(n))
 	}
 	home := t.TempDir()

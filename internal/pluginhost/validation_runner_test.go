@@ -201,7 +201,7 @@ func validatedSource(t *testing.T, id, mode, validation string) (string, *Option
 	}
 	pkg := nativePackageAs(t, id, child, role, extra,
 		map[string]any{"plugin_family": EmbeddingsFamily, "aiios_min_version": packagefmt.EmbeddingsMinHost},
-		&packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: EmbeddingsInterfaceVersion, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}})
+		&packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: 1, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}})
 	opts := supervisedOpts(Options{Roots: roots})
 	useStore(t, opts, model.fetch)
 	return pkg, opts

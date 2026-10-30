@@ -10,6 +10,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,19 +26,35 @@ const PromptToolDefinitionCeiling = 32
 func registryRoom() int { return PromptToolDefinitionCeiling - len(identity.Verbs()) }
 
 func (a *App) buildToolDefinitions() []llm.ToolDefinition {
+	_, safe := a.SafeMode()
+	return a.buildToolDefinitionsIn(safe)
+}
+
+func (a *App) buildToolDefinitionsIn(safe bool) []llm.ToolDefinition {
 	var cfg Config
 	a.cfgMu.RLock()
 	if a.cfg != nil {
 		cfg = *a.cfg
 	}
 	a.cfgMu.RUnlock()
-	return a.toolDefinitions(a.residentLimitsFor(cfg).cfg.Agency.checkpoint())
+	return a.toolDefinitionsIn(a.residentLimitsFor(cfg).cfg.Agency.checkpoint(), safe)
 }
 
 func (a *App) toolDefinitions(turn conversation.Checkpoint) []llm.ToolDefinition {
-	defs := a.toolReg.ToolDefinitions(registryRoom())
+	_, safe := a.SafeMode()
+	return a.toolDefinitionsIn(turn, safe)
+}
 
-	for _, v := range identity.VerbsAt(turn) {
+func (a *App) toolDefinitionsIn(turn conversation.Checkpoint, safe bool) []llm.ToolDefinition {
+	defs := a.toolReg.ToolDefinitionsIn(registryRoom(), safe)
+
+	var roles map[string]string
+	a.cfgMu.RLock()
+	if a.cfg != nil {
+		roles = a.cfg.Agency.roleNotes()
+	}
+	a.cfgMu.RUnlock()
+	for _, v := range identity.OfferedVerbsAt(turn, safe, roles) {
 		defs = append(defs, llm.ToolDefinition{Type: "function", Function: llm.ToolFunction{
 			Name:        v.Name,
 			Description: v.Description,
@@ -179,13 +196,26 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		if v.Name != name {
 			continue
 		}
+
+		unknown := slices.DeleteFunc(tools.UnknownArguments(v.Params, args), func(k string) bool { return slices.Contains(v.Retired, k) })
+		if len(unknown) > 0 {
+			if a.toolReg != nil {
+				a.toolReg.CountMalformed()
+			}
+			res := tools.UnknownArgumentRefusal(name, unknown, v.Params)
+			return conversation.Observation{Text: res.Text(), Failed: true, Refused: true, ReasonCode: res.ReasonCode}
+		}
+		var started string
+		if name == "work" {
+			ctx = context.WithValue(ctx, identity.StartedSession{}, &started)
+		}
 		result, err := a.engine.ExecuteAction(ctx, "verb", name, args)
 		if err != nil {
-			obs := conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true}
+			obs := conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true, ReasonCode: identity.ReasonCode(name, args, err)}
 			var size *identity.WorkStatusSizeError
 			if errors.As(err, &size) {
 				obs.Refused, obs.ReasonCode = true, "status.size"
-				if utf8.RuneCountInString(obs.Text) > a.engine.ToolResultLimit() {
+				if utf8.RuneCountInString(obs.Text) > a.engine.ResultLimit(ctx) {
 
 					obs.HostNote = obs.Text
 				}
@@ -198,6 +228,14 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 				if seat.lookup != nil {
 					return conversation.Observation{Text: "Work changed, but forecast recording could not read its session: " + seat.lookup.Error(), Failed: true}
 				}
+				session := seat.session
+				if act, _ := args["action"].(string); act == "start" || act == "" {
+
+					if started == "" {
+						return conversation.Observation{Text: "Work started, but forecast recording could not read its session: the start named none", Failed: true}
+					}
+					session = started
+				}
 				var sp, ip *int
 				if steps > 0 {
 					sp = &steps
@@ -205,7 +243,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 				if independent > 0 {
 					ip = &independent
 				}
-				if err := a.store.RecordWorkForecast(seat.session, interaction.TurnID(ctx), sp, ip); err != nil {
+				if err := a.store.RecordWorkForecast(session, interaction.TurnID(ctx), sp, ip); err != nil {
 					return conversation.Observation{Text: "Work changed, but forecast was not recorded: " + err.Error(), Failed: true}
 				}
 			}
@@ -289,12 +327,15 @@ func (a *App) callSeat(ctx context.Context) callSeat {
 		seat.actor = actorSafe
 	}
 	if a.store != nil {
-		ws, err := a.store.ActiveWorkSession()
+
+		id, several, err := a.store.ActingSession()
 		switch {
 		case err != nil:
 			seat.reason, seat.lookup = "session_lookup_failed", err
-		case ws != nil:
-			seat.session = ws.ID
+		case several:
+			seat.session, seat.reason = id, store.SeveralActive
+		default:
+			seat.session = id
 		}
 	}
 	if seat.session == "" && seat.reason == "" {

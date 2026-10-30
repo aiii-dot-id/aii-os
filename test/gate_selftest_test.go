@@ -332,6 +332,7 @@ func TestRaceScopeIncludesExamplesFuzzSeedsAndDiscoveryErrors(t *testing.T) {
 			t.Skip("no Go toolchain")
 		}
 	}
+	skipWhereRaceCannotRun(t, goBin)
 	script, err := os.ReadFile("run_race_scope.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -423,6 +424,7 @@ func TestRaceScopeGivesEachShardABudgetThatOnlyCatchesAHang(t *testing.T) {
 			t.Skip("no Go toolchain")
 		}
 	}
+	skipWhereRaceCannotRun(t, goBin)
 	script, err := os.ReadFile("run_race_scope.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -540,6 +542,7 @@ func TestRaceScopeRestKeepsEachTestsSecondsAndItsVerdict(t *testing.T) {
 			t.Skip("no Go toolchain")
 		}
 	}
+	skipWhereRaceCannotRun(t, goBin)
 	script, err := os.ReadFile("run_race_scope.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -697,7 +700,7 @@ func TestTheRunnerBuildsEveryRaceScopeTheSameWay(t *testing.T) {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "#"):
-		case line == `start_job "$reference_log" "$go_bin" test -v -race -count=1 -timeout 45m ./...`:
+		case line == `start_job "$reference_log" "$go_bin" test -v -race -count=1 -timeout 90m ./...`:
 			references++
 		case strings.HasPrefix(line, "race_args=("):
 			definitions++

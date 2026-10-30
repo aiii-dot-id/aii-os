@@ -81,7 +81,7 @@ func TestTheStepsSentenceStatesTheTurnsCheckpoint(t *testing.T) {
 		"a turn's":            appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 1}),
 	} {
 		got := stepsSentence(t, defs)
-		for _, want := range []string{"(with none declared, at 500)", "gives you one more round to say"} {
+		for _, want := range []string{"(500 with none declared)", "gives you one more round to say"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s list does not state the checkpoint (%q): %s", name, want, got)
 			}
@@ -89,7 +89,7 @@ func TestTheStepsSentenceStatesTheTurnsCheckpoint(t *testing.T) {
 	}
 	// A turn's list follows what its loop hands it and nothing else: a
 	// child's loop, or a turn begun before a reload, is told its own.
-	if got := stepsSentence(t, appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12})); !strings.Contains(got, "(with none declared, at 64), gives you 12 more rounds to say") {
+	if got := stepsSentence(t, appToolDefiner{a}.ToolDefinitions(conversation.Checkpoint{Calls: limits.Of(64), GraceRounds: 12})); !strings.Contains(got, "(64 with none declared), gives you 12 more rounds to say") {
 		t.Errorf("a turn handed 64 and 12 was told: %s", got)
 	}
 }
@@ -117,7 +117,7 @@ func TestTheOperatorsCheckpointReachesTheTurn(t *testing.T) {
 	if got := loopCheckpoint(app); got != (conversation.Checkpoint{Calls: limits.Of(500), GraceRounds: 2, Slack: 2}) {
 		t.Errorf("after the door's change the loop holds %+v for its next turn; want 500 and 2", got)
 	}
-	if got := stepsSentence(t, app.buildToolDefinitions()); !strings.Contains(got, "(with none declared, at 500), gives you two more rounds to say") {
+	if got := stepsSentence(t, app.buildToolDefinitions()); !strings.Contains(got, "(500 with none declared), gives you two more rounds to say") {
 		t.Errorf("after the door's change the tool list says: %s", got)
 	}
 
@@ -142,8 +142,8 @@ func TestTheOperatorsCheckpointReachesTheTurn(t *testing.T) {
 		said string
 		held int
 	}{
-		`{"agency":{"turn_checkpoint_grace_rounds":29}}`:                     {"agency.turn_checkpoint_grace_rounds 29 is too many to leave a round of agency.max_tool_rounds (30) for a checkpoint — no turn of the identity's would be checkpointed or continued: 28 is in force", 28},
-		`{"agency":{"turn_checkpoint_grace_rounds":8,"max_tool_rounds":9}}`:  {"agency.turn_checkpoint_grace_rounds 8 is too many to leave a round of agency.max_tool_rounds (9) for a checkpoint — no turn of the identity's would be checkpointed or continued: 7 is in force", 7},
+		`{"agency":{"turn_checkpoint_grace_rounds":29}}`:                     {"agency.turn_checkpoint_grace_rounds 29 is too many to leave a round of agency.max_tool_rounds (30) for a checkpoint — no turn of the identity's would be checkpointed: 28 is in force", 28},
+		`{"agency":{"turn_checkpoint_grace_rounds":8,"max_tool_rounds":9}}`:  {"agency.turn_checkpoint_grace_rounds 8 is too many to leave a round of agency.max_tool_rounds (9) for a checkpoint — no turn of the identity's would be checkpointed: 7 is in force", 7},
 		`{"agency":{"turn_checkpoint_grace_rounds":8,"max_tool_rounds":10}}`: {"", 8},
 		`{"agency":{"max_tool_rounds":3}}`:                                   {"", 4}, // the default grace beside a small ceiling: as it has always run
 	} {
@@ -202,7 +202,7 @@ func TestTheGraceLeavesAChildWithLegsARoundForItsCheckpoint(t *testing.T) {
 	var refusal *CognitionRefusal
 	_, err := app.applyConfigChange(map[string]any{"agency.turn_checkpoint_grace_rounds": float64(9)})
 	if !errors.As(err, &refusal) || refusal.Key != "agency.turn_checkpoint_grace_rounds" ||
-		!strings.Contains(refusal.Requirement, "9 leaves no round of agency.subagent_max_tool_rounds (10) for a checkpoint — no leg of a child's would be checkpointed or continued, though the identity's own turns still would") ||
+		!strings.Contains(refusal.Requirement, "9 leaves no round of agency.subagent_max_tool_rounds (10) for a checkpoint — no leg of a child's would be checkpointed, though the identity's own turns still would") ||
 		!strings.Contains(refusal.Requirement, "set at most 8, or 0 for the default (4)") {
 		t.Errorf("a grace of 9 beside a child's 10 rounds must be refused by the grace's key, naming the child's ceiling: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestTheGraceLeavesAChildWithLegsARoundForItsCheckpoint(t *testing.T) {
 	}
 
 	for body, said := range map[string]string{
-		`{"agency":{"turn_checkpoint_grace_rounds":9,"subagent_max_tool_rounds":10}}`:                               "agency.turn_checkpoint_grace_rounds 9 is too many to leave a round of agency.subagent_max_tool_rounds (10) for a checkpoint — no leg of a child's would be checkpointed or continued, though the identity's own turns still would: 8 is in force",
+		`{"agency":{"turn_checkpoint_grace_rounds":9,"subagent_max_tool_rounds":10}}`:                               "agency.turn_checkpoint_grace_rounds 9 is too many to leave a round of agency.subagent_max_tool_rounds (10) for a checkpoint — no leg of a child's would be checkpointed, though the identity's own turns still would: 8 is in force",
 		`{"agency":{"turn_checkpoint_grace_rounds":8,"subagent_max_tool_rounds":10}}`:                               "",
 		`{"agency":{"turn_checkpoint_grace_rounds":9,"subagent_max_tool_rounds":10,"subagent_continuation":false}}`: "",
 	} {
@@ -254,7 +254,7 @@ func TestTheOperatorsSlackReachesTheTurn(t *testing.T) {
 	if got := loopCheckpoint(app); got.Slack != 3 {
 		t.Errorf("after the door's change the loop holds a slack of %d for its next turn; want 3", got.Slack)
 	}
-	if got := stepsSentence(t, app.buildToolDefinitions()); !strings.Contains(got, "the turn checkpoints at three times this many calls") {
+	if got := stepsSentence(t, app.buildToolDefinitions()); !strings.Contains(got, "The turn checkpoints at three times this many (") {
 		t.Errorf("after the door's change the tool list says: %s", got)
 	}
 }
@@ -272,7 +272,7 @@ func TestAGraceIsHeldToTheMostThatFitsAndTheAdviceIsTrue(t *testing.T) {
 	if got := graceRoundsSetting.n(*cfg); got != 3 || validCognition(*cfg) != nil {
 		t.Errorf("a grace of 4 beside a child's 5 rounds is held to %d (%v); want 3, the most that leaves a round", got, validCognition(*cfg))
 	}
-	if want := "no leg of a child's would be checkpointed or continued, though the identity's own turns still would: 3 is in force"; !strings.Contains(held, want) || strings.Contains(held, "the default") {
+	if want := "no leg of a child's would be checkpointed, though the identity's own turns still would: 3 is in force"; !strings.Contains(held, want) || strings.Contains(held, "the default") {
 		t.Errorf("the loader's sentence is %q; want it to say %q and not to call the default a cure", held, want)
 	}
 
@@ -288,7 +288,7 @@ func TestAGraceIsHeldToTheMostThatFitsAndTheAdviceIsTrue(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "agency.turn_checkpoint_grace_rounds 1 is too many to leave a round of agency.subagent_max_tool_rounds (2) for a checkpoint, and no grace leaves one; " +
-		"until it is raised to at least 3, no leg of a child's would be checkpointed or continued, though the identity's own turns still would: " +
+		"until it is raised to at least 3, no leg of a child's would be checkpointed, though the identity's own turns still would: " +
 		"the default, 4, is in force, and the file is left as it is; raise agency.subagent_max_tool_rounds to at least 3, or leave the grace unset"
 	if held := cfg.cognitionHeld["agency.turn_checkpoint_grace_rounds"]; held != want || graceRoundsSetting.value(*cfg) != limits.Of(4) {
 		t.Errorf("a file's grace beside a child's two rounds loads as %s, said %q; want the default, said %q", graceRoundsSetting.value(*cfg), held, want)
@@ -345,7 +345,7 @@ func TestAResidentTurnEndsAtTheOperatorsCheckpoint(t *testing.T) {
 		t.Fatalf("the turn took %d requests, want 4: two reads to the floor, one grace round, one ending without tools", len(reqs))
 	}
 	for i, req := range reqs[:3] {
-		if !strings.Contains(req, "(with none declared, at 2), gives you one more round to say") {
+		if !strings.Contains(req, "(2 with none declared), gives you one more round to say") {
 			t.Errorf("request %d's tool list does not state the checkpoint the turn is held to", i+1)
 		}
 	}

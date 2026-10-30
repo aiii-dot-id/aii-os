@@ -92,13 +92,13 @@ func TestTheSheetNamesEveryIdentitysFolder(t *testing.T) {
 		t.Fatalf("asked %d questions, ran %q", len(f.asked), f.runs)
 	}
 	q := f.asked[0]
-	for _, want := range []string{"Vega (/Users/example/.aii/identity-0)", "identity-4, not yet born", "data stays exactly where it is", "3.0 GB", "drag AII OS.app to the Trash"} {
+	for _, want := range []string{"Example (/Users/example/.aii/identity-0)", "identity-4, not yet born", "data stays exactly where it is", "3.0 GB", "drag AII OS.app to the Trash"} {
 		if !strings.Contains(q, want) {
 			t.Errorf("the question does not say %q:\n%s", want, q)
 		}
 	}
 	sheet := f.asked[1]
-	for _, want := range []string{"Vega: /Users/example/.aii/identity-0", "/Users/example/.aii/identity-4 (on /srv/archive/slot)", "3.0 GB freed", "Another account on this Mac runs this AII OS.app", "Last step: drag AII OS.app to the Trash"} {
+	for _, want := range []string{"Example: /Users/example/.aii/identity-0", "/Users/example/.aii/identity-4 (on /srv/archive/slot)", "3.0 GB freed", "Another account on this Mac runs this AII OS.app", "Last step: drag AII OS.app to the Trash"} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("the sheet does not say %q:\n%s", want, sheet)
 		}

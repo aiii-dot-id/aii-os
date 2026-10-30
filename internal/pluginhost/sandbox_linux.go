@@ -5,16 +5,16 @@ package pluginhost
 import (
 	"context"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/oswall"
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile, files nativeFiles) ([]string, supervisor.Containment, error) {
-	bwrap, err := exec.LookPath("bwrap")
+	bwrap, err := oswall.Program()
 	if err != nil {
 
 		return nil, supervisor.Containment{}, fmt.Errorf("bubblewrap is not installed; native T3 plugins are not run uncontained (install bwrap)")
@@ -23,7 +23,7 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 		return nil, supervisor.Containment{}, fmt.Errorf("nothing to contain")
 	}
 
-	if err := checkNamespace(ctx, bwrap); err != nil {
+	if err := checkNamespace(ctx, bwrap, oswall.StartWait(files.startSeconds)); err != nil {
 		return nil, supervisor.Containment{}, err
 	}
 
@@ -37,6 +37,8 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 	if err != nil {
 		return nil, supervisor.Containment{}, err
 	}
+
+	view := nativeView(files.view)
 	wrapped := []string{
 		bwrap,
 		"--unshare-all",
@@ -45,11 +47,13 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 		"--new-session",
 
 		"--seccomp", strconv.Itoa(3 + files.inherited),
-		"--ro-bind", "/", "/",
+	}
+	wrapped = append(wrapped, oswall.View(view, false)...)
+	wrapped = append(wrapped,
 		"--dev", "/dev",
 
 		"--proc", "/proc",
-	}
+	)
 
 	if os.Geteuid() == 0 {
 		wrapped = append(wrapped, "--cap-drop", "ALL")
@@ -57,57 +61,69 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 	for _, device := range devices {
 		wrapped = append(wrapped, "--dev-bind", device, device)
 	}
-	paths, err := files.paths()
-	if err != nil {
-		return nil, supervisor.Containment{}, err
-	}
 
-	hidden := runtimeDirs()
-	for _, dir := range hidden {
-		wrapped = append(wrapped, "--tmpfs", dir)
+	standIns := nvidiaDisplayStandIn(profile, devices)
+	for _, node := range standIns {
+		wrapped = append(wrapped, "--dev-bind", os.DevNull, node)
 	}
 	own, err := files.ownPaths()
 	if err != nil {
 		return nil, supervisor.Containment{}, err
 	}
+
+	var ownShown []string
 	for _, o := range own {
-		under := false
-		for _, dir := range hidden {
-			under = under || nativeBelow(dir, o.path)
+		ownShown = append(ownShown, o.path)
+	}
+	files.shown = oswall.Shown(view, ownShown)
+	paths, err := files.paths()
+	if err != nil {
+		return nil, supervisor.Containment{}, err
+	}
+
+	var layers []oswall.Layer
+	var brought []string
+	for _, o := range own {
+
+		if o.path != o.source && oswall.Shown(view)(o.path) {
+			continue
 		}
-		listed := false
-		for _, p := range paths {
-			listed = listed || (p.read && p.path == o.path)
-		}
-		if under && !listed {
-			wrapped = append(wrapped, "--ro-bind", o.source, o.path)
+		layers = append(layers, oswall.Layer{Path: o.path, Source: o.source})
+		brought = append(brought, o.path)
+	}
+	if program := argv[0]; filepath.IsAbs(program) && !strings.HasPrefix(program, "/proc/") {
+		if info, err := os.Stat(program); err == nil && info.Mode().IsRegular() && !oswall.Shown(view, brought)(program) {
+			layers = append(layers, oswall.Bind(program, false))
+			brought = append(brought, program)
 		}
 	}
 	for _, p := range paths {
-		switch {
-		case p.read:
-			wrapped = append(wrapped, "--ro-bind", p.source, p.path)
-		case p.dir:
-			wrapped = append(wrapped, "--tmpfs", p.path)
+		if p.read {
+			layers = append(layers, oswall.Layer{Path: p.path, Source: p.source})
+			brought = append(brought, p.path)
+			continue
 		}
+		layers = append(layers, oswall.Mask(p.path))
 	}
 
-	for _, p := range paths {
-		if !p.read && p.dir {
-			wrapped = append(wrapped, "--remount-ro", p.path)
-		}
-	}
-
+	hidden := runtimeDirs()
 	for _, dir := range hidden {
-		wrapped = append(wrapped, "--remount-ro", dir)
+		layers = append(layers, oswall.Mask(dir))
 	}
-	wrapped = append(wrapped, credentialMasks()...)
+	for _, m := range credentialMasks() {
+		layers = append(layers, oswall.Mask(m))
+	}
+	oswall.Sort(layers)
+	wrapped = append(wrapped, oswall.Args(layers, oswall.Shown(view, brought))...)
+
+	wrapped = append(wrapped, "--remount-ro", "/")
 
 	wrapped = append(wrapped, "--", "/bin/sh", "-c", `echo `+containmentBuiltMark+` >&2; exec "$@"`, "sh")
 
-	description := "contained (bubblewrap: no network and no socket of any kind, read-only filesystem, private PID-namespace procfs, no controlling terminal, no kernel keyring, the account's runtime directory hidden, ssh and shadow files masked; other user-readable credentials are NOT)"
+	description := "contained (bubblewrap: no network and no socket of any kind, read-only filesystem showing only " + strings.Join(view, ", ") + " and the plugin's own material, private PID-namespace procfs, no controlling terminal, no kernel keyring, the account's runtime directory hidden, ssh and shadow files masked"
+	description += ")"
 	if len(files.places) != 0 {
-		description += "; existing AII OS private directories masked (selected plugin material retained); standalone files outside masked directories are NOT protected" + nativePathLimit
+		description += "; existing AII OS private directories and files masked where shown (selected plugin material retained)" + nativePathLimit
 	}
 	if packets {
 
@@ -116,8 +132,15 @@ func containArgv(ctx context.Context, argv []string, profile *AcceleratorProfile
 	if len(devices) != 0 {
 		description += "; " + profile.Backend + " compute devices: " + strings.Join(devices, ", ")
 	}
-	return append(wrapped, argv...), supervisor.Containment{Description: description, NetworkDenied: true, FilesystemRestricted: true, BuiltMark: containmentBuiltMark, Filter: filter}, nil
+	for _, node := range standIns {
+		description += fmt.Sprintf(nvidiaDisplayStandInWords, node)
+	}
+	return append(wrapped, argv...), supervisor.Containment{Description: description, NetworkDenied: true, FilesystemRestricted: true, BuiltMark: containmentBuiltMark, Filter: filter,
+
+		TermIsKill: true}, nil
 }
+
+const nvidiaDisplayStandInWords = "; the null device stands at %s, where NVIDIA's Vulkan driver crashes without a node: NVIDIA's display device is not admitted"
 
 func runtimeDirs() []string {
 	var dirs []string
@@ -160,12 +183,12 @@ func credentialMasks() []string {
 		}
 		seen[d] = true
 		if st, err := os.Stat(d); err == nil && st.IsDir() {
-			m = append(m, "--tmpfs", d)
+			m = append(m, d)
 		}
 	}
 	for _, f := range []string{"/etc/shadow", "/etc/gshadow"} {
 		if st, err := os.Stat(f); err == nil && st.Mode().IsRegular() {
-			m = append(m, "--ro-bind", "/dev/null", f)
+			m = append(m, f)
 		}
 	}
 	return m

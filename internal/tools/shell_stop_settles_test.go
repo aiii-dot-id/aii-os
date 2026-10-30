@@ -59,19 +59,19 @@ func TestACommandStoppedWithItsTurnLeavesNoProcessBehind(t *testing.T) {
 			t.Fatalf("could not read a pid from %q", line)
 		}
 		found++
-		// Signal 0 asks whether the process exists; ESRCH is the passing
-		// answer. One grace beat for the kernel to reap.
+		// Gone is the passing answer (shellProcess finds it by the number
+		// the shell gave it). One grace beat for the kernel to reap.
 		deadline := time.Now().Add(3 * time.Second)
 		for {
-			kerr := syscall.Kill(pid, 0)
-			if kerr == syscall.ESRCH {
+			host, alive := shellProcess(t, st, pid)
+			if !alive {
 				break
 			}
 			if time.Now().After(deadline) {
 				// Not Fatalf: the other one must be looked for too, and
 				// neither may be left running in the suite.
-				_ = syscall.Kill(pid, syscall.SIGKILL)
-				t.Errorf("the %s (%d) outlived the stop (kill(0) => %v)", who, pid, kerr)
+				_ = syscall.Kill(host, syscall.SIGKILL)
+				t.Errorf("the %s (%d) outlived the stop", who, pid)
 				break
 			}
 			time.Sleep(50 * time.Millisecond)

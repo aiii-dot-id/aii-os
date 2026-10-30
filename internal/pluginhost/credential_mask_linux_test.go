@@ -39,43 +39,55 @@ func TestCredentialStoresAreMaskedInsideTheSandbox(t *testing.T) {
 
 	script := `printf "SHADOW<%s>\n" "$(cat /etc/shadow 2>/dev/null)"; ` +
 		`printf "ROOTSSH<%s>\n" "$(ls /root/.ssh 2>/dev/null)"; ` +
-		`printf "OSREL<%s>\n" "$(head -c 40 /etc/os-release 2>/dev/null)"; ` +
+		`printf "OSREL<%s>\n" "$(head -c 40 /usr/lib/os-release 2>/dev/null)"; ` +
+		`printf "ETCREL<%s>\n" "$(head -c 40 /etc/os-release 2>/dev/null)"; ` +
 		`printf "LIBS<%s>\n" "$(ls /usr/lib 2>/dev/null | head -1)"`
-	argv, telemetry, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script}, nil, nativeFiles{})
-	if err != nil {
-		t.Fatalf("containment refused: %v", err)
-	}
-	// THE TELEMETRY MUST NOT OVERSTATE THE MASK. It used to say
-	// "credential stores masked", which reads as all of them, while the
-	// root is bound read-only WHOLE and only the OS-defined stores are
-	// hidden — ~/.aws, ~/.gnupg, ~/.config/gcloud and ~/.kube stay
-	// readable. An operator plans around the broad sentence. This asserts
-	// both halves so the claim cannot quietly re-widen: what IS masked,
-	// and that the rest is not.
-	if !strings.Contains(telemetry.Description, "ssh and shadow files masked") {
-		t.Fatalf("telemetry does not record what is actually masked: %q", telemetry)
-	}
-	if !strings.Contains(telemetry.Description, "other user-readable credentials are NOT") {
-		t.Fatalf("telemetry claims a mask without naming its limit — the sentence an operator plans around: %q", telemetry)
-	}
-	out, err := walled(t, exec.Command(argv[0], argv[1:]...), telemetry).CombinedOutput()
-	if err != nil {
-		t.Fatalf("sandboxed probe did not run: %v\n%s", err, out)
-	}
-	s := string(out)
+	for _, tc := range []struct {
+		name    string
+		view    []string
+		widened bool
+	}{
+		{"the default view", nil, false},
+		{"a view widened to /etc and /root", []string{"/etc", "/root"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argv, telemetry, err := containArgv(context.Background(), []string{"/bin/sh", "-c", script}, nil, nativeFiles{view: tc.view})
+			if err != nil {
+				t.Fatalf("containment refused: %v", err)
+			}
+			// THE TELEMETRY MUST NOT OVERSTATE THE MASK. It names what is
+			// masked, and it names what the child is shown, so an operator
+			// who widens the view reads what the child then sees.
+			if !strings.Contains(telemetry.Description, "ssh and shadow files masked") {
+				t.Fatalf("telemetry does not record what is actually masked: %q", telemetry)
+			}
+			if !strings.Contains(telemetry.Description, "showing only /usr") || tc.widened && !strings.Contains(telemetry.Description, "/etc, /root") {
+				t.Fatalf("telemetry does not name what the child is shown: %q", telemetry)
+			}
+			out, err := walled(t, exec.Command(argv[0], argv[1:]...), telemetry).CombinedOutput()
+			if err != nil {
+				t.Fatalf("sandboxed probe did not run: %v\n%s", err, out)
+			}
+			s := string(out)
 
-	// The secret itself must not survive into the sandbox.
-	if got := between(t, s, "SHADOW"); strings.Contains(got, shadowFirst) {
-		t.Fatalf("the real /etc/shadow content is readable inside the sandbox")
-	}
-	if got := strings.TrimSpace(between(t, s, "ROOTSSH")); got != "" {
-		t.Fatalf("/root/.ssh is visible inside the sandbox: %q", got)
-	}
-
-	if got := strings.TrimSpace(between(t, s, "OSREL")); got == "" {
-		t.Fatal("ordinary /etc reads were penalized — /etc/os-release is empty")
-	}
-	if got := strings.TrimSpace(between(t, s, "LIBS")); got == "" {
-		t.Fatal("the library world was penalized — /usr/lib lists empty")
+			// The secret itself must not survive into the sandbox.
+			if got := between(t, s, "SHADOW"); strings.Contains(got, shadowFirst) {
+				t.Fatalf("the real /etc/shadow content is readable inside the sandbox")
+			}
+			if got := strings.TrimSpace(between(t, s, "ROOTSSH")); got != "" {
+				t.Fatalf("/root/.ssh is visible inside the sandbox: %q", got)
+			}
+			if got := strings.TrimSpace(between(t, s, "OSREL")); got == "" {
+				t.Fatal("the system's view was penalized — /usr/lib/os-release is empty")
+			}
+			if got := strings.TrimSpace(between(t, s, "LIBS")); got == "" {
+				t.Fatal("the library world was penalized — /usr/lib lists empty")
+			}
+			// A widened view shows the rest of /etc: the masks hide the
+			// stores in it, and nothing else of it.
+			if got := strings.TrimSpace(between(t, s, "ETCREL")); tc.widened && got == "" {
+				t.Fatal("a view widened to /etc does not show /etc/os-release, so the masks above were not tested against a shown /etc")
+			}
+		})
 	}
 }

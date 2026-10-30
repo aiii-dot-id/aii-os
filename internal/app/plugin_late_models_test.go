@@ -149,11 +149,7 @@ func TestAModelARunningPluginComesToNeedIsFetchedWhenItsSettingChanges(t *testin
 	}
 }
 
-// NOTHING IS FETCHED THAT MAY NOT BE, AND A FETCH DOES NOT OUTLIVE ITS
-// PLUGIN. In SAFE the host makes no download; while a new release of the
-// same plugin is being prepared, that preparation writes the directory
-// and this one waits; and when the plugin stops, its fetch stops.
-func TestALateFetchHoldsToSafeToAnUpdateInFlightAndToItsPlugin(t *testing.T) {
+func TestALateFetchHoldsToSafeAndToItsPluginAndNotToAnUpdateInFlight(t *testing.T) {
 	want := func(r *lateRig) {
 		t.Helper()
 		r.a.cfgMu.Lock()
@@ -177,28 +173,48 @@ func TestALateFetchHoldsToSafeToAnUpdateInFlightAndToItsPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("an update of the same plugin being prepared", func(t *testing.T) {
+	t.Run("an update of the same plugin in flight", func(t *testing.T) {
 		r := newLateRig(t)
 		want(r)
-		main := pluginhost.NewAcquirer(pluginhost.AcquirerConfig{After: func(time.Duration) <-chan time.Time { return nil }, Logf: func(string, ...any) {}})
-		main.Attach(context.Background())
-		main.Want(pluginhost.ModelMaterialForTest(r.store.w.Dir, lateID, "0.2.0",
-			pluginhost.ModelDecl{Name: "next.bin", URL: "https://example.invalid/next.bin", SHA256: strings.Repeat("a", 64), Size: 10}))
-		eventually(t, "the update's preparation to be waiting", func() bool {
-			st, ok := main.Status(lateID)
-			return ok && st.Phase == pluginhost.PhaseWaiting
-		})
-		r.a.pluginOpts = &pluginhost.Options{Acquirer: main}
+		u := newLateUpdate(t, r, nil, u0next)
+		eventually(t, "the update's own file to be in flight", func() bool { return u.inFlight(u0next.URL) })
 		r.a.reconcileLateModels()
-		time.Sleep(50 * time.Millisecond)
-		if _, on := r.a.lateModels.Status(lateID); on || r.fetches() != 0 {
-			t.Fatal("a second writer was started on a directory an update is preparing")
+		eventually(t, "the pack on disk while the update still fetches its own file", r.packOnDisk)
+		if st, ok := u.acq.Status(lateID); !ok || st.Phase != pluginhost.PhaseFetching {
+			t.Fatalf("the update's preparation should still be fetching: %+v %v", st, ok)
 		}
-		// The update settles; the next pass fetches.
-		main.Forget(lateID)
-		eventually(t, "the update's preparation to leave", func() bool { _, ok := main.Status(lateID); return !ok })
+		close(u.release)
+		eventually(t, "the update's preparation to be ready", func() bool {
+			st, ok := u.acq.Status(lateID)
+			return ok && st.Phase == pluginhost.PhaseReady
+		})
+	})
+
+	t.Run("an update of the same plugin the download rule ended", func(t *testing.T) {
+		r := newLateRig(t)
+		want(r)
+		u := newLateUpdate(t, r, &pluginhost.FetchStatusError{Status: 404}, u0next)
+		eventually(t, "the update's preparation to be ended", func() bool { return u.acq.EndCause(lateID) != nil })
 		r.a.reconcileLateModels()
-		eventually(t, "the pack on disk once the update is out of the way", r.packOnDisk)
+		eventually(t, "the pack on disk beside an ended update", r.packOnDisk)
+	})
+
+	t.Run("one file both ask for has one writer", func(t *testing.T) {
+		r := newLateRig(t)
+		want(r)
+		u := newLateUpdate(t, r, nil, r.fr, u0next)
+		eventually(t, "the update's transfer of the pack to be open", func() bool { return u.inFlight(r.fr.URL) })
+		r.a.reconcileLateModels()
+		eventually(t, "the fetch to be asked for", func() bool { _, on := r.a.lateModels.Status(lateID); return on })
+		time.Sleep(300 * time.Millisecond)
+		if n := r.fetches(); n != 0 {
+			t.Fatalf("a second transfer of the pack was opened (%d) while the update's was open", n)
+		}
+		close(u.release)
+		eventually(t, "the pack on disk", r.packOnDisk)
+		if n, most := u.transfers(r.fr.URL), u.mostOpen(); n != 1 || most != 1 || r.fetches() != 0 {
+			t.Fatalf("the pack was transferred %d time(s) by the update and %d by the late fetch, %d at once; one writer brings it once", n, r.fetches(), most)
+		}
 	})
 
 	t.Run("the plugin stops", func(t *testing.T) {
@@ -241,4 +257,94 @@ func TestALateFetchTheRuleEndsIsStoppedOnItsLineUntilTryAgain(t *testing.T) {
 	r.mu.Unlock()
 	r.a.lateModels.Retry(lateID)
 	eventually(t, "the pack on disk after Try again", r.packOnDisk)
+}
+
+// u0next is a file of the update's own, which the running release does not
+// declare.
+var u0next = func() pluginhost.ModelDecl {
+	sum := sha256.Sum256([]byte(strings.Repeat("n", 1024)))
+	return pluginhost.ModelDecl{Name: "next.bin", URL: "https://example.invalid/next.bin", SHA256: hex.EncodeToString(sum[:]), Size: 1024}
+}()
+
+// lateUpdate is a new release of the rig's plugin being prepared through
+// the same store's writer, as the activation's acquirer prepares one, with
+// a fetcher of its own: each transfer is held open until release is
+// closed, or answers refuse.
+type lateUpdate struct {
+	acq     *pluginhost.Acquirer
+	release chan struct{}
+	files   map[string][]byte
+	refuse  error
+	mu      sync.Mutex
+	asked   map[string]int
+	open    map[string]int
+	most    int
+}
+
+func newLateUpdate(t *testing.T, r *lateRig, refuse error, models ...pluginhost.ModelDecl) *lateUpdate {
+	t.Helper()
+	u := &lateUpdate{release: make(chan struct{}), refuse: refuse, asked: map[string]int{}, open: map[string]int{},
+		files: map[string][]byte{r.fr.URL: r.frBytes, u0next.URL: []byte(strings.Repeat("n", 1024))}}
+	u.acq = r.store.acquirer(u.fetch, pluginhost.AcquirerConfig{Logf: func(string, ...any) {}})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		select {
+		case <-u.release:
+		default:
+			close(u.release)
+		}
+		cancel()
+	})
+	u.acq.Attach(ctx)
+	u.acq.Want(pluginhost.ModelMaterialForTest(r.store.w.Dir, lateID, "0.2.0", models...))
+	r.a.pluginOpts = &pluginhost.Options{Acquirer: u.acq}
+	return u
+}
+
+func (u *lateUpdate) fetch(ctx context.Context, url string, offset int64, w io.Writer) (int64, error) {
+	u.mu.Lock()
+	u.asked[url]++
+	u.open[url]++
+	u.most = max(u.most, u.open[url])
+	u.mu.Unlock()
+	defer func() {
+		u.mu.Lock()
+		u.open[url]--
+		u.mu.Unlock()
+	}()
+	if u.refuse != nil {
+		return 0, u.refuse
+	}
+	select {
+	case <-u.release:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	data, ok := u.files[url]
+	if !ok {
+		return 0, fmt.Errorf("nothing is served at %s", url)
+	}
+	n, err := w.Write(data[offset:])
+	return int64(n), err
+}
+
+// inFlight says a transfer of url is open.
+func (u *lateUpdate) inFlight(url string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.open[url] > 0
+}
+
+// transfers is how many transfers of url were opened.
+func (u *lateUpdate) transfers(url string) int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.asked[url]
+}
+
+// mostOpen is the most transfers of one file that were open at once.
+func (u *lateUpdate) mostOpen() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.most
 }

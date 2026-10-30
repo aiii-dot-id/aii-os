@@ -117,7 +117,12 @@ func TestOnlyAnUntouchedFormerRouteIsMoved(t *testing.T) {
 			if _, err := saveProvidersFile(path, reg); err != nil {
 				t.Fatal(err)
 			}
-			if raw, _ := os.ReadFile(path); tc.window != 0 && (!strings.Contains(string(raw), `"context_length": 200000`) || strings.Contains(string(raw), "max_output_tokens")) {
+			raw, _ := os.ReadFile(path)
+			var written struct {
+				Providers []map[string]any `json:"providers"`
+			}
+			_ = json.Unmarshal(raw, &written)
+			if tc.window != 0 && (len(written.Providers) != 1 || written.Providers[0]["context_length"] != float64(tc.window) || written.Providers[0]["max_output_tokens"] != nil) {
 				t.Fatalf("the operator's window was not kept, or the lent allocation was written:\n%s", raw)
 			}
 		})

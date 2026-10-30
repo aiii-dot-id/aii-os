@@ -19,20 +19,27 @@ var cognitionBounds = map[string][2]int{
 	"cognition.consolidate_batch":             {1, 200},
 	"cognition.consolidate_max_ops":           {2, 512},
 	"agency.outcome_window":                   {1, 1_000_000},
+	"agency.tool_outcome_min":                 {1, 1_000_000},
+	"agency.tool_outcome_window":              {1, 8_760},
+	"prompt.work_card_beliefs":                {1, 50},
 	"cognition.self_model_every_minutes":      {1, 1_000_000},
 	"cognition.identity_review_every_minutes": {1, 1_000_000},
 	"cognition.self_model_evidence_rows":      {1, 200},
 	"cognition.self_model_spoken_rows":        {1, 200},
 	"prompt.self_model_max_tokens":            {200, 1_000_000},
+	"prompt.ring2_evidence_max_chars":         {80, 10_000_000},
+	"prompt.charter_max_tokens":               {200, 1_000_000},
 	"prompt.ring3_max_chars":                  {600, 10_000_000},
 	"prompt.surfacing_max_chars":              {600, 10_000_000},
 	"prompt.dream_conversation_max_chars":     {1, 100_000_000},
 	"prompt.tensions_max_chars":               {1, 10_000_000},
 	"prompt.brief_max_chars":                  {600, 1_000_000},
+	"prompt.operator_beliefs_max_chars":       {1, 1_000_000},
 	"prompt.alarm_firings":                    {1, 100_000},
 	"prompt.excerpt_chars":                    {1, 100_000},
 	"prompt.ring3_recent_experiences":         {1, 1_000},
 	"agency.turn_token_budget":                {1, 1_000_000_000},
+	"agency.turn_seconds_local":               {1, 86_400},
 	"agency.tool_schema_refusals":             {1, 32},
 	"agency.turn_checkpoint_calls":            {1, 1_000_000_000},
 	"agency.turn_checkpoint_grace_rounds":     {1, 1_000_000},
@@ -55,6 +62,23 @@ var cognitionBounds = map[string][2]int{
 	"llm.timeout_seconds":                {1, 86_400},
 	"llm.retries":                        {-1, 100},
 	"llm.retry_backoff_ms":               {1, 600_000},
+	"llm.model_list_timeout_seconds":     {1, 120},
+	"llm.model_list_cache_seconds":       {1, 86_400},
+	"tools.webfetch_max_bytes":           {1, 100_000_000},
+	"agency.work_line_max_chars":         {100, 1_000_000},
+	"prompt.standing_max_chars":          {100, 1_000_000},
+	"prompt.playbook_max_bytes":          {1, 1_000_000},
+	"plugins.context_providers":          {1, 64},
+	"plugins.context_timeout_ms":         {1, 60_000},
+	"record.tool_result_runes":           {1, 100_000},
+	// How a plugin's child is kept (plugin_child_bounds.go).
+	"plugins.runtime.stop_ms":            {1, 600_000},
+	"plugins.runtime.hand_over_ms":       {1, 3_600_000},
+	"plugins.runtime.session_control_ms": {1, 60_000},
+	"plugins.runtime.restart_attempts":   {1, 100},
+	// How far apart the update checks are: GitHub's 60 unauthenticated
+	// requests an hour shared by fifteen identities, and a day at most.
+	"updates.check_interval_minutes": {15, 1_440},
 }
 
 func TestTheRhythmsBoundsAreTheOnesTheRulingStates(t *testing.T) {
@@ -80,12 +104,30 @@ func TestTheRhythmsBoundsAreTheOnesTheRulingStates(t *testing.T) {
 	}
 }
 
+// setDotted states v at a dotted key in a config.json being built, each
+// part but the last an object: a key of the table may sit deeper than one
+// section (plugins.runtime.stop_ms).
+func setDotted(file map[string]any, key string, v any) {
+	parts := strings.Split(key, ".")
+	m := file
+	for _, p := range parts[:len(parts)-1] {
+		next, ok := m[p].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			m[p] = next
+		}
+		m = next
+	}
+	m[parts[len(parts)-1]] = v
+}
+
 // fileWith is a config.json that states one rhythm setting and nothing
 // else of the rhythm's.
 func fileWith(t *testing.T, key string, v any) string {
 	t.Helper()
-	parts := strings.SplitN(key, ".", 2)
-	raw, err := json.Marshal(map[string]map[string]any{"prompt": {"recent_turns": 20}, parts[0]: {parts[1]: v}})
+	file := map[string]any{"prompt": map[string]any{"recent_turns": 20}}
+	setDotted(file, key, v)
+	raw, err := json.Marshal(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +141,10 @@ func fileWith(t *testing.T, key string, v any) string {
 // fileWithAlso is fileWith stating one more key of the same section.
 func fileWithAlso(t *testing.T, key string, v any, also string, w any) string {
 	t.Helper()
-	parts, more := strings.SplitN(key, ".", 2), strings.SplitN(also, ".", 2)
-	raw, err := json.Marshal(map[string]map[string]any{"prompt": {"recent_turns": 20}, parts[0]: {parts[1]: v, more[1]: w}})
+	file := map[string]any{"prompt": map[string]any{"recent_turns": 20}}
+	setDotted(file, key, v)
+	setDotted(file, also, w)
+	raw, err := json.Marshal(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,11 +165,16 @@ var limitDefaults = map[string]int{
 	"agency.subagent_max_legs":           4,
 	"agency.subagent_wall_seconds":       1200,
 	"agency.subagent_wall_seconds_local": 1800,
+	"agency.turn_seconds_local":          2700,
 	"prompt.max_tool_result_chars":       32000,
 	"prompt.max_tokens":                  0,
 	"llm.timeout_seconds":                120,
 	"llm.retries":                        1,
 	"llm.retry_backoff_ms":               2000,
+	"llm.model_list_timeout_seconds":     3,
+	"llm.model_list_cache_seconds":       60,
+	"tools.webfetch_max_bytes":           4_000_000,
+	"updates.check_interval_minutes":     60,
 }
 
 func TestAValueOutsideItsBoundsLoadsHeldToThemAndSaidAndTheDoorStillRefusesIt(t *testing.T) {

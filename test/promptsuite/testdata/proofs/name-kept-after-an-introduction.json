@@ -1,0 +1,61 @@
+{
+  "task": "name-kept-after-an-introduction",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "I'm Marta",
+        "steps": [
+          {
+            "text": "Nice to meet you, Marta."
+          }
+        ]
+      },
+      {
+        "on": "the name you go by",
+        "steps": [
+          {
+            "text": "NAME: Quill"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C3: the identity takes the name their operator introduced themselves by",
+    "fails": [
+      1,
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "I'm Marta",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "data/ui/name",
+                  "content": "Marta\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "Nice to meet you!"
+          }
+        ]
+      },
+      {
+        "on": "the name you go by",
+        "steps": [
+          {
+            "text": "NAME: Marta"
+          }
+        ]
+      }
+    ]
+  }
+}

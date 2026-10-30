@@ -158,6 +158,11 @@ func TestARecordDecodesOnceAsItDidTwice(t *testing.T) {
 	for i, in := range inputs {
 		once, errOnce := decodeEvent(in)
 		twice, errTwice := decodeEventTwice(in)
+		if errTwice == nil {
+			if line, err := twice.MarshalJSON(); err != nil || !bytes.Equal(line, in) {
+				errTwice = ErrNotCanonical
+			}
+		}
 		if (errOnce == nil) != (errTwice == nil) {
 			t.Errorf("input %d (%.60q): once %v, twice %v", i, in, errOnce, errTwice)
 			continue

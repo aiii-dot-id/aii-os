@@ -158,7 +158,7 @@ func (c *Client) refusedTool(err error, tools []ToolDefinition) error {
 	name := tools[i].Function.Name
 	if known := c.refusals.note(c.refusalKey, toolDigest(tools[i])); !known {
 		logsink.Warn("llm.refusal", "%s %s would not accept the definition of the tool %q (HTTP %d) — it is left out of this provider's requests until its definition changes or this process restarts; the provider said: %s",
-			providerLabel(c.dialect), c.model, name, answered.StatusCode, clip(answered.Body, 300))
+			c.providerLabel(), c.model, name, answered.StatusCode, clip(answered.Body, 300))
 	}
 	return &ToolSchemaRefusedError{Tool: name, Err: err}
 }

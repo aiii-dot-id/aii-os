@@ -30,7 +30,9 @@ type devsignSpec struct {
 
 	AiiosMinVersion          string `json:"aiios_min_version,omitempty"`
 	AiiosMaxExclusiveVersion string `json:"aiios_max_exclusive_version,omitempty"`
-	Interfaces               []struct {
+
+	DefaultVariant string `json:"default_variant,omitempty"`
+	Interfaces     []struct {
 		ID         string   `json:"id"`
 		Version    int      `json:"version"`
 		SchemaFile string   `json:"schema_file"`
@@ -104,6 +106,7 @@ func runDevsign(args []string, stdout, stderr io.Writer) int {
 		"title": spec.Title, "description": spec.Description, "publisher": spec.Publisher,
 		"license": spec.License, "homepage": spec.Homepage, "plugin_family": spec.PluginFamily,
 		"aiios_min_version": spec.AiiosMinVersion, "aiios_max_exclusive_version": spec.AiiosMaxExclusiveVersion,
+		"default_variant": spec.DefaultVariant,
 	} {
 		if value != "" {
 			extra[key] = value
@@ -284,6 +287,9 @@ func loadStaging(dir string) (*devsignSpec, map[string][]byte, error) {
 	if spec.ID == "" || spec.Version == "" || len(spec.Variants) == 0 {
 		return nil, nil, fmt.Errorf("devsign.json needs id, version, and at least one variant")
 	}
+	if spec.DefaultVariant != "" && !declaresVariant(&spec, spec.DefaultVariant) {
+		return nil, nil, fmt.Errorf("devsign.json default_variant %q is not a declared variant", spec.DefaultVariant)
+	}
 	rootDir := filepath.Join(dir, "install-root")
 	files := map[string][]byte{}
 	err = filepath.WalkDir(rootDir, func(p string, d fs.DirEntry, werr error) error {
@@ -314,6 +320,15 @@ func loadStaging(dir string) (*devsignSpec, map[string][]byte, error) {
 		return nil, nil, fmt.Errorf("install-root is empty")
 	}
 	return &spec, files, nil
+}
+
+func declaresVariant(spec *devsignSpec, id string) bool {
+	for _, v := range spec.Variants {
+		if v.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {

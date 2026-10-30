@@ -14,7 +14,11 @@ func TestRing1ShowsWhatTheRecognizerHeardBesideACorrectedWord(t *testing.T) {
 	ctx := context.Background()
 	say := func(text string) uint64 {
 		t.Helper()
-		ref, err := engine.RecordConversationRef(ctx, "operator", text, interaction.Details{})
+		said := interaction.SaidTyped
+		if strings.HasPrefix(text, store.SpokenMarker) {
+			said = interaction.SaidSpoken
+		}
+		ref, err := engine.RecordConversationRef(ctx, "operator", text, interaction.Details{Said: said})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,6 +43,9 @@ func TestRing1ShowsWhatTheRecognizerHeardBesideACorrectedWord(t *testing.T) {
 	known := func(turn uint64, key string) {
 		t.Helper()
 		if err := st.AnnotateTurn(turn, store.AnnotationSpeaker, key, `{"decision":"known","speaker":"Quinn","speaker_id":"quinn-desk","speaker_uuid":"6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f","continuity":"matched"}`); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AnnotateTurn(turn, store.AnnotationConfirmed, "ask-"+key, `{"ask":"ask-`+key+`"}`); err != nil {
 			t.Fatal(err)
 		}
 	}

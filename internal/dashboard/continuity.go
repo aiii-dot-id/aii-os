@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 type ContinuitySnapshot struct {
@@ -26,8 +32,10 @@ type ContinuityPass struct {
 }
 
 type ContinuityView struct {
-	Enabled         bool                 `json:"enabled"`
-	Safe            bool                 `json:"safe,omitempty"`
+	Enabled bool `json:"enabled"`
+	Safe    bool `json:"safe,omitempty"`
+
+	Waiting         bool                 `json:"waiting,omitempty"`
 	BackupKeep      int                  `json:"backup_keep"`
 	NextPass        string               `json:"next_pass,omitempty"`
 	Snapshots       []ContinuitySnapshot `json:"snapshots"`
@@ -58,6 +66,26 @@ type ContinuityView struct {
 
 	ExportOK     bool   `json:"export_ok"`
 	ExportWhyNot string `json:"export_why_not,omitempty"`
+
+	IdentityChoice *IdentityChoice `json:"identity_choice,omitempty"`
+}
+
+type IdentityChoice struct {
+	Files []IdentityChoiceFiles `json:"files"`
+}
+
+type IdentityChoiceFiles struct {
+	Key      string               `json:"key"`
+	What     string               `json:"what"`
+	Was      string               `json:"was"`
+	Found    []IdentityChoiceFile `json:"found,omitempty"`
+	Standard string               `json:"standard,omitempty"`
+}
+
+type IdentityChoiceFile struct {
+	Path     string `json:"path"`
+	Bytes    int64  `json:"bytes"`
+	Modified string `json:"modified,omitempty"`
 }
 
 type ContinuitySetAside struct {
@@ -99,6 +127,8 @@ type ContinuityRequest struct {
 	Passphrase string `json:"passphrase,omitempty"`
 	Again      string `json:"again,omitempty"`
 	FileB64    string `json:"file_b64,omitempty"`
+
+	Picked map[string]string `json:"picked,omitempty"`
 }
 
 type ContinuityReply struct {
@@ -131,6 +161,11 @@ type ContinuityHooks struct {
 	KeyBack func(sealed, passphrase []byte) error
 
 	SnapshotKeyBack func(sealed, passphrase []byte) (string, error)
+
+	Download func(name string) (io.ReadCloser, int64, error)
+
+	IdentityChoice      func() *IdentityChoice
+	ChooseIdentityFiles func(picked map[string]string) error
 }
 
 const maxEscrowFileB64 = 96 << 10
@@ -180,6 +215,9 @@ func (s *Server) answerBackups(ctx context.Context, msg ClientMessage, secretsOK
 		if r.View != nil {
 			r.View.SecretsOK = secretsOK
 			r.View.ExportOK, r.View.ExportWhyNot = exportOK, exportWhyNot
+			if hooks.IdentityChoice != nil {
+				r.View.IdentityChoice = hooks.IdentityChoice()
+			}
 		}
 		r.Action = req.Action
 		send(r)
@@ -241,6 +279,21 @@ func (s *Server) answerBackups(ctx context.Context, msg ClientMessage, secretsOK
 		reply(ContinuityReply{Restarting: true})
 		if err := h.Restart(); err != nil {
 			reply(ContinuityReply{Error: "The restore is asked for and the restart did not start: " + err.Error() + " Restart the identity and it will be performed."})
+		}
+	case "identity_choose":
+		if hooks.ChooseIdentityFiles == nil || h.Restart == nil {
+			refuse("there is no choice of the identity's files to make")
+			return
+		}
+		if err := hooks.ChooseIdentityFiles(req.Picked); err != nil {
+			v := hooks.View()
+			reply(ContinuityReply{View: &v, Error: err.Error()})
+			return
+		}
+
+		reply(ContinuityReply{Restarting: true})
+		if err := h.Restart(); err != nil {
+			reply(ContinuityReply{Error: "The choice is written and the restart did not start: " + err.Error() + " Restart the identity and it will start on the files you chose."})
 		}
 	case "escrow_create", "escrow_check", "key_back", "snapshot_key_back":
 		if !secretsOK {
@@ -347,11 +400,20 @@ type RestoreNewRequest struct {
 	Provider   *GenesisRequest `json:"provider,omitempty"`
 }
 
+type RestoreNewBegun struct {
+	Identity string `json:"identity,omitempty"`
+
+	Received []string `json:"received,omitempty"`
+}
+
 type RestoreNewReply struct {
-	Action string          `json:"action"`
-	Keys   *RestoreNewKeys `json:"keys,omitempty"`
-	Done   *RestoreNewDone `json:"done,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	Action    string           `json:"action"`
+	Begun     *RestoreNewBegun `json:"begun,omitempty"`
+	Keys      *RestoreNewKeys  `json:"keys,omitempty"`
+	Done      *RestoreNewDone  `json:"done,omitempty"`
+	Withdrawn bool             `json:"withdrawn,omitempty"`
+	Snapshots []string         `json:"snapshots,omitempty"`
+	Error     string           `json:"error,omitempty"`
 
 	SecretsOK bool `json:"secrets_ok"`
 }
@@ -360,6 +422,53 @@ type RestoreNewHooks struct {
 	Keys    func(sealed, passphrase []byte) (RestoreNewKeys, error)
 	Upload  func(snapshot, member string, body io.Reader) error
 	Restore func(ctx context.Context, snapshot string, provider *GenesisRequest) (RestoreNewDone, error)
+
+	UploadIdle func() time.Duration
+
+	Begun    func() *RestoreNewBegun
+	Withdraw func() ([]string, error)
+}
+
+type RestoreNewRefusal struct {
+	Reason string
+	Text   string
+}
+
+func (e *RestoreNewRefusal) Error() string { return e.Text }
+
+const (
+	RestoreNewStands = "restore_stands"
+
+	RestoreNewNone         = "no_restore"
+	RestoreNewNotFirstBoot = "not_first_boot"
+	RestoreNewNotItsKey    = "not_its_key"
+)
+
+const DefaultRestoreUploadIdle = 120 * time.Second
+
+type RestoreUploadIdle struct{ Wait time.Duration }
+
+func (e *RestoreUploadIdle) Error() string {
+	return fmt.Sprintf("nothing of the upload arrived for %s", e.Wait)
+}
+
+type arrivingBody struct {
+	body io.Reader
+	rc   *http.ResponseController
+	wait time.Duration
+}
+
+func (b *arrivingBody) Read(p []byte) (int, error) {
+	n, err := b.body.Read(p)
+	if n > 0 {
+		if derr := b.rc.SetReadDeadline(time.Now().Add(b.wait)); derr != nil && err == nil {
+			err = derr
+		}
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		err = &RestoreUploadIdle{Wait: b.wait}
+	}
+	return n, err
 }
 
 const notPrivate = "This connection is not private: a passphrase, or an identity in the clear, would cross the network. Open this page on the machine itself, or serve the dashboard with TLS, and come back."
@@ -373,7 +482,12 @@ func (s *Server) answerRestoreNew(ctx context.Context, msg ClientMessage, secret
 	req := *msg.RestoreNew
 	reply := func(r RestoreNewReply) { r.Action, r.SecretsOK = req.Action, secretsOK; send(r) }
 	if req.Action == "hello" {
-		reply(RestoreNewReply{})
+
+		var r RestoreNewReply
+		if secretsOK && h.RestoreNew.Begun != nil {
+			r.Begun = h.RestoreNew.Begun()
+		}
+		reply(r)
 		return
 	}
 	if !secretsOK {
@@ -412,6 +526,22 @@ func (s *Server) answerRestoreNew(ctx context.Context, msg ClientMessage, secret
 		}) {
 			reply(RestoreNewReply{Error: "this identity is stopping"})
 		}
+	case "withdraw":
+		if h.RestoreNew.Withdraw == nil {
+			refuse("withdrawing a restore is not offered here")
+			return
+		}
+
+		if !s.background(h, func() {
+			snapshots, err := h.RestoreNew.Withdraw()
+			if err != nil {
+				reply(RestoreNewReply{Error: err.Error()})
+				return
+			}
+			reply(RestoreNewReply{Withdrawn: true, Snapshots: snapshots})
+		}) {
+			reply(RestoreNewReply{Error: "this identity is stopping"})
+		}
 	default:
 		refuse("restore: unknown action")
 	}
@@ -436,12 +566,47 @@ func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusNotFound, "restoring an identity is offered at first boot only")
 		return
 	}
-	if err := h.RestoreNew.Upload(r.URL.Query().Get("snapshot"), r.URL.Query().Get("member"), r.Body); err != nil {
+
+	wait := DefaultRestoreUploadIdle
+	if h.RestoreNew.UploadIdle != nil {
+		wait = h.RestoreNew.UploadIdle()
+	}
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		logsink.Error("restore.error", "an upload's connection takes no read deadline (%v): refused, since nothing would end it if it stalled", err)
+		refuse(http.StatusInternalServerError, "This connection cannot be given a time limit, so an upload over it that stopped would never end. Nothing was received.")
+		return
+	}
+	body := &arrivingBody{body: r.Body, rc: rc, wait: wait}
+	if err := h.RestoreNew.Upload(r.URL.Query().Get("snapshot"), r.URL.Query().Get("member"), body); err != nil {
 		refuse(http.StatusBadRequest, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) handleSnapshotDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.downloadAdmitted(w, r) {
+		return
+	}
+	h := s.currentHandler()
+	if h == nil || h.Continuity == nil || h.Continuity.Download == nil {
+		http.Error(w, "downloading a snapshot is not available", http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDownloadForm)
+	name := r.PostFormValue("name")
+	file, size, err := h.Continuity.Download(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer file.Close()
+
+	serveDownload(w, file, size, "application/octet-stream", name, "snapshot")
+}
+
+const maxDownloadForm = 4 << 10
 
 func (h *ContinuityHooks) background(work func()) bool {
 	if h.Background == nil {

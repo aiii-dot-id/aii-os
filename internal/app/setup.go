@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/oauth"
+	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
 	"github.com/aiii-dot-id/aii-os/internal/publicname"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -41,6 +43,10 @@ func (a *App) configState() *dashboard.ConfigState {
 		ProbeTimeoutSeconds:    c.LLM.ProbeTimeoutSeconds,
 		RefusedRetryMaxSeconds: c.LLM.RefusedRetryMaxSeconds,
 		RefusedRetryMaxDefault: refusedRetryMaxDefaultSeconds,
+		Retries:                c.LLM.Retries,
+		RetryBackoffMS:         c.LLM.RetryBackoffMS,
+		ModelListTimeout:       c.LLM.ModelListTimeoutSeconds,
+		ModelListCache:         c.LLM.ModelListCacheSeconds,
 	}
 	reg, err := a.loadProviders()
 	speechSt := speechState(c, reg, err, a.speechEngines())
@@ -48,6 +54,7 @@ func (a *App) configState() *dashboard.ConfigState {
 	speechSt.Resets = a.speechResets(time.Now()).Format("2 January")
 	speechSt.Speakers = a.speakerPolicyState()
 	speechSt.OperatorSpeakers = append([]string(nil), c.Speech.OperatorSpeakers...)
+	speechSt.Voices, speechSt.VoicesCut = a.speakerVoices(c)
 	speechSt.Mode = a.voiceModeState()
 	if err != nil {
 		llmSt.Error = err.Error()
@@ -79,6 +86,7 @@ func (a *App) configState() *dashboard.ConfigState {
 		case capNo:
 			llmSt.ImagesShown = "no"
 		}
+		llmSt.Capabilities = a.capabilityView(reg, entry.Name, cc.Model)
 
 		if levels := effortLevelsFor(reg.effective(), entry, cc.Model); len(levels) > 0 {
 			plan := llm.PlanEffort(dialect, entry.ReasoningEffort, levels)
@@ -119,19 +127,28 @@ func (a *App) configState() *dashboard.ConfigState {
 
 			Ring3MaxChars:             c.Prompt.Ring3MaxChars,
 			SurfacingMaxChars:         c.Prompt.SurfacingMaxChars,
+			OperatorBeliefsMaxChars:   c.Prompt.OperatorBeliefsMaxChars,
 			SelfModelMaxTokens:        c.Prompt.SelfModelMaxTokens,
+			Ring2EvidenceMaxChars:     c.Prompt.Ring2EvidenceMaxChars,
+			CharterMaxTokens:          c.Prompt.CharterMaxTokens,
 			DreamConversationMaxChars: c.Prompt.DreamConversationMaxChars,
 			TensionsMaxChars:          c.Prompt.TensionsMaxChars,
 			BriefMaxChars:             c.Prompt.BriefMaxChars,
 			AlarmFirings:              c.Prompt.AlarmFirings,
+			StandingMaxChars:          c.Prompt.StandingMaxChars,
+			PlaybookMaxBytes:          c.Prompt.PlaybookMaxBytes,
 			ExcerptChars:              c.Prompt.ExcerptChars,
 			Ring3RecentExperiences:    c.Prompt.Ring3RecentExperiences,
+			WorkCardBeliefs:           c.Prompt.WorkCardBeliefs,
 		},
 		Agency: dashboard.AgencyConfigState{
 			PreferLocalForRoles: c.Agency.PreferLocalForRoles,
 			RhythmSeconds:       c.Agency.RhythmSeconds,
 			OutcomeWindow:       c.Agency.OutcomeWindow,
+			ToolOutcomeMin:      c.Agency.ToolOutcomeMin,
+			ToolOutcomeWindow:   c.Agency.ToolOutcomeWindow,
 			TurnTokenBudget:     c.Agency.TurnTokenBudget,
+			TurnSecondsLocal:    c.Agency.TurnSecondsLocal,
 			ToolSchemaRefusals:  c.Agency.ToolSchemaRefusals,
 			TurnCheckpointCalls: c.Agency.TurnCheckpointCalls, TurnCheckpointGraceRounds: c.Agency.TurnCheckpointGraceRounds,
 			MaxTurnContinuations:    c.Agency.MaxTurnContinuations,
@@ -139,9 +156,13 @@ func (a *App) configState() *dashboard.ConfigState {
 			ContinuationWallSeconds: c.Agency.ContinuationWallSeconds,
 			AlarmWallSeconds:        c.Agency.AlarmWallSeconds,
 			HarvestWallSeconds:      c.Agency.HarvestWallSeconds,
+			WorkLineMaxChars:        c.Agency.WorkLineMaxChars,
+			Roles:                   roleStates(c.Agency.Roles),
 		},
+		Tools:     dashboard.ToolsConfigState{WebFetchMaxBytes: c.Tools.WebFetchMaxBytes},
+		Record:    dashboard.RecordConfigState{ToolResultRunes: c.Record.ToolResultRunes},
 		Cognition: a.cognitionState(c, reg),
-		Updates:   dashboard.UpdatesConfigState{Automatic: c.Updates.Automatic},
+		Updates:   dashboard.UpdatesConfigState{Automatic: c.Updates.Automatic, CheckIntervalMinutes: c.Updates.CheckIntervalMinutes},
 		Logs: dashboard.LogsConfigState{
 			Dir: c.Logs.Dir, MaxBackups: c.Logs.MaxBackups, CompressDays: c.Logs.CompressDays,
 			MaxBytes: c.Logs.MaxBytes, MaxBytesDefault: logsink.DefaultMaxBytes,
@@ -274,6 +295,8 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, err
 			}
 			cognitionChanged = true
+
+			limitsChanged = limitsChanged || isChildBoundKey(key)
 			continue
 		}
 		switch key {
@@ -356,6 +379,11 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, err
 			}
 			cfg.LLM.RefusedRetryMaxSeconds = n
+		case "llm.model_list_timeout_seconds", "llm.model_list_cache_seconds":
+
+			if _, err := tableNumber(cfg, key, v, integer); err != nil {
+				return nil, err
+			}
 		case "llm.timeout_seconds", "llm.retries", "llm.retry_backoff_ms":
 
 			changed, err := tableNumber(cfg, key, v, integer)
@@ -414,6 +442,34 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, fmt.Errorf("dashboard.refused_pauses: 0 takes the default (%d); otherwise %d to %d", dashboard.DefaultRefusedPauses, dashboard.MinRefusedPauses, dashboard.MaxRefusedPauses)
 			}
 			cfg.Dashboard.RefusedPauses = n
+		case "dashboard.stranger_body_seconds":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n != 0 && (n < dashboard.MinStrangerBodySeconds || n > dashboard.MaxStrangerBodySeconds) {
+				return nil, fmt.Errorf("dashboard.stranger_body_seconds: 0 takes the default (%d); otherwise %d to %d", dashboard.DefaultStrangerBodySeconds, dashboard.MinStrangerBodySeconds, dashboard.MaxStrangerBodySeconds)
+			}
+			cfg.Dashboard.StrangerBodySeconds = n
+		case "dashboard.start_wait_seconds", "dashboard.port_search_span":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			unset, least, most := install.DefaultStartWaitSeconds, install.MinStartWaitSeconds, install.MaxStartWaitSeconds
+			if key == "dashboard.port_search_span" {
+				unset, least, most = install.DefaultPortSearchSpan, install.MinPortSearchSpan, install.MaxPortSearchSpan
+			}
+			if n != 0 && (n < least || n > most) {
+				return nil, fmt.Errorf("%s: 0 takes the default (%d); otherwise %d to %d", key, unset, least, most)
+			}
+			if key == "dashboard.port_search_span" {
+				cfg.Dashboard.PortSearchSpan = n
+			} else {
+				cfg.Dashboard.StartWaitSeconds = n
+			}
 		case "dashboard.unsigned_requests_per_second", "dashboard.unsigned_request_burst":
 
 			n, err := integer(key, v)
@@ -431,6 +487,34 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				cfg.Dashboard.UnsignedRequestBurst = n
 			} else {
 				cfg.Dashboard.UnsignedRequestsPerSecond = n
+			}
+		case "dashboard.refusal_lines_per_minute":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n != 0 && (n < dashboard.MinRefusalLinesPerMinute || n > dashboard.MaxRefusalLinesPerMinute) {
+				return nil, fmt.Errorf("%s: 0 takes the default (%d); otherwise %d to %d", key, dashboard.DefaultRefusalLinesPerMinute, dashboard.MinRefusalLinesPerMinute, dashboard.MaxRefusalLinesPerMinute)
+			}
+			cfg.Dashboard.RefusalLinesPerMinute = n
+		case "dashboard.page_ticket_seconds", "dashboard.page_tickets":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			unset, least, most := dashboard.DefaultPageTicketSeconds, dashboard.MinPageTicketSeconds, dashboard.MaxPageTicketSeconds
+			if key == "dashboard.page_tickets" {
+				unset, least, most = dashboard.DefaultPageTickets, dashboard.MinPageTickets, dashboard.MaxPageTickets
+			}
+			if n != 0 && (n < least || n > most) {
+				return nil, fmt.Errorf("%s: 0 takes the default (%d); otherwise %d to %d", key, unset, least, most)
+			}
+			if key == "dashboard.page_tickets" {
+				cfg.Dashboard.PageTickets = n
+			} else {
+				cfg.Dashboard.PageTicketSeconds = n
 			}
 		case "dashboard.record.page_rows", "dashboard.record.first_view_bytes":
 
@@ -532,6 +616,17 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Dashboard.CarriedIdleSeconds = n
 			restart = append(restart, key)
+		case "tools.shell_windows_utf8":
+
+			if v == nil {
+				cfg.Tools.ShellWindowsUTF8 = nil
+				break
+			}
+			b, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Errorf("tools.shell_windows_utf8: want a boolean, or null for the default (on)")
+			}
+			cfg.Tools.ShellWindowsUTF8 = &b
 		case "dashboard.notices_off_dashboard":
 			b, ok := v.(bool)
 			if !ok {
@@ -664,6 +759,16 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				return nil, fmt.Errorf("maintenance.on_demand_spacing_seconds: 0 takes the default (600); at most 86400")
 			}
 			cfg.Maintenance.OnDemandSpacingSeconds = n
+		case "maintenance.restore_upload_idle_seconds":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n < 0 || n > 86400 {
+				return nil, fmt.Errorf("maintenance.restore_upload_idle_seconds: 0 takes the default (120); at most 86400")
+			}
+			cfg.Maintenance.RestoreUploadIdleSeconds = n
 		case "logs.max_backups":
 			n, err := integer(key, v)
 			if err != nil {
@@ -748,6 +853,19 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			if s != cfg.Plugins.CatalogURL {
 				cfg.Plugins.CatalogURL = s
+				catalogChanged = true
+			}
+		case "plugins.catalog_refresh_minutes":
+
+			n, err := integer(key, v)
+			if err != nil {
+				return nil, err
+			}
+			if n != 0 && (n < plugincatalog.MinRefreshMinutes || n > plugincatalog.MaxRefreshMinutes) {
+				return nil, fmt.Errorf("plugins.catalog_refresh_minutes: 0 takes the default (%d); otherwise %d to %d", plugincatalog.DefaultRefreshMinutes, plugincatalog.MinRefreshMinutes, plugincatalog.MaxRefreshMinutes)
+			}
+			if n != cfg.Plugins.CatalogRefreshMinutes {
+				cfg.Plugins.CatalogRefreshMinutes = n
 				catalogChanged = true
 			}
 
@@ -945,6 +1063,23 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Witness.IntervalEvents = n
 			restart = append(restart, key)
+		case "witness.ask_again_seconds":
+
+			n := 0
+			if v != nil {
+				got, err := integer(key, v)
+				if err != nil {
+					return nil, err
+				}
+				n = got
+			}
+			w := cfg.Witness
+			w.AskAgainSeconds = n
+			if err := validWitnessAskAgain(key, w); err != nil {
+				return nil, err
+			}
+			cfg.Witness = w
+			restart = append(restart, key)
 		case "witness.platform_pubkey_path":
 			s, err := str(key, v)
 			if err != nil {
@@ -973,7 +1108,7 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Genesis.FirewallURL = s
 			restart = append(restart, key)
-		case "genesis.fetch_attempts", "genesis.fetch_timeout_ms":
+		case "genesis.fetch_attempts", "genesis.fetch_timeout_ms", "genesis.ring5_retry_seconds":
 
 			n := 0
 			if v != nil {
@@ -984,10 +1119,13 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 				n = got
 			}
 			g := cfg.Genesis
-			if key == "genesis.fetch_attempts" {
+			switch key {
+			case "genesis.fetch_attempts":
 				g.FetchAttempts = n
-			} else {
+			case "genesis.fetch_timeout_ms":
 				g.FetchTimeoutMs = n
+			default:
+				g.Ring5RetrySeconds = n
 			}
 			if err := validGenesisPatience(g); err != nil {
 				return nil, err
@@ -1342,6 +1480,10 @@ func (a *App) probeSubstrate(client substrateProbeClient, cc llm.ClientConfig, e
 	if a.bgCtx == nil {
 		return substrateCapability{}, fmt.Errorf("substrate refused: application lifecycle is unavailable")
 	}
+
+	if err := a.windowHoldsIdentity(entry, cc.Model); err != nil {
+		return substrateCapability{}, err
+	}
 	bound := probeTimeout(cc, timeoutSeconds)
 	vctx, cancel := context.WithTimeout(a.bgCtx, bound)
 	defer cancel()
@@ -1356,9 +1498,7 @@ func (a *App) probeSubstrate(client substrateProbeClient, cc llm.ClientConfig, e
 		toolCh <- toolAnswer{state, note}
 	}()
 
-	modalityURL := modelModalitiesURL(entry, cc.Model, reg.modelCatalogueURL())
-
-	mctx, mcancel := context.WithTimeout(a.bgCtx, 2*min(bound, modalityTimeout))
+	mctx, mcancel := context.WithTimeout(a.bgCtx, 2*min(bound, reg.capabilityLookup().timeout()))
 	accepted := false
 	defer func() {
 		if !accepted {
@@ -1404,12 +1544,11 @@ func (a *App) probeSubstrate(client substrateProbeClient, cc llm.ClientConfig, e
 		logsink.Info("boot.decision", "%s", tool.note)
 	}
 	return substrateCapability{
-		provider:    entry.Name,
-		model:       cc.Model,
-		toolCalls:   tool.state,
-		note:        tool.note,
-		modalityURL: modalityURL,
-		checkedAt:   time.Now(),
+		provider:  entry.Name,
+		model:     cc.Model,
+		toolCalls: tool.state,
+		note:      tool.note,
+		checkedAt: time.Now(),
 	}, nil
 }
 
@@ -1456,8 +1595,9 @@ func (a *App) wireSettingsHooks(h *dashboard.WSHandler) {
 	h.GetConfig = a.configState
 	h.SetConfig = a.applyConfigChange
 	h.GetSandbox = a.sandboxState
-	h.SetSandbox = a.setSandboxRoots
+	h.ChangeSandbox = a.changeSandboxRoot
 	h.SetSandboxOff = a.setSandboxOff
+	h.CopyAgentNotes = a.copyAgentNotesAsked
 	h.GetTools = func() []dashboard.ToolState {
 		states := a.toolReg.ToolStates()
 		out := make([]dashboard.ToolState, len(states))
@@ -1469,6 +1609,7 @@ func (a *App) wireSettingsHooks(h *dashboard.WSHandler) {
 	h.SetToolFunc = a.setToolEnabled
 	h.ListLogs = a.listLogs
 	h.TailLogs = a.tailLogs
+	h.GetSpend = a.spendView
 	h.DatabaseExport = a.continuity.ExportDatabase
 	h.UpdateCheck = a.checkForUpdateNow
 	h.Uninstall = a.openUninstallApp

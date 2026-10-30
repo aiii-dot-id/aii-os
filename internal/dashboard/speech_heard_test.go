@@ -31,6 +31,7 @@ func TestTheHeardRouteAnswersWhatTheIdentitysReadReturns(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 		if mutate == nil || mutate(r) {
 			r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+			r.Header.Set(pageKeyHeader, pageKeyFor(s))
 		}
 		w := httptest.NewRecorder()
 		s.server.Handler.ServeHTTP(w, r)

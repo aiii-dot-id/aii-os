@@ -119,6 +119,8 @@ func olderSchema(t *testing.T) string {
 func olderReconcile(t *testing.T, s *Store) error {
 	t.Helper()
 	older := olderSchema(t)
+	s.marksUnread = true
+	defer func() { s.marksUnread = false }()
 	return s.withSchema(t.Context(), older, func() error {
 		_, err := s.reconcileSchema(older)
 		return err
@@ -408,6 +410,8 @@ func TestGoingBackOneReleaseMeetsOnlyTheTurnID(t *testing.T) {
 	defer func() { s.Close() }()
 	previous := previousSchema(t)
 	back := func() error {
+		s.marksUnread = true
+		defer func() { s.marksUnread = false }()
 		return s.withSchema(t.Context(), previous, func() error {
 			_, err := s.reconcileSchema(previous)
 			return err

@@ -165,3 +165,92 @@ func TestAMessageWithNoImageIsWiredAsBefore(t *testing.T) {
 		}
 	}
 }
+
+func TestEachKindRidesAUserMessageInTheDialectsThatWriteIt(t *testing.T) {
+	pdf := Image{MediaType: "application/pdf", Name: "brief.pdf", Data: []byte("%PDF-1.7 not a real document"), Tokens: 3000}
+	wav := Image{MediaType: "audio/wav", Name: "note.wav", Data: []byte("RIFF....WAVEfmt not a real sound"), Tokens: 2000}
+	mp4 := Image{MediaType: "video/mp4", Name: "clip.mp4", Data: []byte("....ftypisom not a real video"), Tokens: 9000}
+	b64 := func(img Image) string { return base64.StdEncoding.EncodeToString(img.Data) }
+	dataURL := func(img Image) string { return "data:" + img.MediaType + ";base64," + b64(img) }
+	send := func(t *testing.T, cfg ClientConfig, files ...Image) (map[string]any, int, error) {
+		t.Helper()
+		var raw []byte
+		asked := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			asked++
+			raw, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusTeapot)
+		}))
+		defer srv.Close()
+		cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Retries = srv.URL, "key", "model", -1
+		_, err := New(&cfg).Chat(context.Background(), []Message{{Role: "user", Content: "what is this?", Images: files}}, ChatOptions{})
+		var body map[string]any
+		if asked > 0 {
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("no request body was read: %v", err)
+			}
+		}
+		return body, asked, err
+	}
+	part := func(t *testing.T, body any, path ...any) map[string]any {
+		t.Helper()
+		v := body
+		for _, p := range path {
+			switch k := p.(type) {
+			case string:
+				v = v.(map[string]any)[k]
+			case int:
+				v = v.([]any)[k]
+			}
+		}
+		return v.(map[string]any)
+	}
+	openai := ClientConfig{NoStream: true}
+	body, _, _ := send(t, openai, pdf, wav)
+	if f := part(t, body, "messages", 0, "content", 1); f["type"] != "file" || part(t, f, "file")["filename"] != "brief.pdf" || part(t, f, "file")["file_data"] != dataURL(pdf) {
+		t.Fatalf("chat completions' PDF: %#v", f)
+	}
+	if a := part(t, body, "messages", 0, "content", 2); a["type"] != "input_audio" || part(t, a, "input_audio")["data"] != b64(wav) || part(t, a, "input_audio")["format"] != "wav" {
+		t.Fatalf("chat completions' sound: %#v", a)
+	}
+	body, _, _ = send(t, ClientConfig{Provider: "anthropic"}, pdf)
+	if d := part(t, body, "messages", 0, "content", 0); d["type"] != "document" || part(t, d, "source")["media_type"] != "application/pdf" || part(t, d, "source")["data"] != b64(pdf) {
+		t.Fatalf("anthropic's PDF: %#v", d)
+	}
+	body, _, _ = send(t, ClientConfig{Provider: "chatgpt"}, pdf)
+	if f := part(t, body, "input", 0, "content", 1); f["type"] != "input_file" || f["filename"] != "brief.pdf" || f["file_data"] != dataURL(pdf) {
+		t.Fatalf("the Responses API's PDF: %#v", f)
+	}
+	body, _, _ = send(t, ClientConfig{Provider: "gemini"}, pdf, wav, mp4, Image{MediaType: "image/png", Data: []byte("p")})
+	for i, img := range []Image{pdf, wav, mp4} {
+		if d := part(t, body, "contents", 0, "parts", i, "inlineData"); d["mimeType"] != img.MediaType || d["data"] != b64(img) {
+			t.Fatalf("gemini's %s: %#v", img.MediaType, d)
+		}
+	}
+	if text := part(t, body, "contents", 0, "parts", 4); text["text"] != "what is this?" {
+		t.Fatalf("gemini's words do not follow the files: %#v", text)
+	}
+	for _, c := range []struct {
+		cfg  ClientConfig
+		file Image
+	}{
+		{ClientConfig{Provider: "anthropic"}, wav}, {ClientConfig{Provider: "chatgpt"}, wav}, {openai, mp4},
+		{ClientConfig{Provider: "gemini"}, Image{MediaType: "image/gif", Name: "a.gif", Data: []byte("GIF89a")}},
+	} {
+		if _, asked, err := send(t, c.cfg, c.file); asked != 0 || err == nil || !strings.Contains(err.Error(), "writes no "+c.file.MediaType) {
+			t.Fatalf("%s handed %s: asked %d, %v", c.cfg.Provider, c.file.MediaType, asked, err)
+		}
+	}
+	for d, want := range map[Dialect]map[string]bool{
+		DialectOpenAI:    {"image/png": true, "application/pdf": true, "audio/wav": true, "audio/mpeg": true, "audio/ogg": false, "video/mp4": false},
+		DialectAnthropic: {"image/gif": true, "application/pdf": true, "audio/wav": false, "video/mp4": false},
+		DialectResponses: {"image/webp": true, "application/pdf": true, "audio/mpeg": false},
+		DialectGemini:    {"image/png": true, "image/gif": false, "application/pdf": true, "audio/ogg": true, "video/webm": true, "text/plain": false},
+	} {
+		for mediaType, writes := range want {
+			if Writes(d, mediaType) != writes {
+				t.Errorf("Writes(%s, %s) = %v", d, mediaType, !writes)
+			}
+		}
+	}
+}

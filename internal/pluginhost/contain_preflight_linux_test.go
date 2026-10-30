@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/oswall"
 )
 
 // WHAT THE OPERATOR IS TOLD when the wall cannot be built. The kernel
@@ -61,7 +64,7 @@ func TestTheContainmentProbeSeesAWallItCannotBuild(t *testing.T) {
 	t.Cleanup(func() { namespaceProven.Store(false) })
 
 	var unavailable *ContainmentUnavailableError
-	if err := checkNamespace(context.Background(), "/bin/false"); !errors.As(err, &unavailable) {
+	if err := checkNamespace(context.Background(), "/bin/false", oswall.StartWait(0)); !errors.As(err, &unavailable) {
 		t.Fatalf("a mechanism that cannot build a namespace must refuse typed, got %v", err)
 	}
 	// A failure is never remembered: the operator's fix must take effect
@@ -75,7 +78,7 @@ func TestTheContainmentProbeSeesAWallItCannotBuild(t *testing.T) {
 	if err != nil {
 		t.Skip("no bubblewrap on this host")
 	}
-	if err := checkNamespace(context.Background(), bwrap); err != nil {
+	if err := checkNamespace(context.Background(), bwrap, oswall.StartWait(0)); err != nil {
 		t.Skipf("this host cannot build a namespace either — that is the condition under test, not a defect: %v", err)
 	}
 	if !namespaceProven.Load() {
@@ -94,7 +97,7 @@ func TestAnInterruptedProbeIsACancellationNotAVerdict(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := checkNamespace(ctx, "/bin/false")
+	err := checkNamespace(ctx, "/bin/false", oswall.StartWait(0))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("a cancelled probe must surface the cancellation, got %v", err)
 	}
@@ -104,6 +107,29 @@ func TestAnInterruptedProbeIsACancellationNotAVerdict(t *testing.T) {
 	}
 	if namespaceProven.Load() {
 		t.Fatal("nothing was proved")
+	}
+}
+
+// THE PROBE WAITS AS LONG AS THE OPERATOR SET, AND NO LONGER
+// (tools.wall_start_seconds, the shell's wall's bound too). A bubblewrap
+// that never answers is held to the setting: one second here, and the
+// refusal says it could not decide within it.
+func TestTheContainmentProbeIsBoundedByTheWallStartSetting(t *testing.T) {
+	namespaceProven.Store(false)
+	t.Cleanup(func() { namespaceProven.Store(false) })
+	slow := filepath.Join(t.TempDir(), "bwrap")
+	if err := os.WriteFile(slow, []byte("#!/bin/sh\nexec sleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now()
+	err := checkNamespace(context.Background(), slow, oswall.StartWait(1))
+	took := time.Since(began)
+	var unavailable *ContainmentUnavailableError
+	if !errors.As(err, &unavailable) || !strings.Contains(unavailable.Observed, "did not finish within 1s") {
+		t.Fatalf("a probe that never answers must be refused at the setting's bound, saying so: %v", err)
+	}
+	if took > 5*time.Second {
+		t.Fatalf("THE PROBE WAITED PAST THE OPERATOR'S BOUND: %s for a bound of 1s", took)
 	}
 }
 

@@ -130,6 +130,8 @@ type Config struct {
 
 	TurnTokenBudget limits.Ceiling
 
+	TurnTime time.Duration
+
 	PredictedThisTurn func() (remaining, ordinal int)
 
 	Checkpoint Checkpoint
@@ -154,7 +156,9 @@ const (
 
 type Bounds struct {
 	Rounds, TurnTokens, Calls limits.Ceiling
-	Checkpoint                Checkpoint
+
+	TurnTime   time.Duration
+	Checkpoint Checkpoint
 
 	ToolResultChars int
 }
@@ -200,6 +204,8 @@ type Result struct {
 	ModelID   string
 	Usage     TurnUsage
 
+	Notes []string
+
 	ContractErr error
 
 	Reasoning []CallReasoning
@@ -210,7 +216,11 @@ type Result struct {
 
 	ContinuedAtCap bool
 
+	ContinuedAtRounds bool
+
 	ContinuedAtPressure bool
+
+	ContinuedAtTimeFence bool
 
 	ContinuedAtTokenBudget bool
 
@@ -231,12 +241,16 @@ type Result struct {
 	budgetLine string
 }
 
-func (r Result) NothingContinues(why string) string {
-	if r.budgetLine == "" {
-		return r.Spoken
+func (r Result) NothingContinues(why string) []string {
+	notes := slices.Clone(r.Notes)
+	if i := slices.Index(notes, r.budgetLine); r.budgetLine != "" && i >= 0 {
+		notes[i] = declare("This turn ended at its budget after %d tool calls. Nothing continues by itself: %s. Ask again to continue.", r.ToolCallsUsed, why)
 	}
-	return strings.TrimSuffix(r.Spoken, r.budgetLine) +
-		declare("This turn ended at its budget after %d tool calls. Nothing continues by itself: %s. Ask again to continue.", r.ToolCallsUsed, why)
+	return notes
+}
+
+func (r Result) Said() string {
+	return strings.Join(slices.DeleteFunc(append([]string{r.Spoken}, r.Notes...), func(s string) bool { return s == "" }), "\n\n")
 }
 
 type TurnUsage struct {
@@ -318,6 +332,15 @@ type Loop struct {
 	cfgMu      sync.RWMutex
 	cfg        Config
 	steer      Steering
+
+	now func() time.Time
+}
+
+func (l *Loop) clock() time.Time {
+	if l.now != nil {
+		return l.now()
+	}
+	return time.Now()
 }
 
 func New(l LLMClient, ex ToolExecutor, d ToolDefiner, tr Transcript, em Emitter, cfg Config) *Loop {
@@ -354,6 +377,7 @@ func (l *Loop) SetTurnBounds(b Bounds) error {
 	defer l.cfgMu.Unlock()
 	next := l.cfg
 	next.MaxIterations, next.TurnTokenBudget, next.MaxToolCalls, next.Checkpoint, next.MaxToolResultChars = b.Rounds, b.TurnTokens, b.Calls, b.Checkpoint, b.ToolResultChars
+	next.TurnTime = b.TurnTime
 	for _, f := range []struct {
 		name string
 		zero bool
@@ -410,8 +434,11 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 	yielded := false
 	yieldAnswer := ""
 	continuedAtCap := false
+	continuedAtRounds := false
+	checkpointByRounds := false
 	continuedAtPressure := false
 	continuedAtTokenBudget := false
+	continuedAtTimeFence := false
 	exhaustedBudget := false
 	exhaustedCallBudget := false
 	budgetLine := ""
@@ -426,9 +453,14 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 		t.roundsUsed = i + 1
 
-		if i > 0 && !t.cfg.TurnTokenBudget.Allows(t.turnUsage.TotalTokens+silentSpent) {
-			continuedAtTokenBudget = true
-			addBoundaryNote(&t.messages, &t.fit, budgetPressureNote)
+		ranFor := l.clock().Sub(t.started)
+		byTime := t.cfg.TurnTime > 0 && ranFor >= t.cfg.TurnTime
+		if i > 0 && (byTime || !t.cfg.TurnTokenBudget.Allows(t.turnUsage.TotalTokens+silentSpent)) {
+			note := budgetPressureNote
+			if byTime {
+				note = timePressureNote
+			}
+			addBoundaryNote(&t.messages, &t.fit, note)
 			if err := t.finalCall("LLM final call under budget pressure", "under budget pressure", false); err != nil {
 				return t.fail(err)
 			}
@@ -437,18 +469,31 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			if !t.turnUsage.Complete() {
 				spent = "about " + spent
 			}
-			budgetLine = declare("This turn's token budget (%s) is spent: %s tokens over %d calls. The answer above ends the turn; while its work session is still active, the work continues automatically in a fresh turn.",
-				t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls)
-			t.spoken = append(t.spoken, t.finalText, budgetLine)
-			logsink.InfoCtx(t.ctx, "turn.budget", "TURN BUDGET: fence at %s tokens — %s spent over %d call(s)%s; turn ended with a bounded wrap-up",
-				t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls, t.turnUsage.unreported())
+			if byTime {
+				continuedAtTimeFence = true
+				budgetLine = declare(timeFenceLine, t.cfg.TurnTime, spent, t.turnUsage.Calls)
+				logsink.InfoCtx(t.ctx, "turn.budget", "TURN BUDGET: time fence at %s — ran %s, %s tokens over %d call(s)%s; turn ended with a bounded wrap-up",
+					t.cfg.TurnTime, ranFor.Round(time.Second), spent, t.turnUsage.Calls, t.turnUsage.unreported())
+			} else {
+				continuedAtTokenBudget = true
+				budgetLine = declare("This turn's token budget (%s) is spent: %s tokens over %d calls. The answer above ends the turn; while its work session is still active, the work continues automatically in a fresh turn.",
+					t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls)
+				logsink.InfoCtx(t.ctx, "turn.budget", "TURN BUDGET: fence at %s tokens — %s spent over %d call(s)%s; turn ended with a bounded wrap-up",
+					t.cfg.TurnTokenBudget, spent, t.turnUsage.Calls, t.turnUsage.unreported())
+			}
+			t.spoken = append(t.spoken, t.finalText)
+			t.notes = append(t.notes, budgetLine)
 			break
 		}
 		if i > 0 {
 			t.refreshDefs()
 		}
-		if err := fitRequest(&t.messages, &t.fit, t.systemBase,
-			t.toolDefs, t.cfg.ContextBudgetTokens, l.transcript); err != nil {
+		err := fitRequest(&t.messages, &t.fit, t.systemBase, t.toolDefs, t.cfg.ContextBudgetTokens, l.transcript)
+		if err != nil && t.leaveOutRefusedImages(err) {
+
+			err = fitRequest(&t.messages, &t.fit, t.systemBase, t.toolDefs, t.cfg.ContextBudgetTokens, l.transcript)
+		}
+		if err != nil {
 			if i == 0 {
 				return t.fail(err)
 			}
@@ -459,7 +504,8 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				return t.fail(err)
 			}
 			budgetLine = declare("The context filled during this turn after %d tool calls. The answer above was finished without further tool calls, and older turns were dropped from the request; while its work session is still active, the work continues automatically in a fresh turn.", t.toolCallsSoFar)
-			t.spoken = append(t.spoken, t.finalText, budgetLine)
+			t.spoken = append(t.spoken, t.finalText)
+			t.notes = append(t.notes, budgetLine)
 			break
 		}
 
@@ -517,14 +563,14 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 
 		if choice.FinishReason == "length" && !truncated {
 			truncated = true
-			t.spoken = append(t.spoken, declare("This reply was cut off by the model's output limit. Raise the model's max output tokens to see the rest."))
+			t.notes = append(t.notes, outputCutNote)
 		}
 
 		if note := unhandledStop(choice.FinishReason); note != "" {
 			if err := t.refuseCalls(resp.ModelID, choice.Message.ToolCalls, ReasonToolStopRefused, "Not run: the provider ended this response with an unsupported or refused stop reason."); err != nil {
 				return t.fail(err)
 			}
-			t.spoken = append(t.spoken, note)
+			t.notes = append(t.notes, note)
 			break
 		}
 
@@ -533,14 +579,14 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				return t.fail(err)
 			}
 			if degenNudged {
-				t.spoken = append(t.spoken, declare("Degenerate repetition was detected in the model's output twice this turn; the turn ends here rather than spending further."))
+				t.notes = append(t.notes, declare("Degenerate repetition was detected in the model's output twice this turn; the turn ends here rather than spending further."))
 				logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: second detection (len %d) — turn ended", len(choice.Message.Content))
 				break
 			}
 			degenNudged = true
 			if len(choice.Message.ToolCalls) == 0 {
 				logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in a final answer (len %d) — marked", len(choice.Message.Content))
-				t.spoken = append(t.spoken, declare("Degenerate repetition was detected in this reply; treat its repeating tail as noise, not conclusions."))
+				t.notes = append(t.notes, declare("Degenerate repetition was detected in this reply; treat its repeating tail as noise, not conclusions."))
 				break
 			}
 			logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in emission (len %d) — tool calls discarded, corrective note sent", len(choice.Message.Content))
@@ -584,7 +630,8 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			if err := t.finalCall("LLM final call at the call limit", "at the call limit", true); err != nil {
 				return t.fail(err)
 			}
-			t.spoken = append(t.spoken, t.finalText, declare(callLimitLine, t.cfg.MaxToolCalls.N))
+			t.spoken = append(t.spoken, t.finalText)
+			t.notes = append(t.notes, declare(callLimitLine, t.cfg.MaxToolCalls.N))
 			break
 		}
 		if len(callBudgetSurplus) > 0 {
@@ -596,7 +643,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 					"not executed: child call budget exhausted"))
 			}
 			exhaustedCallBudget = true
-			t.spoken = append(t.spoken, declare(
+			t.notes = append(t.notes, declare(
 				"This run reached its budget of %d tool calls with work unfinished; %d call(s) in the final batch were not executed.",
 				t.cfg.MaxToolCalls.N, len(callBudgetSurplus)))
 			break
@@ -613,15 +660,27 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				spent = t.ordinal - ordinal
 			}
 
-			if !limit.Allows(spent) && (t.cfg.MaxIterations.Unlimited || grace < t.cfg.MaxIterations.N-1-i) {
+			roundsLeft := t.cfg.MaxIterations.N - 1 - i
+			fits := t.cfg.MaxIterations.Unlimited || grace < roundsLeft
+			byRounds := !t.cfg.MaxIterations.Unlimited && !limit.Unlimited && grace+1 == roundsLeft
+			if fits && (!limit.Allows(spent) || byRounds) {
 				softCapFinal = i + grace
-				t.messages[len(t.messages)-1].Content += checkpointNote(declared, spent, grace)
-				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %s) — turn will continue in a fresh turn after %d more rounds",
-					i+1, spent, declared, declarationOrdinal, limit, grace)
+				note, armed := checkpointNote(declared, spent, grace), "calls"
+				if limit.Allows(spent) {
+					checkpointByRounds = true
+					note, armed = roundCheckpointNote(i+1, t.cfg.MaxIterations.N, grace), "rounds"
+				}
+				t.messages[len(t.messages)-1].Content += note
+				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %s, armed by %s) — turn will continue in a fresh turn after %d more rounds",
+					i+1, spent, declared, declarationOrdinal, limit, armed, grace)
 			}
 		}
 
-		if remaining := t.cfg.MaxIterations.N - 1 - i; !t.cfg.MaxIterations.Unlimited && remaining > 0 && remaining <= toolBudgetWarnAt && len(t.messages) > 0 {
+		end := t.cfg.MaxIterations.N - 1
+		if softCapFinal >= 0 && softCapFinal < end {
+			end = softCapFinal
+		}
+		if remaining := end - i; !t.cfg.MaxIterations.Unlimited && remaining > 0 && remaining <= toolBudgetWarnAt && len(t.messages) > 0 {
 			t.messages[len(t.messages)-1].Content += toolBudgetNote(remaining)
 
 			logsink.InfoCtx(t.ctx, "turn.budget", "Tool budget warning sent: %d round(s) remain of %d", remaining, t.cfg.MaxIterations.N)
@@ -643,7 +702,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			}
 		}
 		if t.cfg.MaxIterations.Last(i) {
-			boundary = append(boundary, "You've reached this turn's round limit. Please respond to me now with what you've found.")
+			boundary = append(boundary, roundLimitAsk)
 		} else if yielded {
 			boundary = append(boundary, "You yielded this turn. Reply with one line of status — your gate is free, and a delivery or message wakes you next.")
 		} else if i == softCapFinal {
@@ -656,32 +715,39 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		if t.cfg.MaxIterations.Last(i) || i == softCapFinal || yielded {
 
 			if !yielded && i == softCapFinal && !t.cfg.MaxIterations.Last(i) {
-				continuedAtCap = true
+				continuedAtCap = !checkpointByRounds
+				continuedAtRounds = checkpointByRounds
 			}
 
 			if err := t.finalCall("LLM final call", "at the round limit", true); err != nil {
 				return t.fail(err)
 			}
-			capLine := declare("This turn reached its limit of %d rounds and was finished without further tools. Ask again to continue.", t.cfg.MaxIterations.N)
 
-			exhaustedBudget = !yielded && !continuedAtCap
+			capLine := declare("This turn reached its limit of %d rounds and was finished without further tools; while its work session is still active, the work continues automatically in a fresh turn.", t.cfg.MaxIterations.N)
+			budgetLine = capLine
+
+			exhaustedBudget = !yielded && !continuedAtCap && !continuedAtRounds
 			if yielded {
 				capLine = declare("Turn yielded after %d tool calls — the gate is free; a delivery or message wakes the next turn.", t.toolCallsSoFar)
 			} else if continuedAtCap {
 				capLine = declare("This turn ended at its declared budget after %d tool calls; the work continues automatically in a fresh turn.", t.toolCallsSoFar)
 				budgetLine = capLine
+			} else if continuedAtRounds {
+				capLine = declare("This turn ended at its checkpoint after %d tool calls, before its limit of %d rounds; the work continues automatically in a fresh turn.", t.toolCallsSoFar, t.cfg.MaxIterations.N)
+				budgetLine = capLine
 			}
 			if yielded && yieldAnswer != "" {
 
-				t.spoken = append(t.spoken, t.finalText, "Best current answer: "+yieldAnswer, capLine)
+				t.spoken = append(t.spoken, t.finalText, "Best current answer: "+yieldAnswer)
 			} else {
-				t.spoken = append(t.spoken, t.finalText, capLine)
+				t.spoken = append(t.spoken, t.finalText)
 			}
+			t.notes = append(t.notes, capLine)
 			break
 		}
 	}
 
-	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), Reasoning: t.reasoning, budgetLine: budgetLine}
+	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), Notes: t.notes, FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtRounds: continuedAtRounds, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, ContinuedAtTimeFence: continuedAtTimeFence, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), Reasoning: t.reasoning, budgetLine: budgetLine}
 
 	if format := requestResponseFormat(t.ctx); format != nil {
 		result.ContractErr = llm.ValidateStructuredOutput(format, t.finalText)
@@ -692,6 +758,8 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 type turn struct {
 	l   *Loop
 	cfg Config
+
+	started time.Time
 
 	ctx context.Context
 
@@ -721,6 +789,8 @@ type turn struct {
 
 	roundImages []llm.Image
 
+	notes []string
+
 	turnID  string
 	ordinal int
 
@@ -731,6 +801,7 @@ type turn struct {
 }
 
 func (l *Loop) newTurn(ctx context.Context, system llm.Message, history []llm.Message, omittedHistory int, facts string) (*turn, error) {
+	started := l.clock()
 	l.cfgMu.RLock()
 	cfg := l.cfg
 	l.cfgMu.RUnlock()
@@ -803,7 +874,7 @@ func (l *Loop) newTurn(ctx context.Context, system llm.Message, history []llm.Me
 	for _, d := range toolDefs {
 		offered[d.Function.Name] = true
 	}
-	return &turn{l: l, cfg: cfg, ctx: ctx, messages: messages, fit: fit,
+	return &turn{l: l, cfg: cfg, started: started, ctx: ctx, messages: messages, fit: fit,
 		systemBase: system.Content, toolDefs: toolDefs, turnID: turnID, refusedDefs: refusedDefs,
 		scoped: requestScoped(ctx), offered: offered, plainFacts: plainFacts}, nil
 }
@@ -831,6 +902,7 @@ func (t *turn) fail(err error) (Result, error) {
 	if len(t.spoken) > 0 {
 		r.Spoken = strings.Join(t.spoken, "\n\n")
 	}
+	r.Notes = t.notes
 	if len(t.spoken) > 0 || len(r.Unanswered) > 0 {
 		r.Interrupted = interruptCause(t.ctx, err)
 	}
@@ -920,17 +992,26 @@ func (t *turn) leaveOutRefusedTool(err error) bool {
 func (t *turn) leaveOutRefusedImages(err error) bool {
 	var refused *llm.HTTPError
 	var tool *llm.ToolSchemaRefusedError
-	if !errors.As(err, &refused) || errors.As(err, &tool) {
-		return false
-	}
+	var tooBig *llm.ContextLimitError
+	var note, why string
+	switch {
+	case errors.As(err, &tooBig):
 
-	switch refused.StatusCode {
-	case 400, 413, 415, 422:
-	default:
+		note = declare("the picture(s) or file(s) sent here did not fit this model's window with the rest of the request (about %d tokens, where it takes %d), so it was sent without them and you were not shown them", tooBig.Required, tooBig.Limit)
+		why = "did not fit the model's window"
+	case !errors.As(err, &refused) || errors.As(err, &tool):
 		return false
+	default:
+
+		switch refused.StatusCode {
+		case 400, 413, 415, 422:
+		default:
+			return false
+		}
+		note = declare("the model's provider refused the request that carried the picture(s) or file(s) sent here (HTTP %d), so it was sent again without them and you were not shown them", refused.StatusCode)
+		why = fmt.Sprintf("refused (HTTP %d)", refused.StatusCode)
 	}
 	left := 0
-	note := declare("the model's provider refused the request that carried the picture(s) sent here (HTTP %d), so it was sent again without them and you were not shown them", refused.StatusCode)
 	for i := range t.messages {
 		if len(t.messages[i].Images) == 0 {
 			continue
@@ -947,7 +1028,7 @@ func (t *turn) leaveOutRefusedImages(err error) bool {
 	if left == 0 {
 		return false
 	}
-	logsink.WarnCtx(t.ctx, "llm.refusal", "the provider refused a request that carried %d picture(s) (HTTP %d): sent again without them", left, refused.StatusCode)
+	logsink.WarnCtx(t.ctx, "llm.refusal", "a request that carried %d picture(s) or file(s) %s: sent again without them", left, why)
 	if t.cfg.ImagesRefused != nil {
 		t.cfg.ImagesRefused(t.ctx, err, t.toolCallsSoFar > 0 || len(t.spoken) > 0)
 	}
@@ -1046,7 +1127,8 @@ func (t *turn) execute(ctx context.Context, tc llm.ToolCall) Observation {
 	if t.scoped && !t.offered[name] {
 		return Observation{Text: "Error: " + toolOutsideRequest(name), Failed: true, Refused: true, ReasonCode: ReasonToolOutsideRequest}
 	}
-	return t.l.tools.Execute(ctx, tc)
+
+	return t.l.tools.Execute(limits.WithToolResultChars(ctx, t.cfg.MaxToolResultChars), tc)
 }
 
 const ReasonToolDefinitionRefused = "TOOL_DEFINITION_REFUSED"
@@ -1203,6 +1285,9 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 
 func (t *turn) finalCall(failed, circumstance string, afterTools bool) error {
 	finalTools, err := fitFinalRequest(&t.messages, &t.fit, t.systemBase, t.toolDefs, t.cfg.ContextBudgetTokens, t.l.transcript)
+	if err != nil && t.leaveOutRefusedImages(err) {
+		finalTools, err = fitFinalRequest(&t.messages, &t.fit, t.systemBase, t.toolDefs, t.cfg.ContextBudgetTokens, t.l.transcript)
+	}
 	if err != nil {
 		return err
 	}
@@ -1232,34 +1317,40 @@ func (t *turn) finalCall(failed, circumstance string, afterTools bool) error {
 		}
 	}
 
-	t.finalText, t.modelID, err = finalResponse(resp, circumstance)
+	var notes []string
+	t.finalText, notes, t.modelID, err = finalResponse(resp, circumstance)
+	t.notes = append(t.notes, notes...)
 	return err
 }
 
-func finalResponse(response *llm.Response, circumstance string) (string, string, error) {
+func finalResponse(response *llm.Response, circumstance string) (string, []string, string, error) {
 	if response == nil {
-		return "", "", fmt.Errorf("LLM final response %s has no text", circumstance)
+		return "", nil, "", fmt.Errorf("LLM final response %s has no text", circumstance)
 	}
 	if len(response.Choices) == 0 {
-		return "", "", emptyReply(fmt.Sprintf("LLM final response %s has no text", circumstance))
+		return "", nil, "", emptyReply(fmt.Sprintf("LLM final response %s has no text", circumstance))
 	}
 	choice := response.Choices[0]
 
 	if len(choice.Message.ToolCalls) > 0 {
-		return "", response.ModelID, fmt.Errorf("LLM final response %s requested tools that were disabled", circumstance)
+		return "", nil, response.ModelID, fmt.Errorf("LLM final response %s requested tools that were disabled", circumstance)
 	}
 	if strings.TrimSpace(choice.Message.Content) == "" {
-		return "", "", emptyReply(fmt.Sprintf("LLM final response %s has no text", circumstance))
+		return "", nil, "", emptyReply(fmt.Sprintf("LLM final response %s has no text", circumstance))
 	}
-	text := choice.Message.Content
+	var notes []string
 	if choice.FinishReason == "length" {
-		text += "\n\n" + declare("This reply was cut off by the model's output limit. Raise the model's max output tokens to see the rest.")
+		notes = append(notes, outputCutNote)
 	}
 	if note := unhandledStop(choice.FinishReason); note != "" {
-		text += "\n\n" + note
+		notes = append(notes, note)
 	}
-	return text, response.ModelID, nil
+	return choice.Message.Content, notes, response.ModelID, nil
 }
+
+var outputCutNote = declare("This reply was cut off by the model's output limit. Raise the model's max output tokens to see the rest.")
+
+const roundLimitAsk = "The tool rounds for this turn are used up. Answer now with what you have."
 
 type fitState struct {
 	current  int
@@ -1548,7 +1639,11 @@ func renderCurrent(messages []llm.Message, st *fitState) bool {
 }
 
 const (
-	budgetPressureNote  = "[loop note — this turn's token budget is spent. Your tools are withdrawn for this call, the turn's last.]"
+	budgetPressureNote = "[loop note — this turn's token budget is spent. Your tools are withdrawn for this call, the turn's last.]"
+
+	timePressureNote = "[loop note — this turn's time is spent. Your tools are withdrawn for this call, the turn's last.]"
+
+	timeFenceLine       = "This turn's time (%s) is spent: %s tokens over %d calls. The answer above ends the turn; while its work session is still active, the work continues automatically in a fresh turn."
 	contextPressureNote = "[loop note — the context is full. Your tools are withdrawn for this call, the turn's last.]"
 )
 
@@ -1811,7 +1906,7 @@ func unhandledStop(reason string) string {
 	return declare("The model stopped for a reason this build does not recognise (%s). The turn ended there.", reason)
 }
 
-const turnContract = `
+const turnContractHead = `
 
 ## Your turn
 Your turn continues automatically after each tool call: take the next step by
@@ -1826,7 +1921,9 @@ Your newest message may end with a block from ` + TurnOpen + ` to ` + TurnClose 
 after the words that arrived. Your substrate writes it, never the person: what is right in front of you (your
 intentions, your work session and its plan, your standing state), this turn's
 rhythm, what happened since your last turn, and what of the conversation is out
-of view. It is written fresh each turn from what you have recorded and is not
+of view.`
+
+const turnBlockUpkeep = `It is written fresh each turn from what you have recorded and is not
 kept in your history: change what it shows with your tools, and note what should
 outlast the turn.`
 
@@ -1857,6 +1954,7 @@ func (e emptyReply) Error() string { return string(e) }
 
 func interruptCause(ctx context.Context, err error) string {
 	var answered *llm.HTTPError
+	var failed *llm.StreamFailure
 	var stop TurnStop
 	var empty emptyReply
 	switch {
@@ -1871,10 +1969,14 @@ func interruptCause(ctx context.Context, err error) string {
 		return "the model returned an empty reply"
 	case errors.As(err, &answered):
 		return providerAnswer(answered)
+	case errors.As(err, &failed):
+		return providerFailedAnswering
 	default:
 		return SubstrateFailed
 	}
 }
+
+const providerFailedAnswering = "the model provider failed while answering"
 
 func FailureCause(err error) string {
 	var stop TurnStop
@@ -1918,6 +2020,14 @@ func checkpointNote(declared, spent, grace int) string {
 		"and say which this is: done with its scope, continue from that point, or stop with why. "+
 		"You have %s; then this turn ends and, while its work session is still active, the work continues automatically in a fresh turn.",
 		spent, moreRounds(grace))
+}
+
+func roundCheckpointNote(used, rounds, grace int) string {
+	return declare("This turn has used %d of its %d tool rounds. "+
+		"Checkpoint NOW — `work update next_move=` with the exact resume point (revise plan= if it drifted), "+
+		"and say which this is: done with its scope, continue from that point, or stop with why. "+
+		"You have %s; then this turn ends and, while its work session is still active, the work continues automatically in a fresh turn.",
+		used, rounds, moreRounds(grace))
 }
 
 func moreRounds(n int) string {
@@ -1968,12 +2078,18 @@ func platformName() string {
 	return base + lacks + tail + ")"
 }
 
-func systemAdditions() string { return turnContract + platformNote() + showNote }
+func systemAdditions() string { return systemAdditionsSaying(turnBlockUpkeep) }
+
+func systemAdditionsSaying(blockSentence string) string {
+	return turnContractHead + " " + blockSentence + platformNote() + showNote
+}
 
 const showNote = "\n\nIn the chat, to show your operator an image, write `![caption](path)` on a line of its own, " +
 	"with the path of an image file in your folder. To hand them a file, write `[name](path)` the same way."
 
 func SystemAdditions() string { return systemAdditions() }
+
+func SystemAdditionsSaying(blockSentence string) string { return systemAdditionsSaying(blockSentence) }
 
 const (
 	degenTailRunes     = 3000

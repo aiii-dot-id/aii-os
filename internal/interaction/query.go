@@ -326,6 +326,17 @@ func Compact(r Record, source, inc string) Record {
 	r.ContentRef = &ContentRef{ID: r.ID, Source: source, Incarnation: inc, SHA256: Hash(raw), Bytes: len(raw)}
 	return r
 }
+
+func FitsFrame(p *Page) (bool, error) {
+	v := *p
+	if v.Identity == "" {
+		v.Identity = Hash(nil)
+	}
+	v.Fingerprint = Hash(nil)
+	raw, err := json.Marshal(&v)
+	return len(raw) <= PageBodyBytes, err
+}
+
 func Seal(p *Page) {
 	p.Fingerprint = ""
 	p.Fingerprint = Digest(p)
@@ -404,8 +415,7 @@ func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) 
 		}
 		p.Rows = append(p.Rows, Compact(r, q.Source, inc))
 		p.NextCursor = q.Next(inc, r.Sequence)
-		raw, _ := json.Marshal(p)
-		if len(raw) > MaxPageBytes-8192 {
+		if fits, _ := FitsFrame(p); !fits {
 			p.Rows = p.Rows[:len(p.Rows)-1]
 			if len(p.Rows) == 0 {
 				return nil, &Error{"INTERACTION_CONTENT_UNAVAILABLE", "transient metadata exceeds frame budget"}

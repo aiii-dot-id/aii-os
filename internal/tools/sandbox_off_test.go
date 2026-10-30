@@ -29,7 +29,7 @@ func newOffRig(t *testing.T) offRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := offRig{base: base, home: filepath.Join(base, "vega"), work: filepath.Join(base, "work"), elsewhere: filepath.Join(base, "elsewhere")}
+	g := offRig{base: base, home: filepath.Join(base, "example"), work: filepath.Join(base, "work"), elsewhere: filepath.Join(base, "elsewhere")}
 	put := func(body string, parts ...string) string {
 		t.Helper()
 		p := filepath.Join(parts...)

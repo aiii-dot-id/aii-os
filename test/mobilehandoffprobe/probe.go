@@ -21,8 +21,12 @@ type Probe struct {
 	// CompanionHost is supplied by the native test app's interface API.
 	// Android forbids the routing-table query used by Go's InterfaceAddrs.
 	CompanionHost string
-	rt            *mobile.Runtime
-	detail        string
+	// Keystore is the native test app's keystore, as the shell gives its
+	// own to mobile.Start: a start is refused without one. No case makes an
+	// identity, so it is never asked to wrap a key.
+	Keystore mobile.DeviceKey
+	rt       *mobile.Runtime
+	detail   string
 }
 
 func Create() *Probe { return &Probe{} }
@@ -69,7 +73,7 @@ func (p *Probe) StartCase(home, kind string) (string, error) {
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		return "", err
 	}
-	p.rt, err = mobile.Start(path, dir)
+	p.rt, err = mobile.Start(path, dir, p.Keystore)
 	if err != nil {
 		return "", err
 	}

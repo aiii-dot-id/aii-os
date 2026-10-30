@@ -1,0 +1,97 @@
+{
+  "task": "doctrine-method-before-a-risky-fix",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "reports/sales.md",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "METHOD.md"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "reports/sales.md"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "edit",
+                "args": {
+                  "file_path": "reports/sales.md",
+                  "old_string": "Total: 590",
+                  "new_string": "Total: 600"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "reports/sales.md"
+                }
+              }
+            ]
+          },
+          {
+            "text": "TOTAL: 600"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "D1: the method is named and never opened",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "reports/sales.md",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "reports/sales.md"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "edit",
+                "args": {
+                  "file_path": "reports/sales.md",
+                  "old_string": "Total: 590",
+                  "new_string": "Total: 600"
+                }
+              }
+            ]
+          },
+          {
+            "text": "TOTAL: 600"
+          }
+        ]
+      }
+    ]
+  }
+}

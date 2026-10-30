@@ -13,7 +13,11 @@ import (
 )
 
 func (s *Store) AddConversationTurnSeq(role, content string) (uint64, error) {
-	ref, err := s.RecordConversation(context.Background(), role, content, "", interaction.Details{})
+	var details interaction.Details
+	if role == string(interaction.Operator) {
+		details.Said = interaction.SaidTyped
+	}
+	ref, err := s.RecordConversation(context.Background(), role, content, "", details)
 	return ref.Sequence, err
 }
 
@@ -105,4 +109,41 @@ func (s *Store) TurnAnnotations(kind string, seqs []uint64) (map[uint64]string, 
 		out[seq] = payload
 	}
 	return out, rows.Err()
+}
+
+type HeardVoice struct {
+	UUID     string
+	Label    string
+	Enrolled bool
+}
+
+func (s *Store) HeardVoices(ctx context.Context, limit int) ([]HeardVoice, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	const label = `COALESCE(NULLIF(json_extract(b.payload, '$.display_label'), ''), NULLIF(json_extract(b.payload, '$.speaker'), ''))`
+	rows, err := s.db.QueryContext(ctx, `SELECT u, COALESCE((SELECT `+label+` FROM turn_annotations b
+		 WHERE b.kind = ? AND json_extract(b.payload, '$.speaker_uuid') = u AND `+label+` IS NOT NULL ORDER BY b.turn_seq DESC LIMIT 1), ''), enrolled
+		 FROM (SELECT json_extract(payload, '$.speaker_uuid') AS u, MAX(turn_seq) AS last,
+		   MAX(COALESCE(json_extract(payload, '$.decision'), '') = ? AND COALESCE(json_extract(payload, '$.speaker_id'), '') != '') AS enrolled
+		   FROM turn_annotations WHERE kind = ? AND COALESCE(json_extract(payload, '$.speaker_uuid'), '') != '' GROUP BY u)
+		 ORDER BY last DESC LIMIT ?`, AnnotationSpeaker, SpeakerKnown, AnnotationSpeaker, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []HeardVoice
+	for rows.Next() {
+		var v HeardVoice
+		if err := rows.Scan(&v.UUID, &v.Label, &v.Enrolled); err != nil {
+			return nil, false, err
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -63,6 +64,20 @@ func OpenWriter(dir string) (*Writer, error) {
 		return nil, err
 	}
 	return w, nil
+}
+
+func ReopenWriter(dir string) (*Writer, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("the plugin store %q is not an absolute path", dir)
+	}
+	dir = filepath.Clean(dir)
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		parent := filepath.Dir(dir)
+		if pi, perr := os.Stat(parent); perr != nil || !pi.IsDir() {
+			return nil, fmt.Errorf("%w (%s is missing)", ErrStoreUnreachable, parent)
+		}
+	}
+	return OpenWriter(dir)
 }
 
 func (w *Writer) probeHardLink() error {

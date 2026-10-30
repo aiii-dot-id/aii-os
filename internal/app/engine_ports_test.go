@@ -56,7 +56,7 @@ func requirePorts(t *testing.T, boot string, got, want map[string]string) {
 	}
 }
 
-// The SAFE boot's engine: the read-only conversation's parts, and the six
+// The SAFE boot's engine: the read-only conversation's parts, and the eight
 // ports the minimal posture leaves unwired, each nil.
 func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 	dir := t.TempDir()
@@ -88,10 +88,15 @@ func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 		"reachable":            "nil",
 		"askProposer":          "nil",
 		"workStarted":          "nil", // SAFE starts no work
+		"askFits":              "nil", // SAFE puts no decision to the operator
+		"workDelivered":        "nil", // SAFE delivers no work and runs no check
+		"confirmWord":          "nil",
 		"workWake":             "nil",
 		"yieldGate":            "nil",
 		"routeLimits":          "nil",
 		"alarmFirings":         "set",
+		"workLineMaxChars":     "set",
+		"standingMaxChars":     "set",
 	})
 }
 
@@ -124,10 +129,15 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		"reachable":            "set",
 		"askProposer":          "set",
 		"workStarted":          "set",
+		"askFits":              "set",
+		"workDelivered":        "set",
+		"confirmWord":          "set",
 		"workWake":             "set",
 		"yieldGate":            "set",
 		"routeLimits":          "set",
 		"alarmFirings":         "set",
+		"workLineMaxChars":     "set",
+		"standingMaxChars":     "set",
 	})
 }
 

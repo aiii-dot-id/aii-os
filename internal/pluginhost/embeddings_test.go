@@ -117,7 +117,7 @@ const goodEmbeddings = `{"dimension":2,"form":3,"floor":0.3,"model":"m.onnx","pr
 func newEmbeddingsFixture() *embeddingsFixture {
 	return &embeddingsFixture{
 		family:  EmbeddingsFamily,
-		iface:   &packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: EmbeddingsInterfaceVersion, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}},
+		iface:   &packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: 1, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}},
 		minHost: packagefmt.EmbeddingsMinHost,
 		files: map[string][]byte{
 			EmbeddingsFile: []byte(goodEmbeddings),
@@ -222,6 +222,19 @@ func TestAPackageThatOnlyComputesIsAdmittedAsASourceOfVectors(t *testing.T) {
 	if got := src.Basis(); got != id+"/0123456789ab/f3" {
 		t.Fatalf("the basis is %q, want the id, the first twelve of the model's hash and the form", got)
 	}
+	if src.Version != 1 || src.Tells() {
+		t.Fatalf("a package of %s@1 is a source that does not say how much of a text it read: version %d", EmbeddingsInterfaceID, src.Version)
+	}
+
+	// At @2 the same package is admitted as a source that says, of every
+	// text, how much of it its vector was made from; its basis is the
+	// same, so a package that moves to @2 keeps every vector it made.
+	telling := newEmbeddingsFixture()
+	telling.iface.Version = 2
+	telling.iface.SchemaFile = "interfaces/aii.embeddings.v2.schema.json"
+	if two, err := telling.admit(t, id); err != nil || two == nil || two.Version != 2 || !two.Tells() || two.Basis() != src.Basis() {
+		t.Fatalf("a package of %s@2 must be admitted as a source that says how much it read, under the same basis: %+v %v", EmbeddingsInterfaceID, two, err)
+	}
 
 	// A provider_bridge without the interface is what it has always been,
 	// and a package of another family without it is not looked at.
@@ -244,7 +257,7 @@ func TestAPackageThatMayNotBeASourceOfVectorsIsRefused(t *testing.T) {
 		says string
 	}{
 		{"the interface under another family", func(f *embeddingsFixture) { f.family = "tool_bridge" }, "accepted only under " + EmbeddingsFamily},
-		{"a version this host does not speak", func(f *embeddingsFixture) { f.iface.Version = 2 }, "this host speaks @1"},
+		{"a version this host does not speak", func(f *embeddingsFixture) { f.iface.Version = EmbeddingsInterfaceVersion + 1 }, "this host speaks @1 to @2"},
 		{"a second operation", func(f *embeddingsFixture) { f.iface.Methods = []string{MethodEmbed, "status"} }, "has one operation"},
 		{"another operation in its place", func(f *embeddingsFixture) { f.iface.Methods = []string{"encode"} }, "has one operation"},
 		{"no floor", func(f *embeddingsFixture) { f.minHost = "" }, "requires aiios_min_version >= " + packagefmt.EmbeddingsMinHost},
@@ -323,5 +336,52 @@ func TestAPackageThatMayNotBeASourceOfVectorsIsRefused(t *testing.T) {
 	stray.iface = &packagetest.InterfaceSpec{ID: "quarantine.probe", Version: 1, SchemaFile: "interfaces/quarantine.probe.v1.schema.json", Methods: []string{"ping"}}
 	if src, err := stray.admit(t, "org.example.stray"); src != nil || err == nil || !strings.Contains(err.Error(), "declares no "+EmbeddingsInterfaceID) {
 		t.Fatalf("a package carrying the member and no interface: %v %v", src, err)
+	}
+}
+
+func TestASelectionCarriesTheBasisItsSourceWouldStamp(t *testing.T) {
+	const id = "org.example.meaning"
+	selected := func(f *embeddingsFixture) string {
+		t.Helper()
+		pkg, res := f.build(t, id)
+		sel, err := Select(pkg, res, supervisedOpts(Options{StoreDir: t.TempDir()}))
+		if err != nil {
+			t.Fatalf("the fixture's bytes do not select: %v", err)
+		}
+		return sel.Basis
+	}
+	if got := selected(newEmbeddingsFixture()); got != id+"/0123456789ab/f3" {
+		t.Fatalf("a source's selection carries the basis its start stamps, got %q", got)
+	}
+	// And the facility's record of the attempt carries it, where the
+	// application reads it.
+	roots, _ := sharedPlatformRoots(t)
+	pkg, _ := newEmbeddingsFixture().build(t, id)
+	h := NewRuntime(RuntimeWires{
+		Options:  func() *Options { return supervisedOpts(Options{Roots: roots, StoreDir: t.TempDir()}) },
+		Acquirer: func() *Acquirer { return nil },
+		Serving:  func(string) *ServingSet { return nil },
+	})
+	ev, err := h.Verify(t.Context(), pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := h.Prepare(t.Context(), ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Selection == nil || prepared.Selection.Basis != id+"/0123456789ab/f3" {
+		t.Fatalf("the facility's record of the selection carries the basis: %+v", prepared.Selection)
+	}
+	other := newEmbeddingsFixture()
+	other.files[ModelsFile] = []byte(`[{"name":"m.onnx","url":"https://models.example.test/m.onnx","sha256":"fedcba9876543210` + strings.Repeat("b", 48) + `","size":1024}]`)
+	if got := selected(other); got != id+"/fedcba987654/f3" {
+		t.Fatalf("a package that names another model selects under another basis, got %q", got)
+	}
+	plain := newEmbeddingsFixture()
+	plain.iface = &packagetest.InterfaceSpec{ID: "quarantine.probe", Version: 1, SchemaFile: "interfaces/quarantine.probe.v1.schema.json", Methods: []string{MethodEmbed}}
+	delete(plain.files, EmbeddingsFile)
+	if got := selected(plain); got != "" {
+		t.Fatalf("a package that is not a source carries no basis, got %q", got)
 	}
 }

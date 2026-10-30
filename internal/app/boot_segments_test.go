@@ -33,7 +33,12 @@ func TestBirthDecisionRetainsSealedIdentityEvidence(t *testing.T) {
 			if err := os.WriteFile(segment, []byte("surviving record"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := a.chooseBoot(); !errors.Is(err, ledger.ErrRecordExists) {
+			choice, err := a.chooseBoot()
+			if !standard {
+				if err != nil || choice != bootLive {
+					t.Fatalf("a sealed record where the configuration names it: %v %v", choice, err)
+				}
+			} else if !errors.Is(err, ledger.ErrRecordExists) {
 				t.Fatalf("sealed identity admitted to FIRSTBOOT: %v", err)
 			}
 			if body, err := os.ReadFile(segment); err != nil || string(body) != "surviving record" {

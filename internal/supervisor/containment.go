@@ -15,6 +15,8 @@ type Containment struct {
 	BuiltMark string
 
 	Filter []byte
+
+	TermIsKill bool
 }
 
 const filterLimit = 4096

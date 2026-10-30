@@ -149,18 +149,18 @@ func (r *debRig) stash(t *testing.T, user string) string {
 }
 
 func TestRemoveStopsAndDisablesEachAccountsMachineServiceAndKeepsItsStore(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
-	r.machine(t, "vega", true, true)
-	r.machine(t, "mira", true, true)
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
+	r.machine(t, "userc", true, true)
+	r.machine(t, "usera", true, true)
 	stores := map[string]map[string]string{}
-	for _, u := range []string{"vega", "mira"} {
+	for _, u := range []string{"userc", "usera"} {
 		dir := r.store(t, filepath.Join(r.home[u], ".aii", "plugins"))
 		stores[u] = treeHashes(t, dir, "")
 	}
 	r.run(t, nil, "prerm", "remove")
 	got := r.done(t)
 	var want []string
-	for _, u := range []string{"vega", "mira"} {
+	for _, u := range []string{"userc", "usera"} {
 		for _, unit := range []string{"aii-os-machine.socket", "aii-os-machine.service"} {
 			want = append(want, "disabled "+r.uids[u]+" "+unit)
 		}
@@ -169,7 +169,7 @@ func TestRemoveStopsAndDisablesEachAccountsMachineServiceAndKeepsItsStore(t *tes
 	if !slices.Equal(got, want) {
 		t.Fatalf("prerm remove did %q, want each account's machine units disabled and stopped in its own manager: %q", got, want)
 	}
-	for _, u := range []string{"vega", "mira"} {
+	for _, u := range []string{"userc", "usera"} {
 		if exists(filepath.Join(r.home[u], ".config/systemd/user/default.target.wants/aii-os-machine.service")) {
 			t.Errorf("%s's machine service is still enabled", u)
 		}
@@ -186,39 +186,39 @@ func TestRemoveStopsAndDisablesEachAccountsMachineServiceAndKeepsItsStore(t *tes
 }
 
 func TestRemoveReachesAnAccountWhoseManagerIsNotRunning(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0")
-	r.machine(t, "vega", true, false)
-	if err := os.RemoveAll(filepath.Join(r.managers, r.uids["vega"])); err != nil {
+	r := newDebRig(t, "userc/identity-0")
+	r.machine(t, "userc", true, false)
+	if err := os.RemoveAll(filepath.Join(r.managers, r.uids["userc"])); err != nil {
 		t.Fatal(err)
 	}
 	_, calls := r.run(t, nil, "prerm", "remove")
-	units := filepath.Join(r.home["vega"], ".config", "systemd", "user")
+	units := filepath.Join(r.home["userc"], ".config", "systemd", "user")
 	for _, l := range []string{"sockets.target.wants/aii-os-machine.socket", "default.target.wants/aii-os-machine.service"} {
 		if exists(filepath.Join(units, l)) {
 			t.Errorf("with no manager running the enable link %s stayed", l)
 		}
-		want := "rm as vega -f " + filepath.Join(units, l)
+		want := "rm as userc -f " + filepath.Join(units, l)
 		if !slices.Contains(calls, want) {
 			t.Errorf("the link was not removed as the account: want %q in %q", want, calls)
 		}
 	}
-	if !strings.Contains(r.stash(t, "vega"), "machine-enabled") {
+	if !strings.Contains(r.stash(t, "userc"), "machine-enabled") {
 		t.Fatal("the stash does not say the units were enabled")
 	}
 }
 
 func TestReinstallRestoresTheMachineServiceItFound(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
-	r.machine(t, "vega", true, true)
-	r.machine(t, "mira", false, false) // registered once, then switched off by its person
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
+	r.machine(t, "userc", true, true)
+	r.machine(t, "usera", false, false) // registered once, then switched off by its person
 	r.run(t, nil, "prerm", "remove")
 	r.run(t, nil, "postinst", "configure", "0.1.16")
 	got := r.done(t)
-	want := []string{"enabled " + r.uids["vega"] + " aii-os-machine.service", "enabled " + r.uids["vega"] + " aii-os-machine.socket"}
+	want := []string{"enabled " + r.uids["userc"] + " aii-os-machine.service", "enabled " + r.uids["userc"] + " aii-os-machine.socket"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("a reinstall did %q, want only what it found enabled enabled again: %q", got, want)
 	}
-	if strings.Contains(r.stash(t, "vega"), "machine-enabled") {
+	if strings.Contains(r.stash(t, "userc"), "machine-enabled") {
 		t.Fatal("the stash still says enabled once it was restored")
 	}
 	// A second configure has nothing more to restore.
@@ -229,15 +229,15 @@ func TestReinstallRestoresTheMachineServiceItFound(t *testing.T) {
 }
 
 func TestPurgeRemovesStoresServiceDirectoryAndUnitsAndNoIdentity(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "vega/identity-1")
-	r.machine(t, "vega", true, true)
-	home := r.home["vega"]
+	r := newDebRig(t, "userc/identity-0", "userc/identity-1")
+	r.machine(t, "userc", true, true)
+	home := r.home["userc"]
 	store := r.store(t, filepath.Join(home, ".aii", "plugins"))
 	writeFile(t, filepath.Join(home, ".aii", "identity-0", "data", "ledger.jsonl"), "{}\n")
 	if err := os.MkdirAll(filepath.Join(home, ".aii", "by-name"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("../identity-0", filepath.Join(home, ".aii", "by-name", "Vega")); err != nil {
+	if err := os.Symlink("../identity-0", filepath.Join(home, ".aii", "by-name", "Userc")); err != nil {
 		t.Fatal(err)
 	}
 	units := filepath.Join(home, ".config", "systemd", "user")
@@ -257,7 +257,7 @@ func TestPurgeRemovesStoresServiceDirectoryAndUnitsAndNoIdentity(t *testing.T) {
 	if !equalMaps(treeHashes(t, home, ".aii/identity-"), identities) {
 		t.Fatal("a purge changed an identity")
 	}
-	for _, p := range []string{filepath.Join(home, ".aii"), filepath.Join(home, ".aii", "by-name", "Vega")} {
+	for _, p := range []string{filepath.Join(home, ".aii"), filepath.Join(home, ".aii", "by-name", "Userc")} {
 		if !exists(p) {
 			t.Errorf("a purge removed %s", p)
 		}
@@ -268,19 +268,19 @@ func TestPurgeRemovesStoresServiceDirectoryAndUnitsAndNoIdentity(t *testing.T) {
 }
 
 func TestPurgeKeepsAPinnedStoreAndSaysSo(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0", "nova/identity-0")
-	for _, u := range []string{"vega", "mira"} {
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0", "userb/identity-0")
+	for _, u := range []string{"userc", "usera"} {
 		r.machine(t, u, true, true)
 	}
-	pinned := r.store(t, filepath.Join(r.home["vega"], ".aii", "plugins"))
+	pinned := r.store(t, filepath.Join(r.home["userc"], ".aii", "plugins"))
 	pin, err := ps.Store{Dir: pinned}.PinView(storeViewKey) // an identity started by hand runs from it
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pin.Close()
-	network := r.store(t, filepath.Join(r.home["mira"], ".aii", "plugins"))
+	network := r.store(t, filepath.Join(r.home["usera"], ".aii", "plugins"))
 	writeFile(t, network+".fstype", "nfs\n")
-	r.machine(t, "nova", true, true, filepath.Join(r.dir, "unmounted-volume", "plugins"))
+	r.machine(t, "userb", true, true, filepath.Join(r.dir, "unmounted-volume", "plugins"))
 	r.run(t, nil, "prerm", "remove")
 	out, _ := r.run(t, nil, "postrm", "purge")
 	for _, kept := range []string{pinned, network} {
@@ -294,7 +294,7 @@ func TestPurgeKeepsAPinnedStoreAndSaysSo(t *testing.T) {
 	if !strings.Contains(out, "kept "+filepath.Join(r.dir, "unmounted-volume", "plugins")+": the directory that holds it is not there") {
 		t.Errorf("a store on a volume not there was not named:\n%s", out)
 	}
-	for _, u := range []string{"vega", "mira", "nova"} {
+	for _, u := range []string{"userc", "usera", "userb"} {
 		if !exists(filepath.Join(r.home[u], ".aii", "machine", "state.json")) {
 			t.Errorf("%s's service directory went while a store it names stayed", u)
 		}
@@ -302,9 +302,9 @@ func TestPurgeKeepsAPinnedStoreAndSaysSo(t *testing.T) {
 }
 
 func TestPurgeHoldsEveryLockThroughWhatItGuards(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0")
-	r.machine(t, "vega", true, false)
-	home := r.home["vega"]
+	r := newDebRig(t, "userc/identity-0")
+	r.machine(t, "userc", true, false)
+	home := r.home["userc"]
 	m := filepath.Join(home, ".aii", "machine")
 	store := r.store(t, filepath.Join(home, ".aii", "plugins"))
 	r.run(t, nil, "prerm", "remove")
@@ -360,13 +360,13 @@ func TestPurgeHoldsEveryLockThroughWhatItGuards(t *testing.T) {
 // hand, or one the remove could not stop. Its stores and its state stay,
 // and the purge says why; another account's purge goes on.
 func TestPurgeKeepsAnAccountWhoseMachineServiceHoldsItsLock(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
-	for _, u := range []string{"vega", "mira"} {
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
+	for _, u := range []string{"userc", "usera"} {
 		r.machine(t, u, true, false)
 		r.store(t, filepath.Join(r.home[u], ".aii", "plugins"))
 	}
 	r.run(t, nil, "prerm", "remove")
-	m := filepath.Join(r.home["vega"], ".aii", "machine")
+	m := filepath.Join(r.home["userc"], ".aii", "machine")
 	service, err := holdLock(filepath.Join(m, "machine.lock"))
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +374,7 @@ func TestPurgeKeepsAnAccountWhoseMachineServiceHoldsItsLock(t *testing.T) {
 	defer service.Close()
 	out, _ := r.run(t, nil, "postrm", "purge")
 	for _, p := range []string{filepath.Join(m, "state.json"), filepath.Join(m, "machine.lock"),
-		filepath.Join(r.home["vega"], ".aii", "plugins", "v", storeViewKey+".record.json")} {
+		filepath.Join(r.home["userc"], ".aii", "plugins", "v", storeViewKey+".record.json")} {
 		if !exists(p) {
 			t.Errorf("a purge removed %s while the account's machine service held its lock", p)
 		}
@@ -382,22 +382,22 @@ func TestPurgeKeepsAnAccountWhoseMachineServiceHoldsItsLock(t *testing.T) {
 	if !strings.Contains(out, "kept "+m+" and every store it names: a machine service") {
 		t.Errorf("the purge did not say why it kept the account:\n%s", out)
 	}
-	if !exists(filepath.Join(r.state, "accounts", r.uids["vega"])) {
+	if !exists(filepath.Join(r.state, "accounts", r.uids["userc"])) {
 		t.Errorf("the kept account's stash went:\n%s", out)
 	}
-	if exists(filepath.Join(r.home["mira"], ".aii", "plugins")) || exists(filepath.Join(r.home["mira"], ".aii", "machine")) {
+	if exists(filepath.Join(r.home["usera"], ".aii", "plugins")) || exists(filepath.Join(r.home["usera"], ".aii", "machine")) {
 		t.Errorf("one account's running service kept another's store or service directory:\n%s", out)
 	}
 }
 
 func TestPurgeRemovesAPlacedStoreStashedAtRemoveAndNothingElse(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0")
+	r := newDebRig(t, "userc/identity-0")
 	elsewhere := filepath.Join(r.dir, "big-volume")
 	placed := r.store(t, filepath.Join(elsewhere, "plugins"))
 	beside := filepath.Join(elsewhere, "photos", "a.jpg")
 	writeFile(t, beside, "the person's")
 	writeFile(t, filepath.Join(placed, "notes.txt"), "the person's too")
-	r.machine(t, "vega", true, true, placed)
+	r.machine(t, "userc", true, true, placed)
 	r.run(t, nil, "prerm", "remove")
 	out, _ := r.run(t, nil, "postrm", "purge")
 	for _, own := range []string{".lock", "a", "b", "r", "v", ".trash"} {
@@ -416,11 +416,11 @@ func TestPurgeRemovesAPlacedStoreStashedAtRemoveAndNothingElse(t *testing.T) {
 }
 
 func TestPurgeNeverRemovesAsRootInAHome(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
-	r.machine(t, "vega", true, true)
-	r.machine(t, "mira", true, false)
-	r.store(t, filepath.Join(r.home["vega"], ".aii", "plugins"))
-	r.store(t, filepath.Join(r.home["mira"], ".aii", "plugins"))
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
+	r.machine(t, "userc", true, true)
+	r.machine(t, "usera", true, false)
+	r.store(t, filepath.Join(r.home["userc"], ".aii", "plugins"))
+	r.store(t, filepath.Join(r.home["usera"], ".aii", "plugins"))
 	r.run(t, nil, "prerm", "remove")
 	_, calls := r.run(t, nil, "postrm", "purge")
 	n := 0
@@ -466,21 +466,21 @@ func TestPurgeWalksAHomeOutsideHome(t *testing.T) {
 // read), or no remove stashed anything. The default store goes; the state,
 // which may name another, stays and is named.
 func TestPurgeKeepsTheServiceStateWhenItsStoresAreNotKnown(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
-	for _, u := range []string{"vega", "mira"} {
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
+	for _, u := range []string{"userc", "usera"} {
 		r.machine(t, u, true, true)
 		r.store(t, filepath.Join(r.home[u], ".aii", "plugins"))
 	}
-	writeFile(t, filepath.Join(r.home["vega"], ".aii-store-list-fails"), "")
+	writeFile(t, filepath.Join(r.home["userc"], ".aii-store-list-fails"), "")
 	r.run(t, nil, "prerm", "remove")
-	if st := r.stash(t, "vega"); !strings.Contains(st, "stores-unknown") {
+	if st := r.stash(t, "userc"); !strings.Contains(st, "stores-unknown") {
 		t.Fatalf("a refused store list is not stashed as unknown: %q", st)
 	}
-	if err := os.Remove(filepath.Join(r.state, "accounts", r.uids["mira"])); err != nil {
+	if err := os.Remove(filepath.Join(r.state, "accounts", r.uids["usera"])); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := r.run(t, nil, "postrm", "purge")
-	for _, u := range []string{"vega", "mira"} {
+	for _, u := range []string{"userc", "usera"} {
 		if exists(filepath.Join(r.home[u], ".aii", "plugins")) {
 			t.Errorf("%s's default store stayed", u)
 		}
@@ -494,10 +494,10 @@ func TestPurgeKeepsTheServiceStateWhenItsStoresAreNotKnown(t *testing.T) {
 // A HOME ITS OWN ACCOUNT DOES NOT OWN IS NOT WALKED: a directory under
 // /home whose owner's entry names another home is nobody's to act in.
 func TestAHomeNotItsAccountsIsNotWalked(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0")
-	r.machine(t, "vega", true, true)
+	r := newDebRig(t, "userc/identity-0")
+	r.machine(t, "userc", true, true)
 	stray := filepath.Join(r.homes, "stray")
-	writeFile(t, filepath.Join(stray, ".uid"), r.uids["vega"]+"\n") // vega's uid owns it; vega's home is elsewhere
+	writeFile(t, filepath.Join(stray, ".uid"), r.uids["userc"]+"\n") // userc's uid owns it; userc's home is elsewhere
 	writeFile(t, filepath.Join(stray, ".aii", "machine", "state.json"), "{}")
 	strayStore := r.store(t, filepath.Join(stray, ".aii", "plugins"))
 	r.run(t, nil, "prerm", "remove")
@@ -508,14 +508,14 @@ func TestAHomeNotItsAccountsIsNotWalked(t *testing.T) {
 }
 
 func TestAPurgeWhoseRemovalFailsKeepsTheStateAndTheStashItNeeds(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-0")
+	r := newDebRig(t, "userc/identity-0", "usera/identity-0")
 	placed := r.store(t, filepath.Join(r.dir, "big-volume", "plugins"))
-	r.machine(t, "vega", true, false, placed)
-	r.machine(t, "mira", true, false)
-	r.store(t, filepath.Join(r.home["mira"], ".aii", "plugins"))
+	r.machine(t, "userc", true, false, placed)
+	r.machine(t, "usera", true, false)
+	r.store(t, filepath.Join(r.home["usera"], ".aii", "plugins"))
 	r.run(t, nil, "prerm", "remove")
 	out, _ := r.run(t, []string{"AII_RIG_RM_FAILS=" + filepath.Join(placed, "b")}, "postrm", "purge")
-	m := filepath.Join(r.home["vega"], ".aii", "machine")
+	m := filepath.Join(r.home["userc"], ".aii", "machine")
 	if !exists(filepath.Join(placed, "b", strings.Repeat("ab", 32))) {
 		t.Fatal("rig: the refused removal removed the blob")
 	}
@@ -528,25 +528,25 @@ func TestAPurgeWhoseRemovalFailsKeepsTheStateAndTheStashItNeeds(t *testing.T) {
 	if !exists(filepath.Join(m, "state.json")) || !strings.Contains(out, "kept "+m+": a store it names is kept") {
 		t.Errorf("the service's state, the only record of where the placed store lies, was not kept and named:\n%s", out)
 	}
-	if st, err := os.ReadFile(filepath.Join(r.state, "accounts", r.uids["vega"])); err != nil || !strings.Contains(string(st), "store "+placed+"\n") {
+	if st, err := os.ReadFile(filepath.Join(r.state, "accounts", r.uids["userc"])); err != nil || !strings.Contains(string(st), "store "+placed+"\n") {
 		t.Errorf("the stash that names the placed store went (%v):\n%s", err, out)
 	}
-	if exists(filepath.Join(r.state, "accounts", r.uids["mira"])) || exists(filepath.Join(r.home["mira"], ".aii", "machine")) {
+	if exists(filepath.Join(r.state, "accounts", r.uids["usera"])) || exists(filepath.Join(r.home["usera"], ".aii", "machine")) {
 		t.Errorf("an account whose purge finished kept its stash or its service directory:\n%s", out)
 	}
 
 	// The service's own names: one that cannot go keeps state.json.
-	s := newDebRig(t, "vega/identity-0")
-	s.machine(t, "vega", true, false)
-	s.store(t, filepath.Join(s.home["vega"], ".aii", "plugins"))
-	m = filepath.Join(s.home["vega"], ".aii", "machine")
+	s := newDebRig(t, "userc/identity-0")
+	s.machine(t, "userc", true, false)
+	s.store(t, filepath.Join(s.home["userc"], ".aii", "plugins"))
+	m = filepath.Join(s.home["userc"], ".aii", "machine")
 	writeFile(t, filepath.Join(m, "relaunch.json"), "{}")
 	s.run(t, nil, "prerm", "remove")
 	out, _ = s.run(t, []string{"AII_RIG_RM_FAILS=" + filepath.Join(m, "relaunch.json")}, "postrm", "purge")
 	if !exists(filepath.Join(m, "state.json")) || !strings.Contains(out, "kept "+m+": "+filepath.Join(m, "relaunch.json")+", the service's own, could not be removed") {
 		t.Errorf("a service name that could not be removed did not keep the state and say so:\n%s", out)
 	}
-	if !exists(filepath.Join(s.state, "accounts", s.uids["vega"])) {
+	if !exists(filepath.Join(s.state, "accounts", s.uids["userc"])) {
 		t.Errorf("the stash went while the service's state stayed:\n%s", out)
 	}
 }

@@ -15,6 +15,8 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 )
 
+// secret, and inside the same wall a sibling nobody keeps, in the directory
+// the engine is handed, stays readable.
 func TestAContainedNativeChildCannotReadAKeptPlaceNamedWithACharacterGoEscapes(t *testing.T) {
 	requireWall(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -45,7 +47,7 @@ func TestAContainedNativeChildCannotReadAKeptPlaceNamedWithACharacterGoEscapes(t
 			if out, err := exec.Command("/bin/cat", secret).CombinedOutput(); err != nil || !strings.Contains(string(out), "KEPT SECRET") {
 				t.Fatalf("uncontained, the probe must read the file it is refused below: %v\n%s", err, out)
 			}
-			files := nativeFiles{places: []*firewall.Rule{nativePlace(kept)}, own: standInTools}
+			files := nativeFiles{places: []*firewall.Rule{nativePlace(kept)}, read: []string{root}, own: standInTools}
 			run := func(path string) (string, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
@@ -71,14 +73,6 @@ func TestAContainedNativeChildCannotReadAKeptPlaceNamedWithACharacterGoEscapes(t
 	}
 }
 
-// AN ORDINARY PATH IS WRITTEN IN THE SAME BYTES AS BEFORE. The profile for a
-// fixture that draws every kind of line the wall writes (a compute service
-// and driver, a masked directory with a read exception inside it, the
-// metadata lines for its ancestors, a masked file, the image and the own
-// directories a child may start) is held to the bytes strconv.Quote gave it,
-// which is what the wall wrote before Seatbelt's string spelling had a writer
-// of its own. A space and accented letters are ordinary: Go writes them as
-// they are.
 func TestDarwinProfileSpellsAnOrdinaryPathAsBefore(t *testing.T) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
 		t.Skip("sandbox-exec is absent: containment refuses instead, which TestContainmentRefusesRatherThanRunningBare covers")
@@ -97,7 +91,11 @@ func TestDarwinProfileSpellsAnOrdinaryPathAsBefore(t *testing.T) {
 	if err := os.WriteFile(key, []byte("key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files := nativeFiles{places: []*firewall.Rule{nativePlace(data), nativePlace(key)}, read: []string{selected}, own: standInTools}
+	added := filepath.Join(root, "vendor tree")
+	if err := os.MkdirAll(added, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := nativeFiles{places: []*firewall.Rule{nativePlace(data), nativePlace(key)}, read: []string{selected}, own: standInTools, view: []string{added}}
 	argv, _, err := containArgv(context.Background(), []string{"/bin/sh", "-c", "true"}, &AcceleratorProfile{Backend: "metal"}, files)
 	if err != nil {
 		t.Fatal(err)
@@ -106,19 +104,87 @@ func TestDarwinProfileSpellsAnOrdinaryPathAsBefore(t *testing.T) {
 		t.Fatalf("argv does not carry a profile: %q", argv)
 	}
 	q := strconv.Quote
-	want := seatbeltProfile +
-		"(allow mach-lookup (global-name " + q("com.apple.MTLCompilerService") + "))\n" +
-		"(allow iokit-open (iokit-user-client-class " + q("AGXDeviceUserClient") + "))\n" +
-		"(deny file-read* (require-all (subpath " + q(data) + ") (require-not (subpath " + q(selected) + "))))\n" +
-		"(allow file-read-metadata (literal " + q(models) + "))\n" +
-		"(allow file-read-metadata (literal " + q(data) + "))\n" +
-		"(deny file-read* (require-all (literal " + q(key) + ")))\n" +
-		"(deny process-exec*)\n" +
-		"(allow process-exec* (literal " + q("/bin/sh") + "))\n" +
-		"(allow process-exec* (subpath " + q("/bin") + "))\n" +
-		"(allow process-exec* (subpath " + q("/usr/bin") + "))\n"
-	if got := argv[2]; got != want {
-		t.Fatalf("the profile for ordinary paths changed bytes\n got: %q\nwant: %q", got, want)
+	// A path under one of the root's links into /private (a temporary
+	// directory is) is matched at both of its spellings.
+	sp := func(kind, p string) string {
+		if alias := rootLinkSpelling(p); alias != "" {
+			return "(require-any (" + kind + " " + q(p) + ") (" + kind + " " + q(alias) + "))"
+		}
+		return "(" + kind + " " + q(p) + ")"
+	}
+	if real := "/private/var/"; strings.HasPrefix(added, real) && sp("subpath", added) == "(subpath "+q(added)+")" {
+		t.Fatalf("a path under %s is not matched at its /var spelling", real)
+	}
+	// Each line the fixture draws, in the order the profile writes them:
+	// the files' deny, the system's view and what of it is excepted, what
+	// the operator adds (after the exception, so it may add back), the
+	// handed material, what stays refused wherever those show, the compute
+	// exceptions, the masks, the names above the material, the starts.
+	want := []string{
+		seatbeltProfile,
+		"(allow file-read* file-test-existence (subpath " + q("/System") + "))\n",
+		"(deny file-read* file-test-existence (subpath " + q("/System/Volumes") + "))\n",
+		"(deny file-read* file-test-existence (subpath " + q("/usr/local") + "))\n",
+		"(allow file-read* file-test-existence " + sp("subpath", added) + ")\n",
+		"(allow file-read* file-test-existence " + sp("subpath", selected) + ")\n",
+		seatbeltRefused,
+		"(allow mach-lookup (global-name " + q("com.apple.MTLCompilerService") + "))\n",
+		"(allow iokit-open (iokit-user-client-class " + q("AGXDeviceUserClient") + "))\n",
+		"(deny file-read* file-test-existence (require-all " + sp("subpath", data) + " (require-not " + sp("subpath", selected) + ")))\n",
+		"(deny file-read* file-test-existence (require-all " + sp("literal", key) + "))\n",
+		"(allow file-read-metadata file-test-existence (literal " + q(models) + "))\n",
+		"(allow file-read-metadata file-test-existence (literal " + q(data) + "))\n",
+		"(deny process-exec*)\n",
+		"(allow process-exec* (literal " + q("/bin/sh") + "))\n",
+		"(allow process-exec* (subpath " + q("/bin") + "))\n",
+		"(allow process-exec* (subpath " + q("/usr/bin") + "))\n",
+	}
+	got := argv[2]
+	at := 0
+	for _, line := range want {
+		i := strings.Index(got[at:], line)
+		if i < 0 {
+			t.Fatalf("the profile for ordinary paths does not carry, in its place, the line\n%q\nprofile:\n%s", line, got)
+		}
+		at += i + len(line)
+	}
+	// Every file the profile refuses by name it refuses the existence of
+	// with the read, the system's credential stores and the terminals as
+	// the masks: where a view the operator widened shows existence, a read
+	// refused alone tells a refused file apart from a missing one.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "(deny file-read* ") && !strings.HasPrefix(line, "(deny file-read* file-test-existence ") {
+			t.Errorf("a file refused its read and not its existence:\n%s", line)
+		}
+	}
+}
+
+// THE LINE SAYS WHAT THE VIEW WITHHOLDS. The default view shows /System and
+// /usr but the volumes under /System/Volumes and /usr/local; an operator who
+// adds one back, or a place above it, is told it is shown, and one who adds
+// a place inside it is told it is shown only there. /usr is the default's
+// already, so naming it again adds nothing back.
+func TestDarwinContainmentLineSaysWhatTheViewWithholds(t *testing.T) {
+	if _, err := exec.LookPath("sandbox-exec"); err != nil {
+		t.Skip("sandbox-exec is absent: containment refuses instead, which TestContainmentRefusesRatherThanRunningBare covers")
+	}
+	for _, c := range []struct {
+		view []string
+		says string
+	}{
+		{nil, "material (not /System/Volumes or /usr/local), "},
+		{[]string{"/usr"}, "material (not /System/Volumes or /usr/local), "},
+		{[]string{"/System/Volumes"}, "material (not /usr/local), "},
+		{[]string{filepath.Join("/System/Volumes", "Data")}, "material (not /usr/local; of /System/Volumes only what is named), "},
+		{[]string{"/"}, "material, "},
+	} {
+		_, wall, err := containArgv(context.Background(), []string{"/bin/sh", "-c", "true"}, nil, nativeFiles{own: standInTools, view: c.view})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(wall.Description, c.says) {
+			t.Errorf("view %q: the line does not say %q:\n%s", c.view, c.says, wall.Description)
+		}
 	}
 }
 

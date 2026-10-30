@@ -1,4 +1,5 @@
 import { $ } from '../util.js';
+import { signedFetch, ticketed } from '../pagekey.js';
 import { S } from '../state.js';
 import { toast } from '../app.js';
 
@@ -21,6 +22,24 @@ function pictureNote(chip, sent) {
   sent.count++; sent.bytes += chip.bytes;
   return ' · the model will be shown it';
 }
+const FILE_KINDS = { pdf: ['pdf', 'application/pdf'], wav: ['audio', 'audio/wav'], mp3: ['audio', 'audio/mpeg'], ogg: ['audio', 'audio/ogg'], mp4: ['video', 'video/mp4'], webm: ['video', 'video/webm'] };
+const KIND_NOUN = { pdf: 'PDFs', audio: 'audio', video: 'video' };
+function fileNote(chip, sent) {
+  const known = FILE_KINDS[(String(chip.path).match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase()];
+  if (!known) return '';
+  const [kind, type] = known;
+  const llm = S.config?.llm || {};
+  const line = (llm.capabilities?.takes || []).find(l => l.kind === kind) || {};
+  const why = line.kind && !(line.types || []).includes(type) ? 'this host does not send ' + type + ' in this provider\'s dialect'
+    : line.state === 'no' ? 'this model does not take ' + KIND_NOUN[kind]
+    : line.state !== 'yes' ? 'nobody has said this model takes ' + KIND_NOUN[kind]
+    : S.thinking ? '' : llm.images_max_count && sent.count >= llm.images_max_count ? 'this message already has the ' + llm.images_max_count + ' files one request takes'
+    : llm.images_max_bytes && sent.bytes + chip.bytes > llm.images_max_bytes ? 'with it this message\'s files pass what one request carries (' + sizeText(llm.images_max_bytes) + ')' : '';
+  if (why) return ' · to the folder only: ' + why;
+  if (S.thinking) return ' · to the folder only while a turn is running: the identity is told of the file and can read it';
+  sent.count++; sent.bytes += chip.bytes;
+  return ' · the model will be shown it';
+}
 function renderChips() {
   const host = $('attach-chips'); if (!host) return;
   host.hidden = !chips.length;
@@ -31,7 +50,7 @@ function renderChips() {
     const name = document.createElement('span'); name.className = 'attach-name'; name.textContent = chip.name;
     const note = document.createElement('span'); note.className = 'attach-note';
     const kept = chip.given && chip.given !== chip.name ? ' · kept as ' + chip.name + ', not ' + chip.given : '';
-    const shown = chip.path && DRAWN.test(chip.path) && !/\.svg$/i.test(chip.path) ? pictureNote(chip, sent) : '';
+    const shown = !chip.path ? '' : DRAWN.test(chip.path) && !/\.svg$/i.test(chip.path) ? pictureNote(chip, sent) : fileNote(chip, sent);
     note.textContent = chip.error ? chip.error : chip.path ? sizeText(chip.bytes) + kept + shown : 'sending…';
     const drop = document.createElement('button'); drop.type = 'button'; drop.className = 'attach-drop'; drop.textContent = '×';
     drop.setAttribute('aria-label', 'Remove ' + chip.name);
@@ -45,7 +64,7 @@ async function take(file) {
   chips.push(chip); renderChips();
   if (/^image\//.test(file.type || '') && window.createImageBitmap) createImageBitmap(file).then(b => { chip.side = Math.max(b.width, b.height); if (b.close) b.close(); if (chips.includes(chip)) renderChips(); }).catch(() => {});
   try {
-    const res = await fetch('/upload?name=' + encodeURIComponent(file.name), { method: 'POST', body: file });
+    const res = await signedFetch('/upload?name=' + encodeURIComponent(file.name), { method: 'POST', body: file });
     if (!res.ok) chip.error = (await res.text()).trim() || 'not taken (HTTP ' + res.status + ')';
     else { const reply = await res.json(); chip.path = reply.path; chip.given = chip.name; chip.name = reply.name; chip.bytes = reply.bytes; }
   } catch (e) {
@@ -89,11 +108,11 @@ function fileChip(path, label) {
     e.preventDefault();
     let why = '';
     try {
-      const res = await fetch(a.href);
+      const res = await signedFetch(a.href);
       if (res.ok) {
         const url = URL.createObjectURL(await res.blob()), save = document.createElement('a');
-        save.href = url; save.download = baseName(path); save.click();
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        save.href = url; save.download = baseName(path); save.hidden = true; document.body.appendChild(save); save.click();
+        setTimeout(() => { URL.revokeObjectURL(url); save.remove(); }, 60000);
       } else why = res.status === 404 ? 'not available at ' + path : (await res.text()).trim() || 'not handed over (HTTP ' + res.status + ')';
     } catch (err) { why = 'not handed over: ' + (err && err.message || err); }
     let note = a.nextElementSibling;
@@ -102,10 +121,29 @@ function fileChip(path, label) {
   };
   return a;
 }
+const seen = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    seen.unobserve(e.target);
+    ticketed('GET', e.target.dataset.file).then(address => { e.target.src = address; });
+  }
+}, { rootMargin: '200px' });
+function drawWhenSeen(img, address) {
+  img.dataset.file = address;
+  seen.observe(img);
+}
+function openInTab(event) {
+  event.preventDefault();
+  const win = window.open('', '_blank');
+  if (!win) return;
+  win.opener = null;
+  ticketed('GET', event.currentTarget.getAttribute('href')).then(address => { win.location = address; });
+}
 function shownImage(path, label) {
   const fig = document.createElement('figure'); fig.className = 'shown-image';
   const link = document.createElement('a'); link.href = fileURL(path, false); link.target = '_blank'; link.rel = 'noopener noreferrer';
-  const img = document.createElement('img'); img.alt = label; img.loading = 'lazy'; img.src = fileURL(path, false);
+  link.onclick = openInTab;
+  const img = document.createElement('img'); img.alt = label; drawWhenSeen(img, fileURL(path, false));
   img.onerror = () => { fig.textContent = ''; const gone = document.createElement('span'); gone.className = 'shown-missing'; gone.textContent = label + ' (image not available at ' + path + ')'; fig.appendChild(gone); };
   link.appendChild(img); fig.appendChild(link);
   if (label) { const cap = document.createElement('figcaption'); cap.textContent = label; fig.appendChild(cap); }
@@ -130,6 +168,6 @@ export function drawReply(body, content) {
 export function drawAttached(label, path) {
   if (label.dataset.attached === path) return;
   label.dataset.attached = path; label.textContent = '';
-  if (DRAWN.test(path)) { const img = document.createElement('img'); img.className = 'attached-thumb'; img.alt = ''; img.loading = 'lazy'; img.src = fileURL(path, false); img.onerror = () => img.remove(); label.appendChild(img); }
+  if (DRAWN.test(path)) { const img = document.createElement('img'); img.className = 'attached-thumb'; img.alt = ''; drawWhenSeen(img, fileURL(path, false)); img.onerror = () => img.remove(); label.appendChild(img); }
   label.appendChild(fileChip(path, baseName(path)));
 }

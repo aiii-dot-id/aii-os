@@ -1,12 +1,20 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/continuity/continuitytest"
@@ -81,6 +89,39 @@ func blankMachine(t *testing.T) (*App, string) {
 	return a, dir
 }
 
+func TestASnapshotMadeBeforeSigningIsRestoredAtFirstBootsDoor(t *testing.T) {
+	var key []byte
+	left := oldMachineLiving(t, func(old *App) {
+		key, _ = continuitytest.SnapshotKey(t, old.configSnapshot().Identity.KeyPath)
+	}, nil)
+	carried := filepath.Join(t.TempDir(), left.snapshotName)
+	if err := os.WriteFile(carried, left.snapshotBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := continuitytest.Unsign(carried, key); err != nil {
+		t.Fatal(err)
+	}
+	unsigned, err := os.ReadFile(carried)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := blankMachine(t)
+	defer stopApp(t, a)
+	if _, err := a.continuity.NewMachineKeys(left.escrowFile, []byte(newMachinePass)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.continuity.NewMachineUpload(left.snapshotName, "", bytes.NewReader(unsigned)); err != nil {
+		t.Fatal(err)
+	}
+	done, err := a.continuity.NewMachineRestore(t.Context(), left.snapshotName, nil)
+	if err != nil || done.RestoredTo != left.through || !a.live.Load() {
+		t.Fatalf("A SNAPSHOT MADE BEFORE SIGNING WAS REFUSED AT FIRST BOOT'S DOOR: %+v %v", done, err)
+	}
+	if v := continuityDoor(a).View(); !strings.Contains(v.Restored, "carried no signature of the identity's key") {
+		t.Errorf("THE PAGE DOES NOT SAY THE SNAPSHOT WAS UNSIGNED: %q", v.Restored)
+	}
+}
+
 // THE JOURNEY: two files and a passphrase, and the identity is running on a
 // machine that had never seen it — through the record the snapshot held, with
 // nothing set aside, because nothing was here.
@@ -147,6 +188,11 @@ func TestAnIdentityIsRestoredOnAMachineThatNeverHeldIt(t *testing.T) {
 	}
 	if continuity.RestoringOnNewMachine(continuitySettingsOf(a.configSnapshot())) {
 		t.Error("the marker outlived the restore it guarded")
+	}
+	// What the door received is the identity's kept snapshot now, and the
+	// door's own directory is gone.
+	if fileExists(filepath.Join(dir, "restore-new-machine")) || !fileExists(filepath.Join(a.backupsDir(a.configSnapshot()), left.snapshotName)) {
+		t.Error("the snapshot the door received is not among the identity's kept snapshots, or the door's directory outlived the restore")
 	}
 	if sets := continuityDoor(a).View().SetAside; len(sets) != 0 {
 		t.Errorf("nothing was here, and the page would say something was set aside: %+v", sets)
@@ -273,12 +319,15 @@ func TestTheNewMachineDoorRefusesWhatIsNotItsToDo(t *testing.T) {
 	}
 }
 
-// THE SAME NAME IS NOT THE SAME SNAPSHOT. A snapshot's name holds a second
-// and a record number and nothing of whose it is, so two identities make the
-// same one. A person who picks the wrong file first — refused, as another
-// identity's — and then the right one UNDER THE SAME NAME must get the right
-// one: it used to be answered "it arrived before", and the wrong bytes stayed
-// for good with no way on the page to replace them.
+// THE LAST ARRIVAL UNDER A NAME IS THE ONE THE PERSON MEANS. A snapshot's
+// name holds a second and a record number and nothing of whose it is, so
+// two identities make the same one. A person who picks the wrong file
+// first (refused, as another identity's) and then the right one UNDER THE
+// SAME NAME must get the right one: it used to be answered "it arrived
+// before", and the wrong bytes stayed for good. What stood under the name
+// in the door's directory was only the door's earlier arrival, sent from
+// the person's own copy, so it is replaced; and nothing the door receives
+// is among an identity's kept snapshots until the restore is done.
 func TestTheRightSnapshotArrivesAfterAWrongOneOfTheSameName(t *testing.T) {
 	mine, other := oldMachine(t), oldMachine(t)
 	a, dir := blankMachine(t)
@@ -296,29 +345,49 @@ func TestTheRightSnapshotArrivesAfterAWrongOneOfTheSameName(t *testing.T) {
 	if err := a.continuity.NewMachineUpload(name, "", bytes.NewReader(mine.snapshotBytes)); err != nil {
 		t.Fatal(err)
 	}
-	backups := a.backupsDir(a.configSnapshot())
-	if got, err := os.ReadFile(filepath.Join(backups, name)); err != nil || !bytes.Equal(got, mine.snapshotBytes) {
-		t.Fatalf("THE WRONG BYTES KEPT THE NAME: what is published is not what just arrived (%v)", err)
+	received := filepath.Join(dir, "restore-new-machine")
+	if got, err := os.ReadFile(filepath.Join(received, name)); err != nil || !bytes.Equal(got, mine.snapshotBytes) {
+		t.Fatalf("THE WRONG BYTES KEPT THE NAME: what is there is not what just arrived (%v)", err)
 	}
-	// The one that was there is kept, under a name no snapshot has.
-	replaced, _ := filepath.Glob(filepath.Join(backups, name+".replaced-*"))
-	if len(replaced) != 1 {
-		t.Fatalf("the snapshot that was in the way must be kept aside, never deleted: %v", replaced)
+	if entries, _ := os.ReadDir(received); len(entries) != 1 {
+		t.Errorf("the door's directory holds more than the snapshot that arrived last: %v", entries)
 	}
-	if got, _ := os.ReadFile(replaced[0]); !bytes.Equal(got, other.snapshotBytes) {
-		t.Error("what was kept aside is not what was in the way")
-	}
-	if kept := continuityDoor(a).View().Snapshots; len(kept) != 1 {
-		t.Errorf("what was kept aside must not read as a snapshot: %+v", kept)
+	if kept := continuityDoor(a).View().Snapshots; len(kept) != 0 {
+		t.Errorf("what the door received reads as an identity's kept snapshot before any restore: %+v", kept)
 	}
 	done, err := a.continuity.NewMachineRestore(t.Context(), name, nil)
 	if err != nil || done.RestoredTo != mine.through || !fileExists(filepath.Join(dir, "ledger.jsonl")) {
 		t.Fatalf("the right snapshot under the same name: %+v %v", done, err)
 	}
-	// And the same bytes again are the same snapshot: nothing new is kept.
-	if err := a.continuity.NewMachineUpload(name, "", bytes.NewReader(mine.snapshotBytes)); err == nil {
-		if again, _ := filepath.Glob(filepath.Join(backups, name+".replaced-*")); len(again) != 1 {
-			t.Errorf("the same snapshot arriving again set something aside: %v", again)
+	if got, err := os.ReadFile(filepath.Join(a.backupsDir(a.configSnapshot()), name)); err != nil || !bytes.Equal(got, mine.snapshotBytes) {
+		t.Fatalf("the restored snapshot is not the identity's kept snapshot: %v", err)
+	}
+}
+
+// SO DOES A PLAINTEXT SNAPSHOT'S FOLDER sent again under its name: a
+// folder takes its name at the third act, and one that took it before is
+// replaced by the folder that arrived since, not kept in its way.
+func TestAFolderSentAgainReplacesTheOneThatTookItsName(t *testing.T) {
+	left := oldMachine(t)
+	a, dir := blankMachine(t)
+	defer stopApp(t, a)
+	if _, err := a.continuity.NewMachineKeys(left.escrowFile, []byte(newMachinePass)); err != nil {
+		t.Fatal(err)
+	}
+	const plain = "ledger-20260920T101500Z-seq7"
+	published := filepath.Join(dir, "restore-new-machine", plain, "ledger.jsonl")
+	for _, sent := range []string{"the first", "the second"} {
+		for member, body := range map[string]string{"ledger.jsonl": sent, "SHA256SUMS": "x"} {
+			if err := a.continuity.NewMachineUpload(plain, member, strings.NewReader(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := a.continuity.NewMachineRestore(t.Context(), plain, nil)
+		if err == nil || strings.Contains(err.Error(), "could not be kept") {
+			t.Fatalf("%s folder: it must take its name and fail only its proof: %v", sent, err)
+		}
+		if got, _ := os.ReadFile(published); string(got) != sent {
+			t.Fatalf("THE FOLDER UNDER THE NAME IS NOT THE ONE SENT LAST: %q, want %q", got, sent)
 		}
 	}
 }
@@ -451,5 +520,106 @@ func TestARestoreOnANewMachineWhoseStartStopsAtAPageSaysSo(t *testing.T) {
 	}
 	if !fileExists(filepath.Join(dir, "ledger.jsonl")) {
 		t.Fatal("the record the restore put in place is not there")
+	}
+}
+
+// AN UPLOAD THAT STOPS ARRIVING IS ENDED, AND WHAT ARRIVED IS REMOVED.
+// Through first boot's own route: a peer sends the head of an upload and a
+// byte, keeps the connection, and sends nothing more. Nothing ended it: the
+// upload, its half-written file and its connection stayed for as long as
+// the peer liked. The body now has a read deadline that each byte moves
+// forward, maintenance.restore_upload_idle_seconds after the last one: an
+// upload still arriving, however slowly, is never cut, and one that has
+// stopped is ended and answered, and what had arrived of it removed.
+func TestAnUploadThatStopsArrivingIsEnded(t *testing.T) {
+	left := oldMachine(t)
+	a, dir := blankMachine(t)
+	defer stopApp(t, a)
+	if _, err := a.continuity.NewMachineKeys(left.escrowFile, []byte(newMachinePass)); err != nil {
+		t.Fatal(err)
+	}
+	a.cfgMu.Lock()
+	a.cfg.Maintenance.RestoreUploadIdleSeconds = 1
+	a.cfgMu.Unlock()
+	d := startFirstbootDashboardForTest(t, a)
+	scheme, addr, _ := strings.Cut(d.Origin(), "://")
+	var conn net.Conn
+	var err error
+	if scheme == "https" {
+		conn, err = tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	} else {
+		conn, err = net.Dial("tcp", addr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	head := fmt.Sprintf("POST /restore/upload?snapshot=%s HTTP/1.1\r\nHost: %s\r\nOrigin: %s\r\nSec-Fetch-Site: same-origin\r\nContent-Length: %d\r\n\r\n",
+		left.snapshotName, addr, d.Origin(), len(left.snapshotBytes))
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		status int
+		body   string
+		err    error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			answered <- answer{err: err}
+			return
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		answered <- answer{status: resp.StatusCode, body: string(body), err: err}
+	}()
+	// arriving lists what an upload has written so far, wherever under the
+	// home: the snapshot's name under the pass's work prefix.
+	arriving := func() []string {
+		var work []string
+		filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+			if err == nil && strings.HasPrefix(e.Name(), continuity.SnapshotWorkPrefix) {
+				work = append(work, path)
+			}
+			return nil
+		})
+		return work
+	}
+	// Seven bytes, three tenths of a second apart: two seconds of an upload
+	// still arriving under a wait of one.
+	for i := 0; i < 7; i++ {
+		if _, err := conn.Write(left.snapshotBytes[i : i+1]); err != nil {
+			t.Fatalf("byte %d of an upload still arriving could not be sent: %v", i, err)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	select {
+	case got := <-answered:
+		t.Fatalf("AN UPLOAD WHOSE BYTES WERE STILL ARRIVING WAS ENDED: %d %q %v", got.status, got.body, got.err)
+	default:
+	}
+	if len(arriving()) == 0 {
+		t.Fatal("rig: nothing of the upload is on this machine while it arrives")
+	}
+
+	// Nothing more is sent, and the connection is kept.
+	var got answer
+	select {
+	case got = <-answered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("AN UPLOAD THAT STOPPED ARRIVING WAS NEVER ENDED: it lasts for as long as the peer keeps the connection")
+	}
+	if got.err != nil || got.status != http.StatusBadRequest || !strings.Contains(got.body, "No part of the snapshot arrived for a second, so this machine stopped receiving it and removed what had arrived.") ||
+		!strings.Contains(got.body, "maintenance.restore_upload_idle_seconds") {
+		t.Fatalf("the page is not told why its upload ended and what to do: %d %q %v", got.status, got.body, got.err)
+	}
+	if work := arriving(); len(work) != 0 {
+		t.Fatalf("WHAT ARRIVED OF AN UPLOAD THAT WAS ENDED IS STILL HERE: %v", work)
+	}
+	// The same snapshot sent again, whole, arrives.
+	if err := a.continuity.NewMachineUpload(left.snapshotName, "", bytes.NewReader(left.snapshotBytes)); err != nil {
+		t.Fatalf("the snapshot sent again: %v", err)
 	}
 }

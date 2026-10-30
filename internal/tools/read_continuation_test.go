@@ -86,7 +86,7 @@ func TestAContinuationTheReadToolOffersIsOneItTakes(t *testing.T) {
 func TestAWindowOfALongLineOffersNoByteTheToolRefuses(t *testing.T) {
 	rt := &ReadTool{maxBytes: 64}
 	win := bytes.Repeat([]byte("y"), 65) // one more than the cap: the line goes on
-	inside, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-1000)
+	inside, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-1000, rt.maxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +94,14 @@ func TestAWindowOfALongLineOffersNoByteTheToolRefuses(t *testing.T) {
 		t.Fatalf("a window that ends inside what the tool reads does not say %q: %q", want, inside.Output)
 	}
 	// The last byte the tool takes is still offered.
-	last, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-64)
+	last, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-64, rt.maxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := fmt.Sprintf("byte_offset %d.", maxByteOffset); !strings.Contains(last.Output, want) {
 		t.Fatalf("the last byte the tool takes is not offered (%q): %q", want, last.Output)
 	}
-	past, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-10)
+	past, err := rt.pageWindow(bufio.NewReader(strings.NewReader("")), win, false, 3, maxByteOffset-10, rt.maxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +119,14 @@ func TestAWindowOfALongLineOffersNoByteTheToolRefuses(t *testing.T) {
 func TestTheEndOfALongLineOffersNoLineTheToolRefuses(t *testing.T) {
 	rt := &ReadTool{maxBytes: 64}
 	more := func() *bufio.Reader { return bufio.NewReader(strings.NewReader("another line\n")) }
-	before, err := rt.pageWindow(more(), []byte("the end of it"), true, maxReadOffset-1, 128)
+	before, err := rt.pageWindow(more(), []byte("the end of it"), true, maxReadOffset-1, 128, rt.maxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := fmt.Sprintf("continue at offset %d", maxReadOffset); !strings.Contains(before.Output, want) {
 		t.Fatalf("the end of a line before the last the tool reads does not say %q: %q", want, before.Output)
 	}
-	at, err := rt.pageWindow(more(), []byte("the end of it"), true, maxReadOffset, 128)
+	at, err := rt.pageWindow(more(), []byte("the end of it"), true, maxReadOffset, 128, rt.maxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

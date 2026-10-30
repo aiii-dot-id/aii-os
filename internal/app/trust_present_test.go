@@ -8,6 +8,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
+	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
@@ -51,8 +52,10 @@ func TestAStartLeavesTheStatusFilesInTheTrustDirectory(t *testing.T) {
 			if _, ok := app.pluginOptions().Roots.Revocation.Epoch(d.RootKeyType); !ok {
 				t.Fatalf("%s: the %s tier is unavailable: %v", when, d.RootKeyType, app.pluginOptions().Roots.Revocation.Describe())
 			}
-			if _, _, accepted, err := app.store.TrustEpochHighWater(d.RootKeyType); err != nil || accepted {
-				t.Fatalf("%s: the shipped list was added to the identity's accepted epochs for %s (%v)", when, d.RootKeyType, err)
+			for _, mark := range []string{packagefmt.EpochMark(shippedFor(d.RootKeyType)), d.RootKeyType} {
+				if _, _, accepted, err := app.store.TrustEpochHighWater(mark); err != nil || accepted {
+					t.Fatalf("%s: the shipped list was added to the identity's accepted epochs as %s (%v)", when, mark, err)
+				}
 			}
 		}
 	}
@@ -97,4 +100,9 @@ func TestAConfigurationWithNoLedgerWritesNoTrustDirectory(t *testing.T) {
 			t.Fatalf("the %s tier is available with no status file anywhere", d.RootKeyType)
 		}
 	}
+}
+
+// shippedFor is the root this build ships for a list's key type.
+func shippedFor(keyType string) *sigenvelope.PublicKeyEnvelope {
+	return pinnedFor(packagefmt.ShippedRoots(), keyType)
 }

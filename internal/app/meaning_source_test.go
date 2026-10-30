@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
@@ -1240,5 +1243,75 @@ func TestAMemoryThePluginCannotEmbedIsSetAsideCountedAndAskedAgainAfterARestart(
 	}
 	if state, _ := a.meaningState(ctx, f, a.pickMeaningSource()); state.SetAside != 0 || state.SetAsideWhy != "" {
 		t.Fatalf("nothing is set aside any more: %+v", state)
+	}
+}
+
+// A PLUGIN OF aii.embeddings@2 SAYS HOW MUCH OF EACH TEXT IT READ, and the
+// host keeps it. Through the application's own source and backfill, each
+// memory's vector is kept with the characters past what the package read,
+// a recall's cue carries what it read of the cue, and the card says the
+// source tells and counts the vectors made from a beginning alone. The
+// same package at @1 is a source that does not say.
+func TestAPluginOfVersionTwoSaysHowMuchItReadThroughThePassAndTheCard(t *testing.T) {
+	a := liveApp(t)
+	f := memory.New(a.store)
+	f.SetEmbedder(sourceEmbedder{a})
+	ctx := context.Background()
+	threeMemories(t, a)
+	const window = 20
+	reading := func(_ context.Context, kind, text string) (tools.Result, error) {
+		read := min(utf8.RuneCountInString(text), window)
+		if kind == pluginhost.EmbedKindCue {
+			return tools.Result{Output: fmt.Sprintf(`{"vector":[0.6,0.8],"read":%d}`, read)}, nil
+		}
+		return tools.Result{Output: fmt.Sprintf(`{"vector":[0.8,0.6],"read":%d}`, read)}, nil
+	}
+	s := runSource(t, a, "org.example.vectors", reading)
+	s.ap.Embeddings.Version = 2
+	checked(t, a, s)
+	if check := a.sourceCheck(s.ap); check.err != nil {
+		t.Fatalf("a package of @2 that says how much it read passes its probes: %v", check.err)
+	}
+	if rep, err := f.Backfill(ctx, 0); err != nil || rep.Embedded != 3 {
+		t.Fatalf("the pass: %+v %v", rep, err)
+	}
+	rows, err := a.store.DB().Query(`SELECT b.content, ` + store.VectorUnread + ` FROM memory_vectors v` + store.VectorUnreadJoin + ` JOIN experiences b ON b.id = v.id WHERE v.store = 'experiences'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for rows.Next() {
+		var text string
+		var unread sql.NullInt64
+		if err := rows.Scan(&text, &unread); err != nil {
+			t.Fatal(err)
+		}
+		if want := int64(utf8.RuneCountInString(text) - window); !unread.Valid || unread.Int64 != want {
+			t.Fatalf("%q: kept with %v characters past what was read, want %d", text, unread, want)
+		}
+		n++
+	}
+	rows.Close()
+	if n != 3 {
+		t.Fatalf("%d vectors kept, want 3", n)
+	}
+	res, err := f.Recall(ctx, memory.Query{Text: "a long cue that runs past what the package reads of it", Stores: []string{"experiences"}, Decay: memory.DecayNone})
+	if err != nil || res.Meaning.CueRead != window || res.Meaning.CueChars != 54 {
+		t.Fatalf("the cue says how much of it the package read: %+v %v", res.Meaning, err)
+	}
+	state, err := a.meaningState(ctx, f, a.pickMeaningSource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var partial int64
+	for _, c := range state.Coverage {
+		partial += c.Partial
+	}
+	if !state.Tells || partial != 3 || state.HandedChars != memory.MaxEmbedChars {
+		t.Fatalf("the card must say the source tells and count the three vectors made from a beginning: %+v", state)
+	}
+	s.ap.Embeddings.Version = 1
+	if state, err = a.meaningState(ctx, f, a.pickMeaningSource()); err != nil || state.Tells {
+		t.Fatalf("the same package at @1 does not say how much it read: %+v %v", state, err)
 	}
 }

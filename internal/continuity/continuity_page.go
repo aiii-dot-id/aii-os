@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
@@ -47,7 +49,34 @@ func (r *Runtime) continuityHooks() *dashboard.ContinuityHooks {
 		Restore:         r.requestRestore,
 		KeyBack:         r.putBackKey,
 		SnapshotKeyBack: r.putBackSnapshotKey,
+		Download:        r.downloadSnapshot,
 	}
+}
+
+func (r *Runtime) downloadSnapshot(name string) (io.ReadCloser, int64, error) {
+	cfg := r.w.Settings()
+	dir := r.BackupsDir(cfg)
+	kept, _ := keptSnapshots(dir)
+	for _, k := range kept {
+		if k.Name != name {
+			continue
+		}
+		if !k.Encrypted {
+			return nil, 0, errors.New("That snapshot is not encrypted, so it is not offered for download: it holds every conversation in the clear. Make or check an escrow file under Keys, and the next snapshot is encrypted; Back up now makes one at once.")
+		}
+		f, err := atomicfile.Open(filepath.Join(dir, k.Name))
+		if err != nil {
+			return nil, 0, fmt.Errorf("That snapshot could not be opened: %s.", fsWhy(err))
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, 0, fmt.Errorf("That snapshot could not be read: %s.", fsWhy(err))
+		}
+		logsink.Info("snapshot.end", "%s handed to the operator's browser to keep off this machine (%d bytes)", k.Name, st.Size())
+		return f, st.Size(), nil
+	}
+	return nil, 0, errors.New("That snapshot is not in the list any more. Reload the list.")
 }
 
 func (r *Runtime) continuityView() dashboard.ContinuityView {
@@ -59,6 +88,7 @@ func (r *Runtime) continuityView() dashboard.ContinuityView {
 		Chain:      r.w.BootChain(),
 	}
 	v.Safe = r.w.Safe()
+	v.Waiting = r.waiting()
 	v.KeyAbsent = v.Safe && r.keyAbsent(cfg)
 	v.RecordAbsent = v.KeyAbsent && r.recordAbsent(cfg)
 	v.KeyUnnamed = v.Safe && !v.KeyAbsent && r.keyUnnamed(cfg)
@@ -110,8 +140,11 @@ func (r *Runtime) continuityView() dashboard.ContinuityView {
 
 func restoredForPerson(r store.Restore) string {
 	from := RestoredFrom(r)
-	return "Last " + from + ", on " + r.At.UTC().Format("2006-01-02 15:04 MST") + ". " +
-		"Messages to people that were still waiting to be sent in it were not sent again, because they may already have been sent before the restore: each is marked so, and the identity was told. " +
+	said := "Last " + from + ", on " + r.At.UTC().Format("2006-01-02 15:04 MST") + ". "
+	if r.Unsigned {
+		said += "That snapshot carried no signature of the identity's key (snapshots made before AII OS 0.2.0 carry none). No record of the identity was on this machine, so it was restored as it proved, and nothing held its database to the identity. "
+	}
+	return said + "Messages to people that were still waiting to be sent in it were not sent again, because they may already have been sent before the restore: each is marked so, and the identity was told. " +
 		"An alarm that was due before the restore fires after it, marked the same way."
 }
 
@@ -153,6 +186,8 @@ func personError(err error) error {
 		return err
 	}
 	switch r.Reason {
+	case "waiting":
+		return errors.New("This start is DEGRADED: it is waiting for Ring 5, asks for it again by itself, and makes no files until it completes. Try again once it has.")
 	case "safe":
 		return errors.New("This start is SAFE: it verifies and reports and makes no files. Restart normally first.")
 	case "disabled":
@@ -163,11 +198,16 @@ func personError(err error) error {
 		return errors.New("There is no snapshot yet. Press Back up now to make the first.")
 	case "unknown":
 		return errors.New("That snapshot is not in the list any more. Reload the list.")
+	case "unsigned":
+		return errors.New("That snapshot carries no signature of the identity's key (snapshots made before they were signed carry none), so nothing holds its database to the identity, and a restore from this page will not take it. Press Back up now for a signed one.")
 	}
 	return err
 }
 
 func (r *Runtime) escrowCreateHere(pass []byte) (file []byte, name string, err error) {
+	if r.waiting() {
+		return nil, "", errors.New("This start is DEGRADED, waiting for Ring 5. An escrow is made from a start that has completed.")
+	}
 	if r.w.Safe() {
 		return nil, "", errors.New("This start is SAFE. An escrow is made from a normal start.")
 	}
@@ -178,7 +218,7 @@ func (r *Runtime) escrowCreateHere(pass []byte) (file []byte, name string, err e
 	var c escrow.Contents
 	defer c.Wipe()
 
-	if c.IdentityKey, err = os.ReadFile(r.w.Active(cfg.Identity).KeyPath); err != nil {
+	if c.IdentityKey, err = crypto.ReadKeyFile(r.w.Active(cfg.Identity).KeyPath); err != nil {
 		logsink.Error("escrow.error", "the identity key does not read: %v", err)
 		return nil, "", errors.New("The identity's key could not be read on this machine.")
 	}
@@ -207,6 +247,9 @@ const escrowMinPassphrase = 12
 
 func (r *Runtime) escrowCheckHere(sealed, pass []byte) (dashboard.ContinuityView, error) {
 	fail := func(msg string) (dashboard.ContinuityView, error) { return r.continuityView(), errors.New(msg) }
+	if r.waiting() {
+		return fail("This start is DEGRADED, waiting for Ring 5. An escrow is checked from a start that has completed.")
+	}
 	if r.w.Safe() {
 		return fail("This start is SAFE. An escrow is checked from a normal start.")
 	}

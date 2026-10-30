@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -87,7 +89,7 @@ func backupsConnAs(t *testing.T, rig *backupsRig, token bool) (*websocket.Conn, 
 		return dialWS(t, addr), s
 	}
 	s.SetAccessToken(true, "the-backups-tests-token")
-	conn, err := dialWSToken(addr, s.accessHash())
+	conn, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +213,12 @@ func TestTheRestoreActsAtTheDoor(t *testing.T) {
 	hooks := rig.hooks()
 	var asked [][3]string
 	hooks.RestorePlan = func(source, name string) (RestorePlan, error) {
-		return RestorePlan{Source: source, Name: name, RestoredTo: 1300, LiveThrough: 1402, SetAside: 102, Witnessed: 1368, WitnessedSetAside: 68, ConfirmText: "Vega"}, nil
+		return RestorePlan{Source: source, Name: name, RestoredTo: 1300, LiveThrough: 1402, SetAside: 102, Witnessed: 1368, WitnessedSetAside: 68, ConfirmText: "Example"}, nil
 	}
 	hooks.Restore = func(source, name, confirm string) error {
 		asked = append(asked, [3]string{source, name, confirm})
-		if confirm != "Vega" {
-			return errors.New(`To confirm, type "Vega" exactly.`)
+		if confirm != "Example" {
+			return errors.New(`To confirm, type "Example" exactly.`)
 		}
 		return nil
 	}
@@ -230,12 +232,12 @@ func TestTheRestoreActsAtTheDoor(t *testing.T) {
 	if len(got) != 1 || got[0].Plan == nil || got[0].Plan.SetAside != 102 || got[0].Plan.WitnessedSetAside != 68 || got[0].View == nil {
 		t.Fatalf("the plan: %+v", got)
 	}
-	send(ContinuityRequest{Action: "restore", Source: "snapshot", Name: "ledger-x", Confirm: "vega"})
+	send(ContinuityRequest{Action: "restore", Source: "snapshot", Name: "ledger-x", Confirm: "example"})
 	if restarts != 0 || got[1].Error == "" || got[1].Restarting {
 		t.Fatalf("A RESTORE THAT WAS REFUSED RESTARTED THE RUNTIME: restarts=%d %+v", restarts, got[1])
 	}
-	send(ContinuityRequest{Action: "restore", Source: "set-aside", Name: "Vega-x", Confirm: "Vega"})
-	if restarts != 1 || !got[2].Restarting || len(asked) != 2 || asked[1] != [3]string{"set-aside", "Vega-x", "Vega"} {
+	send(ContinuityRequest{Action: "restore", Source: "set-aside", Name: "Example-x", Confirm: "Example"})
+	if restarts != 1 || !got[2].Restarting || len(asked) != 2 || asked[1] != [3]string{"set-aside", "Example-x", "Example"} {
 		t.Fatalf("a confirmed restore: restarts=%d %+v asked=%v", restarts, got[2], asked)
 	}
 }
@@ -305,8 +307,16 @@ func TestTheNewMachineDoorAtTheServer(t *testing.T) {
 			req.Header.Set("Origin", origin)
 		}
 		w := httptest.NewRecorder()
-		srv.handleRestoreUpload(w, req)
+		srv.handleRestoreUpload(deadlineRecorder{w}, req)
 		return w
+	}
+	// A connection that takes no read deadline is refused before anything
+	// is read: nothing would end an upload over it that stopped.
+	bare, plain := httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "http://127.0.0.1/restore/upload?snapshot=ledger-20260920T101500Z-seq7.tar.age", strings.NewReader("bytes"))
+	plain.RemoteAddr = "127.0.0.1:5000"
+	s.handleRestoreUpload(bare, plain)
+	if bare.Code != http.StatusInternalServerError || !strings.Contains(bare.Body.String(), "time limit") || len(uploads) != 0 {
+		t.Fatalf("an upload over a connection with no deadline reached the host: %d %q %v", bare.Code, bare.Body.String(), uploads)
 	}
 	if w := post(s, "127.0.0.1:5000", "", "snapshot=ledger-20260920T101500Z-seq7.tar.age", "bytes"); w.Code != http.StatusNoContent || len(uploads) != 1 || uploads[0] != "ledger-20260920T101500Z-seq7.tar.age||bytes" {
 		t.Fatalf("an upload from this machine: %d %v", w.Code, uploads)
@@ -392,5 +402,76 @@ func TestTheKeysLeaveOnlyForAPageSignedInWithTheToken(t *testing.T) {
 	s.answerBackups(context.Background(), ClientMessage{Type: "backups", Backups: &create}, true, false, func(r ContinuityReply) { got = &r }, func(string) {})
 	if got == nil || got.FileB64 != "" || !strings.Contains(got.Error, "not signed in") || len(rig.created) != 1 {
 		t.Fatalf("a page not signed in with the token in force exported the keys: %+v", got)
+	}
+}
+
+// deadlineRecorder is a recorder whose connection takes a read deadline,
+// as a served one does (http.ResponseController).
+type deadlineRecorder struct{ *httptest.ResponseRecorder }
+
+func (deadlineRecorder) SetReadDeadline(time.Time) error { return nil }
+
+func TestASnapshotDownloadIsWalledAndHandsOverTheKeptFile(t *testing.T) {
+	const name = "ledger-20261020T040005Z-seq1402.tar.age"
+	const kept = "age-encryption.org/v1 sealed snapshot bytes"
+	for _, tc := range []struct {
+		what, method, origin, site string
+		signedIn                   bool
+		form                       string
+		status                     int
+		asked                      bool
+	}{
+		{"the operator's page", http.MethodPost, "http://localhost", "same-origin", true, "name=" + name, 200, true},
+		{"not signed in", http.MethodPost, "http://localhost", "same-origin", false, "name=" + name, 401, false},
+		{"another site", http.MethodPost, "https://foreign.invalid", "cross-site", true, "name=" + name, 403, false},
+		{"a sibling site", http.MethodPost, "http://localhost", "same-site", true, "name=" + name, 403, false},
+		{"a link", http.MethodGet, "", "", true, "", 405, false},
+		{"a snapshot the runtime refuses", http.MethodPost, "http://localhost", "same-origin", true, "name=plain", 409, true},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			var asked []string
+			s := New("localhost", 0, &WSHandler{Continuity: &ContinuityHooks{Download: func(n string) (io.ReadCloser, int64, error) {
+				asked = append(asked, n)
+				if n != name {
+					return nil, 0, errors.New("That snapshot is not encrypted, so it is not offered for download.")
+				}
+				return io.NopCloser(strings.NewReader(kept)), int64(len(kept)), nil
+			}}})
+			s.SetAccessToken(true, "test-token")
+			r := httptest.NewRequest(tc.method, "http://localhost/backups/download", strings.NewReader(tc.form))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+			if tc.site != "" {
+				r.Header.Set("Sec-Fetch-Site", tc.site)
+			}
+			if tc.signedIn {
+				r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+				r.Header.Set(pageKeyHeader, pageKeyFor(s))
+			}
+			w := httptest.NewRecorder()
+			s.AllowHost(r.Host)
+			s.server.Handler.ServeHTTP(w, r)
+			if w.Code != tc.status && !(tc.method == http.MethodGet && w.Code == http.StatusNotFound) {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.status, w.Body)
+			}
+			if (len(asked) > 0) != tc.asked {
+				t.Fatalf("the runtime was asked %v", asked)
+			}
+			if tc.status == 409 && !strings.Contains(w.Body.String(), "not encrypted") {
+				t.Errorf("the runtime's refusal is not said: %s", w.Body)
+			}
+			if tc.status != 200 {
+				return
+			}
+			if asked[0] != name || w.Body.String() != kept || w.Header().Get("Content-Length") != strconv.Itoa(len(kept)) ||
+				w.Header().Get("Content-Disposition") != `attachment; filename="`+name+`"` {
+				t.Fatalf("not the kept file: asked %v, %v %q", asked, w.Header(), w.Body)
+			}
+			if w.Header().Get("Cache-Control") != "no-store" {
+				t.Error("a snapshot download can be cached")
+			}
+		})
 	}
 }

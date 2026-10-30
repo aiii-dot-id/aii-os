@@ -35,16 +35,16 @@ func writeSignedCatalog(t *testing.T, dir string, cat Index, signer *packagetest
 		t.Fatal(err)
 	}
 	md := []byte("# AII OS Plugin Catalog\n\nThe platform's signed index. Prose is ignored; the signature covers the whole file.\n\n```json\n" + string(block) + "\n```\n")
-	if err := os.WriteFile(filepath.Join(dir, CatalogFile), md, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, CatalogFileFor(OwnLine())), md, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sig, err := signer.Sign(ArtifactKindPluginCatalog, catalogSig{
-		CatalogVersion: cat.Version, Generated: cat.Generated, CatalogSHA256: sigenvelope.SHA256Prefixed(md),
+		CatalogVersion: cat.Version, Generated: cat.Generated, CatalogSHA256: sigenvelope.SHA256Prefixed(md), HostLine: OwnLine(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, CatalogSigFile), sig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, CatalogFileFor(OwnLine())+".sig"), sig, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -87,7 +87,7 @@ func TestCatalogRefusesTamperedFile(t *testing.T) {
 	dir := t.TempDir()
 	plat := platformSignedCatalog(t, dir, hostCatalog())
 	// Flip a byte in the file the signature covers.
-	f := filepath.Join(dir, CatalogFile)
+	f := filepath.Join(dir, CatalogFileFor(OwnLine()))
 	md, _ := os.ReadFile(f)
 	md[len(md)/2] ^= 0xff
 	if err := os.WriteFile(f, md, 0o644); err != nil {

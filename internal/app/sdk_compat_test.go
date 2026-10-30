@@ -187,6 +187,9 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 		said := 0
 		var call, result bool
 		cursor := ""
+		turn := h.lastTurn(t)
+		answered := turn.model.String
+
 		for pages := 0; ; pages++ {
 			if pages > 10 {
 				t.Fatal("the history never ended")
@@ -218,9 +221,9 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 				if r.Tool == compatTool("remember") || r.Tool == "tools" && strings.Contains(r.Content, compatTool("remember")) {
 					switch r.Kind {
 					case "tool_call":
-						call = r.Model == "m"
+						call = r.Model == answered
 					case "tool_result":
-						result = r.Model == "m" && r.DurationMS != nil && r.Outcome == "succeeded"
+						result = r.Model == answered && r.DurationMS != nil && r.Outcome == "succeeded"
 					}
 				}
 			}
@@ -234,9 +237,8 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 		if !call || !result {
 			t.Errorf("the turn's call and result carry the model, the duration and the outcome: call %v, result %v", call, result)
 		}
-		turn := h.lastTurn(t)
 		u := turn.usage
-		if turn.provider.String != "test" || turn.model.String != "m" || !turn.known || u.Calls != 2 ||
+		if turn.provider.String != "test" || answered != "fake" || !turn.known || u.Calls != 2 ||
 			u.PromptTokens != 200 || u.CompletionTokens != 15 || u.TotalTokens != 215 || u.UnknownAttempts != 0 || u.Silent != 0 {
 			t.Errorf("the turn's route and usage are what the provider reported: %+v %+v", turn, u)
 		}

@@ -53,7 +53,7 @@ func TestCarriedChannelReadsTheAnswerWhileWritingCandidates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	signal := &unbufferedPageSignal{ctx: ctx, fromPage: make(chan setupMessage), toPage: make(chan setupMessage)}
-	peer, err := newPeer(nil)
+	peer, err := newPeer(carriedServers(t))
 	if err != nil {
 		t.Fatal(err)
 	}

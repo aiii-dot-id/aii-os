@@ -13,14 +13,15 @@ type choosingRuntime struct{ *sharedRuntime }
 
 func (c choosingRuntime) Prepare(ctx context.Context, ev Evidence) (Prepared, error) {
 	p, err := c.sharedRuntime.Prepare(ctx, ev)
-	p.Selection = &Selection{Variant: "small", Excluded: []Exclusion{{Variant: "full", Reasons: []string{"accelerator:cuda availability is unknown"}}}}
+	p.Selection = &Selection{Variant: "small", Excluded: []Exclusion{{Variant: "full", Reasons: []string{"accelerator:cuda availability is unknown"}}},
+		Basis: "id.example.one/0123456789ab/f3"}
 	return p, err
 }
 
 // WHY A SET WAS PASSED OVER IS THE FACILITY'S RECORD, not only a line the
 // runtime logs: each activation carries the set it prepared and the
 // runtime's reasons, so the card reads data, and every reader gets its own
-// copy.
+// copy, the basis of a source of vectors included.
 func TestTheChosenSetAndItsReasonsAreOnTheActivation(t *testing.T) {
 	var mu sync.Mutex
 	var log []string
@@ -46,6 +47,11 @@ func TestTheChosenSetAndItsReasonsAreOnTheActivation(t *testing.T) {
 	}
 	if sel == nil || sel.Variant != "small" || len(sel.Excluded) != 1 || sel.Excluded[0].Variant != "full" || sel.Excluded[0].Reasons[0] != "accelerator:cuda availability is unknown" {
 		t.Fatalf("the serving activation's selection is %+v", sel)
+	}
+	// The basis a source of vectors of these bytes stamps is on the record
+	// too: an update's is read from it before it activates.
+	if sel.Basis != "id.example.one/0123456789ab/f3" {
+		t.Fatalf("the activation's selection does not carry its basis: %q", sel.Basis)
 	}
 	sel.Excluded[0].Reasons[0] = "scribbled"
 	for _, v := range f.Snapshot().Instances {

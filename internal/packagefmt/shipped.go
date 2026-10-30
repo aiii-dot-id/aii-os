@@ -4,9 +4,11 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
+	"github.com/aiii-dot-id/aii-os/internal/rootlist"
 	"github.com/aiii-dot-id/aii-os/internal/sigenvelope"
 )
 
@@ -30,7 +32,44 @@ var shippedRootFiles = map[string]string{
 	keyTypePublisherCertifier: "shipped/publisher_certifier_root.json",
 }
 
+var shippedPlatformReleaseList = []shippedListEntry{
+	{envelope: shippedRootFiles[keyTypePlatformRelease]},
+}
+
+type shippedListEntry struct{ envelope, endorsement string }
+
+var shippedPlatformReleaseRoots = sync.OnceValue(func() *rootlist.List {
+	return mustParseShippedList(shippedFS, shippedPlatformReleaseList)
+})
+
+func mustParseShippedList(files fs.FS, list []shippedListEntry) *rootlist.List {
+	entries := make([]rootlist.Entry, 0, len(list))
+	for _, f := range list {
+		raw, err := fs.ReadFile(files, f.envelope)
+		if err != nil {
+			panic(fmt.Sprintf("packagefmt: embedded %s root missing — broken build: %v", keyTypePlatformRelease, err))
+		}
+		e := rootlist.Entry{Envelope: raw}
+		if f.endorsement != "" {
+			if e.Endorsement, err = fs.ReadFile(files, f.endorsement); err != nil {
+				panic(fmt.Sprintf("packagefmt: embedded %s endorsement missing — broken build: %v", keyTypePlatformRelease, err))
+			}
+		}
+		entries = append(entries, e)
+	}
+	l, err := rootlist.Parse(keyTypePlatformRelease, entries)
+	if err != nil {
+		panic(fmt.Sprintf("packagefmt: embedded %s root invalid — broken build: %v", keyTypePlatformRelease, err))
+	}
+	return l
+}
+
+func ShippedPlatformReleaseRoots() *rootlist.List { return shippedPlatformReleaseRoots() }
+
 func shippedRoot(keyType string) *sigenvelope.PublicKeyEnvelope {
+	if keyType == keyTypePlatformRelease {
+		return shippedPlatformReleaseRoots().Current()
+	}
 	name, ok := shippedRootFiles[keyType]
 	if !ok {
 		return nil

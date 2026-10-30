@@ -1,0 +1,114 @@
+{
+  "task": "playbook-written-when-served",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "blue heron",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions blue heron",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "blue heron",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n3.txt mentions blue heron"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "playbooks/find-phrase/SKILL.md",
+                  "content": "# find-phrase\n\nOne grep with literal=true over the folder, then answer with the file it names.\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n3.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A5: the work is served and no playbook is written",
+    "fails": [
+      3
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "blue heron",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "start",
+                  "description": "find which note mentions blue heron",
+                  "family": "find-phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "blue heron",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "work",
+                "args": {
+                  "action": "deliver",
+                  "result": "served: notes/n3.txt mentions blue heron"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n3.txt"
+          }
+        ]
+      }
+    ]
+  }
+}

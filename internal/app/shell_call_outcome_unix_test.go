@@ -27,7 +27,7 @@ func TestAShellCallCutShortIsRecordedAsTheRuleSays(t *testing.T) {
 		{"the operator's stop", "echo begun > started; sleep 30", 0, true, "cancelled", ""},
 		{"the shell's ceiling", "echo begun; sleep 30", 1, false, "failed", tools.ReasonShellTimeout},
 		{"the shell's ceiling, after more output than the record keeps", "seq 1 2000; sleep 30", 1, false, "failed", tools.ReasonShellTimeout},
-		{"a non-zero exit, which is an answer", "echo begun; exit 3", 0, false, "succeeded", ""},
+		{"a non-zero exit, recorded failed with its status", "echo begun; exit 3", 0, false, "failed", tools.ReasonShellExit},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newVoiceApp(t)

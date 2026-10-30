@@ -15,8 +15,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/supervisor"
 )
 
-const SessionControlBound = 5 * time.Second
-
 var checkSpeaker = audio.Format{Rate: 48000, Channels: 1}
 
 type SessionUnendedError struct {
@@ -85,7 +83,7 @@ func (ap *ActivePlugin) sessionCheck(ctx context.Context, id string, c packagefm
 	defer ap.binding.EndOperation()
 
 	sent := time.Now()
-	octx, cancel := context.WithTimeout(ctx, SessionControlBound)
+	octx, cancel := context.WithTimeout(ctx, v.ControlBound())
 	events, err := v.OpenCheck(octx, id, b)
 	cancel()
 	if events == nil {
@@ -146,7 +144,7 @@ func (ap *ActivePlugin) listen(ctx context.Context, v *VoiceSession, id string, 
 					ended = src.Ended()
 					break
 				}
-				sctx, cancel := context.WithTimeout(ctx, SessionControlBound)
+				sctx, cancel := context.WithTimeout(ctx, v.ControlBound())
 				err = v.SynthesizeFor(sctx, id, ans.SynthesisID, c.Text)
 				cancel()
 				if refused := refusal("speech.session.synthesize", err); refused != nil {
@@ -174,7 +172,7 @@ func (ap *ActivePlugin) listen(ctx context.Context, v *VoiceSession, id string, 
 			}
 		case <-ended:
 			ended = nil
-			fctx, cancel := context.WithTimeout(ctx, SessionControlBound)
+			fctx, cancel := context.WithTimeout(ctx, v.ControlBound())
 			err = v.FinishInputFor(fctx, id, b.InputHandle, frames)
 			cancel()
 			if refused := refusal("speech.session.finish_input", err); refused != nil {
@@ -223,10 +221,10 @@ func (ap *ActivePlugin) endCheckSession(ctx context.Context, v *VoiceSession, id
 	default:
 	}
 	lasting := context.WithoutCancel(ctx)
-	actx, cancel := context.WithTimeout(lasting, SessionControlBound)
+	actx, cancel := context.WithTimeout(lasting, v.ControlBound())
 	_ = v.CloseFor(actx, id, "abort", "the publisher's check is over")
 	cancel()
-	wait := time.NewTimer(StopBudget)
+	wait := time.NewTimer(ap.StopBudget())
 	defer wait.Stop()
 	for {
 		select {

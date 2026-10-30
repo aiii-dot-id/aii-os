@@ -43,6 +43,10 @@ type ConsolidateConfig struct {
 	OutcomeWindow int
 
 	ObservationMaxChars int
+
+	ToolOutcomeMin int
+
+	ToolOutcomeWindow time.Duration
 }
 
 const DefaultRing3MaxChars = 8000
@@ -72,7 +76,12 @@ type ConsolidateFacility struct {
 
 	outcomes      outcomeReader
 	outcomeCursor func(rows.OutcomeBatch) landing.Cursor
-	intake        *landing.Lander
+
+	tools      toolReader
+	toolCursor func(rows.ToolOutcomeBatch, int) landing.Cursor
+	toolShow   atomic.Int64
+	clock      func() time.Time
+	intake     *landing.Lander
 
 	ring3Mu    sync.Mutex
 	retiredGen atomic.Uint64
@@ -120,6 +129,12 @@ func (c *ConsolidateFacility) Reconfigure(cfg ConsolidateConfig) {
 	if cfg.ObservationMaxChars <= 0 {
 		cfg.ObservationMaxChars = DefaultSurfacingMaxChars
 	}
+	if cfg.ToolOutcomeMin <= 0 {
+		cfg.ToolOutcomeMin = DefaultToolOutcomeMin
+	}
+	if cfg.ToolOutcomeWindow <= 0 {
+		cfg.ToolOutcomeWindow = DefaultToolOutcomeWindow
+	}
 	c.config.Store(&cfg)
 }
 
@@ -129,6 +144,7 @@ func (c *ConsolidateFacility) Reconsider() {
 	c.refusedLast.Store(false)
 	c.aside.forget()
 	c.outcomeShow.Store(0)
+	c.toolShow.Store(0)
 }
 
 type ConsolidateStore interface {
@@ -137,6 +153,8 @@ type ConsolidateStore interface {
 	ListExperiencesForConsolidate(n int) ([]rows.Experience, error)
 	BeliefStore
 	EdgeStore
+
+	AboutOperator() (rows.AboutOperator, error)
 	LifetimeStore
 	IntentionStore
 	EntityChecker
@@ -164,7 +182,7 @@ type IntentionStore interface {
 }
 
 type EdgeStore interface {
-	ListEdgesForBelief(beliefID string) ([]rows.Edge, error)
+	EdgesTouching(ids []string) ([]rows.Edge, error)
 }
 
 type LifetimeStore interface {
@@ -355,17 +373,6 @@ func (c *ConsolidateFacility) Execute(ctx context.Context) error {
 		c.writeRing3Deterministic(cfg)
 	}
 
-	if operator := strings.TrimSpace(env.Operator); operator != "" {
-		switch {
-		case !view.extras:
-			logsink.Info("consolidate.decision", "the pass was not shown the operator model, for want of room — its %d-char model is not kept; the current one stands", len(operator))
-		case len(outputs) > 0 && c.ringWriter != nil:
-			c.ringWriter.SetRingSection(ring.Ring3, "operator", operator)
-			logsink.Info("consolidate.end", "wrote %d chars to Ring 3 (operator)", len(operator))
-		case len(outputs) == 0:
-			logsink.Info("consolidate.decision", "the pass minted nothing — its %d-char operator model is not backed by any belief and was not kept", len(operator))
-		}
-	}
 	return nil
 }
 
@@ -381,7 +388,7 @@ func (c *ConsolidateFacility) sayFit(m *passMaterial, v evidenceView) {
 		left = append(left, fmt.Sprintf("%d of %d active intentions were shown", v.intentions, len(m.intentions)))
 	}
 	if !v.extras {
-		left = append(left, "the retired beliefs, the contradictions and the operator model were left out")
+		left = append(left, "the retired beliefs and the contradictions were left out")
 	}
 	if len(left) == 0 {
 		c.teller.say(Condition{Facility: "consolidate", Kind: ConditionWhole, Said: fmt.Sprintf("the last pass carried all it was asked: %d experience(s), %d belief(s), %d intention(s)", len(v.experiences), len(m.beliefs), len(m.intentions))})
@@ -402,7 +409,7 @@ func (c *ConsolidateFacility) sayFit(m *passMaterial, v evidenceView) {
 	}
 	c.toldOf().tell(Condition{Facility: "consolidate", Kind: ConditionFitted, Said: said},
 		fmt.Sprintf("consolidate|beliefs|%d", doubling(len(m.beliefs))),
-		fmt.Sprintf("consolidation: only %d of your %d current beliefs fit beside the experiences a pass reads, so each pass weighs those nearest what it read; the rest stand in your record unchanged, and recall (source=ledger) reaches them. Your operator can make room on the Cognition card.", v.beliefs, len(m.beliefs)))
+		fmt.Sprintf("consolidation: only %d of your %d current beliefs fit beside the experiences a pass reads, so each pass weighs those linked to what it read, then those nearest it; the rest stand in your record unchanged, and recall (source=ledger) reaches them. Your operator can make room on the Cognition card.", v.beliefs, len(m.beliefs)))
 }
 
 type beliefOperation struct {
@@ -417,13 +424,13 @@ type beliefOperation struct {
 	Distinction  string   `json:"distinction,omitempty"`
 
 	Evidence []string `json:"evidence,omitempty"`
+
+	AboutOperator bool `json:"about_operator,omitempty"`
 }
 
 type consolidationEnvelope struct {
 	Operations []beliefOperation `json:"operations"`
 	Ring3View  string            `json:"ring3_view"`
-
-	Operator string `json:"operator,omitempty"`
 }
 
 func parseConsolidationEnvelope(output string) (*consolidationEnvelope, error) {
@@ -504,6 +511,20 @@ func (c *ConsolidateFacility) mintOperations(cfg *ConsolidateConfig, ops []belie
 	for _, b := range beliefs {
 		known[b.ID] = b.Ring
 		statements[b.ID] = b.Statement
+	}
+
+	var about rows.AboutOperator
+	marked := map[string]bool{}
+	for _, op := range ops {
+		if op.Op == "upsert" && op.AboutOperator {
+			if about, err = c.store.AboutOperator(); err != nil {
+				return nil, upsertRefusals{}, fmt.Errorf("the operator relationship could not be read: %w", err)
+			}
+			for _, b := range about.Beliefs {
+				marked[b.ID] = true
+			}
+			break
+		}
 	}
 
 	alias := map[string]string{}
@@ -610,6 +631,15 @@ func (c *ConsolidateFacility) mintOperations(cfg *ConsolidateConfig, ops []belie
 			known[id] = 3
 			statements[id] = stmt
 			c.logDecision(decision, stmt, evt.Seq)
+			if op.AboutOperator {
+				seq, err := c.markAboutOperator(about, marked, i, id, modelID)
+				if err != nil {
+					return outputs, refused, err
+				}
+				if seq > 0 {
+					outputs = append(outputs, seq)
+				}
+			}
 		case "supersede":
 			oldID := strings.TrimSpace(op.OldID)
 			newID := strings.TrimSpace(op.NewID)
@@ -657,6 +687,29 @@ func (c *ConsolidateFacility) mintOperations(cfg *ConsolidateConfig, ops []belie
 		}
 	}
 	return outputs, refused, nil
+}
+
+func (c *ConsolidateFacility) markAboutOperator(about rows.AboutOperator, marked map[string]bool, i int, id, modelID string) (uint64, error) {
+	switch {
+	case marked[id]:
+		return 0, nil
+	case about.RelationshipID == "":
+		logsink.Debug("consolidate.refusal", "op %d (upsert %q) is about the operator, and no operator relationship is recorded — the belief stands without the mark", i, id)
+		return 0, nil
+	}
+	evt, err := c.ledger.Append(ledger.EventEdgeCreate, 3, map[string]any{
+		"id":      "edge_about_" + outputHash(about.RelationshipID+"\x00"+id),
+		"from_id": about.RelationshipID, "to_id": id, "edge_type": "SHAPED_BY",
+	}, modelID)
+	if err != nil {
+		if !errors.Is(err, rows.ErrRefused) {
+			return 0, fmt.Errorf("op %d (upsert %q): the mark that it is about the operator neither landed nor was refused: %w", i, id, err)
+		}
+		logsink.Debug("consolidate.refusal", "op %d (upsert %q): the mark that it is about the operator was refused (%v) — the belief stands without it", i, id, err)
+		return 0, nil
+	}
+	marked[id] = true
+	return evt.Seq, nil
 }
 
 func (c *ConsolidateFacility) tensionsBlock(cfg *ConsolidateConfig, listed map[string]bool) []string {
@@ -1026,16 +1079,12 @@ func consolidationTool() wire.ToolDefinition {
 		"properties": map[string]any{
 			"operations": map[string]any{
 				"type":        "array",
-				"description": "upsert (statement, confidence, and evidence: the ids of the experiences on the table it comes from or of beliefs it derives from — a belief never comes from nowhere) and supersede operations over beliefs",
+				"description": "upsert (statement, confidence, and evidence: the ids of the experiences on the table it comes from or of beliefs it derives from — a belief never comes from nowhere; about_operator: true when it is about the person the identity works with) and supersede operations over beliefs",
 				"items":       map[string]any{"type": "object"},
 			},
 			"ring3_view": map[string]any{
 				"type":        "string",
 				"description": "the identity's working truth, second person",
-			},
-			"operator": map[string]any{
-				"type":        "string",
-				"description": "the person the identity works with, as these experiences show them, written to the identity (\"you\" is the identity) with the operator in the third person by their name, never addressed; omit when they show nothing new",
 			},
 		},
 	}

@@ -1,0 +1,21 @@
+# tools "consolidation" on windows: 1 definitions, in the order a request offers them
+
+=== tool 1 of 1: emit_consolidation ===
+Emit the consolidation envelope: belief operations and the Ring 3 working-truth view.
+--- parameters ---
+{
+  "properties": {
+    "operations": {
+      "description": "upsert (statement, confidence, and evidence: the ids of the experiences on the table it comes from or of beliefs it derives from — a belief never comes from nowhere; about_operator: true when it is about the person the identity works with) and supersede operations over beliefs",
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "ring3_view": {
+      "description": "the identity's working truth, second person",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

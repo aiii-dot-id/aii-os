@@ -33,7 +33,7 @@ func persistedFixture(t *testing.T) persisted {
 	fw := newFakeWitness(t)
 	dir := t.TempDir()
 	manifest := buildManifest(t, p, fw.witnessEnv, false)
-	if err := persistWitnessKey(dir, fw.witnessEnv.KeyID, manifest, mustCanonical(t, fw.witnessEnv)); err != nil {
+	if err := persistWitnessKey(dir, fw.witnessEnv.KeyID, manifest, mustCanonical(t, fw.witnessEnv), nil); err != nil {
 		t.Fatal(err)
 	}
 	return persisted{dir: dir, p: p, fw: fw, manifest: manifest}
@@ -61,7 +61,7 @@ func TestPersistedWitnessKeyVerifiesUnderThePlatformRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := persistWitnessKey(f.dir, f.fw.witnessEnv.KeyID, f.manifest, mustCanonical(t, f.fw.witnessEnv)); err != nil {
+	if err := persistWitnessKey(f.dir, f.fw.witnessEnv.KeyID, f.manifest, mustCanonical(t, f.fw.witnessEnv), nil); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(path)
@@ -90,7 +90,7 @@ func TestAPersistedKeyThatDoesNotVerifyRefusesTheLoad(t *testing.T) {
 
 	t.Run("tampered manifest", func(t *testing.T) {
 		d := t.TempDir()
-		if err := persistWitnessKey(d, f.fw.witnessEnv.KeyID, buildManifest(t, f.p, f.fw.witnessEnv, true), mustCanonical(t, f.fw.witnessEnv)); err != nil {
+		if err := persistWitnessKey(d, f.fw.witnessEnv.KeyID, buildManifest(t, f.p, f.fw.witnessEnv, true), mustCanonical(t, f.fw.witnessEnv), nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadWitnessKeys(d, f.p.env); err == nil {
@@ -100,7 +100,7 @@ func TestAPersistedKeyThatDoesNotVerifyRefusesTheLoad(t *testing.T) {
 	t.Run("manifest for another key", func(t *testing.T) {
 		d := t.TempDir()
 		other := newFakeWitness(t)
-		if err := persistWitnessKey(d, other.witnessEnv.KeyID, f.manifest, mustCanonical(t, other.witnessEnv)); err != nil {
+		if err := persistWitnessKey(d, other.witnessEnv.KeyID, f.manifest, mustCanonical(t, other.witnessEnv), nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadWitnessKeys(d, f.p.env); err == nil {
@@ -325,7 +325,7 @@ func TestAWitnessKeysEnvelopeIsAskedAtTheMomentTheHeadWasWitnessed(t *testing.T)
 			fw.witnessEnv.NotBefore = c.notBefore.Format(time.RFC3339)
 			fw.witnessEnv.ExpiresAt = c.expiry.Format(time.RFC3339)
 			dir := t.TempDir()
-			if err := persistWitnessKey(dir, fw.witnessEnv.KeyID, buildManifest(t, p, fw.witnessEnv, false), mustCanonical(t, fw.witnessEnv)); err != nil {
+			if err := persistWitnessKey(dir, fw.witnessEnv.KeyID, buildManifest(t, p, fw.witnessEnv, false), mustCanonical(t, fw.witnessEnv), nil); err != nil {
 				t.Fatal(err)
 			}
 			// The key loads whatever the clock says of its window: the

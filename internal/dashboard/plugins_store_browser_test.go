@@ -107,6 +107,45 @@ func TestPluginStoreNamesTheVerifiedTierAndTheIndexClaim(t *testing.T) {
 	runPluginStorePage(t, pluginStoreTierPage)
 }
 
+const pluginStoreBuildPage = `<!doctype html>
+<style>__LAYOUT_CSS__</style>
+<div class="app"><div class="stack" id="plugins-stack"></div></div>
+<script type="module">
+import { assert, run } from './__harness.js';
+import { S } from './state.js';
+import { renderPlugins } from './views/plugins.js';
+
+run(() => {
+  S.config = { plugins: { autoload: 'T1', catalog_url: 'https://plugins.example.test/aiios-plugins.md',
+    catalog: [
+      { id: 'org.example.portable', version: '1.0.0', tier: 'T1', available: true, installed: false, build: 'portable' },
+      { id: 'org.example.engine', version: '2.0.0', tier: 'T3', available: true, installed: false, build: 'system' },
+      { id: 'org.example.runs', version: '1.0.0', tier: 'T3', available: true, installed: true, installed_version: '1.0.0', installed_tier: 'T3', build: 'system' },
+      { id: 'org.example.newer', version: '2.0.0', tier: 'T3', available: true, installed: true, installed_version: '1.0.0', installed_tier: 'T1', update_available: true, build: 'system' },
+      { id: 'org.example.elsewhere', version: '1.0.0', tier: 'T3', available: false, installed: false },
+      { id: 'org.example.odd', version: '1.0.0', tier: 'T1', available: true, installed: false, build: 'constructor' },
+    ], installed: [] } };
+  renderPlugins();
+  const st = document.getElementById('plugins-stack');
+  const meta = id => st.querySelector('[data-entry="' + id + '"] .store-meta').textContent;
+
+  assert(meta('org.example.portable') === '1.0.0 · the catalog says signed, portable', 'a portable build is not named before Install, in the index\'s word and no more: ' + meta('org.example.portable'));
+  assert(!st.textContent.includes('WASM'), 'the row says what is inside a build, which the index does not');
+  assert(meta('org.example.engine') === '2.0.0 · the catalog says platform-signed, built for this system', 'a build for this system is not named before Install: ' + meta('org.example.engine'));
+  assert(st.querySelector('[data-plugin="install:org.example.engine"]').textContent.trim() === 'Install', 'the row that names its build no longer offers Install');
+  assert(meta('org.example.runs') === '1.0.0 · platform-signed', 'a release the host runs names what the host verified, not the catalog\'s build: ' + meta('org.example.runs'));
+  const newer = st.querySelector('[data-entry="org.example.newer"]');
+  assert(meta('org.example.newer') === '1.0.0 · signed', 'an update row no longer names the release that runs: ' + meta('org.example.newer'));
+  assert(newer.textContent.includes('update to 2.0.0 — the catalog says built for this system'), 'an update does not name its build before Update: ' + newer.textContent);
+  assert(meta('org.example.elsewhere') === '1.0.0 · the catalog says platform-signed', 'a row with no build for this machine names one: ' + meta('org.example.elsewhere'));
+  assert(meta('org.example.odd') === '1.0.0 · the catalog says signed', 'a build word the page does not know is printed: ' + meta('org.example.odd'));
+});
+</script>`
+
+func TestPluginStoreNamesTheBuildTheCatalogListsBeforeInstall(t *testing.T) {
+	runPluginStorePage(t, pluginStoreBuildPage)
+}
+
 func runPluginStorePage(t *testing.T, template string) {
 	t.Helper()
 	read := func(name string) []byte {

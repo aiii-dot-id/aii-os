@@ -266,7 +266,7 @@ func TestTheSandboxSwitchOutlastsARestartAndKeepsTheSubstrateAndAPluginsReach(t 
 		t.Fatalf("the home stays the identity's: %q", out)
 	}
 	// A plugin granted files: the door it is given, asked as the broker asks.
-	door := newPluginSandbox(app.toolReg, app.configSnapshot().Identity.LedgerPath)
+	door := newPluginSandbox(app.toolReg, app.configSnapshot())
 	if _, _, err := door.Admit("org.example.reader fs.read", outside); !errors.Is(err, tools.ErrOutsideSandbox) {
 		t.Fatalf("a plugin's files stay in the home and the granted roots with the sandbox off: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestAGrantedFolderIsAsItWasWithTheSandboxOff(t *testing.T) {
 		}
 	}
 	work, more := filepath.Join(slot, "work"), filepath.Join(slot, "more")
-	if err := a.setSandboxRoots([]string{work}); err != nil {
+	if err := a.changeSandboxRoot(work, true); err != nil {
 		t.Fatalf("with the sandbox on, a folder in another identity's slot is the operator's to grant: %v", err)
 	}
 	if out := toolRead(a, filepath.Join(work, "plan.txt")); !strings.Contains(out, "shared plan") {
@@ -729,7 +729,7 @@ func TestAGrantedFolderIsAsItWasWithTheSandboxOff(t *testing.T) {
 	withProcessTable(t, table)
 	a.applySubstrate(a.configSnapshot())
 	for _, root := range []string{more, slot, filepath.Dir(slot), realPath(table)} {
-		if err := a.setSandboxRoots([]string{work, root}); err == nil || !strings.Contains(err.Error(), "would expose the identity's own substrate") {
+		if err := a.changeSandboxRoot(root, true); err == nil || !strings.Contains(err.Error(), "would expose the identity's own substrate") {
 			t.Fatalf("with the sandbox off a grant of %s must be refused as a grant of a kept place is: %v", root, err)
 		}
 	}
@@ -739,8 +739,8 @@ func TestAGrantedFolderIsAsItWasWithTheSandboxOff(t *testing.T) {
 	if out := toolRead(a, filepath.Join(more, "notes.txt")); !strings.Contains(out, "access denied: protected path (sub.identity:") {
 		t.Fatalf("the folder refused as a root stays closed: %q", out)
 	}
-	if err := a.setSandboxRoots([]string{work}); err != nil {
-		t.Fatalf("the folder already granted is as it was, and is taken again: %v", err)
+	if err := a.changeSandboxRoot(work, true); err == nil || strings.Contains(err.Error(), "would expose") || !strings.Contains(err.Error(), "already an extra root") {
+		t.Fatalf("the folder already granted is as it was: adding it again is refused as already held, not as a kept place: %v", err)
 	}
 	if out := toolRead(a, filepath.Join(work, "plan.txt")); !strings.Contains(out, "shared plan") {
 		t.Fatalf("the granted folder must stay open: %q", out)
@@ -749,7 +749,7 @@ func TestAGrantedFolderIsAsItWasWithTheSandboxOff(t *testing.T) {
 	if err := a.setSandboxOff(false, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.setSandboxRoots([]string{work, more}); err != nil {
+	if err := a.changeSandboxRoot(more, true); err != nil {
 		t.Fatalf("with the sandbox on the operator may grant a folder there: %v", err)
 	}
 	if out := toolRead(a, filepath.Join(more, "notes.txt")); !strings.Contains(out, "more notes") {

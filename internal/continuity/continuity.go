@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
@@ -28,6 +29,8 @@ type Wires struct {
 	Active func(configured Identity) Identity
 
 	Safe func() bool
+
+	Waiting func() bool
 
 	Store func() *store.Store
 
@@ -72,6 +75,8 @@ type Runtime struct {
 	Seams
 	w     Wires
 	maint maintenanceState
+
+	newMachine sync.Mutex
 }
 
 func New(w Wires) *Runtime {
@@ -149,7 +154,17 @@ func OnDemandSpacing(m MaintenanceConfig) time.Duration {
 	return DefaultOnDemandSpacing
 }
 
+func RestoreUploadIdle(m MaintenanceConfig) time.Duration {
+	if m.RestoreUploadIdleSeconds > 0 {
+		return time.Duration(m.RestoreUploadIdleSeconds) * time.Second
+	}
+	return dashboard.DefaultRestoreUploadIdle
+}
+
 func (r *Runtime) admitContinuityAct(cfg Settings, what string) error {
+	if r.waiting() {
+		return refuseContinuity("waiting", "this start is DEGRADED, waiting for Ring 5, which it asks for again by itself: it makes no files until it completes, so %s waits for the start that completes. recall source=continuity still reads what you have", what)
+	}
 	if r.w.Safe() {
 		return refuseContinuity("safe", "this boot is SAFE: it verifies and reports and makes no files, so %s waits for a normal boot. recall source=continuity still reads what you have", what)
 	}
@@ -234,7 +249,10 @@ func (r *Runtime) verifyKept(ctx context.Context, name string, spaced bool, now 
 	}
 	r.maint.lastVerify = now
 
-	if err := r.proveKept(ctx, cfg, dir, target); err != nil {
+	if err := r.proveKept(ctx, cfg, dir, target); errors.Is(err, escrow.ErrUnsigned) {
+
+		return "", refuseContinuity("unsigned", "%s carries no signature of your key (snapshots made before they were signed carry none), so nothing holds what its database says to you, and a restore will not take it. The next pass makes a signed one, and work action=backup.take makes one now", target.Name)
+	} else if err != nil {
 
 		r.Alert("snapshot-rot", fmt.Sprintf("%s no longer proves: %v", target.Name, err))
 		return "", fmt.Errorf("%s does NOT prove: it no longer restores as it did when it was kept. Your operator is told what failed. Your other snapshots are untouched — prove another, or take a new one", target.Name)
@@ -287,6 +305,9 @@ func (r *Runtime) proveKept(ctx context.Context, cfg Settings, dir string, k kep
 	}
 	if want.LastSeq != k.Record {
 		return fmt.Errorf("it is named for record %d and its receipt says %d", k.Record, want.LastSeq)
+	}
+	if err := heldToKey(set, r.w.DoorKey(), want); err != nil {
+		return err
 	}
 	return r.proveSnapshotIn(ctx, cfg, set, want, filepath.Join(work, "restore-proof"))
 }
@@ -352,7 +373,9 @@ func (r *Runtime) continuityRead(query string, now time.Time) (string, error) {
 		chain = "not walked by this boot"
 	}
 	b.WriteString("chain: " + chain + "\n")
-	if r.w.Safe() {
+	if r.waiting() {
+		b.WriteString("next pass: none while this start waits for Ring 5; the start that completes makes them")
+	} else if r.w.Safe() {
 		b.WriteString("next pass: this boot is SAFE — it walks your chain each day and makes no snapshot")
 	} else if !MaintenanceEnabled(cfg.Maintenance) {
 		b.WriteString("next pass: none — your operator has switched the pass off on this host")
@@ -498,3 +521,5 @@ func RoundAge(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
+
+func (r *Runtime) waiting() bool { return r.w.Waiting != nil && r.w.Waiting() }

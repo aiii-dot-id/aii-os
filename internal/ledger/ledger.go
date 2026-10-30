@@ -19,6 +19,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 )
 
 func readTailEvents(f *os.File, k int) ([]*Event, error) {
@@ -296,14 +297,21 @@ type Ledger struct {
 
 	sealErr error
 
-	frozenReason string
+	frozenReason  string
+	frozenWaiting bool
 }
 
-func (l *Ledger) SetFrozen(reason string) {
+func (l *Ledger) frozenName() string {
+	return hold.Hold{Waiting: l.frozenWaiting}.Name()
+}
+
+func (l *Ledger) SetFrozen(reason string) { l.SetHold(hold.Safe(reason)) }
+
+func (l *Ledger) SetHold(h hold.Hold) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.frozenReason == "" {
-		l.frozenReason = reason
+		l.frozenReason, l.frozenWaiting = h.Reason, h.Waiting
 	}
 }
 
@@ -597,7 +605,7 @@ func (l *Ledger) AppendPrepared(eventType EventType, ring int, payload PreparedP
 	raw := payload.raw
 
 	if l.frozenReason != "" {
-		return nil, fmt.Errorf("append refused — %w (SAFE): %s", ErrFrozen, l.frozenReason)
+		return nil, fmt.Errorf("append refused — %w (%s): %s", ErrFrozen, l.frozenName(), l.frozenReason)
 	}
 	if l.dirLock == nil {
 		return nil, os.ErrClosed
@@ -792,13 +800,18 @@ func ReadAll(path string) ([]Event, error) {
 }
 
 func decodeEvent(raw []byte) (Event, error) {
-	if _, err := canonicaljson.CanonicalizeV1(raw); err != nil {
-		return Event{}, err
-	}
 
 	var e Event
 	if err := e.UnmarshalJSON(raw); err != nil {
 		return Event{}, err
+	}
+
+	line, err := e.MarshalJSON()
+	if err != nil {
+		return Event{}, err
+	}
+	if !bytes.Equal(line, raw) {
+		return Event{}, fmt.Errorf("%w: the line is not the canonical form of the record it holds (its members, their order, or the bytes between them)", ErrNotCanonical)
 	}
 	return e, nil
 }

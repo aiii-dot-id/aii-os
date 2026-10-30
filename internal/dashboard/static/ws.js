@@ -1,5 +1,6 @@
 import './interaction-view.js';
 import { hasShellAuth, shellAccessToken } from './shell-auth.js';
+import { pageKey, keepPageKey, signedFetch, signIn, keptInMemoryOnly, MEMORY_ONLY } from './pagekey.js';
 
 import { acceptSignIn, abandonSignIn } from './signin.js';
 import { S } from './state.js';
@@ -10,23 +11,25 @@ import { go, renderFirstbootVisibility, toast } from './app.js';
 import { sysLine, toolEventLive, thinkingEvent, renderChatSubstrate, renderComposer, acceptSubstrateConfig, rejectSubstrateConfig, substrateConnectionLost, renderSteering, renderAsks } from './views/chat.js';
 import { renderHome } from './views/home.js';
 import { renderWorkPill } from './views/work.js';
+import { acceptAsks, renderTitle } from './waiting.js';
 import { renderProjPill, renderProjects, rejectCreate, rejectFocusSave, rejectContractSave, acceptCreate, acceptFocusSave, acceptContractSave, projectsConnectionLost } from './views/projects.js';
 import { renderMemory } from './views/memory.js';
 import { renderIdentity } from './views/identity.js';
 import { applyBackups, backupsReconnected, backupsConnectionLost, acceptBackupPreferences, rejectBackups } from './views/backups.js';
 import { acceptSandbox, rejectSandbox, sandboxConnectionLost } from './sandbox.js';
+import { acceptTools, rejectTools, toolsConnectionLost } from './tools.js';
 import { acceptMailRepair, rejectMailRepair } from './views/mail-repair.js';
 import { acceptMessages, rejectMessages } from './views/messages.js';
 import { acceptExpertConfig, rejectExpertConfig, expertStatus, expertConnectionLost } from './views/expert.js';
 import { applyRestoreNew } from './firstboot-restore.js';
 import { renderPlugins, rejectPluginAction, applyPluginStored } from './views/plugins.js';
 import { applySettingChoices } from './views/plugin-setting.js';
-import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptDashboardToken, acceptAccessCode, rejectAccessCode, settingsConnectionLost } from './views/settings.js';
+import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptAccessCode, rejectAccessCode, settingsConnectionLost } from './views/settings.js';
 import { renderProviderOptions, discoveryAnswered, discoveryFailed, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
 import { publish as publishToSections, onSections, onLayout, onTokensChanged } from './sections.js';
 import { renderPanel } from './panel.js';
 import { onTheme } from './theme.js';
-import { onOverlayChanged } from './overlay.js';
+import { onOverlayChanged, reloadForTheOverlay } from './overlay.js';
 import { bindTransport, render as renderVoice, speak, connectionLost as voiceConnectionLost } from './voice.js';
 
 S.onThemeApplied = onTokensChanged;
@@ -77,9 +80,13 @@ function connectionLost(socket) {
   substrateConnectionLost();
   expertConnectionLost();
   settingsConnectionLost();
+  if (S.pluginsConnectionLost) S.pluginsConnectionLost();
+  S.revokeLost?.();
+  S.actsLost?.();
   if (S.view === 'plugins') renderPlugins();
   backupsConnectionLost();
   sandboxConnectionLost();
+  toolsConnectionLost();
   abandonSignIn();
   firstbootConnectionLost();
   projectsConnectionLost();
@@ -164,7 +171,7 @@ export function connect() {
   };
   if (!viaChannel) {
     ws = socket;
-    socket.onopen = () => opened(socket);
+    socket.onopen = () => { hello(socket); opened(socket); };
     socket.onclose = () => connectionLost(socket);
     socket.onmessage = e => { if (ws === socket) onMessage(e); };
     return;
@@ -173,12 +180,16 @@ export function connect() {
   ws = pending;
 }
 
+function hello(socket) {
+  try { socket.send(JSON.stringify({ type: 'hello', page_key: pageKey() })); } catch (_) { }
+}
+
 export async function recoverAuthentication() {
   if (!canRetry() || S.tokenPrompted || authCheck) return;
   authCheck = true;
   let status;
   try {
-    status = await fetch('/auth/token', { cache: 'no-store', credentials: 'same-origin' });
+    status = await signedFetch('/auth/token', { cache: 'no-store', credentials: 'same-origin' });
   } catch (e) {
     authCheck = false;
     return;
@@ -192,18 +203,20 @@ export async function recoverAuthentication() {
     try {
       const token = await shellAccessToken();
       if (!canRetry()) return;
-      const reply = await fetch('/auth/token', {
-        method: 'POST', cache: 'no-store', credentials: 'same-origin',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: token,
-      });
-      if (reply.ok) { authCheck = false; wake(); }
+      const reply = await signIn(token);
+      if (reply.ok) { authCheck = false; signedIn(reply); wake(); }
     } catch (e) {
     } finally { authCheck = false; }
     return;
   }
 
   authCheck = false;
-  showManualAuthentication();
+  showManualAuthentication(status.headers.get('Aii-Missing') === 'page-key');
+}
+
+function signedIn(reply) {
+  if (keptInMemoryOnly()) { toast(MEMORY_ONLY); return; }
+  if (reply && reply.headers.get('Aii-Overlay') === 'reload') reloadForTheOverlay();
 }
 
 async function tokenAct(path) {
@@ -211,7 +224,8 @@ async function tokenAct(path) {
   authCheck = true;
   const previous = ws;
   try {
-    const reply = await fetch(path, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+    const reply = await signedFetch(path, { method: 'POST', cache: 'no-store', credentials: 'same-origin' });
+    if (keepPageKey(reply)) signedIn();
     if (reply.ok && previous && ws === previous) retireStalled(previous);
     return { ok: reply.ok, text: reply.ok ? '' : (await reply.text()).trim() };
   } catch (e) {
@@ -236,12 +250,15 @@ export function couldBeAccessCode(text) {
   const read = String(text).toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
   return read.length <= ACCESS_CODE_LENGTH && [...read].every(ch => ACCESS_CODE_ALPHABET.includes(ch));
 }
-function showManualAuthentication() {
+const SIGN_IN_HOW = 'On a device that is already signed in, Settings \u2192 Dashboard \u2192 Open on another device shows an access code for this one. Or read the access token with aii dashboard-token on the AII OS machine, in its identity directory.';
+const SIGN_IN = 'Sign in to this dashboard. ' + SIGN_IN_HOW;
+const SIGN_IN_AGAIN = 'Sign in once more in this browser. This dashboard now keeps half of its sign-in in the page itself, where a page at another address on this machine cannot read it. ' + SIGN_IN_HOW;
+function showManualAuthentication(again) {
   if (!foreground()) return;
   if (!authForm) {
     const box = document.createElement('section'); box.id = 'dashboard-signin'; box.setAttribute('aria-label', 'Dashboard sign-in');
     const note = document.createElement('p');
-    note.textContent = 'Sign in to this dashboard. On a device that is already signed in, Settings \u2192 Dashboard \u2192 Open on another device shows an access code for this one. Or read the access token with aii dashboard-token on the AII OS machine, in its identity directory.';
+    note.textContent = again ? SIGN_IN_AGAIN : SIGN_IN;
     const reveal = document.createElement('button'); reveal.type = 'button'; reveal.className = 'btn ghost'; reveal.textContent = 'Sign in';
     const form = document.createElement('form');
     const label = document.createElement('label'); label.textContent = 'Access code or access token';
@@ -272,10 +289,10 @@ function showManualAuthentication() {
       const revision = ++authFormRevision;
       authCheck = true; submit.disabled = true; note.textContent = 'Signing in…';
       try {
-        const reply = await fetch('/auth/token', { method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: token });
+        const reply = await signIn(token);
         const why = reply.status === 403 ? (await reply.text()).trim() : '';
         if (revision !== authFormRevision || box !== authForm) { if (reply.ok && canRetry()) wake(); return; }
-        if (reply.ok) { clearManualAuthentication(); authCheck = false; wake(); }
+        if (reply.ok) { clearManualAuthentication(); authCheck = false; signedIn(reply); wake(); }
         else note.textContent = why ? 'That was not accepted: ' + why + '.' : 'That was not accepted. An access code works once and for a short time. Try again or choose Not now.';
       } catch (_) {
         if (revision === authFormRevision && box === authForm) note.textContent = 'Sign-in could not be confirmed. Check the connection and try again.';
@@ -361,7 +378,7 @@ function onMessage(e) {
     reads.forEach(q => query(q));
   }
 
-  publishToSections(msg);
+  try { publishToSections(msg); } catch (err) { console.warn('sections: publish failed', err); }
   switch (msg.type) {
     case 'probe': break;
     case 'sections': onSections(msg.sections || [], msg.message || ''); break;
@@ -411,11 +428,11 @@ function onMessage(e) {
     case 'interaction_error': if (S.interactionError) S.interactionError(msg.interaction_reason, msg.message, msg.request_id); break;
     case 'chat_ack': if (S.chatAcknowledged) S.chatAcknowledged(msg.request_id, msg.message); break;
     case 'chat_receipt': if (S.chatReceipt) S.chatReceipt(msg.request_id, msg.chat_recording); break;
-    case 'asks': S.asks = msg.asks || []; renderAsks(S.asks); renderPanel(); break;
+    case 'asks': S.asks = msg.asks || []; renderAsks(S.asks); renderPanel(); acceptAsks(S.asks); break;
     case 'identity': S.identity = msg.identity || null; if (S.view === 'memory') renderMemory(); if (S.view === 'identity') renderIdentity(); if (S.view === 'home') renderHome(); break;
     case 'recall': S.recall = { query: msg.query || '', text: msg.message || '' }; if (S.view === 'memory') renderMemory(); break;
-    case 'tools': S.tools = msg.tools || []; if (S.view === 'settings') renderSettings(); break;
-    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id); if (S.view === 'settings') renderSettings(); break;
+    case 'tools': S.tools = msg.tools || []; acceptTools(msg.request_id); if (S.view === 'settings') renderSettings(); break;
+    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id, msg.message); if (S.view === 'settings') renderSettings(); break;
     case 'work': S.gradeAnswered?.(msg.request_id, null); S.work = msg.work || null; S.gradesRead?.(S.work); renderWorkPill(); renderPanel(); if (S.view === 'home') renderHome(); break;
 
     case 'workspace': S.workspace = msg.workspace || null; S.workspaceFor = (S.workspace && S.workspace.project) ? S.workspace.project.id : ''; if (S.view === 'projects') renderProjects(); break;
@@ -425,12 +442,16 @@ function onMessage(e) {
     case 'plugin_stored': applyPluginStored(msg.plugin_stored); if (S.view === 'plugins') renderPlugins(); break;
     case 'config':
       S.config = msg.config || null;
-      acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id);
+      acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id); S.revokeAnswered?.(msg.request_id, null);
       acceptBackupPreferences(msg.request_id);
+      if (S.pluginStartAnswered) S.pluginStartAnswered(msg.request_id);
       renderChatSubstrate(); renderComposer(); if (S.view === 'settings') renderSettings(); if (S.view === 'plugins') renderPlugins();
       S.chipsRedraw?.();
       if (S.view === 'memory') query('identity');
       break;
+    case 'spend':
+      S.spend = msg.spend || { days: [] };
+      if (S.view === 'settings') renderSettings(); break;
     case 'logs':
 
       if (msg.logs_tail) { S.logTail = msg.logs_tail; }
@@ -477,7 +498,6 @@ function onMessage(e) {
     case 'restart': sysLine('restarting to run the update \u2014 this page reconnects when the identity is back'); break;
     case 'public_name': if (S.renderPublicName) S.renderPublicName(msg.public_name || null); break;
     case 'speech_lists': acceptSpeechLists(msg.speech_lists); break;
-    case 'dashboard_token': acceptDashboardToken(msg.request_id, msg.dashboard_token); break;
     case 'access_code': acceptAccessCode(msg.request_id, msg.access_code || null); break;
     case 'models': {
       if (!acceptDiscoveryResponse(msg.request_id, msg.provider)) {
@@ -500,6 +520,7 @@ function onMessage(e) {
 }
 function onStats(stats) {
   S.stats = stats || null;
+  renderTitle();
 
   S.update = (stats && stats.update) || null;
   if (S.renderUpdate) S.renderUpdate();
@@ -522,8 +543,9 @@ function onStats(stats) {
   if (S.view === 'home') renderHome();
 }
 function onError(text, requestID, provider, needsKey) {
-  if (S.gradeAnswered?.(requestID, text)) return;
-  if (rejectBackups(requestID, text) || rejectSandbox(requestID, text)) return;
+  if (S.gradeAnswered?.(requestID, text) || S.revokeAnswered?.(requestID, text)) return;
+  if (S.askRefused?.(requestID, text) || S.actRefused?.(requestID, text) || S.chatRefused?.(requestID, text)) return;
+  if (rejectBackups(requestID, text) || rejectSandbox(requestID, text) || rejectTools(requestID, text)) return;
   if (rejectMailRepair(requestID, text) || rejectMessages(requestID, text) || rejectExpertConfig(requestID, text)) return;
   abandonSignIn(requestID);
   if (!requestID) {
@@ -546,6 +568,7 @@ function onError(text, requestID, provider, needsKey) {
   if (rejectPluginAction(requestID)) { toast(text); return; }
   if (rejectAccessCode(text, requestID)) return;
   if (rejectSettingsConfig(text, requestID)) { if (S.view === 'plugins') renderPlugins(); return; }
+  if (S.pluginStartRefused && S.pluginStartRefused(requestID, text)) return;
   if (rejectSpeechLists(requestID, text)) return;
   if (rejectProviderSave(text, requestID) || rejectSubstrateConfig(text, requestID) || rejectCreate(requestID) || rejectFocusSave(requestID) || rejectContractSave(requestID)) { toast(text); return; }
   if (requestID) { toast(text); return; }
@@ -617,6 +640,8 @@ class ChannelSocket {
       if (message && this.onmessage) this.onmessage(message);
     };
     pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.end(); };
+    this.left = () => this.end();
+    window.addEventListener('pagehide', this.left);
   }
   pieceBytes() {
     const stated = this.pc.sctp && this.pc.sctp.maxMessageSize;
@@ -632,14 +657,13 @@ class ChannelSocket {
       while (this.queue.length && this.dc.readyState === 'open' && this.dc.bufferedAmount < QUEUE_HIGH) this.dc.send(this.queue.shift());
     } catch (_) { this.close(); }
   }
-  close() {
-    try { this.dc.close(); } catch (_) { }
-    try { this.pc.close(); } catch (_) { }
-    this.end();
-  }
+  close() { this.end(); }
   end() {
     if (this.readyState === 3) return;
     this.readyState = 3; this.queue = [];
+    window.removeEventListener('pagehide', this.left);
+    try { this.dc.close(); } catch (_) { }
+    try { this.pc.close(); } catch (_) { }
     if (this.onclose) this.onclose({});
   }
 }
@@ -647,20 +671,24 @@ class ChannelSocket {
 export function settle(socket, adopt, lost, makePeer) {
   let pc = null, channel = null, timer = null, over = false, negotiating = false;
   let offered = false, answered = false, answering = false;
+  let readyHere = false, socketClosed = false;
   let localCandidates = [], remoteCandidates = [];
   const finish = () => { over = true; clearTimeout(timer); localCandidates = []; remoteCandidates = []; };
+  const drop = () => {
+    if (channel) { channel.onclose = null; channel.end(); }
+    if (pc) { try { pc.close(); } catch (_) { } }
+  };
   const abandon = () => {
     try { socket.close(); } catch (_) { }
-    if (channel) channel.onclose = null;
-    if (pc) { try { pc.close(); } catch (_) { } }
+    drop();
   };
   const fail = () => { if (over) return; finish(); abandon(); lost(); };
   const onSocket = () => {
     finish();
-    if (channel) channel.onclose = null;
-    if (pc) { try { pc.close(); } catch (_) { } }
+    drop();
     adopt(socket);
   };
+  const take = () => { if (channel.readyState !== 1) { fail(); return; } finish(); adopt(channel); };
   const say = message => { if (!over && socket.readyState === 1) socket.send(JSON.stringify(message)); };
 
   const begin = setup => {
@@ -670,11 +698,13 @@ export function settle(socket, adopt, lost, makePeer) {
     channel = new ChannelSocket(pc, pc.createDataChannel('dashboard', { ordered: true }));
     channel.onmessage = e => {
       if (over) return;
+      if (readyHere) { take(); if (channel.onmessage) channel.onmessage(e); return; }
       let message = null;
       try { message = JSON.parse(e.data); } catch (_) { }
       if (!message || message.type !== 'transport_ready') return;
-      finish();
-      adopt(channel);
+      try { channel.send(JSON.stringify({ type: 'transport_ready', carrier: 'channel' })); } catch (_) { return; }
+      readyHere = true;
+      if (socketClosed) take();
     };
     pc.onicecandidate = e => {
       if (over) return;
@@ -695,10 +725,12 @@ export function settle(socket, adopt, lost, makePeer) {
       .catch(() => { });
   };
 
-  socket.onopen = () => { };
+  socket.onopen = () => hello(socket);
   socket.onclose = () => {
     if (over) return;
+    socketClosed = true;
     if (!negotiating) fail();
+    else if (readyHere) take();
   };
   socket.onmessage = e => {
     if (over) return;

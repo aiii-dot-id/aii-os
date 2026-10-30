@@ -134,6 +134,7 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	if finalText != "" {
 		return a.answer(ctx, finalText, result)
 	}
+	a.recordLoopNotes(ctx, "", result.Notes)
 	return finalText, nil
 }
 
@@ -143,6 +144,9 @@ func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversat
 	defer cancel()
 	a.recordTurnCost(ctx, result)
 	about := ""
+	if result.Spoken == "" {
+		a.recordLoopNotes(ctx, "", result.Notes)
+	}
 	if result.Spoken != "" {
 		ref, err := a.recordReply(ctx, result.Spoken, result)
 		if err != nil {

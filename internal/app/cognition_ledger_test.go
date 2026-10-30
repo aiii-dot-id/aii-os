@@ -64,11 +64,9 @@ func (b *cognitionBench) mintExperiences(t *testing.T, ids ...string) {
 
 func (b *cognitionBench) mintPrivateOrigin(t *testing.T, id string) {
 	t.Helper()
-	if _, err := b.door.Append(ledger.EventExperienceCreate, 3, map[string]any{
+	b.door.appendAsAnEarlierRelease(t, ledger.EventExperienceCreate, 3, map[string]any{
 		"id": id, "content": "a prior source", "provenance": "self", "private": true,
-	}, ""); err != nil {
-		t.Fatal(err)
-	}
+	})
 }
 
 // mintExperiencesWith appends raw experiences of one provenance class.
@@ -415,7 +413,7 @@ func TestAContestedBeliefThroughTheRealStore(t *testing.T) {
 	b.mintExperiences(t, "exp_seed")
 	mint(ledger.EventBeliefUpsert, map[string]any{"id": "b_old", "statement": "The operator ships in the morning", "ring": 3, "confidence": 0.5,
 		"origin_refs": []map[string]string{{"kind": "experience", "id": "exp_seed"}}})
-	mint(ledger.EventExperienceCreate, map[string]any{
+	b.door.appendAsAnEarlierRelease(t, ledger.EventExperienceCreate, 3, map[string]any{
 		"id": "exp_kept_out", "content": keptOut, "category": "reflection", "provenance": "self", "private": true, "raw": false,
 	})
 	mint(ledger.EventEdgeCreate, map[string]any{"id": "edge_t1", "from_id": "exp_kept_out", "to_id": "b_old", "edge_type": "CONTRADICTS"})

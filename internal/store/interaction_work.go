@@ -9,14 +9,19 @@ import (
 )
 
 func (s *Store) recordWorkChangeTx(ctx context.Context, tx *sql.Tx, change interaction.WorkChange, turn, reason string) error {
+	_, err := s.recordWorkChangeRefTx(ctx, tx, change, turn, reason)
+	return err
+}
+
+func (s *Store) recordWorkChangeRefTx(ctx context.Context, tx *sql.Tx, change interaction.WorkChange, turn, reason string) (InteractionRef, error) {
 	var project string
 	var child bool
 	if err := tx.QueryRow(`SELECT project_id, `+queuedChild("")+` FROM work_sessions WHERE id=?`,
 		SubagentWorkKind, SubagentWorkKind, change.Session).Scan(&project, &child); err != nil {
-		return err
+		return InteractionRef{}, err
 	}
-	_, _, err := s.appendInteractionTx(ctx, tx, InteractionInput{ID: "work_" + uuid.New().String(), Kind: interaction.Notice, Role: interaction.System, ProjectID: project, TurnID: turn, Content: reason, Details: interaction.Details{Actor: workActor(child), WorkSession: change.Session, Work: &change}})
-	return err
+	ref, _, err := s.appendInteractionTx(ctx, tx, InteractionInput{ID: "work_" + uuid.New().String(), Kind: interaction.Notice, Role: interaction.System, ProjectID: project, TurnID: turn, Content: reason, Details: interaction.Details{Actor: workActor(child), WorkSession: change.Session, Work: &change}})
+	return ref, err
 }
 
 func (s *Store) RecordWorkForecast(session, turn string, steps, independent *int) error {

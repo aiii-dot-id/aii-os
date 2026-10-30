@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	askKindChoose  = "choose"
 	askKindConnect = "connect"
 	askKindConfirm = "confirm"
+	askKindWord    = "word"
 
 	asksPending = 8
 	askTextMax  = 2000
@@ -34,6 +36,8 @@ type pendingAsk struct {
 	Connector string
 	Digest    string
 	Proposed  time.Time
+
+	Turn uint64
 }
 
 type askRegistry struct {
@@ -61,11 +65,8 @@ func (a *App) proposeAsk(session, text string, choices []string, connector strin
 		a.withdrawAsk(session, "the identity cleared the decision it had owed")
 		return nil
 	}
-	if len(text) > askTextMax {
-		return fmt.Errorf("the decision text is %d characters; a card carries %d — say the short version and put the rest in the plan", len(text), askTextMax)
-	}
-	if len(choices) > askChoices {
-		return fmt.Errorf("%d choices; a card offers at most %d", len(choices), askChoices)
+	if err := askShapeFits(text, choices); err != nil {
+		return err
 	}
 	kind := askKindClarify
 	switch {
@@ -83,6 +84,9 @@ func (a *App) proposeAsk(session, text string, choices []string, connector strin
 	var superseded *pendingAsk
 	pending := 0
 	for _, ask := range r.asks {
+		if ask.Kind == askKindWord {
+			continue
+		}
 		if ask.Digest == digest {
 			r.mu.Unlock()
 			return nil
@@ -95,17 +99,17 @@ func (a *App) proposeAsk(session, text string, choices []string, connector strin
 	}
 	if pending >= asksPending {
 		r.mu.Unlock()
-		return fmt.Errorf("%d questions already await your operator; the ceiling is %d — answer or withdraw one first", pending, asksPending)
+		return asksFull(pending)
 	}
 	if superseded != nil {
 		delete(r.asks, superseded.ID)
 	}
-	var nonce [8]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	id, err := newAskID()
+	if err != nil {
 		r.mu.Unlock()
 		return err
 	}
-	ask := &pendingAsk{ID: "ask-" + hex.EncodeToString(nonce[:]), Kind: kind, Session: session, Text: text,
+	ask := &pendingAsk{ID: id, Kind: kind, Session: session, Text: text,
 		Choices: append([]string(nil), choices...), Connector: connector, Digest: digest, Proposed: time.Now()}
 	r.asks[ask.ID] = ask
 	r.mu.Unlock()
@@ -119,12 +123,114 @@ func (a *App) proposeAsk(session, text string, choices []string, connector strin
 	return nil
 }
 
+func askShapeFits(text string, choices []string) error {
+	if len(text) > askTextMax {
+		return fmt.Errorf("the decision text is %d characters; a card carries %d — say the short version and put the rest in the plan", len(text), askTextMax)
+	}
+	if len(choices) > askChoices {
+		return fmt.Errorf("%d choices; a card offers at most %d", len(choices), askChoices)
+	}
+	return nil
+}
+
+func asksFull(pending int) error {
+	return fmt.Errorf("%d questions already await your operator; the ceiling is %d — answer or withdraw one first", pending, asksPending)
+}
+
+func (a *App) askFits(session, text string, choices []string, connector string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if err := askShapeFits(text, choices); err != nil {
+		return err
+	}
+	digest := askDigest(session, text, choices, connector)
+	r := &a.asks
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := 0
+	for _, ask := range r.asks {
+		if ask.Kind == askKindWord || ask.Session == session && session != "" {
+			continue
+		}
+		if ask.Digest == digest {
+			return nil
+		}
+		pending++
+	}
+	if pending >= asksPending {
+		return asksFull(pending)
+	}
+	return nil
+}
+
+func newAskID() (string, error) {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return "ask-" + hex.EncodeToString(nonce[:]), nil
+}
+
+const askWordsMax = 1500
+
+func (a *App) confirmSpokenWord(turn uint64) error {
+	if a.store == nil {
+		return fmt.Errorf("no record to read the words from")
+	}
+	t, err := a.store.GetTurnBySeq(turn)
+	if err != nil {
+		return fmt.Errorf("read turn %d: %w", turn, err)
+	}
+	if t == nil {
+		return fmt.Errorf("no turn %d is on record", turn)
+	}
+	words := strings.TrimSpace(strings.TrimPrefix(t.Content, store.SpokenMarker))
+	if r := []rune(words); len(r) > askWordsMax {
+		words = string(r[:askWordsMax]) + fmt.Sprintf("… (the first %d of %d characters; the whole is in the conversation, at turn %d)", askWordsMax, len(r), turn)
+	}
+	text := fmt.Sprintf("At turn %d you said: \"%s\". Spoken words stand as your affirmation of a change to the identity's relationships (Ring 1) only once you confirm here that you said them: recognizing your voice is evidence, not your word.", turn, words)
+	r := &a.asks
+	r.mu.Lock()
+	if r.asks == nil {
+		r.asks = map[string]*pendingAsk{}
+	}
+	var superseded *pendingAsk
+	for _, ask := range r.asks {
+		if ask.Kind != askKindWord {
+			continue
+		}
+		if ask.Turn == turn {
+			r.mu.Unlock()
+			return nil
+		}
+		superseded = ask
+	}
+	if superseded != nil {
+		delete(r.asks, superseded.ID)
+	}
+	id, err := newAskID()
+	if err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	r.asks[id] = &pendingAsk{ID: id, Kind: askKindWord, Text: text, Turn: turn, Proposed: time.Now()}
+	r.mu.Unlock()
+	if superseded != nil {
+		logsink.Info("ask.decision", "%s superseded %s: newer spoken words (turn %d) await confirmation", id, superseded.ID, turn)
+	}
+	logsink.Info("ask.start", "%s asks the operator to confirm the words they spoke at turn %d", id, turn)
+	a.broadcastAsks()
+	return nil
+}
+
 func (a *App) withdrawAsk(session, why string) {
 	r := &a.asks
 	r.mu.Lock()
 	var gone *pendingAsk
 	for id, ask := range r.asks {
-		if ask.Session == session {
+		if ask.Kind != askKindWord && ask.Session == session {
 			gone = ask
 			delete(r.asks, id)
 		}
@@ -143,7 +249,11 @@ func (a *App) askViews() []dashboard.AskView {
 	r := &a.asks
 	r.mu.Lock()
 	for _, ask := range r.asks {
-		out = append(out, dashboard.AskView{ID: ask.ID, Kind: ask.Kind, From: "identity", Session: ask.Session, Text: ask.Text,
+		from := "identity"
+		if ask.Kind == askKindWord {
+			from = "host"
+		}
+		out = append(out, dashboard.AskView{ID: ask.ID, Kind: ask.Kind, From: from, Session: ask.Session, Text: ask.Text,
 			Choices: append([]string(nil), ask.Choices...), Connector: ask.Connector, Proposed: ask.Proposed.UTC().Format(time.RFC3339)})
 	}
 	r.mu.Unlock()
@@ -179,7 +289,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (text string, settle func(recor
 
 	reasked := func() bool {
 		for _, other := range r.asks {
-			if other.Session == ask.Session {
+			if (other.Kind == askKindWord) == (ask.Kind == askKindWord) && other.Session == ask.Session {
 				return true
 			}
 		}
@@ -214,7 +324,7 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (text string, settle func(recor
 	}
 
 	answered := func(words string, clears bool) (string, func(bool), error) {
-		return "[ask " + ask.ID + "] " + words, func(recorded bool) {
+		return store.AskMarker + ask.ID + "] " + words, func(recorded bool) {
 			switch {
 			case !recorded:
 				keep()
@@ -229,6 +339,24 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (text string, settle func(recor
 	refused := func(err error) (string, func(bool), error) {
 		keep()
 		return "", nil, err
+	}
+	if ask.Kind == askKindWord {
+
+		switch req.Answer {
+		case "confirm":
+			if a.store == nil {
+				return refused(fmt.Errorf("your confirmation could not be recorded: no record"))
+			}
+			if err := a.store.AnnotateTurn(ask.Turn, store.AnnotationConfirmed, ask.ID, fmt.Sprintf(`{"ask":%q}`, ask.ID)); err != nil {
+				return refused(fmt.Errorf("your confirmation could not be recorded, so the words at turn %d do not stand yet: %w", ask.Turn, err))
+			}
+			logsink.Info("ask.decision", "%s: the operator confirmed in the page that the words they spoke at turn %d are theirs", ask.ID, ask.Turn)
+			return answered(fmt.Sprintf("confirmed — the words I spoke at turn %d are mine", ask.Turn), false)
+		case "no":
+			logsink.Info("ask.decision", "%s: the operator said the words at turn %d are not their affirmation", ask.ID, ask.Turn)
+			return answered(fmt.Sprintf("no — the words at turn %d are not my affirmation", ask.Turn), false)
+		}
+		return refused(fmt.Errorf("a card confirming your spoken words is answered confirm or no, not %q", req.Answer))
 	}
 	switch req.Answer {
 	case "chose":

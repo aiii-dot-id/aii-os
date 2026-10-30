@@ -41,7 +41,7 @@ async function show(name, approval, mode) {
 
 async function main() {
   sockets[0].open();
-  say({ type: 'status', stats: { name: 'Vega', version: 'test', build: 'test', ledger_seq: 9, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' } });
+  say({ type: 'status', stats: { name: 'Example', version: 'test', build: 'test', ledger_seq: 9, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' } });
   document.querySelector('.nav-item[data-view="identity"]').click();
   expect(sent.some(f => f.type === 'query' && f.query === 'identity'), 'opening Identity did not ask for the identity: ' + JSON.stringify(sent.map(f => f.query || f.type)));
 
@@ -116,6 +116,84 @@ func TestTheIdentityPageShowsTheOperatorsCitedWordsFirstInTheCharter(t *testing.
 	runPageInEnginesWithHeaders(t, page, map[string][]byte{
 		"/__socket.js": []byte(statusFakeSocketJS),
 		"/__check.js":  []byte(charterApprovalJS),
+		"/theme.css":   read("theme.css"),
+		"/layout.css":  read("layout.css"),
+		"/custom.css":  read("custom.css"),
+	}, map[string]string{"Content-Security-Policy": uiCSP})
+}
+
+// EVERY OTHER CURRENT RELATIONSHIP, WHOLE, UNDER THE CHARTER: whom it is
+// with, its role, its latest entry as a link to that row of the Record page,
+// the operator's words its entry cites and its text, all as text. None sent,
+// no card.
+const otherRelationshipsJS = `import { report, until } from '/__harness.js';
+const sockets = window.__sockets;
+const say = m => sockets[sockets.length - 1].say(m);
+const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+const card = () => [...document.querySelectorAll('#identity-stack .card')].find(c => norm((c.querySelector('h3') || {}).textContent) === 'OTHER RELATIONSHIPS — RING 1');
+const kv = (el, label) => { const k = [...el.querySelectorAll('.kv')].find(k => norm(k.querySelector('span').textContent) === label); return k ? norm(k.querySelector('b').textContent) : null; };
+const problems = [];
+const expect = (ok, what) => { if (!ok) problems.push(what); };
+
+const TEXT = 'Ola and I compare notes.\n\n<b>We</b> answer within a day. '.repeat(40);
+const WORDS = 'Yes, <i>Ola</i> can be a peer of yours.';
+const identity = relationships => ({ beliefs: [], intentions: [], experiences: [], synthesis: '', brief: '', charter: 'We build this together.',
+  approval: { state: 'said', excerpt: 'Yes.', turn: 3, record: 5 }, trust_level: 'building', autonomy_level: 'supervised', relationships });
+
+async function main() {
+  sockets[0].open();
+  say({ type: 'status', stats: { name: 'Example', version: 'test', build: 'test', ledger_seq: 40, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' } });
+  say({ type: 'continuity', continuity: { mode: 'normal', ledger_seq: 40, lifetime_ticks: 3 } });
+  document.querySelector('.nav-item[data-view="identity"]').click();
+  say({ type: 'identity', identity: identity(undefined) });
+  await until(() => norm((document.getElementById('identity-stack') || {}).textContent).includes('We build this together.'));
+  expect(!card(), 'a card of other relationships is drawn when none is sent');
+
+  say({ type: 'identity', identity: identity([
+    { id: 'rel_ola', name: 'Ola', role: 'peer', charter: TEXT, record: 31, approval: { state: 'said', excerpt: WORDS, turn: 12, said_at: '2026-10-20T10:00:00Z', record: 30 } },
+    { id: 'rel_sol', name: '', role: 'peer', charter: '', record: 33 },
+  ]) });
+  await until(() => card());
+  const c = card();
+  expect(c, 'no card of other relationships');
+  if (!c) return;
+  const ola = c.querySelector('[data-relationship="rel_ola"]'), sol = c.querySelector('[data-relationship="rel_sol"]');
+  expect(ola && sol, 'not every relationship is drawn: ' + norm(c.textContent));
+  if (!ola || !sol) return;
+  expect(kv(ola, 'with') === 'Ola' && kv(ola, 'role') === 'peer', 'whom it is with and its role are not said: ' + kv(ola, 'with') + ', ' + kv(ola, 'role'));
+  const link = ola.querySelector('a[href="#/record/31"]');
+  expect(link && norm(link.textContent) === 'record 31', 'its latest entry is not a link to its row of the Record page: ' + ola.innerHTML.slice(0, 400));
+  const words = ola.querySelector('[data-approval-words]');
+  expect(words && words.textContent === WORDS, 'the operator\'s words its entry cites are not shown verbatim, as text: ' + (words ? words.innerHTML : 'none'));
+  expect([...ola.querySelectorAll('div')].some(d => d.textContent === TEXT), 'its text is not shown whole, as text');
+  expect(!ola.querySelector('i') && ![...ola.querySelectorAll('b')].some(b => b.textContent === 'We'), 'markup in a relationship became markup');
+  expect(ola.checkVisibility({ checkVisibilityCSS: true, visibilityProperty: true }), 'the relationship is not visible without a click');
+  expect(kv(sol, 'with') === 'no name given' && /No text is recorded for this relationship\./.test(norm(sol.textContent)) && sol.querySelector('a[href="#/record/33"]'),
+    'a relationship with no name and no text is not said as such: ' + norm(sol.textContent));
+}
+
+const finish = () => report(problems.length ? 'FAIL: ' + problems.join('\n  - ') : 'OK');
+main().then(finish, e => { problems.push('the run stopped: ' + ((e && e.stack) || e)); finish(); });
+`
+
+func TestTheIdentityPageShowsAnotherRelationshipWholeInBrowser(t *testing.T) {
+	read := func(p string) []byte {
+		b, err := staticFS.ReadFile("static/" + p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		return b
+	}
+	frame := string(read("index.html"))
+	const first = `<script src="./theme-boot.js"></script>`
+	if !strings.Contains(frame, first) || !strings.Contains(frame, "</body>") {
+		t.Fatal("index.html no longer has the shape this test loads it by")
+	}
+	page := strings.Replace(frame, first, `<script src="/__socket.js"></script>`+first, 1)
+	page = strings.Replace(page, "</body>", `<script type="module" src="/__check.js"></script></body>`, 1)
+	runPageInEnginesWithHeaders(t, page, map[string][]byte{
+		"/__socket.js": []byte(statusFakeSocketJS),
+		"/__check.js":  []byte(otherRelationshipsJS),
 		"/theme.css":   read("theme.css"),
 		"/layout.css":  read("layout.css"),
 		"/custom.css":  read("custom.css"),

@@ -24,17 +24,26 @@ const (
 	capDeclared
 	capContext
 	capTokenFence
+	capRounds
 	capDeadline
+	capTimeFence
 )
+
+const timeFenceHow = "because it spent its time"
 
 func capReasonOf(r conversation.Result) capReason {
 	switch {
 	case r.ContinuedAtTokenBudget:
 		return capTokenFence
+	case r.ContinuedAtTimeFence:
+		return capTimeFence
 	case r.ContinuedAtPressure:
 		return capContext
 	case r.ContinuedAtCap:
 		return capDeclared
+	case r.ContinuedAtRounds || r.ExhaustedBudget:
+
+		return capRounds
 	}
 	return noCap
 }
@@ -47,6 +56,10 @@ func (r capReason) how() string {
 		return "because its context filled"
 	case capTokenFence:
 		return "because it spent its token budget"
+	case capTimeFence:
+		return timeFenceHow
+	case capRounds:
+		return "at its round limit"
 	}
 	return "at its declared tool budget"
 }
@@ -254,19 +267,36 @@ func (a *App) continueCappedTurn(sessionID string, leg int, reason capReason, fr
 	}
 	defer a.releaseTurn()
 
-	if ws, err := a.store.WorkSessionByID(sessionID); sessionID != "" && err != nil {
-		logsink.Warn("continuation.error", "%s: the session could not be read before leg %d began: %v", sessionID, leg, err)
-	} else if ws != nil && ws.Status != "active" {
-		logsink.Info("continuation.refusal", "%s: leg %d stands down — the session was %s before it began", sessionID, leg, ws.Status)
-		a.legStoodDown(sessionID, leg, from)
+	if !agencyOn(a.configSnapshot().Agency.TurnContinuation) {
+		a.legStandsDown(sessionID, leg, from, "continuation was switched off (agency.turn_continuation) before it began")
 		return
 	}
-	if reason == capDeadline {
-		selected, err := a.store.ActiveWorkSession()
-		if err != nil || (selected == nil && sessionID != "") || (selected != nil && selected.ID != sessionID) {
+	if sessionID != "" {
+		ws, err := a.store.WorkSessionByID(sessionID)
+		switch {
+		case err != nil:
+			logsink.Warn("continuation.error", "%s: the session could not be read before leg %d began: %v", sessionID, leg, err)
+			a.legStandsDown(sessionID, leg, from, "the host could not read its work session before it began")
+			return
+		case ws != nil && ws.Status != "active":
+			logsink.Info("continuation.refusal", "%s: leg %d stands down — the session was %s before it began", sessionID, leg, ws.Status)
+			a.legStoodDown(sessionID, leg, from)
+			return
+		}
+	}
+	selected, err := a.store.ActiveWorkSession()
+	if err != nil || (selected == nil && sessionID != "") || (selected != nil && selected.ID != sessionID) {
+		if reason == capDeadline {
 			a.legDidNotRun(sessionID, leg, from, fmt.Errorf("the work selection changed or could not be read; the timed-out request was not resumed"))
 			return
 		}
+		if err != nil {
+			logsink.Warn("continuation.error", "%s: the active work session could not be read before leg %d began: %v", sessionID, leg, err)
+			a.legStandsDown(sessionID, leg, from, "the host could not read its work session before it began")
+			return
+		}
+		a.legStandsDown(sessionID, leg, from, "the active work changed before it began")
+		return
 	}
 
 	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceContinuation), a.turnWall(continuationWallSetting))
@@ -288,10 +318,8 @@ func (a *App) continueCappedTurn(sessionID string, leg int, reason capReason, fr
 		}
 	}
 
-	if ws, err := a.store.ActiveWorkSession(); err != nil {
-		logsink.Warn("continuation.error", "%s: resume card unreadable: %v", sessionID, err)
-	} else if ws != nil && (reason != capDeadline || ws.ID == sessionID) {
-		if card := resumeCardFor(ws); card != "" {
+	if selected != nil {
+		if card := resumeCardFor(selected); card != "" {
 			fact += "\n\n" + card
 		}
 	}
@@ -358,6 +386,14 @@ func (a *App) legStoodDown(sessionID string, leg int, from string) {
 	a.tellNextPart(sessionID, leg, a.store.LatestReply,
 		fmt.Sprintf("The next part of %s did not run: that work was finished before it started.", name),
 		fmt.Sprintf("[The next part of %s did not run: it was already finished.]", quotedWork(name)))
+}
+
+func (a *App) legStandsDown(sessionID string, leg int, from, why string) {
+	logsink.Info("continuation.refusal", "%s: leg %d stands down — %s", sessionID, leg, why)
+	name := a.workName(sessionID)
+	a.tellNextPart(sessionID, leg, a.replyOf(from),
+		fmt.Sprintf("The next part of %s did not run: %s.", name, why),
+		fmt.Sprintf("[The next part of %s did not run: %s. Nothing continues it by itself.]", quotedWork(name), why))
 }
 
 func (a *App) legCutShort(sessionID string, leg int, cause error, wall bool) {

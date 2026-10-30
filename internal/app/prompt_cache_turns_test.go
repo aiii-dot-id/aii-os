@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -51,6 +52,7 @@ func operatorTurn(t *testing.T, app *App, msg string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	ctx = interaction.WithSaid(ctx, interaction.SaidTyped) // as the chat door marks what the operator types
 	if err := app.acquireTurn(ctx); err != nil {
 		t.Fatalf("acquire turn: %v", err)
 	}

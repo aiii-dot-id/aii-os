@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
@@ -20,6 +22,9 @@ import (
 func substratePlaces(cfg Config, home string) []*firewall.Rule {
 	var places []*firewall.Rule
 	for _, p := range substrateObjects(cfg, home) {
+		if p.ID == configDirectoryLabel {
+			continue
+		}
 		covered := false
 		for _, parent := range places {
 			if inside(parent.Path, p.Path) {
@@ -34,22 +39,39 @@ func substratePlaces(cfg Config, home string) []*firewall.Rule {
 	return places
 }
 
+const configDirectoryLabel = "sub.config-directory"
+
+func shellSubstrateLabels(cfg Config, home string) []*firewall.Rule {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	var labels []*firewall.Rule
+	for _, p := range substrateObjects(cfg, home) {
+		if p.ID == configDirectoryLabel {
+			labels = append(labels, p)
+		}
+	}
+	return labels
+}
+
 func substrateObjects(cfg Config, home string) []*firewall.Rule {
 	data := identityDataDir(cfg.Identity.LedgerPath)
 	if abs, err := filepath.Abs(home); err == nil {
 		home = abs
 	}
 	var places []*firewall.Rule
-	place := func(id, path, reason string, except ...string) {
+	place := func(id, path, reason string, except ...string) *firewall.Rule {
 		if path == "" {
-			return
+			return nil
 		}
 		if abs, err := filepath.Abs(path); err == nil {
 			path = abs
 		}
 		path = realPath(path)
-		places = append(places, &firewall.Rule{ID: id, Kind: firewall.KindSubstrate, Path: path,
-			Except: except, Reason: reason, Enforced: true})
+		r := &firewall.Rule{ID: id, Kind: firewall.KindSubstrate, Path: path,
+			Except: except, Reason: reason, Enforced: true}
+		places = append(places, r)
+		return r
 	}
 	const kept = "Kept by the host: your record's archives, your keys and credentials, your backups and your plugins' state."
 	if !inside(realPath(data), realPath(home)) {
@@ -59,7 +81,10 @@ func substrateObjects(cfg Config, home string) []*firewall.Rule {
 
 	for _, name := range []string{"credentials", "trust", "tls", "witness-keys", "witness-tail.json", "backups",
 		"plugins-data", "plugins-models", "plugins-runtime", "plugins-catalog", "snapshot.key"} {
-		place("sub.data."+name, filepath.Join(data, name), kept)
+		r := place("sub.data."+name, filepath.Join(data, name), kept)
+		if r != nil && (name == "plugins-models" || name == "plugins-runtime") {
+			r.NativeReads = true
+		}
 	}
 
 	place("sub.data."+seedRecordDirName, filepath.Join(data, seedRecordDirName),
@@ -71,19 +96,43 @@ func substrateObjects(cfg Config, home string) []*firewall.Rule {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		place("sub.db", cfg.Identity.DBPath+suffix, names.Rule("sub.db").Reason)
 	}
+
+	if runtime.GOOS == "windows" && cfg.SourcePath != "" {
+		if dir, err := filepath.Abs(filepath.Dir(cfg.SourcePath)); err == nil {
+			dir = realPath(dir)
+			if realPath(home) != dir && inside(realPath(home), dir) {
+				place(configDirectoryLabel, dir, names.Rule("sub.config").Reason)
+			}
+		}
+	}
 	place("sub.config", cfg.SourcePath, names.Rule("sub.config").Reason)
 	place("sub.providers", providerFilePath(cfg.SourcePath), names.Rule("sub.providers").Reason)
+
+	if cfg.SourcePath != "" {
+		for _, f := range []struct{ id, path string }{{"sub.config", cfg.SourcePath}, {"sub.providers", providerFilePath(cfg.SourcePath)}} {
+			places = append(places, &firewall.Rule{ID: f.id, Kind: firewall.KindSubstrate, Path: firewall.StemPath(f.path + "."),
+				Stem: true, Shown: filepath.Base(f.path), Reason: names.Rule(f.id).Reason, Enforced: true})
+		}
+	}
 	if cfg.Identity.KeyPath != "" {
 		place("sub.snapshot-key", continuity.SnapshotKeyPath(cfg.Identity.KeyPath), kept)
 	}
-	place("sub.plugins", "plugins", "Your installed plugins are the host's: they change by install, never by a file write.")
+	place("sub.plugins", "plugins", "Your installed plugins are the host's: they change by install, never by a file write.").NativeReads = true
+
+	for _, dir := range logDirs(cfg, home) {
+		var except []string
+		if inside(dir, logControlFile(cfg)) {
+			except = []string{logControlFile(cfg)}
+		}
+		place("sub.logs", dir, logsReason, except...).ReadOpen = true
+	}
 
 	if machine.Supported {
 		if dir, err := machineDirOf(cfg, "."); err == nil {
 			place("sub.machine", dir, "The machine service's directory belongs to the account, shared by every identity on it — not yours to read or change.")
 
 			if store, err := machine.StoreDir(dir); err == nil {
-				place("sub.store", store, "The account's plugin store holds every identity's plugins' models and runtimes, written by the machine service alone — not yours to read or change.")
+				place("sub.store", store, "The account's plugin store holds every identity's plugins' models and runtimes, written by the machine service alone — not yours to read or change.").NativeReads = true
 			}
 		}
 	}
@@ -99,6 +148,36 @@ func substrateObjects(cfg Config, home string) []*firewall.Rule {
 		}
 	}
 	return places
+}
+
+const logsReason = "Your host's log and its captures of what your models were sent: yours to read with read, grep and ls, and not to write, but for control.json in it, your switch for what is recorded."
+
+func logDirs(cfg Config, home string) []string {
+	if abs, err := filepath.Abs(home); err == nil {
+		home = abs
+	}
+	home = realPath(home)
+	var dirs []string
+	for _, dir := range []string{filepath.Dir(logControlFile(cfg)), cfg.Logs.Dir} {
+		if dir == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+		if dir = realPath(dir); !inside(dir, home) && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
+func logControlFile(cfg Config) string {
+	path := LogControlPathIn(identityHomeFromConfig(cfg.SourcePath))
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return firewall.ResolveSlot(path)
 }
 
 func otherIdentitiesPlaces(cfg Config, slot string) ([]*firewall.Rule, error) {
@@ -127,7 +206,7 @@ func otherIdentitiesPlaces(cfg Config, slot string) ([]*firewall.Rule, error) {
 		if p := realPath(s); s != "" && !seen[p] {
 			seen[p] = true
 
-			out = append(out, &firewall.Rule{ID: "sub.identity", Kind: firewall.KindSubstrate, Path: p, Shown: "other identities' slots", Enforced: true,
+			out = append(out, &firewall.Rule{ID: firewall.RuleOtherIdentity, Kind: firewall.KindSubstrate, Path: p, Shown: "other identities' slots", Enforced: true,
 				Reason: "Another identity's slot on this account: its keys, its record and its credentials are its own."})
 		}
 	}
@@ -195,24 +274,33 @@ type pluginSandbox struct {
 	gate tools.Gate
 }
 
-func newPluginSandbox(reg *tools.Registry, ledgerPath string) pluginSandbox {
+func newPluginSandbox(reg *tools.Registry, cfg Config) pluginSandbox {
+	const (
+		uiWhy  = "The dashboard's frame, colours and layout are your operator's and the identity's to re-form, not a plugin's."
+		logWhy = "The identity's log, and the switch for what it records, are not a plugin's to read or change."
+	)
 	var surface []*firewall.Rule
-	const why = "The dashboard's frame, colours and layout are your operator's and the identity's to re-form, not a plugin's."
-	for _, p := range uiSurfacePaths(ledgerPath) {
-
-		surface = append(surface, &firewall.Rule{ID: "sub.ui", Kind: firewall.KindSubstrate, Path: p, Enforced: true, Reason: why})
-
-		target, linked, err := linkLeads(p)
-		switch {
-		case !linked || realPath(p) != firewall.ResolveSlot(p):
-		case err != nil:
-			logsink.Warn("ring.refusal", "where the dashboard surface %s leads could not be read, so a plugin is refused every file: %v", p, err)
-			surface = append(surface, &firewall.Rule{ID: "sub.ui", Kind: firewall.KindSubstrate, Path: filepath.VolumeName(p) + string(filepath.Separator), Enforced: true, Reason: why})
-		case target != p:
-			surface = append(surface, &firewall.Rule{ID: "sub.ui", Kind: firewall.KindSubstrate, Path: target, Enforced: true, Reason: why})
-		}
+	for _, p := range uiSurfacePaths(cfg.Identity.LedgerPath) {
+		surface = append(surface, keptFromPlugins("sub.ui", p, uiWhy)...)
 	}
+	surface = append(surface, keptFromPlugins("sub.logs", logControlFile(cfg), logWhy)...)
 	return pluginSandbox{reg: reg, surface: surface}
+}
+
+func keptFromPlugins(id, p, why string) []*firewall.Rule {
+
+	rules := []*firewall.Rule{{ID: id, Kind: firewall.KindSubstrate, Path: p, Enforced: true, Reason: why}}
+
+	target, linked, err := linkLeads(p)
+	switch {
+	case !linked || realPath(p) != firewall.ResolveSlot(p):
+	case err != nil:
+		logsink.Warn("ring.refusal", "where %s leads could not be read, so a plugin is refused every file: %v", p, err)
+		rules = append(rules, &firewall.Rule{ID: id, Kind: firewall.KindSubstrate, Path: filepath.VolumeName(p) + string(filepath.Separator), Enforced: true, Reason: why})
+	case target != p:
+		rules = append(rules, &firewall.Rule{ID: id, Kind: firewall.KindSubstrate, Path: target, Enforced: true, Reason: why})
+	}
+	return rules
 }
 
 func (s pluginSandbox) Look() tools.Gate {

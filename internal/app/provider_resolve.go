@@ -107,13 +107,15 @@ func (a *App) resolveLLMConfig(full Config, reg *providerRegistry) (llm.ClientCo
 	resolved := *entry
 	resolved.signInsSeen = signIns
 
+	facts := a.modelCapabilitiesFor(reg, *entry, model)
+	published := modelMeta{Context: said(facts.windows, capFromProvider), MaxOut: said(facts.outLimits, capFromProvider)}
 	if resolved.ContextLength == 0 || resolved.MaxOutputTokens == 0 {
-		m, found, listed, named := a.discoveredMeta(entry.Name, model)
+		_, _, listed, named := a.discoveredMeta(entry.Name, model)
 
 		windowless := resolved.ContextLength == 0 && limitModelWindow(resolved, model, reg.effective()).ContextLength == 0
 		switch {
-		case found:
-			window, reserve := discoveredWindow(m, resolved, entry.Name, model)
+		case published.Context > 0 || published.MaxOut > 0:
+			window, reserve := discoveredWindow(published, resolved, entry.Name, model)
 			if resolved.ContextLength == 0 {
 				resolved.ContextLength = window
 			}
@@ -130,6 +132,7 @@ func (a *App) resolveLLMConfig(full Config, reg *providerRegistry) (llm.ClientCo
 				entry.Name, listed, model)
 		}
 	}
+	resolved = limitToPublishedWindow(*entry, resolved, model, published.Context)
 	resolved = limitToModel(resolved, model, reg.effective())
 	if err := validateModelWindow(resolved, model); err != nil {
 		return llm.ClientConfig{}, providerEntry{}, err
@@ -567,6 +570,9 @@ func (a *App) providerRuntimeMatches(reg *providerRegistry) bool {
 
 	if entry.ContextLength == 0 {
 		desired.ContextLength = limitModelWindow(active, model, reg.effective()).ContextLength
+	} else if atVendorsAddress(*entry) && active.ContextLength > 0 && active.ContextLength < desired.ContextLength {
+
+		desired.ContextLength = active.ContextLength
 	}
 	if entry.MaxOutputTokens == 0 {
 		desired.MaxOutputTokens = limitModelOutput(active, model, reg.effective()).MaxOutputTokens
@@ -584,6 +590,22 @@ func (a *App) providerRuntimeMatches(reg *providerRegistry) bool {
 
 func limitToModel(entry providerEntry, model string, eff *effectiveCaps) providerEntry {
 	return limitModelOutput(limitModelWindow(entry, model, eff), model, eff)
+}
+
+func limitToPublishedWindow(declared, resolved providerEntry, model string, window int) providerEntry {
+	if resolved.ContextLength <= 0 || !atVendorsAddress(declared) {
+		return resolved
+	}
+	if window > 0 && window < resolved.ContextLength {
+		logsink.Info("llm.budget", "LLM context window: provider %q model %q limited from %d to the window the vendor publishes for it at its own address, %d", declared.Name, model, resolved.ContextLength, window)
+		resolved.ContextLength = window
+	}
+	return resolved
+}
+
+func atVendorsAddress(e providerEntry) bool {
+	shipped := entryNamed(embeddedRegistry(), e.Name)
+	return shipped != nil && !shipped.Local && !e.Local && sameOrigin(shipped.URL, e.URL)
 }
 
 func limitModelWindow(entry providerEntry, model string, eff *effectiveCaps) providerEntry {

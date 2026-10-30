@@ -11,6 +11,7 @@ import { renderSettings } from './views/settings.js';
 import { viewProject } from './views/projects.js';
 import { forgetBackupsSecrets } from './views/backups.js';
 import { renderPanel } from './panel.js';
+import { renderTitle } from './waiting.js';
 import { restoreDraft } from './overlay.js';
 
 function setHash(h) {
@@ -37,6 +38,7 @@ export function go(v) {
   });
   S.refreshMessageText?.();
   $('crumb').textContent = TITLES[v] || sectionTitle(v) || v;
+  renderTitle();
   try { localStorage.setItem('aii.view', v); } catch (err) {}
   renderFirstbootVisibility();
   if (!S.connected) return;
@@ -58,6 +60,9 @@ S.renderNavBadges = () => {
   b.textContent = n;
   b.title = n + ' plugin update' + (n === 1 ? '' : 's') + ' available';
 };
+const CHIP_WITHDRAWN = 'Release withdrawn';
+const CHIP_WITHDRAWN_TITLE = 'The release this program came from has been withdrawn by its publisher — see Settings → Updates';
+const CHIP_WITHDRAWN_BEFORE = 'The release this program came from has been withdrawn by its publisher. ';
 S.renderUpdateChip = () => {
   const el = document.getElementById('nav-update');
   if (!el) return;
@@ -65,12 +70,14 @@ S.renderUpdateChip = () => {
   let text = '';
   if (u && u.needs_restart) text = 'Restart to update';
   else if (u && u.available_version) text = 'Update ' + u.available_version;
+  else if (u && u.running_withdrawn) text = CHIP_WITHDRAWN;
   const t = document.getElementById('nav-update-text');
   if (text && (el.hidden || !t || t.textContent !== text)) announce(text);
   el.hidden = !text;
   if (t) t.textContent = text;
   el.title = u && u.needs_restart ? 'Version ' + u.installed_version + ' is installed — relaunch to run it'
-    : (text ? (u.stage_refusal ? 'Version ' + u.available_version + ' is available — install it with your package manager' : 'A newer release is available') : '');
+    : text === CHIP_WITHDRAWN ? CHIP_WITHDRAWN_TITLE
+    : (text ? (u.running_withdrawn ? CHIP_WITHDRAWN_BEFORE : '') + (u.stage_refusal ? 'Version ' + u.available_version + ' is available — install it with your package manager' : 'A newer release is available') : '');
 };
 const updateChip = document.getElementById('nav-update');
 if (updateChip) updateChip.onclick = () => { go('settings'); if (S.openUpdates) S.openUpdates(); };

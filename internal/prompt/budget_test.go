@@ -158,7 +158,7 @@ func TestProtectedMaterialSurvivesImpossibleBudget(t *testing.T) {
 func TestFoldLadderOrderIsRuled(t *testing.T) {
 	got := foldOrder()
 
-	want := [5]string{"brief", "turn", "ring4", "ring3", "ring2"}
+	want := [6]string{"brief", "turn", "ring4", "ring3", "operator", "ring2"}
 	if got != want {
 		t.Fatalf("fold ladder = %v, want %v — the order is ruled, not incidental", got, want)
 	}
@@ -212,14 +212,14 @@ func TestRing2IsNeverOmitted(t *testing.T) {
 
 func TestFoldsAndOmissionsCarryARouteToTheContent(t *testing.T) {
 	folded := summarize("ring3", strings.Repeat("a paragraph of working truth.\n\n", 6), budgetRoute)
-	if !strings.Contains(folded, "recall (source=experiences)") || !strings.Contains(folded, budgetRoute) {
+	if !strings.Contains(folded, `recall source=ring3`) || !strings.Contains(folded, budgetRoute) {
 		t.Fatalf("a folded Ring 3 does not say how to reach the rest: %q", folded)
 	}
 	if r2 := summarize("ring2", "## Who You Have Become\n\n- b [b1]\n  - e1\n  - e2\n  - e3\n  - e4\n  - e5\n  - e6", budgetRoute); !strings.Contains(r2, "recall (source=ledger)") {
 		t.Fatalf("a folded Ring 2 does not route to the derivation: %q", r2)
 	}
 	receipt := renderOmissions([]Omission{{Name: "What Is Right in Front of You", Source: "ring4"}, {Name: "This Morning", Source: "brief"}}, budgetRoute)
-	if !strings.Contains(receipt, "work status") || !strings.Contains(receipt, "recall (source=experiences) reaches the day") {
+	if !strings.Contains(receipt, "work status") || !strings.Contains(receipt, `recall source=brief reads the brief whole`) {
 		t.Fatalf("omission receipts do not route to the content: %q", receipt)
 	}
 }

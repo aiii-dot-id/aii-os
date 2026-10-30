@@ -9,7 +9,7 @@ import (
 )
 
 var replyKindSaid = map[witness.ReplyKind]string{
-	witness.ReplyInWitnessForm: "an error in the witness's own form, in words this program does not know",
+	witness.ReplyInWitnessForm: "an error in the witness's own form, with a code or words this program does not know",
 	witness.ReplyEmpty:         "an empty reply",
 	witness.ReplyPage:          "a web page",
 	witness.ReplyJSON:          "JSON in a form the witness does not answer in",
@@ -24,6 +24,10 @@ func unrecognisedWitnessReply(url string, ce *witness.ConflictError, now time.Ti
 		"The identity keeps running and nothing is switched off; that anchor pass was skipped and the next one asks again, so new records are not witnessed while this goes on. " +
 		"Another reply of this kind is not told again today, whatever its words. " +
 		"If it does go on, look at what is answering at that address. The reply: " + ce.Message
+	if ce.Code != "" {
+
+		said += " (code " + ce.Code + ")"
+	}
 	return id, said
 }
 

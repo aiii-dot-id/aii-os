@@ -3,18 +3,32 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 type ReadTool struct {
 	maxBytes int
 
 	held func(ctx context.Context, path string, file os.FileInfo, by *os.File) error
+}
+
+const readPageRoom = 512
+
+func (t *ReadTool) page(ctx context.Context) int {
+	n := limits.ToolResultChars(ctx) - readPageRoom
+	if t.maxBytes > 0 && t.maxBytes < n {
+		n = t.maxBytes
+	}
+	return max(n, utf8.UTFMax)
 }
 
 func (t *ReadTool) Name() string { return "read" }
@@ -25,6 +39,12 @@ func (t *ReadTool) Description() string {
 func readImage(path, mediaType string, width, height int, size int64) Result {
 	return Result{Output: fmt.Sprintf("%s is an image: %s, %d by %d pixels, %d bytes.", path, mediaType, width, height, size),
 		Image: &ResultImage{Path: path, MediaType: mediaType, Width: width, Height: height}}
+}
+
+func readMedia(path, mediaType, kind string, size int64) Result {
+	noun := map[string]string{"pdf": "a PDF", "audio": "a sound", "video": "a video"}[kind]
+	return Result{Output: fmt.Sprintf("%s is %s: %s, %d bytes.", path, noun, mediaType, size),
+		Image: &ResultImage{Path: path, MediaType: mediaType}}
 }
 
 func (t *ReadTool) Parameters() map[string]any {
@@ -60,38 +80,38 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	}
 	offset, err := intArg(args, "offset", 1)
 	if err != nil {
-		return Result{Error: "offset: " + err.Error()}, nil
+		return failed(ReasonArgumentInvalid, "offset: "+err.Error()), nil
 	}
 	if offset < 1 {
-		return Result{Error: fmt.Sprintf("offset must be 1 or greater, got %d", offset)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("offset must be 1 or greater, got %d", offset)), nil
 	}
 	if offset > maxReadOffset {
-		return Result{Error: fmt.Sprintf("offset %d is beyond the %d-line ceiling", offset, maxReadOffset)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("offset %d is beyond the %d-line ceiling", offset, maxReadOffset)), nil
 	}
 	byteOffset, err := intArg(args, "byte_offset", 0)
 	if err != nil {
-		return Result{Error: "byte_offset: " + err.Error()}, nil
+		return failed(ReasonArgumentInvalid, "byte_offset: "+err.Error()), nil
 	}
 	if byteOffset < 0 {
-		return Result{Error: fmt.Sprintf("byte_offset must not be negative, got %d", byteOffset)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("byte_offset must not be negative, got %d", byteOffset)), nil
 	}
 	if byteOffset > maxByteOffset {
-		return Result{Error: fmt.Sprintf("byte_offset %d is beyond the %d-byte ceiling", byteOffset, maxByteOffset)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("byte_offset %d is beyond the %d-byte ceiling", byteOffset, maxByteOffset)), nil
 	}
 	limit, err := intArg(args, "limit", 0)
 	if err != nil {
-		return Result{Error: "limit: " + err.Error()}, nil
+		return failed(ReasonArgumentInvalid, "limit: "+err.Error()), nil
 	}
 	if limit < 0 {
-		return Result{Error: fmt.Sprintf("limit must not be negative, got %d", limit)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("limit must not be negative, got %d", limit)), nil
 	}
 	if limit > maxReadLimit {
-		return Result{Error: fmt.Sprintf("limit %d is beyond the %d-line ceiling — the byte cap would truncate long before", limit, maxReadLimit)}, nil
+		return failed(ReasonArgumentInvalid, fmt.Sprintf("limit %d is beyond the %d-line ceiling — the byte cap would truncate long before", limit, maxReadLimit)), nil
 	}
 
 	f, st, err := openRegular(path)
 	if err != nil {
-		return Result{Error: err.Error()}, nil
+		return Result{Error: osRefused(err), ReasonCode: osReason(err)}, nil
 	}
 	defer f.Close()
 
@@ -103,35 +123,39 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	if mediaType, width, height, ok := ImageConfig(f); ok {
 		return readImage(path, mediaType, width, height, st.Size()), nil
 	}
+	if mediaType, kind := MediaOf(f); kind != "" {
+		return readMedia(path, mediaType, kind, st.Size()), nil
+	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 
 	r := bufio.NewReaderSize(f, 64<<10)
 	skipped, err := skipLines(ctx, r, offset-1)
 	if err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 	if skipped < offset-1 {
-		return Result{Output: "", Error: fmt.Sprintf(
-			"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)}, nil
+		return failed(ReasonOffsetPastEnd, fmt.Sprintf(
+			"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)), nil
 	}
+	page := t.page(ctx)
 
 	if byteOffset > 0 {
-		win, ended, endedBefore, err := lineWindow(ctx, r, byteOffset, t.maxBytes+1)
+		win, ended, endedBefore, err := lineWindow(ctx, r, byteOffset, page+1)
 		if err != nil {
-			return Result{Error: err.Error()}, nil
+			return failedOn(err), nil
 		}
 		if endedBefore == 0 && len(win) == 0 && !ended {
-			return Result{Output: "", Error: fmt.Sprintf(
-				"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)}, nil
+			return failed(ReasonOffsetPastEnd, fmt.Sprintf(
+				"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)), nil
 		}
 		if endedBefore > 0 || (endedBefore == 0 && ended && len(win) == 0 && byteOffset > 0) {
-			return Result{Error: fmt.Sprintf(
+			return failed(ReasonOffsetPastEnd, fmt.Sprintf(
 				"byte_offset %d is past the end of line %d, which is %d byte(s) long",
-				byteOffset, offset, endedBefore)}, nil
+				byteOffset, offset, endedBefore)), nil
 		}
-		return t.pageWindow(r, win, ended, offset, byteOffset)
+		return t.pageWindow(r, win, ended, offset, byteOffset, page)
 	}
 
 	var out strings.Builder
@@ -139,14 +163,14 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	cappedOut := false
 	for {
 		if err := ctx.Err(); err != nil {
-			return Result{Error: "read cancelled: " + err.Error()}, nil
+			return failed(ReasonCancelled, "read cancelled: "+err.Error()), nil
 		}
 		if limit > 0 && kept == limit {
 			break
 		}
-		win, ended, _, err := lineWindow(ctx, r, 0, t.maxBytes+1)
+		win, ended, _, err := lineWindow(ctx, r, 0, page+1)
 		if err != nil {
-			return Result{Error: err.Error()}, nil
+			return failedOn(err), nil
 		}
 		if !ended && len(win) == 0 {
 
@@ -154,22 +178,22 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (Result, er
 				return Result{Output: "[empty file]"}, nil
 			}
 			if kept == 0 {
-				return Result{Output: "", Error: fmt.Sprintf(
-					"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)}, nil
+				return failed(ReasonOffsetPastEnd, fmt.Sprintf(
+					"offset %d is past the end of %s, which has %d line(s)", offset, path, skipped)), nil
 			}
 			break
 		}
-		if !ended || len(win) > t.maxBytes {
+		if !ended || len(win) > page {
 
 			if kept == 0 {
-				return t.pageWindow(r, win, ended, offset, 0)
+				return t.pageWindow(r, win, ended, offset, 0, page)
 			}
 			cappedOut = true
 			break
 		}
 
 		num := lineNumber(offset + kept)
-		if kept > 0 && out.Len()+1+len(num)+len(win) > t.maxBytes {
+		if kept > 0 && out.Len()+1+len(num)+len(win) > page {
 			cappedOut = true
 			break
 		}
@@ -193,13 +217,15 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) (Result, er
 	return Result{Output: out.String()}, nil
 }
 
+var errNotRegular = errors.New("not a regular file")
+
 func openRegular(path string) (*os.File, os.FileInfo, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("%s is not a regular file (%s) — read serves files only", path, st.Mode().Type())
+		return nil, nil, fmt.Errorf("%s is %w (%s) — read serves files only", path, errNotRegular, st.Mode().Type())
 	}
 	f, err := openNonBlocking(path)
 	if err != nil {
@@ -215,6 +241,13 @@ func openRegular(path string) (*os.File, os.FileInfo, error) {
 		return nil, nil, fmt.Errorf("%s changed type while opening (%s) — refused", path, fst.Mode().Type())
 	}
 	return f, fst, nil
+}
+
+func osRefused(err error) string {
+	if errors.Is(err, fs.ErrPermission) {
+		return err.Error() + " — the operating system refused it, not AII's wall"
+	}
+	return err.Error()
 }
 
 func lineWindow(ctx context.Context, r *bufio.Reader, start, max int) (win []byte, ended bool, endedBefore int, err error) {
@@ -265,21 +298,21 @@ func lineWindow(ctx context.Context, r *bufio.Reader, start, max int) (win []byt
 	}
 }
 
-func (t *ReadTool) pageWindow(r *bufio.Reader, win []byte, ended bool, offset, byteOffset int) (Result, error) {
+func (t *ReadTool) pageWindow(r *bufio.Reader, win []byte, ended bool, offset, byteOffset, page int) (Result, error) {
 
 	if byteOffset > 0 && len(win) > 0 && !utf8.RuneStart(win[0]) {
-		return Result{Error: fmt.Sprintf(
+		return failed(ReasonArgumentInvalid, fmt.Sprintf(
 			"byte_offset %d is inside a UTF-8 character on line %d — use the offset a previous page reported",
-			byteOffset, offset)}, nil
+			byteOffset, offset)), nil
 	}
-	if ended && len(win) <= t.maxBytes {
+	if ended && len(win) <= page {
 		out := lineNumber(offset) + string(win)
 		if hasAnotherLine(r) {
 			out += fmt.Sprintf("\n[end of line %d — %s]", offset, nextLine(offset+1))
 		}
 		return Result{Output: out}, nil
 	}
-	cut := t.maxBytes
+	cut := page
 	if cut > len(win) {
 		cut = len(win)
 	}

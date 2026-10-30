@@ -90,7 +90,8 @@ func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *inte
 	if s.historicalInteractions && !s.historicalAnnotations {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT kind,payload FROM turn_annotations WHERE turn_seq=? ORDER BY kind`, r.Sequence)
+
+	rows, err := tx.QueryContext(ctx, `SELECT kind,payload FROM turn_annotations WHERE turn_seq=? AND kind!=? ORDER BY kind`, r.Sequence, AnnotationSaid)
 	if err != nil {
 		return err
 	}
@@ -228,11 +229,11 @@ func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out
 		r = interaction.Compact(r, q.Source, inc)
 		page.Rows = append(page.Rows, r)
 		page.NextCursor = q.Next(inc, r.Sequence)
-		raw, err := json.Marshal(page)
+		fits, err := interaction.FitsFrame(page)
 		if err != nil {
 			return nil, err
 		}
-		if len(raw) > interaction.MaxPageBytes-8192 {
+		if !fits {
 			page.Rows = page.Rows[:len(page.Rows)-1]
 			if len(page.Rows) == 0 {
 				return nil, &interaction.Error{Code: "INTERACTION_CONTENT_UNAVAILABLE", Detail: "record metadata exceeds frame budget"}

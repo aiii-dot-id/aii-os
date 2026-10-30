@@ -12,6 +12,7 @@ export const S = {
 
   tokenPrompted: false, wsEverOpened: false,
   logsList: null, logTail: null, logFile: '',
+  spend: null,
   overlays: [],
   asks: [],
 
@@ -29,7 +30,7 @@ export const S = {
   go: null, refreshCurrentView: null, renderNavBadges: null, renderUpdateChip: null,
   onThemeApplied: null, reconcileTurn: null, requireAccessToken: null, rotateAccessToken: null,
   initThemeSwitch: null, setThemeChoice: null, themeChoice: null,
-  cancelReadingRestore: null, chatAcknowledged: null, chatConnectionLost: null, chatReceipt: null,
+  askRefused: null, cancelReadingRestore: null, chatAcknowledged: null, chatConnectionLost: null, chatReceipt: null, chatRefused: null,
   interactionBookmark: null, interactionFollowing: null, interactionPositioned: null, interactionVisible: null,
   operatorTurnBegins: null, refreshMessageText: null,
   interactionChanged: null, interactionError: null, interactionHold: null, interactionLatest: null,
@@ -37,7 +38,9 @@ export const S = {
   saveInteractionPosition: null,
   gradeAnswered: null, gradesLost: null, gradesRead: null,
   renderIdentityView: null,
+  pluginStartAnswered: null, pluginStartRefused: null, pluginsConnectionLost: null,
+  actRefused: null, actsLost: null, revokeAnswered: null, revokeLost: null,
   openSettings: null, openUpdates: null, renderBackups: null, renderMailRepair: null, renderMessages: null,
-  renderPublicName: null, renderSandbox: null, renderUpdate: null,
+  renderPublicName: null, renderSandbox: null, renderTools: null, renderUpdate: null, renderExpertPlaces: null,
   requestSettingsSection: null, settingsAddress: null, settingsSection: null,
 };

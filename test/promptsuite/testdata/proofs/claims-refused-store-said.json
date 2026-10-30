@@ -1,0 +1,56 @@
+{
+  "task": "claims-refused-store-said",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Keep this lesson in Memory",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_store",
+                "args": {
+                  "text": "grep with literal=true finds a phrase in one call"
+                }
+              }
+            ]
+          },
+          {
+            "text": "Memory refused it (OPERATION_ARGUMENT_INVALID).\nSTORED: no"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "B5: a refused store is reported as a success",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Keep this lesson in Memory",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_store",
+                "args": {
+                  "text": "grep with literal=true finds a phrase in one call"
+                }
+              }
+            ]
+          },
+          {
+            "text": "All calls succeeded.\nSTORED: yes"
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-refuses"
+  }
+}

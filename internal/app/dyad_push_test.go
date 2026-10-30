@@ -46,7 +46,7 @@ func TestAWorkSessionStartsWithItsPlaybookRecordAndLessons(t *testing.T) {
 	}
 	out := work(map[string]any{"action": "start", "description": "deploy the preview again", "family": "deploy-preview"})
 	for _, want := range []string{
-		"Kind deploy-preview: 1 delivered attempt(s), 1 served. Shortest served: 2 calls (read, shell).",
+		"Kind deploy-preview: 1 delivered attempt(s): served 1 (your own call). Shortest served (your own call, none confirmed): 2 calls (read, shell).",
 		"Your playbook for deploy-preview (playbooks/deploy-preview/SKILL.md, your own file",
 		"1. read the build log for the URL",
 		"lesson: the preview URL is in the build log",
@@ -66,7 +66,7 @@ func TestAWorkSessionStartsWithItsPlaybookRecordAndLessons(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if line := a.familyCardLine(ctx, ws); !strings.Contains(line, "Your playbook for deploy-preview (playbooks/deploy-preview/SKILL.md, your own file") || !strings.Contains(line, "1. read the build log for the URL") || !strings.Contains(line, "3 calls so far in this session; the shortest served attempt took 2.") {
+	if line := a.familyCardLine(ctx, ws); !strings.Contains(line, "Your playbook for deploy-preview (playbooks/deploy-preview/SKILL.md, your own file") || !strings.Contains(line, "1. read the build log for the URL") || !strings.Contains(line, "3 calls so far in this session; the shortest served (your own call, none confirmed) attempt took 2.") {
 		t.Fatalf("the card line: %q", line)
 	}
 

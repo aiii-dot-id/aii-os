@@ -116,7 +116,7 @@ func TestThePrivateDirectoryNeedsNoGrantAndFollowsTheTierRule(t *testing.T) {
 // refusal written to the floor's audit, naming the plugin.
 func TestAPluginWorksInTheIdentitysSandbox(t *testing.T) {
 	base := t.TempDir()
-	home := filepath.Join(base, "vega")
+	home := filepath.Join(base, "example")
 	data := filepath.Join(home, "data")
 	work := filepath.Join(base, "work")
 	outside := filepath.Join(base, "elsewhere")

@@ -27,8 +27,19 @@ const (
 	sandboxHeldEarlier = "HELD_EARLIER"
 )
 
-var errSandboxHeldInSafe = &SandboxHeldError{Why: sandboxHeldSafe,
-	Require: "SAFE holds, and while it does the sandbox is on whatever the saved setting says; the saved setting applies again at a start that passes"}
+var (
+	errSandboxHeldInSafe = &SandboxHeldError{Why: sandboxHeldSafe,
+		Require: "SAFE holds, and while it does the sandbox is on whatever the saved setting says; the saved setting applies again at a start that passes"}
+	errSandboxHeldWaiting = &SandboxHeldError{Why: sandboxHeldSafe,
+		Require: "this start waits for Ring 5, and until it completes the sandbox is on whatever the saved setting says; the saved setting applies again at the start that completes"}
+)
+
+func (a *App) sandboxHeldInPosture() *SandboxHeldError {
+	if h, _ := a.Hold(); h.Waiting {
+		return errSandboxHeldWaiting
+	}
+	return errSandboxHeldInSafe
+}
 
 const sandboxNeedsToken = "turning it off requires this dashboard to ask for its access token, so that only a browser signed in with it can, and it does not now. Turn that on in Settings, under Dashboard, with Ask for an access token"
 
@@ -99,7 +110,7 @@ func keptByTheBoundaryAlone(rules []*firewall.Rule, home string, roots []string)
 	for _, r := range rules {
 		within := false
 		for i, dir := range reach {
-			granted := i > 0 && !r.ReadOpen
+			granted := i > 0
 			if inside(dir, r.Path) {
 				within = true
 				if granted && r.Stem {
@@ -125,10 +136,7 @@ func keptByTheBoundaryAlone(rules []*firewall.Rule, home string, roots []string)
 	return kept, slices.Compact(open)
 }
 
-const (
-	machineryReason = "Your host's own machinery, outside your home: what updates and starts your program, the programs and trust roots it runs by, the credentials it reads, its service's link and stores, and its temporary files. None of it is yours to read or change."
-	logsReason      = "Your host's logs, outside your home: yours to read with read, grep and ls, and not to write."
-)
+const machineryReason = "Your host's own machinery, outside your home: what updates and starts your program, the programs and trust roots it runs by, the credentials it reads, its service's link and stores, and its temporary files. None of it is yours to read or change."
 
 func hostMachinery(cfg Config) ([]*firewall.Rule, error) {
 	var out []*firewall.Rule
@@ -188,10 +196,6 @@ func hostMachinery(cfg Config) ([]*firewall.Rule, error) {
 				place("sub.borrowed", "credentials your host borrows", machineryReason, path)
 			}
 		}
-
-		for _, suffix := range []string{configBeforeUpdate, configRolledBack} {
-			place("sub.config", ConfigFileName, firewall.DefaultPolicy().Rule("sub.config").Reason, cfg.SourcePath+suffix)
-		}
 	}
 
 	if machine.Supported {
@@ -211,12 +215,6 @@ func hostMachinery(cfg Config) ([]*firewall.Rule, error) {
 
 	for _, prefix := range []string{pluginhost.ArtifactDirPrefix, sections.ExtractDirPrefix} {
 		place("sub.temp", "your host's temporary files", machineryReason, filepath.Join(os.TempDir(), prefix)).Stem = true
-	}
-
-	for _, dir := range []string{cfg.Logs.Dir, filepath.Dir(LogControlPathIn(identityHomeFromConfig(cfg.SourcePath)))} {
-		if dir != "" {
-			place("sub.logs", "your host's logs", logsReason, dir).ReadOpen = true
-		}
 	}
 	return out, nil
 }
@@ -252,7 +250,7 @@ func (a *App) moveSandbox(cfg Config, off bool) error {
 
 		if _, safe := a.SafeMode(); safe {
 			policy.SetBoundary(true)
-			return errSandboxHeldInSafe
+			return a.sandboxHeldInPosture()
 		}
 
 		if !a.accessTokenInForce() {
@@ -303,7 +301,12 @@ func (a *App) keepSandboxOffPlaces() {
 }
 
 func (a *App) sandboxHeld(cfg Config) (why, sentence string) {
-	if _, safe := a.SafeMode(); safe {
+	if h, safe := a.Hold(); safe && h.Waiting {
+		if cfg.Tools.SandboxOff {
+			return sandboxHeldSafe, "This start waits for Ring 5, and until it completes the sandbox is on. The saved setting is off and applies again at the start that completes."
+		}
+		return sandboxHeldSafe, "This start waits for Ring 5, and until it completes the sandbox is on and cannot be turned off."
+	} else if safe {
 
 		if cfg.Tools.SandboxOff {
 			return sandboxHeldSafe, "SAFE holds, and while it does the sandbox is on. The saved setting is off and applies again at a start that passes."

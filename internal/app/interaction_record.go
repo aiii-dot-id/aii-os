@@ -26,7 +26,12 @@ func (a *App) recordConversationForReceipt(ctx, receiptCtx context.Context, role
 	if a.keyPair != nil {
 		fingerprint = a.keyPair.Fingerprint()
 	}
-	ref, loc, err := a.engine.RecordConversationLocated(ctx, role, text, interaction.Details{})
+
+	var details interaction.Details
+	if role == string(interaction.Operator) {
+		details.Said = interaction.SaidOf(receiptCtx)
+	}
+	ref, loc, err := a.engine.RecordConversationLocated(ctx, role, text, details)
 	if role == string(interaction.Participant) && err == nil && ref.Sequence != 0 && a.store != nil {
 		if id := inboundID(receiptCtx); id != "" {
 			if err := a.store.AnnotateTurn(ref.Sequence, "turn_event.arrival", id, `{}`); err != nil {
@@ -48,13 +53,31 @@ func (a *App) recordConversationForReceipt(ctx, receiptCtx context.Context, role
 
 func (a *App) recordReply(ctx context.Context, text string, result conversation.Result) (store.InteractionRef, error) {
 	ref, err := a.recordConversationRef(ctx, string(interaction.Resident), text)
-	if err != nil || ref.Sequence == 0 || a.store == nil {
+	if err != nil {
 		return ref, err
+	}
+	a.recordLoopNotes(ctx, ref.ID, result.Notes)
+	if ref.Sequence == 0 || a.store == nil {
+		return ref, nil
 	}
 	if err := a.store.AddReasoning(ref.Sequence, replyReasoning(result)); err != nil {
 		logsink.Warn("turn.error", "reasoning of turn %d not recorded: %v", ref.Sequence, err)
 	}
 	return ref, nil
+}
+
+func (a *App) recordLoopNotes(ctx context.Context, about string, notes []string) {
+	if len(notes) == 0 || a.engine == nil {
+		return
+	}
+	if about == "" {
+		about = a.unansweredAnchor(ctx)
+	}
+	for _, note := range notes {
+		if _, err := a.engine.RecordRelatedConversationRef(ctx, string(interaction.System), note, about, interaction.Details{ReasonCode: store.ReasonLoopNote}); err != nil {
+			logsink.Warn("turn.error", "the loop's note on the turn was not recorded (%v): %s", err, note)
+		}
+	}
 }
 
 func replyReasoning(r conversation.Result) []store.ReasoningCall {

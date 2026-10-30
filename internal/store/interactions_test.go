@@ -246,7 +246,8 @@ func TestInteractionOwnerTransactionsRollBackWhenRecordingFails(t *testing.T) {
 		}
 	}
 	var n int
-	for _, q := range []string{`SELECT COUNT(*) FROM conversations WHERE kind='tool_call' AND turn_id='other'`, `SELECT COUNT(*) FROM outbox WHERE id='mail'`, `SELECT COUNT(*) FROM turn_annotations`} {
+	// The operator's turn above carries the mark written with it (AnnotationSaid).
+	for _, q := range []string{`SELECT COUNT(*) FROM conversations WHERE kind='tool_call' AND turn_id='other'`, `SELECT COUNT(*) FROM outbox WHERE id='mail'`, `SELECT COUNT(*) FROM turn_annotations WHERE kind != '` + AnnotationSaid + `'`} {
 		if err = s.DB().QueryRow(q).Scan(&n); err != nil || n != 0 {
 			t.Fatal("partial owner write", q, n, err)
 		}

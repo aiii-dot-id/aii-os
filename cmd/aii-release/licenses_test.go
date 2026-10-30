@@ -61,7 +61,8 @@ func TestTheThirdPartyLicencesGenerateForEveryShippedProgram(t *testing.T) {
 			t.Errorf("%s %s is built into a shipped program and has no section", m.Path, m.Version)
 		}
 	}
-	for _, said := range []string{"THIRD-PARTY SOFTWARE IN AII OS", "The Go programming language: runtime and standard library", "golang.org/x/crypto ", "modernc.org/sqlite ", "github.com/tetratelabs/wazero "} {
+	for _, said := range []string{"THIRD-PARTY SOFTWARE IN AII OS", "The Go programming language: runtime and standard library", "golang.org/x/crypto ", "modernc.org/sqlite ", "github.com/tetratelabs/wazero ",
+		licensesRule + "models.dev: the model capability rows of config/providers.json\nthird_party/models.dev/LICENSE\n" + licensesRule + "MIT License\n\nCopyright (c) 2025 models.dev\n"} {
 		if !strings.Contains(text, said) {
 			t.Errorf("the generated file does not name %q", said)
 		}
@@ -145,7 +146,7 @@ func TestAModuleWithNoLicenceFileStopsTheGeneration(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(with, "LICENSES"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, err := renderThirdPartyLicenses([]byte("go terms\n"), []thirdPartyModule{{Path: "example.com/with", Version: "v1.2.3", Dir: with}})
+	out, err := renderThirdPartyLicenses([]byte("go terms\n"), []thirdPartyModule{{Path: "example.com/with", Version: "v1.2.3", Dir: with}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,10 +161,10 @@ func TestAModuleWithNoLicenceFileStopsTheGeneration(t *testing.T) {
 	if bytes.Contains(out, []byte("not terms")) || bytes.Contains(out, []byte("\r")) {
 		t.Errorf("the rendering carries a file that states no terms, or a carriage return:\n%q", out)
 	}
-	if _, err := renderThirdPartyLicenses([]byte("go terms\n"), []thirdPartyModule{{Path: "example.com/without", Version: "v0.1.0", Dir: without}}); err == nil || !strings.Contains(err.Error(), "example.com/without v0.1.0 has no licence file") {
+	if _, err := renderThirdPartyLicenses([]byte("go terms\n"), []thirdPartyModule{{Path: "example.com/without", Version: "v0.1.0", Dir: without}}, nil); err == nil || !strings.Contains(err.Error(), "example.com/without v0.1.0 has no licence file") {
 		t.Fatalf("a module with no licence file did not stop the generation: %v", err)
 	}
-	if _, err := renderThirdPartyLicenses(nil, nil); err == nil {
+	if _, err := renderThirdPartyLicenses(nil, nil, nil); err == nil {
 		t.Fatal("a missing licence of the Go distribution did not stop the generation")
 	}
 }
@@ -208,5 +209,34 @@ func TestEveryArchiveAndInstallerCarriesTheThirdPartyLicences(t *testing.T) {
 				t.Errorf("the %s update archive does not carry %s", target.Platform, doc)
 			}
 		}
+	}
+}
+
+// DATA THE PROGRAMS CARRY CARRIES ITS LICENCE. The model capability rows of
+// config/providers.json are generated from models.dev, whose MIT licence
+// asks its notice to go with them: the tree's copy of that licence is in
+// every THIRD_PARTY_LICENSES, after the modules', and a copy that is
+// missing or empty stops the generation, as a module's missing licence
+// does.
+func TestTheDataTheProgramsCarryCarriesItsLicence(t *testing.T) {
+	out, err := renderThirdPartyLicenses([]byte("go terms\n"), nil, []licensedData{{Title: "data: rows", File: "third_party/d/LICENSE", Text: []byte("data terms\n")}})
+	if err != nil || !bytes.HasSuffix(out, []byte(licensesRule+"data: rows\nthird_party/d/LICENSE\n"+licensesRule+"data terms\n")) {
+		t.Fatalf("the data's licence is not the file's last section: %v\n%s", err, out)
+	}
+	if _, err := renderThirdPartyLicenses([]byte("go terms\n"), nil, []licensedData{{Title: "data: rows", File: "third_party/d/LICENSE"}}); err == nil || !strings.Contains(err.Error(), "data: rows: its licence third_party/d/LICENSE is empty or was not found") {
+		t.Fatalf("data with no licence did not stop the generation: %v", err)
+	}
+	if !slices.ContainsFunc(shippedData, func(d struct{ title, file string }) bool { return d.file == "third_party/models.dev/LICENSE" }) {
+		t.Fatal("models.dev's licence is not among the shipped data's")
+	}
+	if text := repoFile(t, "third_party", "models.dev", "LICENSE"); !strings.HasPrefix(text, "MIT License\n\nCopyright (c) 2025 models.dev\n") {
+		t.Fatalf("the tree's copy of models.dev's licence: %q", text)
+	}
+	// The birth copy's shapes of a secret follow gitleaks' default rules, in part.
+	if !slices.ContainsFunc(shippedData, func(d struct{ title, file string }) bool { return d.file == "third_party/gitleaks/LICENSE" }) {
+		t.Fatal("gitleaks' licence is not among the shipped data's")
+	}
+	if text := repoFile(t, "third_party", "gitleaks", "LICENSE"); !strings.HasPrefix(text, "MIT License\n\nCopyright (c) 2019 Zachary Rice\n") {
+		t.Fatalf("the tree's copy of gitleaks' licence: %q", text)
 	}
 }

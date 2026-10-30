@@ -46,7 +46,7 @@ func embeddingsNativeIn(t *testing.T, id, mode string, top map[string]any) (stri
 		manifest[k] = v
 	}
 	pkg := nativePackageAs(t, id, child, role, map[string][]byte{ModelsFile: models, EmbeddingsFile: []byte(member)}, manifest,
-		&packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: EmbeddingsInterfaceVersion, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}})
+		&packagetest.InterfaceSpec{ID: EmbeddingsInterfaceID, Version: 1, SchemaFile: "interfaces/aii.embeddings.v1.schema.json", Methods: []string{MethodEmbed}})
 	opts := supervisedOpts(Options{Roots: roots})
 	useStore(t, opts, model.fetch)
 	return pkg, opts
@@ -125,7 +125,8 @@ func TestAWorkingInstallAnswersItsProbesAndABrokenOneIsNamed(t *testing.T) {
 		t.Cleanup(func() { _ = ap.Deactivate(context.Background()) })
 		e := ap.Embeddings
 		return ap, e.Probe(context.Background(), func(ctx context.Context, kind, text string) ([]float32, error) {
-			return e.Ask(ctx, reg, ap, kind, text)
+			got, err := e.Ask(ctx, reg, ap, kind, text)
+			return got.Vector, err
 		})
 	}
 	if _, err := check("vectors"); err != nil {

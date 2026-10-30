@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -214,8 +215,8 @@ func TestParseModelListNativeImageCapabilities(t *testing.T) {
 				t.Fatalf("published model: %v %v", models, err)
 			}
 			got := meta["vision-model"]
-			if (got.Images != nil) != tc.known || (got.Images != nil && *got.Images != tc.want) {
-				t.Fatalf("image support = %v, want known=%v images=%v", got.Images, tc.known, tc.want)
+			if images := saidOf(got.Input, "image"); (images != nil) != tc.known || (images != nil && *images != tc.want) {
+				t.Fatalf("image support = %v, want known=%v images=%v", got.Input, tc.known, tc.want)
 			}
 			if tc.known {
 				if _, ok := meta["vision-model"]; !ok || got.Context != 0 || got.MaxOut != 0 {
@@ -227,7 +228,7 @@ func TestParseModelListNativeImageCapabilities(t *testing.T) {
 		})
 	}
 	_, meta, err := parseModelList([]byte(`{"models":[{"name":"models/vision-model","supportedGenerationMethods":["generateContent"],"inputTokenLimit":1000}]}`))
-	if err != nil || meta["vision-model"].Images != nil {
+	if err != nil || saidOf(meta["vision-model"].Input, "image") != nil {
 		t.Fatalf("a name or supported method was mistaken for image support: %+v %v", meta, err)
 	}
 }
@@ -248,7 +249,7 @@ func TestNativeImageCapabilitiesFollowCanonicalNames(t *testing.T) {
 			}
 			for _, name := range []string{"alias", "canonical"} {
 				got := meta[name]
-				if got.Images == nil || *got.Images != supportsImages || got.Context != 2000 || got.MaxOut != 200 {
+				if images := saidOf(got.Input, "image"); images == nil || *images != supportsImages || got.Context != 2000 || got.MaxOut != 200 {
 					t.Fatalf("%s: metadata not carried under %q: %+v", field, name, got)
 				}
 			}
@@ -267,10 +268,10 @@ func TestNativeImageCapabilitiesFollowCanonicalNames(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := meta["role"].Images; got == nil || !*got {
+		if got := saidOf(meta["role"].Input, "image"); got == nil || !*got {
 			t.Fatalf("alias lost its own image support: %+v", meta)
 		}
-		if got := meta["X"].Images; (got != nil) != tc.known || (got != nil && *got) {
+		if got := saidOf(meta["X"].Input, "image"); (got != nil) != tc.known || (got != nil && *got) {
 			t.Fatalf("alias overrode its canonical model's own row: %+v", meta)
 		}
 	}
@@ -282,7 +283,7 @@ func TestALiveListSurvivesAFailedReprobe(t *testing.T) {
 	writeTestProviders(t, dir, entry)
 	a := New(&Config{SourcePath: filepath.Join(dir, "config.json")})
 	a.providers.runtime.provStatus = map[string]providerProbe{entry.Name: {
-		state: "ok", models: []string{"live"}, checkedAt: time.Now().Add(-2 * providerStatusTTL), key: probeKey(entry),
+		state: "ok", models: []string{"live"}, checkedAt: time.Now().Add(-2 * defaultModelListCacheSeconds * time.Second), key: probeKey(entry),
 	}}
 	providers := a.providerDirectory().Providers
 	if len(providers) != 1 || providers[0].Status != "unreachable" {
@@ -609,5 +610,70 @@ func TestAModelsOwnWindowHoldsTheEntrysWindow(t *testing.T) {
 	llmCfg.Model = "small"
 	if _, _, err := a.resolveLLMConfig(Config{LLM: llmCfg}, bad); err == nil || !strings.Contains(err.Error(), "negative context window") {
 		t.Fatalf("a negative row window resolved: %v", err)
+	}
+}
+
+func TestEachVendorsListIsReadForWhatItSays(t *testing.T) {
+	type want struct {
+		in, out     map[string]bool
+		tools       *bool
+		ctx, maxOut int
+	}
+	all := func(kinds []string, yes ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, k := range kinds {
+			m[k] = slices.Contains(yes, k)
+		}
+		return m
+	}
+	for _, tc := range []struct {
+		vendor, body, model string
+		want                want
+	}{
+		{"anthropic", `{"data":[{"id":"claude-x","max_input_tokens":200000,"max_tokens":64000,"capabilities":{"image_input":{"supported":true},"pdf_input":{"supported":true},"citations":{"supported":true}}}]}`, "claude-x",
+			want{in: map[string]bool{"image": true, "pdf": true}, ctx: 200000, maxOut: 64000}},
+		{"openrouter", `{"data":[{"id":"a/m","context_length":1000,"architecture":{"input_modalities":["text","image","file"],"output_modalities":["text"]},"supported_parameters":["max_tokens","tools","tool_choice"]}]}`, "a/m",
+			want{in: all(inputKinds, "image", "pdf"), out: all(outputKinds, "text"), tools: boolp(true), ctx: 1000}},
+		{"openrouter without tools", `{"data":[{"id":"a/m","architecture":{"input_modalities":["text"]},"supported_parameters":["max_tokens"]}]}`, "a/m",
+			want{in: all(inputKinds), tools: boolp(false)}},
+		{"llama.cpp", `{"data":[{"id":"local.gguf","architecture":{"input_modalities":["text","image","audio"],"output_modalities":["text"]}}]}`, "local.gguf",
+			want{in: all(inputKinds, "image", "audio"), out: all(outputKinds, "text")}},
+		{"deepseek", `{"data":[{"id":"deepseek-v4","input_modalities":["text"],"output_modalities":["text"],"context_window":1000000,"max_output_tokens":384000}]}`, "deepseek-v4",
+			want{in: all(inputKinds), out: all(outputKinds, "text"), ctx: 1000000, maxOut: 384000}},
+		{"moonshot", `{"data":[{"id":"kimi-k3","context_length":262144,"supports_image_in":true,"supports_video_in":false}]}`, "kimi-k3",
+			want{in: map[string]bool{"image": true, "video": false}, ctx: 262144}},
+		{"mistral", `{"data":[{"id":"mistral-x","max_context_length":32000,"capabilities":{"vision":false,"function_calling":true}}]}`, "mistral-x",
+			want{in: map[string]bool{"image": false}, tools: boolp(true)}},
+		{"chatgpt", `{"models":[{"slug":"gpt-x","context_window":272000,"input_modalities":["text","image"]}]}`, "gpt-x",
+			want{in: all(inputKinds, "image"), ctx: 272000}},
+		{"chatgpt silent", `{"models":[{"slug":"gpt-x","context_window":272000}]}`, "gpt-x",
+			want{ctx: 272000}},
+		{"lm studio", `{"models":[{"type":"llm","key":"qwen-vl","max_context_length":262144,"capabilities":{"vision":true,"trained_for_tool_use":true}}]}`, "qwen-vl",
+			want{in: map[string]bool{"image": true}, tools: boolp(true), ctx: 262144}},
+		{"dashscope", `{"output":{"total":1,"models":[{"model":"qwen-x","features":["structured-outputs"],"inference_metadata":{"request_modality":["Text","Image","Video"],"response_modality":["Text"]},"model_info":{"context_window":131072,"max_output_tokens":16384}}]}}`, "qwen-x",
+			want{in: all(inputKinds, "image", "video"), out: all(outputKinds, "text"), tools: boolp(false), ctx: 131072, maxOut: 16384}},
+		{"gemini", `{"models":[{"name":"models/gemini-x","inputTokenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateContent"]}]}`, "gemini-x",
+			want{ctx: 1048576, maxOut: 65536}},
+	} {
+		t.Run(tc.vendor, func(t *testing.T) {
+			models, meta, err := parseModelList([]byte(tc.body))
+			if err != nil || !slices.Contains(models, tc.model) {
+				t.Fatalf("models %v, %v", models, err)
+			}
+			got := meta[tc.model]
+			if !reflect.DeepEqual(got.Input, tc.want.in) || !reflect.DeepEqual(got.Output, tc.want.out) || !reflect.DeepEqual(got.Tools, tc.want.tools) ||
+				got.Context != tc.want.ctx || got.MaxOut != tc.want.maxOut {
+				t.Fatalf("read %+v (tools %v), want %+v", got, got.Tools, tc.want)
+			}
+		})
+	}
+	// An Ollama server answers one model at a time, from its capabilities.
+	_, meta, err := parseShow("llava", []byte(`{"capabilities":["completion","vision"],"model_info":{"llama.context_length":4096}}`))
+	if got := meta["llava"]; err != nil || !reflect.DeepEqual(got.Input, map[string]bool{"image": true, "audio": false}) ||
+		!reflect.DeepEqual(got.Output, map[string]bool{"text": true, "image": false}) || got.Tools == nil || *got.Tools {
+		t.Fatalf("ollama show read %+v, %v", got, err)
+	}
+	if _, meta, err := parseShow("x", []byte(`{"modelfile":""}`)); err != nil || meta["x"].answers() {
+		t.Fatalf("a description with no capabilities was read as an answer: %+v %v", meta, err)
 	}
 }

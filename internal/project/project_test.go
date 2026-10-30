@@ -88,7 +88,7 @@ func TestSetStateRefusesANonTransition(t *testing.T) {
 		t.Fatalf("first close: %v", err)
 	}
 	if _, err := m.SetState(p.ID, "closed"); err == nil {
-		t.Fatal("a second close of a closed project succeeded — the duplicate-lineage door (D74)")
+		t.Fatal("a second close of a closed project succeeded — the duplicate-lineage door")
 	}
 	if _, err := m.SetState(p.ID, "open"); err != nil {
 		t.Fatalf("reopen: %v", err)

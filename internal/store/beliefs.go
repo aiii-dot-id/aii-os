@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -106,11 +107,17 @@ func (s *Store) chainEndLocked(id, first string) (TensionEnd, error) {
 	return head, nil
 }
 
+var ErrBeliefNotFound = errors.New("no belief holds that id")
+
 func (s *Store) GetBelief(id string) (*Belief, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return beliefRead(s.db, id)
+	b, err := beliefRead(s.db, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %w", ErrBeliefNotFound, err)
+	}
+	return b, err
 }
 
 func scanBeliefs(rows *sql.Rows) ([]Belief, error) {
@@ -130,6 +137,21 @@ func (s *Store) ListEdgesForBelief(beliefID string) ([]Edge, error) {
 	defer s.mu.RUnlock()
 
 	return edgesForBeliefRead(s.db, beliefID)
+}
+
+func (s *Store) EdgesTouching(ids []string) ([]Edge, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return edgesRead(s.db, `SELECT id, from_id, to_id, edge_type, created_seq FROM edges
+		 WHERE archived = 0 AND (from_id IN (SELECT value FROM json_each(?)) OR to_id IN (SELECT value FROM json_each(?)))
+		 ORDER BY created_seq, id`, string(list), string(list))
 }
 
 func (s *Store) OldestStaleBelief(minGap uint64) (StaleBelief, bool, error) {

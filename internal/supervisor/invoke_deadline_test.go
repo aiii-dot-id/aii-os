@@ -3,7 +3,10 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"io"
+	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -183,4 +186,86 @@ func aNestedReplyHonoursTheDeadline(t *testing.T, spec Spec) {
 	if err != nil || !strings.Contains(string(resp), `"upstream_bytes"`) {
 		t.Fatalf("the call after a cut-off one must be served: %v %s", err, resp)
 	}
+}
+
+// A Windows pipe close can wait for a blocked writer. Model that dependency
+// exactly while retaining the real child, reaper, and containment: neither
+// hard cancellation nor graceful Close may wait for it before killing the child.
+func TestStopsReachTheKillWhenPipeCloseWaitsForTheChild(t *testing.T) {
+	for _, hard := range []bool{true, false} {
+		t.Run(map[bool]string{true: "hard cancellation", false: "graceful close"}[hard], func(t *testing.T) {
+			cmd := exec.Command(fakechildBin, "deaf")
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			contained, _, err := containProcess(cmd.Process.Pid, 0)
+			if err != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatal(err)
+			}
+			c := &child{cmd: cmd, stdin: stdin, exited: make(chan struct{}), abandon: make(chan struct{})}
+			s := &Supervisor{spec: childSpec("deaf"), child: c, state: StateRunning, gen: 1}
+			ended := make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(ended) }) }
+			c.contained = func() error {
+				release()
+				if contained != nil {
+					return contained()
+				}
+				return nil
+			}
+			c.stdin = &closeAfterChild{WriteCloser: c.stdin, ended: ended}
+			t.Cleanup(func() {
+				_ = c.cmd.Process.Kill()
+				release()
+				_ = s.Close()
+			})
+			// No successor is wanted in the hard-stop case. CloseContext makes
+			// the same transition itself in the graceful case.
+			if hard {
+				s.state = StateStopped
+			}
+			go s.reap(c, 1)
+			stopped := make(chan error, 1)
+			go func() {
+				if hard {
+					s.kill(c, true)
+					stopped <- nil
+					return
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				stopped <- s.CloseContext(ctx)
+			}()
+			select {
+			case err := <-stopped:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("pipe close prevented the stop from reaching the kill")
+			}
+			select {
+			case <-c.exited:
+			default:
+				t.Fatal("stop returned before child and containment retirement")
+			}
+		})
+	}
+}
+
+type closeAfterChild struct {
+	io.WriteCloser
+	ended <-chan struct{}
+}
+
+func (c *closeAfterChild) Close() error {
+	<-c.ended
+	return c.WriteCloser.Close()
 }

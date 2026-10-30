@@ -3,7 +3,9 @@ package publicname
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,13 +159,17 @@ func TestRelayAdmissionRequiresAnAcceptingApplicationLifecycle(t *testing.T) {
 }
 
 func TestARelayAlreadyChosenKeepsCarryingBehindAShortToken(t *testing.T) {
-	f := newRelayFixture(t)
-	f.dash.SetAccessToken(true, "short")
-	if n := f.dash.AccessTokenLength(); n >= dashboard.ShortAccessToken {
-		t.Fatalf("the fixture's token is not short: %d", n)
-	}
-	f.r.startRelay(Settings{}, "fixture.example.test", certs.RelayEndpoint{Name: "127.0.0.1", Port: 1})
-	if !f.published() {
-		t.Fatal("a relay already chosen was refused its tunnel because the token is short: an upgrade would cut the operator off")
+	for _, n := range []int{5, dashboard.ShortAccessToken, 63} {
+		t.Run(fmt.Sprintf("%d characters", n), func(t *testing.T) {
+			f := newRelayFixture(t)
+			f.dash.SetAccessToken(true, strings.Repeat("s", n))
+			if got := f.dash.AccessTokenLength(); got != n {
+				t.Fatalf("the fixture's token is %d characters, want %d", got, n)
+			}
+			f.r.startRelay(Settings{}, "fixture.example.test", certs.RelayEndpoint{Name: "127.0.0.1", Port: 1})
+			if !f.published() {
+				t.Fatalf("a relay already chosen was refused its tunnel behind a %d-character token: an upgrade would cut the operator off", n)
+			}
+		})
 	}
 }

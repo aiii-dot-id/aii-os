@@ -467,6 +467,9 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
     PRIMARY KEY (store, id)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_memory_vectors_basis ON memory_vectors (store, basis);
+CREATE TRIGGER IF NOT EXISTS memory_vectors_unread_ad AFTER DELETE ON memory_vectors BEGIN
+    DELETE FROM runtime_meta WHERE key = 'memory_vectors.unread/' || old.store || '/' || old.id;
+END;
 
 CREATE TABLE IF NOT EXISTS memory_decisions (
     -- provenance: ephemeral

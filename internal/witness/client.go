@@ -193,6 +193,10 @@ func verifyManifestBundle(raw []byte, platformEnv *PublicKeyEnvelope, witnessKey
 	if err := sigenvelope.ValidatePublicKeyEnvelope(platformEnv, ProfileRoot); err != nil {
 		return nil, fmt.Errorf("platform pubkey envelope: %w", err)
 	}
+	return verifyManifestUnder(raw, platformEnv, witnessKey, checkWindow)
+}
+
+func verifyManifestUnder(raw []byte, platformEnv *PublicKeyEnvelope, witnessKey *PublicKeyEnvelope, checkWindow bool) (*manifestPayload, error) {
 
 	payloadRaw, err := sigenvelope.VerifyPayload(raw, platformEnv, "witness.public_key_manifest", ProfileRoot)
 	if err != nil {
@@ -302,6 +306,20 @@ type BookmarkResult struct {
 }
 
 const (
+	codeCadence = "cadence"
+
+	codeRollback = "rollback"
+
+	codeFork = "fork"
+
+	codeIdentityKeyMismatch = "identity_key_mismatch"
+
+	codeKeyAlreadyEnrolled = "key_already_enrolled"
+
+	codeContextRequired = "context_required"
+)
+
+const (
 	conflictMsgCadence = "witness bookmark cadence below hosted minimum"
 
 	conflictMsgRollbackFork = "witness bookmark rollback or fork"
@@ -316,6 +334,18 @@ type ConflictError struct {
 	WitnessSide bool
 
 	WitnessForm bool
+
+	Code string
+
+	Evidence *RefusalEvidence
+}
+
+type RefusalEvidence struct {
+	Receipt                     *WitnessReceipt
+	RegisteredIdentityID        string
+	RegisteredIdentityPublicKey json.RawMessage
+
+	Unreadable string
 }
 
 type ReplyKind string
@@ -359,29 +389,85 @@ func (e *ConflictError) Error() string {
 }
 
 func (e *ConflictError) IsCadence() bool {
-	return !e.Local && e.Message == conflictMsgCadence
+	if e.Local {
+		return false
+	}
+	if e.Code != "" {
+		return e.Code == codeCadence
+	}
+	return e.Message == conflictMsgCadence
 }
 
 func (e *ConflictError) IsIntegrity() bool {
 	if e.Local {
 		return !e.WitnessSide
 	}
+	if e.Code != "" {
+		return e.Code == codeRollback || e.Code == codeFork || e.Code == codeIdentityKeyMismatch
+	}
 	return e.Message == conflictMsgRollbackFork || e.Message == conflictMsgIdentityMismatch
 }
 
+func (e *ConflictError) IsKeyAlreadyEnrolled() bool {
+	return !e.Local && e.Code == codeKeyAlreadyEnrolled
+}
+
+func (e *ConflictError) IsContextRequired() bool {
+	return !e.Local && e.Code == codeContextRequired
+}
+
 func (e *ConflictError) Unrecognised() bool {
-	return !e.Local && !e.IsCadence() && !e.IsIntegrity()
+	return !e.Local && !e.IsCadence() && !e.IsIntegrity() && !e.IsKeyAlreadyEnrolled() && !e.IsContextRequired()
 }
 
 func newConflictError(body []byte) *ConflictError {
 	var wire struct {
 		Error string `json:"error"`
+		Code  string `json:"code"`
 	}
 
 	if err := json.Unmarshal(body, &wire); err == nil && wire.Error != "" {
-		return &ConflictError{Message: tlsfault.Printable(wire.Error, tlsfault.MaxSaid), WitnessForm: true}
+		return &ConflictError{Message: tlsfault.Printable(wire.Error, tlsfault.MaxSaid), Code: tlsfault.Printable(wire.Code, tlsfault.MaxSaid), WitnessForm: true,
+			Evidence: refusalEvidence(body)}
 	}
 	return &ConflictError{Message: tlsfault.Printable(strings.TrimSpace(string(body)), tlsfault.MaxSaid)}
+}
+
+func refusalEvidence(body []byte) *RefusalEvidence {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(body, &members); err != nil {
+		return nil
+	}
+	rawReceipt, hasReceipt := members["receipt"]
+	rawID, hasID := members["registered_identity_id"]
+	rawKey, hasKey := members["registered_identity_public_key"]
+	if !hasReceipt && !hasID && !hasKey {
+		return nil
+	}
+	ev := &RefusalEvidence{}
+	var unreadable []string
+	if hasReceipt {
+		if r, err := DecodeReceipt(rawReceipt); err != nil {
+			unreadable = append(unreadable, "receipt: "+err.Error())
+		} else {
+			ev.Receipt = &r
+		}
+	}
+	if hasID {
+		if err := json.Unmarshal(rawID, &ev.RegisteredIdentityID); err != nil || ev.RegisteredIdentityID == "" {
+			ev.RegisteredIdentityID = ""
+			unreadable = append(unreadable, "registered_identity_id is not an identity id")
+		}
+	}
+	if hasKey {
+		if canonical, err := canonicaljson.CanonicalizeV1(rawKey); err != nil {
+			unreadable = append(unreadable, "registered_identity_public_key: "+err.Error())
+		} else {
+			ev.RegisteredIdentityPublicKey = canonical
+		}
+	}
+	ev.Unreadable = tlsfault.Printable(strings.Join(unreadable, "; "), tlsfault.MaxSaid)
+	return ev
 }
 
 func (c *Client) Bookmark(req WitnessRequest) (*BookmarkResult, error) {
@@ -409,8 +495,8 @@ func (c *Client) Bookmark(req WitnessRequest) (*BookmarkResult, error) {
 	if resp.StatusCode != StatusCreated && resp.StatusCode != StatusOK {
 		return nil, fmt.Errorf("witness returned %d: %s", resp.StatusCode, tlsfault.Printable(string(respBody), tlsfault.MaxSaid))
 	}
-	var receipt WitnessReceipt
-	if err := json.Unmarshal(respBody, &receipt); err != nil {
+	receipt, err := DecodeReceipt(respBody)
+	if err != nil {
 		return nil, fmt.Errorf("decode receipt: %w", err)
 	}
 	return &BookmarkResult{Receipt: receipt, First: resp.StatusCode == StatusCreated}, nil
@@ -423,6 +509,13 @@ func VerifyReceipt(receipt WitnessReceipt, req WitnessRequest, witnessKey *Publi
 	if receipt.LedgerOrdinal != req.LedgerOrdinal || receipt.LedgerHash != req.LedgerHash {
 		return fmt.Errorf("receipt ledger fields do not match request")
 	}
+	if receipt.ContextSHA256 != "" {
+		return fmt.Errorf("the receipt signs context %s and the request carried none: %w", receipt.ContextSHA256, ErrLaterReceiptForm)
+	}
+	return verifyReceiptSignature(receipt, witnessKey)
+}
+
+func verifyReceiptSignature(receipt WitnessReceipt, witnessKey *PublicKeyEnvelope) error {
 	sig := receipt.WitnessSignature
 	if sig.SignatureProfile != ProfileFast {
 		return fmt.Errorf("receipt signature_profile %q", sig.SignatureProfile)

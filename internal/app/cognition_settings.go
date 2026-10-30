@@ -9,7 +9,9 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/limits"
+	"github.com/aiii-dot-id/aii-os/internal/prompt"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/updates"
 )
 
 type cognitionSetting struct {
@@ -36,6 +38,10 @@ func (s cognitionSetting) place() string {
 		return "Settings → Prompt"
 	case "substrate":
 		return "Settings → Substrate"
+	case "tools":
+		return "Settings → Tools"
+	case "updates":
+		return "Settings → Updates"
 	}
 	return "Settings → Identity → Cognition"
 }
@@ -168,11 +174,11 @@ func graceShort(c Config) (key string, rounds, most int, who string) {
 	grace, resident := c.Agency.TurnCheckpointGraceRounds, c.Agency.MaxToolRounds
 	switch {
 	case key == "agency.max_tool_rounds":
-		who = "no turn of the identity's would be checkpointed or continued"
+		who = "no turn of the identity's would be checkpointed"
 	case resident.Unlimited || resident.N <= 0 || grace < resident.N-1:
-		who = "no leg of a child's would be checkpointed or continued, though the identity's own turns still would"
+		who = "no leg of a child's would be checkpointed, though the identity's own turns still would"
 	default:
-		who = "neither the identity's turns nor a child's legs would be checkpointed or continued"
+		who = "neither the identity's turns nor a child's legs would be checkpointed"
 	}
 	return key, rounds, most, who
 }
@@ -182,6 +188,63 @@ var alarmFiringsSetting = cognitionSetting{key: "prompt.alarm_firings", min: 1, 
 	num: func(c *Config) *int { return &c.Prompt.AlarmFirings }}
 
 func (a *App) alarmFirings() int { return alarmFiringsSetting.n(a.configSnapshot()) }
+
+var workLineMaxCharsSetting = cognitionSetting{key: identity.WorkLineMaxCharsKey, min: 100, max: 1_000_000, unit: "characters", zero: true,
+	floor: "a line of ordinary length: under it a next move as the identities measured write one (the middle of them 146 to 176 characters) is refused at every write",
+	def:   fixed(identity.DefaultWorkLineMaxChars),
+	num:   func(c *Config) *int { return &c.Agency.WorkLineMaxChars }}
+
+var standingMaxCharsSetting = cognitionSetting{key: identity.StandingMaxCharsKey, min: 100, max: 1_000_000, unit: "characters", zero: true,
+	floor: "a line of ordinary length: under it a standing state of one ordinary line is refused at every write",
+	def:   fixed(identity.DefaultStandingMaxChars),
+	num:   func(c *Config) *int { return &c.Prompt.StandingMaxChars }}
+
+var playbookMaxBytesSetting = cognitionSetting{key: "prompt.playbook_max_bytes", min: 1, max: 1_000_000, unit: "bytes", zero: true,
+	def: fixed(defaultPlaybookMaxBytes),
+	num: func(c *Config) *int { return &c.Prompt.PlaybookMaxBytes }}
+
+var contextProvidersSetting = cognitionSetting{key: "plugins.context_providers", min: 1, max: 64, unit: "providers", zero: true,
+	def: fixed(defaultContextProviders),
+	num: func(c *Config) *int { return &c.Plugins.ContextProviders }}
+
+var contextTimeoutSetting = cognitionSetting{key: "plugins.context_timeout_ms", min: 1, max: 60_000, unit: "milliseconds", zero: true,
+	def: fixed(defaultContextTimeoutMs),
+	num: func(c *Config) *int { return &c.Plugins.ContextTimeoutMs }}
+
+var toolResultRunesSetting = cognitionSetting{key: "record.tool_result_runes", min: 1, max: 100_000, unit: "characters", zero: true,
+	def: fixed(store.TranscriptResultLimit),
+	num: func(c *Config) *int { return &c.Record.ToolResultRunes }}
+
+func (a *App) boundsConfig() Config {
+	if a.cfg == nil {
+		return Config{}
+	}
+	return a.configSnapshot()
+}
+
+var updateIntervalSetting = cognitionSetting{key: "updates.check_interval_minutes", min: updates.MinCheckIntervalMinutes, max: updates.MaxCheckIntervalMinutes, unit: "minutes", zero: true, card: "updates",
+	floor: "the least that keeps fifteen identities behind one address inside the 60 requests an hour GitHub allows it unauthenticated, at one request a check",
+	def:   fixed(updates.DefaultCheckIntervalMinutes),
+	num:   func(c *Config) *int { return &c.Updates.CheckIntervalMinutes }}
+
+func (a *App) updateInterval() time.Duration {
+	return time.Duration(updateIntervalSetting.n(a.boundsConfig())) * time.Minute
+}
+
+func (a *App) workLineMaxChars() int { return workLineMaxCharsSetting.n(a.boundsConfig()) }
+func (a *App) standingMaxChars() int { return standingMaxCharsSetting.n(a.boundsConfig()) }
+func (a *App) playbookMaxBytes() int { return playbookMaxBytesSetting.n(a.boundsConfig()) }
+
+func (a *App) contextRead() (providers int, each time.Duration) {
+	c := a.boundsConfig()
+	return contextProvidersSetting.n(c), time.Duration(contextTimeoutSetting.n(c)) * time.Millisecond
+}
+
+var operatorBeliefsSetting = cognitionSetting{key: "prompt.operator_beliefs_max_chars", min: 1, max: 1_000_000, unit: "characters", zero: true,
+	def: fixed(prompt.DefaultOperatorBeliefsMaxChars),
+	num: func(c *Config) *int { return &c.Prompt.OperatorBeliefsMaxChars }}
+
+func (a *App) operatorBeliefsMaxChars() int { return operatorBeliefsSetting.n(a.configSnapshot()) }
 
 const minReplyChars = 600
 
@@ -195,6 +258,10 @@ var cognitionSettings = []cognitionSetting{
 		num:   func(c *Config) *int { return &c.Cognition.ConsolidateMaxOps }},
 	{key: "agency.outcome_window", min: 1, max: 1_000_000, unit: "records", def: fixed(cognitive.DefaultOutcomeWindow),
 		num: func(c *Config) *int { return &c.Agency.OutcomeWindow }},
+	{key: "agency.tool_outcome_min", min: 1, max: 1_000_000, unit: "calls", zero: true, def: fixed(cognitive.DefaultToolOutcomeMin),
+		num: func(c *Config) *int { return &c.Agency.ToolOutcomeMin }},
+	{key: "agency.tool_outcome_window", min: 1, max: 8_760, unit: "hours", zero: true, def: fixed(int(cognitive.DefaultToolOutcomeWindow / time.Hour)),
+		num: func(c *Config) *int { return &c.Agency.ToolOutcomeWindow }},
 	{key: "cognition.self_model_every_minutes", min: 1, max: 1_000_000, unit: "lived minutes", zero: true, def: fixed(defaultSelfModelEveryMinutes),
 		num: func(c *Config) *int { return &c.Cognition.SelfModelEveryMinutes }},
 	{key: "cognition.identity_review_every_minutes", min: 1, max: 1_000_000, unit: "lived minutes", zero: true, def: fixed(defaultIdentityReviewEveryMinutes),
@@ -206,12 +273,21 @@ var cognitionSettings = []cognitionSetting{
 	{key: "prompt.self_model_max_tokens", min: minReplyChars / 3, max: 1_000_000, unit: "tokens", zero: true, def: fixed(store.SelfModelDefaultMaxTokens),
 		floor: "a hundred words as a portrait is counted, 600 characters at three bytes a token: under it no portrait is admitted, and the current one stands for good",
 		num:   func(c *Config) *int { return &c.Prompt.SelfModelMaxTokens }},
+
+	{key: "prompt.ring2_evidence_max_chars", min: prompt.MinRing2EvidenceChars, max: 10_000_000, unit: "characters", zero: true, def: fixed(prompt.DefaultRing2EvidenceChars),
+		floor: "the length of the account a cut line carries: under it a cut line is more account than source",
+		num:   func(c *Config) *int { return &c.Prompt.Ring2EvidenceMaxChars }},
+
+	{key: "prompt.charter_max_tokens", min: minReplyChars / 3, max: 1_000_000, unit: "tokens", zero: true, def: fixed(store.CharterDefaultMaxTokens),
+		floor: "a hundred words as a charter is counted, 600 characters at three bytes a token: under it an ordinary charter is refused, and the one on record cannot be amended",
+		num:   func(c *Config) *int { return &c.Prompt.CharterMaxTokens }},
 	{key: "prompt.ring3_max_chars", min: minReplyChars, max: 10_000_000, unit: "characters", zero: true, def: fixed(cognitive.DefaultRing3MaxChars),
 		floor: "the least a working-truth view is asked to be: a hundred words at six characters a word",
 		num:   func(c *Config) *int { return &c.Prompt.Ring3MaxChars }},
 	{key: "prompt.surfacing_max_chars", min: minReplyChars, max: 10_000_000, unit: "characters", zero: true, def: fixed(cognitive.DefaultSurfacingMaxChars),
 		floor: "the least a dream note is asked to be: a hundred words at six characters a word",
 		num:   func(c *Config) *int { return &c.Prompt.SurfacingMaxChars }},
+	operatorBeliefsSetting,
 	{key: "prompt.dream_conversation_max_chars", min: 1, max: 100_000_000, unit: "characters", zero: true, def: fixed(cognitive.DefaultConversationMaxChars),
 		num: func(c *Config) *int { return &c.Prompt.DreamConversationMaxChars }},
 	{key: "prompt.tensions_max_chars", min: 1, max: 10_000_000, unit: "characters", zero: true, def: fixed(cognitive.DefaultTensionsMaxChars),
@@ -220,11 +296,25 @@ var cognitionSettings = []cognitionSetting{
 		floor: "a hundred words at six characters a word, the floor of every note a facility writes",
 		num:   func(c *Config) *int { return &c.Prompt.BriefMaxChars }},
 	alarmFiringsSetting,
+	workLineMaxCharsSetting,
+	standingMaxCharsSetting,
+	playbookMaxBytesSetting,
+	toolResultRunesSetting,
+	contextProvidersSetting,
+	contextTimeoutSetting,
+
+	stopSetting,
+	handOverSetting,
+	sessionControlSetting,
+	restartAttemptsSetting,
+	updateIntervalSetting,
 	{key: "prompt.excerpt_chars", min: 1, max: 100_000, unit: "characters", zero: true, def: fixed(cognitive.DefaultExcerptChars),
 		num: func(c *Config) *int { return &c.Prompt.ExcerptChars }},
 	{key: "prompt.ring3_recent_experiences", min: 1, max: 1_000, unit: "experiences", zero: true, def: fixed(cognitive.DefaultRecentExperiences),
 		num: func(c *Config) *int { return &c.Prompt.Ring3RecentExperiences }},
+	workCardBeliefsSetting,
 	turnTokenBudgetSetting,
+	localTurnSecondsSetting,
 
 	toolSchemaRefusalsSetting,
 	checkpointCallsSetting,
@@ -246,10 +336,16 @@ var cognitionSettings = []cognitionSetting{
 	timeoutSetting,
 	retriesSetting,
 	retryBackoffSetting,
+	modelListTimeoutSetting,
+	modelListCacheSetting,
+	webFetchMaxBytesSetting,
 }
 
 var turnTokenBudgetSetting = cognitionSetting{key: "agency.turn_token_budget", min: 1, max: 1_000_000_000, unit: "tokens", zero: true, signed: true, perModel: "model", unlimited: true,
 	def: fixed(limits.DefaultTurnTokens), ceil: func(c *Config) *limits.Ceiling { return &c.Agency.TurnTokenBudget }}
+
+var localTurnSecondsSetting = cognitionSetting{key: "agency.turn_seconds_local", min: 1, max: 86_400, unit: "seconds", zero: true,
+	def: fixed(limits.DefaultTurnSecondsLocal), num: func(c *Config) *int { return &c.Agency.TurnSecondsLocal }}
 
 var maxToolCallsSetting = cognitionSetting{key: "agency.max_tool_calls", min: 1, max: 1_000_000_000, unit: "tool calls", zero: true, perModel: "model", unlimited: true, card: "agency",
 	def: unlimitedDefault, ceil: func(c *Config) *limits.Ceiling { return &c.Agency.MaxToolCalls }}
@@ -288,6 +384,15 @@ var retriesSetting = cognitionSetting{key: "llm.retries", min: -1, max: 100, uni
 
 var retryBackoffSetting = cognitionSetting{key: "llm.retry_backoff_ms", min: 1, max: 600_000, unit: "milliseconds", zero: true, signed: true, perModel: "provider", card: "substrate",
 	def: fixed(limits.DefaultRetryBackoffMS), num: func(c *Config) *int { return &c.LLM.RetryBackoffMS }}
+
+var modelListTimeoutSetting = cognitionSetting{key: "llm.model_list_timeout_seconds", min: 1, max: limits.DefaultTimeoutSeconds, unit: "seconds", zero: true, card: "substrate",
+	def: fixed(defaultModelListTimeoutSeconds), num: func(c *Config) *int { return &c.LLM.ModelListTimeoutSeconds }}
+
+var modelListCacheSetting = cognitionSetting{key: "llm.model_list_cache_seconds", min: 1, max: 86_400, unit: "seconds", zero: true, card: "substrate",
+	def: fixed(defaultModelListCacheSeconds), num: func(c *Config) *int { return &c.LLM.ModelListCacheSeconds }}
+
+var webFetchMaxBytesSetting = cognitionSetting{key: "tools.webfetch_max_bytes", min: 1, max: 100_000_000, unit: "bytes", zero: true, card: "tools",
+	def: fixed(limits.DefaultWebFetchMaxBytes), num: func(c *Config) *int { return &c.Tools.WebFetchMaxBytes }}
 
 var toolSchemaRefusalsSetting = cognitionSetting{key: "agency.tool_schema_refusals", min: 1, max: maxToolSchemaRefusals, unit: "tools", zero: true,
 	def: fixed(limits.DefaultToolSchemaRefusals), num: func(c *Config) *int { return &c.Agency.ToolSchemaRefusals }}

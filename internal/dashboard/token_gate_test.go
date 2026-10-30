@@ -12,20 +12,33 @@ import (
 	"github.com/coder/websocket"
 )
 
-func dialWSToken(addr, cookie string) (*websocket.Conn, error) {
+// dialWSToken opens the socket at addr over TLS with the cookie; given a page
+// key, it sends the socket's first message with it, as a page does.
+func dialWSToken(addr, cookie string, key ...string) (*websocket.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	h := http.Header{"Origin": []string{"https://" + addr}}
 	if cookie != "" {
 		_, port, _ := net.SplitHostPort(addr)
-		h.Set("Cookie", "aii_token_"+port+"="+cookie)
+		h.Set("Cookie", tlsCookieName(port)+"="+cookie)
 	}
 	conn, _, err := websocket.Dial(ctx, "wss://"+addr+"/ws", &websocket.DialOptions{
 		HTTPClient: testClient,
 		HTTPHeader: h,
 	})
+	if err == nil && len(key) > 0 {
+		err = sendHello(ctx, conn, key[0])
+	}
 	return conn, err
 }
+
+// sendHello sends a socket's first message: the page key a page holds.
+func sendHello(ctx context.Context, conn *websocket.Conn, key string) error {
+	return conn.Write(ctx, websocket.MessageText, []byte(`{"type":"hello","page_key":"`+key+`"}`))
+}
+
+// pageKeyFor is the page key a sign-in on s answers under its policy now.
+func pageKeyFor(s *Server) string { return mintPageKey(s.auth.Load()) }
 
 func TestTokenGateRefusesAndAdmits(t *testing.T) {
 	s := New("127.0.0.1", 0, &WSHandler{})
@@ -44,7 +57,7 @@ func TestTokenGateRefusesAndAdmits(t *testing.T) {
 		conn.CloseNow()
 		t.Fatal("a wrong token was admitted")
 	}
-	conn, err := dialWSToken(addr, s.accessHash())
+	conn, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatalf("the right token was refused: %v", err)
 	}

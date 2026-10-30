@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/install"
 )
@@ -113,12 +114,23 @@ func TestTheServiceVerbsAnswerByteForByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	machineNote := "note: the machine service is registered only from this account's installed program (" + filepath.Join(app, "MacOS", "aii") + "); this is " + self + "\n"
+	for _, n := range []int{90, 91} {
+		if !install.PortFree(install.Port(n)) {
+			t.Skipf("port %d is in use on this host", install.Port(n))
+		}
+	}
+	saved := servingWait
+	servingWait = func(string) time.Duration { return 100 * time.Millisecond }
+	t.Cleanup(func() { servingWait = saved })
+	unseen := func(verb string, n int) string {
+		return verb + ": the service manager started " + unit(n) + ", but this identity did not answer on port " + port(n) + " within 0.1s.\n" +
+			"Its log is " + filepath.Join(slot(n), "log", "aii.log") + ". Once what it names is mended, start it again with:\n  aii register " + install.SlotName(n) + "\n"
+	}
 
 	checkAnswersHere(t, launchdEnv(t), root, []verbAnswer{
-		{args: []string{"init"}, stdout: "Created " + slot(90) + " (dashboard port " + port(90) + ")\nStarted " + unit(90) + "\n\nOpen http://127.0.0.1:" + port(90) + " to meet them.\n" +
-			"\nThe dashboard asks for its access token, once in each browser; that browser then stays signed in.\n" + tokenLines(slot(90)), stderr: note + machineNote},
-		{args: []string{"register", "identity-90"}, stdout: "Started " + unit(90) + "\n",
-			stderr: note + machineNote + "note: identity-90 has no identity key yet; the machine service records the identity at its first link after birth\n"},
+		{args: []string{"init"}, code: install.ExitNotServing, stdout: "Created " + slot(90) + " (dashboard port " + port(90) + ")\n", stderr: note + machineNote + unseen("init", 90)},
+		{args: []string{"register", "identity-90"}, code: install.ExitNotServing,
+			stderr: note + machineNote + "note: identity-90 has no identity key yet; the machine service records the identity at its first link after birth\n" + unseen("register", 90)},
 		{args: []string{"stop", "identity-90"}, stdout: "Stopped " + unit(90) + "\n"},
 		{args: []string{"unregister", "identity-90"}, stdout: "Unregistered " + unit(90) + " — its data is still at " + slot(90) + "\n"},
 	})

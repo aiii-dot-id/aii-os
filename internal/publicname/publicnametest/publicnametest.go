@@ -212,6 +212,8 @@ type Manager struct {
 	Ensures int
 	Renews  int
 	Fail    error
+
+	Owed bool
 }
 
 func (m *Manager) Certificate() *tls.Certificate {
@@ -223,6 +225,11 @@ func (m *Manager) State() certs.State {
 	return certs.State{Name: m.Cfg.Name, NotAfter: time.Now().Add(60 * 24 * time.Hour)}
 }
 func (m *Manager) DaysLeft() float64 { return 60 }
+func (m *Manager) OrderOwed() bool {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+	return m.Cert == nil || m.Owed
+}
 func (m *Manager) Ensure(context.Context) (bool, error) {
 	m.Mu.Lock()
 	defer m.Mu.Unlock()
@@ -230,8 +237,8 @@ func (m *Manager) Ensure(context.Context) (bool, error) {
 	if m.Fail != nil {
 		return false, m.Fail
 	}
-	if m.Cert == nil {
-		m.Cert = selfSignedFor(m.Cfg.Name)
+	if m.Cert == nil || m.Owed {
+		m.Cert, m.Owed = selfSignedFor(m.Cfg.Name), false
 		return true, nil
 	}
 	return false, nil
@@ -265,6 +272,14 @@ func Managers[M any](into *[]*Manager) func(certs.Config) (M, error) {
 	}
 }
 
+func Holding[M any](into *[]*Manager, owed bool) func(certs.Config) (M, error) {
+	return func(c certs.Config) (M, error) {
+		m := &Manager{Cfg: c, Cert: selfSignedFor(c.Name), Owed: owed}
+		*into = append(*into, m)
+		return any(m).(M), nil
+	}
+}
+
 type HeldIssueManager struct {
 	Base      *Manager
 	Started   chan struct{}
@@ -284,6 +299,7 @@ func NewHeldIssueManager() *HeldIssueManager {
 func (m *HeldIssueManager) Certificate() *tls.Certificate { return m.Base.Certificate() }
 func (m *HeldIssueManager) State() certs.State            { return m.Base.State() }
 func (m *HeldIssueManager) DaysLeft() float64             { return m.Base.DaysLeft() }
+func (m *HeldIssueManager) OrderOwed() bool               { return m.Base.OrderOwed() }
 func (m *HeldIssueManager) Renew(ctx context.Context) (bool, error) {
 	return m.Base.Renew(ctx)
 }

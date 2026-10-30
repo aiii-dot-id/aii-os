@@ -552,8 +552,8 @@ func replaceBlob(ctx context.Context, w *plugstore.Writer, key, damaged string, 
 			links = append(links, blob)
 		}
 	}
-	fresh := blob + ".repair-" + randomSuffix()
-	defer os.Remove(fresh)
+
+	fresh := blob + plugstore.PartialSuffix
 	if !adoptInto(ctx, adoptCandidates(adopt, d), fresh, d.Size, d.SHA256, "model "+d.Name, logf) {
 		if err := fetchVerified(ctx, "store", "model "+d.Name, d.URL, fresh, d.Size, d.SHA256, fetch, logf); err != nil {
 			return err

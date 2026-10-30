@@ -29,7 +29,7 @@ func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
 		joined := strings.Join(argv, " ")
 
 		for _, want := range []string{"deny network*", "deny file-write*", "deny mach-lookup", "deny iokit-open", "deny ipc-posix-shm*",
-			`(deny file-read* (regex #"^/dev/(tty|pty|ptmx|console)"))`, "deny lsopen", "deny appleevent-send",
+			`(deny file-read* file-test-existence (regex #"^/dev/(tty|pty|ptmx|console)"))`, "deny lsopen", "deny appleevent-send",
 			"deny job-creation", "(deny signal)\n(allow signal (target same-sandbox))", "deny process-exec*", `(allow process-exec* (literal "/tmp/artifact"))`} {
 			if !strings.Contains(joined, want) {
 				t.Errorf("the Seatbelt profile does not %q: %v", want, argv)
@@ -75,10 +75,22 @@ func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
 	if !strings.Contains(joined, "--new-session") {
 		t.Fatalf("the child shares the host's session, and with it the terminal the host was started from: %v", argv)
 	}
-	if !strings.Contains(joined, "--ro-bind / /") {
-		t.Fatalf("the child can write the daemon's filesystem: %v", argv)
+	for i, a := range argv {
+		if (a == "--ro-bind" || a == "--bind") && i+2 < len(argv) && argv[i+2] == "/" {
+			t.Fatalf("the child is shown the whole root: %v", argv)
+		}
+		if a == "--bind" {
+			t.Fatalf("the child is shown a place it may write: %v", argv)
+		}
 	}
-
+	if !strings.Contains(joined, "--ro-bind /usr /usr") {
+		t.Fatalf("the child is not shown the system's view: %v", argv)
+	}
+	if !strings.Contains(joined, "--remount-ro / --") {
+		t.Fatalf("the sandbox's own root is left writable: %v", argv)
+	}
+	// No network is not no socket: a socket on the file system the view
+	// shows is in reach, and the filter is what refuses them.
 	if !strings.Contains(joined, "--seccomp 3") || len(telemetry.Filter) == 0 {
 		t.Fatalf("the child runs under no system-call filter, so a socket on the file system is a way out: %v", argv)
 	}
@@ -88,19 +100,25 @@ func TestTheNativeChildIsWrappedNotRunBare(t *testing.T) {
 
 func requirePrivateProc(t *testing.T, argv []string) {
 	t.Helper()
-	root, proc, end := -1, -1, len(argv)
+	proc, end := -1, len(argv)
 	for i, a := range argv {
 		switch {
 		case a == "--" && end == len(argv):
 			end = i
-		case a == "--ro-bind" && i+2 < len(argv) && argv[i+1] == "/" && argv[i+2] == "/" && root < 0:
-			root = i
-		case a == "--proc" && i+1 < len(argv) && argv[i+1] == "/proc":
+		case a == "--proc" && i+1 < len(argv) && argv[i+1] == "/proc" && i < end:
 			proc = i
 		}
 	}
-	if root < 0 || proc < root || proc > end {
-		t.Fatalf("the child does not get its own /proc after the root bind — the daemon's /proc reaches past every mask: %v", argv)
+	if proc < 0 {
+		t.Fatalf("the child does not get its own /proc — the daemon's /proc reaches past every mask: %v", argv)
+	}
+	for i := 0; i+2 < end; i++ {
+		switch argv[i] {
+		case "--ro-bind", "--bind", "--dev-bind", "--ro-bind-try", "--bind-try":
+			if dest := argv[i+2]; (dest == "/" || dest == "/proc" || strings.HasPrefix(dest, "/proc/")) && i > proc {
+				t.Fatalf("a bind over /proc comes after the child's own /proc and covers it with the host's: %v", argv)
+			}
+		}
 	}
 }
 

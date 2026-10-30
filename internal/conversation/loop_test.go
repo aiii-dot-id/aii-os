@@ -207,10 +207,10 @@ func TestSpokenAccumulationAcrossToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Spoken, longThought) {
+	if !strings.Contains(result.Said(), longThought) {
 		t.Fatal("content spoken alongside a tool call was dropped from the reply")
 	}
-	if !strings.Contains(result.Spoken, "Here is what I found.") {
+	if !strings.Contains(result.Said(), "Here is what I found.") {
 		t.Fatal("final text missing from the reply")
 	}
 	if len(tools.calls) != 1 || tools.calls[0] != "ls" {
@@ -418,8 +418,8 @@ func TestContextGuardForceStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Spoken, "Enough. Here is my answer") {
-		t.Fatalf("forced guard response must become the reply, got %q", result.Spoken)
+	if !strings.Contains(result.Said(), "Enough. Here is my answer") {
+		t.Fatalf("forced guard response must become the reply, got %q", result.Said())
 	}
 	if result.FinalText != "Enough. Here is my answer from what I have." || result.ModelID != "forced-model" {
 		t.Fatalf("forced guard provenance = (%q, %q)", result.FinalText, result.ModelID)
@@ -673,7 +673,7 @@ func TestResultCarriesFinalTextSeparately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FinalText != result.Spoken {
+	if result.FinalText != result.Said() {
 		t.Fatalf("simple turn: FinalText should equal Spoken verbatim")
 	}
 	if !strings.Contains(result.FinalText, "note(content=") {
@@ -693,8 +693,8 @@ func TestAnAnnouncedStepEndsTheTurn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.calls != 1 || res.Spoken != reply {
-			t.Fatalf("%q: want one call spoken whole, got %d call(s), spoken %q", reply, s.calls, res.Spoken)
+		if s.calls != 1 || res.Said() != reply {
+			t.Fatalf("%q: want one call spoken whole, got %d call(s), spoken %q", reply, s.calls, res.Said())
 		}
 	}
 }
@@ -727,11 +727,11 @@ func TestOutputCapTruncationIsDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Spoken, "cut off by the model's output limit") {
-		t.Fatalf("truncation was not declared to the operator: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "cut off by the model's output limit") {
+		t.Fatalf("truncation was not declared to the operator: %q", res.Said())
 	}
-	if !strings.Contains(res.Spoken, "Here is the first half") {
-		t.Fatalf("the partial answer must survive beside the declaration: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "Here is the first half") {
+		t.Fatalf("the partial answer must survive beside the declaration: %q", res.Said())
 	}
 }
 
@@ -744,8 +744,8 @@ func TestCleanStopIsNotDeclaredTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(res.Spoken, "cut off") {
-		t.Fatalf("a finished reply was labelled truncated: %q", res.Spoken)
+	if strings.Contains(res.Said(), "cut off") {
+		t.Fatalf("a finished reply was labelled truncated: %q", res.Said())
 	}
 }
 
@@ -763,8 +763,8 @@ func TestTruncationDeclaredOncePerTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(res.Spoken, "cut off by the model's output limit"); got != 1 {
-		t.Fatalf("declaration should appear exactly once per turn, got %d: %q", got, res.Spoken)
+	if got := strings.Count(res.Said(), "cut off by the model's output limit"); got != 1 {
+		t.Fatalf("declaration should appear exactly once per turn, got %d: %q", got, res.Said())
 	}
 }
 
@@ -777,11 +777,11 @@ func TestProviderRefusalIsNamedNotSpoken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Spoken, "declined this request") {
-		t.Fatalf("refusal was not named: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "declined this request") {
+		t.Fatalf("refusal was not named: %q", res.Said())
 	}
-	if !strings.Contains(res.Spoken, "not the identity's choice") {
-		t.Fatalf("refusal must be attributed to the substrate, not the resident: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "not the identity's choice") {
+		t.Fatalf("refusal must be attributed to the substrate, not the resident: %q", res.Said())
 	}
 }
 
@@ -796,8 +796,8 @@ func TestUnknownStopReasonIsNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Spoken, "pause_turn") {
-		t.Fatalf("unknown stop reason must be named with its value: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "pause_turn") {
+		t.Fatalf("unknown stop reason must be named with its value: %q", res.Said())
 	}
 }
 
@@ -813,8 +813,8 @@ func TestOrdinaryStopCarriesNoNote(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(res.Spoken, "[") {
-			t.Fatalf("finish=%q produced a note on an ordinary completion: %q", reason, res.Spoken)
+		if strings.Contains(res.Said(), "[") {
+			t.Fatalf("finish=%q produced a note on an ordinary completion: %q", reason, res.Said())
 		}
 	}
 }

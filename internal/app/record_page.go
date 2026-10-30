@@ -101,4 +101,5 @@ func (a *App) wireRecordHooks(h *dashboard.WSHandler) {
 	h.Record = recordSource{a}
 	h.RecordSettings = a.recordSettings
 	h.Sent = a.sentRequests
+	h.WorkExport = a.exportWork
 }

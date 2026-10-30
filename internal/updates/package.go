@@ -70,8 +70,7 @@ func (c *Checker) preparePackage(ctx context.Context, version string) {
 		if err != nil {
 			return fmt.Errorf("its signature did not verify: %w", err)
 		}
-		revRoots := packagefmt.ReleaseTrustRoots(filepath.Join(c.dataDir, "trust"), root)
-		if err := packagefmt.CheckReleaseRevocation(revRoots, artifactKindReleaseSig, signed); err != nil {
+		if err := packagefmt.CheckReleaseRevocation(c.revocationRoots(root), artifactKindReleaseSig, signed); err != nil {
 			return fmt.Errorf("its signature is refused: %w", err)
 		}
 		return nil
@@ -91,17 +90,21 @@ func (c *Checker) preparePackage(ctx context.Context, version string) {
 		refuse("the release that named it is no longer held; the next check asks again")
 		return
 	}
+	if err := c.sameSource(release); err != nil {
+		refuse("%v", err)
+		return
+	}
 	pkgURL, sigURL, err := findAssets(release, name, SigAssetName(name))
 	if err != nil {
 		refuse("the release carries no signed package for this machine (%v)", err)
 		return
 	}
-	pkg, err := c.download(ctx, pkgURL)
+	pkg, err := c.download(ctx, release.source, pkgURL)
 	if err != nil {
 		refuse("the package could not be fetched: %v", err)
 		return
 	}
-	sig, err := c.download(ctx, sigURL)
+	sig, err := c.download(ctx, release.source, sigURL)
 	if err != nil {
 		refuse("the package's signature could not be fetched: %v", err)
 		return

@@ -18,12 +18,12 @@ func TestTheGateFoldsRing2AndLeavesTheCallerItsReserve(t *testing.T) {
 	const budget, reserve = 2000, 600
 	g := NewGate(rings, budget)
 
-	whole, _ := g.SystemWithin("CALLER", rings.r1, ring2, 0)
+	whole, _ := g.SystemWithin("CALLER", rings.r1, "", ring2, 0)
 	if got := estimateTokens(whole); got > budget+120 { // the declared-omissions banner rides after enforcement
 		t.Fatalf("rig: with no reserve the preamble is folded to the budget: %d tokens against %d", got, budget)
 	}
 
-	sys, _ := g.SystemWithin("CALLER", rings.r1, ring2, reserve)
+	sys, _ := g.SystemWithin("CALLER", rings.r1, "", ring2, reserve)
 	if got := estimateTokens(sys); got > budget-reserve+120 {
 		t.Fatalf("THE PREAMBLE TOOK THE FACILITY'S RESERVE: %d tokens of a %d budget, %d reserved for the facility's own material", got, budget, reserve)
 	}
@@ -49,7 +49,7 @@ func TestTheGateFoldsRing2AndLeavesTheCallerItsReserve(t *testing.T) {
 	// ceiling, and a wider model would change nothing — what widens it is
 	// the window declared, or that ceiling raised.
 	g.SetWindowKnown(false)
-	if sys, _ = g.SystemWithin("CALLER", rings.r1, ring2, reserve); strings.Contains(sys, windowRoute) || strings.Count(sys, ceilingRoute) < 2 {
+	if sys, _ = g.SystemWithin("CALLER", rings.r1, "", ring2, reserve); strings.Contains(sys, windowRoute) || strings.Count(sys, ceilingRoute) < 2 {
 		t.Fatalf("with no window known a fold and an omission must each name what widens the conversation's ceiling, never a wider model:\n%.2000s", sys)
 	}
 }

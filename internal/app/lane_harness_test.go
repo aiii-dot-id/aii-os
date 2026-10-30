@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/agentmemory"
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/publicname"
 	"net"
@@ -47,6 +48,7 @@ func TestMain(m *testing.M) {
 	accountRelaunch = func() func() error { return nil }
 
 	publicname.PrepareOffByDefaultForTest()
+	otherAgentStores = func() []agentmemory.Store { return nil }
 	asked := watchPlatformDials()
 	code := m.Run()
 	if owner {
@@ -55,7 +57,7 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(machineDir)
 	}
 	if n, first := asked(); n > 0 && code == 0 {
-		fmt.Fprintf(os.Stderr, "FAIL: this test binary opened %d connection(s) to the platform's own servers, the first to %s. A test that boots an app names genesistest.Ring5Server as its firewall_url (safebootConfig does); only the test seam asks the platform.\n", n, first)
+		fmt.Fprintf(os.Stderr, "FAIL: this test binary opened %d connection(s) to the platform's own servers or the hosted witness, the first to %s. A test that boots an app names genesistest.Ring5Server as its firewall_url and is on no witness or a witnesstest one (safebootConfig does); only the test seam asks the platform, and no test asks the hosted witness.\n", n, first)
 		code = 1
 	}
 	os.Exit(code)
@@ -65,8 +67,10 @@ func TestMain(m *testing.M) {
 // its machine directory is made in: its parent's, removed with it.
 const machineRootEnv = "AII_APP_TEST_MACHINE_ROOT"
 
-// platformServers are the servers a boot or a birth asks.
-var platformServers = map[string]bool{"genesis.aiii.id": true, "firewall.aiii.id": true, "bootstrap.aiii.id": true}
+// platformServers are the servers a boot or a birth asks, and the hosted
+// witness the default configuration names: no test reaches it either
+// (safebootConfig is on no witness; a test that needs one uses witnesstest).
+var platformServers = map[string]bool{"genesis.aiii.id": true, "firewall.aiii.id": true, "bootstrap.aiii.id": true, "witness.aiii.id": true}
 
 // watchPlatformDials counts the connections this test binary opens to the
 // platform's servers through the default transport, which is what the

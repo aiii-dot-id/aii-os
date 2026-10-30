@@ -75,6 +75,20 @@ func (r *Activation) Failure() ([]time.Time, error) {
 
 type assetLane struct{ res *packagefmt.Result }
 
+func (h *Runtime) RetireBound() time.Duration {
+	if h.w.Options == nil {
+		return ChildBounds{}.Retirement()
+	}
+	return h.w.Options().bounds().Retirement()
+}
+
+func (h *Runtime) handOverBudget() time.Duration {
+	if h.w.Options == nil {
+		return DefaultHandOverBudget
+	}
+	return h.w.Options().bounds().HandOverBudget()
+}
+
 func (h *Runtime) roots() packagefmt.TrustRoots {
 	opts := h.w.Options()
 	if opts == nil {
@@ -89,8 +103,38 @@ func (h *Runtime) Verify(ctx context.Context, pkg string) (pluginfacility.Eviden
 		return pluginfacility.Evidence{}, err
 	}
 	m := res.Manifest
+	native, signed := NativeHere(res)
 	return pluginfacility.Evidence{ID: m.ID, Version: m.Version, Package: pkg,
-		PackageHash: res.PackageHash, ManifestHash: res.ManifestHash, Tier: res.Tier.String(), Family: m.PluginFamily, Handle: res}, nil
+		PackageHash: res.PackageHash, ManifestHash: res.ManifestHash, Tier: res.Tier.String(), Family: m.PluginFamily,
+		Native: native, Capabilities: signed, Handle: res}, nil
+}
+
+func (h *Runtime) Recheck(_ context.Context, ev pluginfacility.Evidence) error {
+	res, ok := ev.Handle.(*packagefmt.Result)
+	if !ok {
+		return fmt.Errorf("pluginhost: the verification kept for %s is not this host's", ev.ID)
+	}
+	return res.Recheck(h.roots())
+}
+
+func NativeHere(res *packagefmt.Result) (native bool, signed []string) {
+	m := res.Manifest
+	platform, arch, topology := packagefmt.HostPlatform(), packagefmt.HostArch(), packagefmt.HostTopology()
+	seen := map[string]bool{}
+	for i := range m.Variants {
+		v := &m.Variants[i]
+		if v.Platform != platform || v.Arch != arch || v.Topology != topology {
+			continue
+		}
+		native = native || v.Native()
+		for _, c := range signedCapabilitySurface(m, v, res) {
+			if !seen[c] {
+				seen[c] = true
+				signed = append(signed, c)
+			}
+		}
+	}
+	return native, signed
 }
 
 func (h *Runtime) Prepare(ctx context.Context, ev pluginfacility.Evidence) (pluginfacility.Prepared, error) {
@@ -135,7 +179,7 @@ func (h *Runtime) Prepare(ctx context.Context, ev pluginfacility.Evidence) (plug
 		HostBytes: host, DeviceBytes: sel.DeviceBytes, Backend: sel.Backend}
 	if len(sel.Sets) > 0 {
 
-		out.Selection = &pluginfacility.Selection{Variant: sel.VariantID, Better: sel.Better, Kept: sel.Kept, Sets: sel.Sets, Needs: sel.Needs}
+		out.Selection = &pluginfacility.Selection{Variant: sel.VariantID, Better: sel.Better, Kept: sel.Kept, Sets: sel.Sets, Needs: sel.Needs, Basis: sel.Basis}
 		out.Interim = sel.Better != ""
 		for _, r := range sel.ResourceRefusals {
 			out.Selection.Excluded = append(out.Selection.Excluded, pluginfacility.Exclusion{Variant: r.VariantID, Reasons: append([]string(nil), r.Missing...)})
@@ -243,7 +287,7 @@ func (h *Runtime) Redirect(from, to pluginfacility.Running) error {
 		}
 		bound := h.w.HandOver
 		if bound <= 0 {
-			bound = HandOverBudget
+			bound = h.handOverBudget()
 		}
 		if err := next.Plugin.HandOver(prevAp, bound); err != nil {
 			return err
@@ -264,8 +308,6 @@ func (h *Runtime) Redirect(from, to pluginfacility.Running) error {
 
 	return nil
 }
-
-const StopBudget = 5 * time.Second
 
 func (h *Runtime) Stop(ctx context.Context, r pluginfacility.Running) (pluginfacility.Retirement, error) {
 	act, ok := r.(*Activation)
@@ -295,7 +337,7 @@ func (h *Runtime) Stop(ctx context.Context, r pluginfacility.Running) (pluginfac
 			Residue: []string{"a resident session is open; the engine runs until it closes or its child exits"}}, nil
 	}
 
-	dctx, cancel := context.WithTimeout(ctx, StopBudget)
+	dctx, cancel := context.WithTimeout(ctx, ap.StopBudget())
 	defer cancel()
 	stop := ap.CloseQuiet
 	if act.admitted.Load() {

@@ -1,0 +1,71 @@
+{
+  "task": "dyad-store-after-delivery",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "copper kettle",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "copper kettle",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_store",
+                "args": {
+                  "text": "To find which file under notes/ mentions a phrase, one grep with literal=true answers it."
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n4.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A4: the identity says they will remember and keep nothing",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "copper kettle",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "copper kettle",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n4.txt\nI will remember that grep works."
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-keeps",
+    "planning": "planning"
+  }
+}

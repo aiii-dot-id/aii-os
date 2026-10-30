@@ -3,10 +3,14 @@ import { $, esc, b64 } from './util.js';
 import { renderInto } from './announce.js';
 import { send } from './ws.js';
 import { holdReloadWhile } from './overlay.js';
+import { signedFetch } from './pagekey.js';
 
 let step = 'closed';
+let back = 'keys';
 let busy = false;
+let act = '';
 let said = null;
+let begun = null;
 let keys = null;
 let snapshot = '';
 let progress = '';
@@ -41,9 +45,10 @@ function render() {
   if (keys) {
     html += '<div class="ok" data-keys-ok data-announce>The keys of identity <span style="font-family:var(--mono)">' + esc(keys.identity.slice(0, 16)) + '…</span> are in place on this machine; the key signs and verifies.</div>';
   } else {
+    if (begun) html += '<div class="err" data-begun data-announce>A restore of ' + esc(named(begun.identity)) + ' was begun on this machine and has been neither finished nor withdrawn. To go on with it, open the escrow file again below; to end it, press "Withdraw these keys".</div>';
     html += '<input type="file" id="fbr-escrow" accept=".age">' +
       '<label class="f">ITS PASSPHRASE</label><input type="password" id="fbr-pass" autocomplete="off">' +
-      '<div style="margin-top:10px"><button class="btn" id="fbr-keys"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Opening…' : 'Open it') + '</button></div>';
+      '<div style="margin-top:10px"><button class="btn" id="fbr-keys"' + (busy ? ' disabled' : '') + '>' + (busy && act === 'opening' ? 'Opening…' : 'Open it') + '</button></div>';
   }
   html += '</div>';
   if (keys) {
@@ -55,7 +60,7 @@ function render() {
         ? '<div class="fb-hint">The encrypted snapshot file, named <span style="font-family:var(--mono)">ledger-&lt;date&gt;-seq&lt;N&gt;.tar.age</span>. Do not rename it.</div><input type="file" id="fbr-snap" accept=".age">'
         : '<div class="fb-hint">This escrow was made before snapshots were encrypted, so pick a plaintext snapshot\'s FOLDER, named <span style="font-family:var(--mono)">ledger-&lt;date&gt;-seq&lt;N&gt;</span>.</div>') +
         '<div class="fb-hint" style="margin-top:8px">Or a plaintext snapshot\'s folder:</div><input type="file" id="fbr-folder" webkitdirectory>' +
-        '<div style="margin-top:10px"><button class="btn" id="fbr-send"' + (busy ? ' disabled' : '') + '>' + (busy ? esc(progress || 'Sending…') : 'Send it to this machine') + '</button></div>';
+        '<div style="margin-top:10px"><button class="btn" id="fbr-send"' + (busy ? ' disabled' : '') + '>' + (busy && act === 'sending' ? esc(progress || 'Sending…') : 'Send it to this machine') + '</button></div>';
     }
     html += '</div>';
   }
@@ -65,6 +70,7 @@ function render() {
       '<div style="margin-top:10px"><button class="btn" id="fbr-restore" style="width:100%"' + (busy ? ' disabled' : '') + '>' + (step === 'restoring' ? 'Proving and restoring…' : 'Restore') + '</button></div></div>';
   }
   if (said) html += '<div class="' + (said.kind === 'ok' ? 'ok' : 'err') + '" data-restore-said data-announce style="margin-top:12px">' + esc(said.text) + '</div>';
+  if (keys || begun) html += '<div style="margin-top:14px"><button class="btn ghost" id="fbr-withdraw" type="button"' + (busy ? ' disabled' : '') + '>' + (step === 'withdrawing' ? 'Withdrawing…' : 'Withdraw these keys') + '</button></div>';
   html += '<div style="margin-top:14px"><button class="btn ghost" id="fbr-close" type="button"' + (busy ? ' disabled' : '') + '>Back to Birth</button></div>';
   renderInto(el, html);
   wire();
@@ -79,7 +85,7 @@ function readB64(file, then) {
 
 async function put(name, member, file) {
   const q = '/restore/upload?snapshot=' + encodeURIComponent(name) + (member ? '&member=' + encodeURIComponent(member) : '');
-  const res = await fetch(q, { method: 'POST', body: file, credentials: 'same-origin' });
+  const res = await signedFetch(q, { method: 'POST', body: file, credentials: 'same-origin' });
   if (!res.ok) throw new Error((await res.text()).trim() || 'the upload was refused');
 }
 
@@ -90,7 +96,7 @@ function wire() {
     if (!f) return say('err', 'Pick the escrow file first.');
     if (f.size > 65536) return say('err', 'That file is larger than any escrow file.');
     if (!pass) return say('err', 'Type the escrow file\'s passphrase.');
-    busy = true; said = null; render();
+    busy = true; act = 'opening'; said = null; render();
     readB64(f, b64 => { if (!send({ type: 'restore_new', restore_new: { action: 'keys', file_b64: b64, passphrase: pass } })) { busy = false; say('err', 'Not connected — nothing was sent.'); } });
   };
   const s = $('fbr-send');
@@ -98,7 +104,7 @@ function wire() {
     const one = $('fbr-snap') && $('fbr-snap').files[0];
     const many = $('fbr-folder') ? Array.from($('fbr-folder').files) : [];
     if (!one && !many.length) return say('err', 'Pick the snapshot first.');
-    busy = true; said = null; progress = 'Sending…'; render();
+    busy = true; act = 'sending'; said = null; progress = 'Sending…'; render();
     try {
       let name;
       if (one) {
@@ -121,21 +127,55 @@ function wire() {
   if (r) r.onclick = () => {
     const p = S.providers[parseInt(($('fb-provider') || {}).value, 10)];
     if (!p) return say('err', 'Choose the provider and model above first: a restored identity needs a mind to run on.');
-    busy = true; step = 'restoring'; said = null; render();
+    busy = true; act = 'restoring'; step = 'restoring'; said = null; render();
     const provider = { provider: p.name, model: $('fb-model').value, api_key: $('fb-apikey').value.trim(), endpoint: p.local ? $('fb-url').value.trim() : p.endpoint };
     if (!send({ type: 'restore_new', restore_new: { action: 'restore', snapshot, provider } })) { busy = false; step = 'snapshot'; say('err', 'Not connected — nothing was sent.'); }
+  };
+  const w = $('fbr-withdraw');
+  if (w) w.onclick = () => {
+    const whose = named((keys || begun).identity), got = received();
+    const only = got.length === 1 ? 'Only the keys this page put here from your escrow file are removed, with the snapshot this page received (' + got[0] + '); your own copy of it is not touched.'
+      : got.length ? 'Only the keys this page put here from your escrow file are removed, with the snapshots this page received (' + got.join(', ') + '); your own copies of them are not touched.'
+      : 'Only the keys this page put here from your escrow file are removed.';
+    if (!window.confirm('Withdraw the keys of ' + whose + ' from this machine? ' + only + ' The escrow file is not touched, and the keys can be put back from it here. This identity cannot be restored on this machine until they are.')) return;
+    back = step;
+    busy = true; act = 'withdrawing'; step = 'withdrawing'; said = null; render();
+    if (!send({ type: 'restore_new', restore_new: { action: 'withdraw' } })) { busy = false; step = back; say('err', 'Not connected — nothing was sent.'); }
   };
   const c = $('fbr-close');
   if (c) c.onclick = () => { step = 'closed'; said = null; render(); };
 }
 
+function named(identity) { return identity ? 'identity ' + identity.slice(0, 16) + '…' : 'an identity'; }
+
+function received() {
+  const got = ((begun && begun.received) || []).slice();
+  if (snapshot && !got.includes(snapshot)) got.push(snapshot);
+  return got;
+}
+
 export function applyRestoreNew(reply) {
   if (!reply) return;
   secretsOK = reply.secrets_ok !== false;
-  if (reply.action === 'hello') { render(); return; }
+  if (reply.action === 'hello') {
+    if (secretsOK) {
+      begun = reply.begun || null;
+      if (keys && (!begun || begun.identity !== keys.identity)) { keys = null; if (step === 'snapshot') step = 'keys'; }
+    }
+    render(); return;
+  }
   busy = false;
-  if (reply.error) { if (step === 'restoring') step = 'snapshot'; say('err', reply.error); return; }
-  if (reply.action === 'keys' && reply.keys) { keys = reply.keys; step = 'snapshot'; said = null; render(); return; }
+  if (reply.error) { if (step === 'restoring') step = 'snapshot'; else if (step === 'withdrawing') step = back; say('err', reply.error); return; }
+  if (reply.action === 'withdraw' && reply.withdrawn) {
+    const whose = named((keys || begun || {}).identity);
+    begun = null; keys = null; snapshot = ''; progress = ''; said = null; step = 'closed';
+    render();
+    const el = $('fb-result');
+    const took = (reply.snapshots || []).length ? ', with the snapshots this page received,' : ',';
+    if (el) el.innerHTML = '<div class="ok" data-withdrawn>' + esc('The keys of ' + whose + ' are withdrawn from this machine' + took + ' and nothing else here was changed. Your escrow file still holds them. You can birth a new identity here now, or restore one.') + '</div>';
+    return;
+  }
+  if (reply.action === 'keys' && reply.keys) { keys = reply.keys; begun = { identity: keys.identity, received: (begun && begun.received) || [] }; step = 'snapshot'; said = null; render(); return; }
   if (reply.action === 'restore' && reply.done) {
     step = 'done';
     say('ok', 'Restored through record ' + reply.done.restored_to + '. Opening the identity\'s page…');
@@ -143,4 +183,4 @@ export function applyRestoreNew(reply) {
   }
 }
 
-export function restoreDoorState() { return { step, busy, keys, snapshot, secretsOK }; }
+export function restoreDoorState() { return { step, busy, begun, keys, snapshot, secretsOK }; }

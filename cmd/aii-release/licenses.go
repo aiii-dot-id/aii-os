@@ -119,14 +119,26 @@ func licenseFilesIn(dir string) ([]string, error) {
 
 const licensesRule = "================================================================================\n"
 
-func renderThirdPartyLicenses(goLicense []byte, mods []thirdPartyModule) ([]byte, error) {
+type licensedData struct {
+	Title, File string
+	Text        []byte
+}
+
+var shippedData = []struct{ title, file string }{
+	{"models.dev: the model capability rows of config/providers.json", "third_party/models.dev/LICENSE"},
+	{"gitleaks: the shapes of a secret in internal/agentmemory, after those of its default rules (config/gitleaks.toml) that know a token by its own shape or read it in its context", "third_party/gitleaks/LICENSE"},
+}
+
+func renderThirdPartyLicenses(goLicense []byte, mods []thirdPartyModule, data []licensedData) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("THIRD-PARTY SOFTWARE IN AII OS\n\n")
-	b.WriteString("The AII OS programs are built from the software listed below, each under its own\n")
-	b.WriteString("licence, which is reproduced here in full as that licence asks. AII OS itself is\n")
-	b.WriteString("under the licence in the file LICENSE beside this one.\n\n")
-	b.WriteString("This file is generated from the module graph of the shipped programs when\n")
-	b.WriteString("they are packaged (aii-release licenses) and is not edited by hand.\n\n")
+	b.WriteString("The AII OS programs are built from the software listed below, and carry the data\n")
+	b.WriteString("listed last, each under its own licence, which is reproduced here in full as that\n")
+	b.WriteString("licence asks. AII OS itself is under the licence in the file LICENSE beside this\n")
+	b.WriteString("one.\n\n")
+	b.WriteString("This file is generated from the module graph of the shipped programs and the\n")
+	b.WriteString("licences of the data they carry when they are packaged (aii-release licenses),\n")
+	b.WriteString("and is not edited by hand.\n\n")
 	section := func(title, file string, text []byte) {
 		b.WriteString(licensesRule)
 		b.WriteString(title + "\n" + file + "\n")
@@ -154,6 +166,12 @@ func renderThirdPartyLicenses(goLicense []byte, mods []thirdPartyModule) ([]byte
 			section(m.Path+" "+m.Version, name, text)
 		}
 	}
+	for _, d := range data {
+		if len(bytes.TrimSpace(d.Text)) == 0 {
+			return nil, fmt.Errorf("%s: its licence %s is empty or was not found: the data cannot ship without it", d.Title, d.File)
+		}
+		section(d.Title, d.File, d.Text)
+	}
 
 	return append(bytes.TrimRight(b.Bytes(), "\n"), '\n'), nil
 }
@@ -171,7 +189,15 @@ func generateThirdPartyLicenses(goBin, repo string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return renderThirdPartyLicenses(goLicense, mods)
+	var data []licensedData
+	for _, d := range shippedData {
+		text, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(d.file)))
+		if err != nil {
+			return nil, fmt.Errorf("%s: its licence: %v", d.title, err)
+		}
+		data = append(data, licensedData{Title: d.title, File: d.file, Text: text})
+	}
+	return renderThirdPartyLicenses(goLicense, mods, data)
 }
 
 func runLicenses(args []string, stdout, stderr *os.File) int {

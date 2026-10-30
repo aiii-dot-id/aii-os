@@ -177,8 +177,8 @@ func TestTheWorkFacadeAdvertisesTheVoiceMode(t *testing.T) {
 	if !slices.Contains(actions, "voice.mode") {
 		t.Fatalf("the work action enum must advertise voice.mode: %v", actions)
 	}
-	if !strings.Contains(work.Description, "voice.mode") {
-		t.Error("the work charter prose must name voice.mode among the absorbed actions")
+	if d, _ := action["description"].(string); !strings.Contains(d, "voice.mode") {
+		t.Error("work's action words must name voice.mode among the absorbed actions")
 	}
 	for param, want := range map[string][]string{
 		"mode":   voiceModeNameValues(),

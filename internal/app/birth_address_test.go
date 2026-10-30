@@ -39,6 +39,16 @@ func keyHearingServer(t *testing.T) (*httptest.Server, func() []string) {
 	}
 }
 
+// allCarry says the server was asked, and every request carried auth.
+func allCarry(got []string, auth string) bool {
+	for _, h := range got {
+		if h != auth {
+			return false
+		}
+	}
+	return len(got) > 0
+}
+
 func TestABirthNamingAnotherAddressForAShippedEntryIsRefused(t *testing.T) {
 	srv, heard := keyHearingServer(t)
 	dir := t.TempDir()
@@ -107,7 +117,9 @@ func TestALocalBirthIsAskedOnlyWithWhatWasTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := heard(); len(got) != 1 || got[0] != "" || cc.APIKey != "" || cc.Credential != nil {
+	// The list, and the server's own routes for its window (a local
+	// entry's, askLocalWindows): every request carries what was typed.
+	if got := heard(); !allCarry(got, "") || cc.APIKey != "" || cc.Credential != nil {
 		t.Fatalf("A KEY THE OPERATOR DID NOT TYPE WENT TO THE ADDRESS TYPED AT BIRTH: the list carried %q, the founding request would carry %q", got, cc.APIKey)
 	}
 	if _, _, err := a.discoverMetaForEntry(context.Background(), e, "typed-secret"); err != nil {
@@ -117,7 +129,7 @@ func TestALocalBirthIsAskedOnlyWithWhatWasTyped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := heard(); len(got) != 1 || got[0] != "Bearer typed-secret" || cc.APIKey != "typed-secret" {
+	if got := heard(); !allCarry(got, "Bearer typed-secret") || cc.APIKey != "typed-secret" {
 		t.Fatalf("the key typed beside the address was not the one sent: the list carried %q, the founding request %q", got, cc.APIKey)
 	}
 

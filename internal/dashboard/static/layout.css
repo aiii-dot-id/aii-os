@@ -86,7 +86,7 @@ body {
   background:var(--panel); font-size:11.5px; color:var(--dim); white-space:nowrap; }
 .pill b { color:var(--txt); font-weight:600; font-variant-numeric:tabular-nums; }
 .pill.mode-normal b { color:var(--good); } .pill.mode-safe b { color:var(--bad); }
-.pill.mode-degraded_witness b { color:var(--warn); }
+.pill.mode-degraded_witness b, .pill.mode-degraded_ring5 b { color:var(--warn); }
 
 .views { flex:1; position:relative; min-height:0; display:flex; flex-direction:column; }
 .view { position:absolute; inset:0; overflow-y:auto; opacity:0; pointer-events:none; visibility:hidden;
@@ -132,6 +132,11 @@ label.f { display:block; font-size:11px; letter-spacing:.14em; color:var(--faint
 
 .work-row.live .work-st { color:var(--good); }
 .work-res { flex-basis:100%; font-size:12px; color:var(--faint); line-height:1.45; padding-left:17px; }
+.work-rec { flex-basis:100%; padding-left:17px; font-size:12px; line-height:1.45; color:var(--dim); }
+.work-rec-row { overflow-wrap:anywhere; }
+.work-rec-k { color:var(--faint); }
+.role-row { padding:6px 0; border-bottom:1px solid var(--line-soft); font-size:13px; overflow-wrap:anywhere; }
+.role-desc { font-size:12.5px; line-height:1.5; margin-top:2px; }
 .work-dot { width:7px; height:7px; border-radius:50%; background:var(--good); animation:workpulse 1.4s ease-in-out infinite; flex:0 0 auto; }
 .work-dot.queued { background:var(--warn); animation:none; }
 .work-dot.done { background:var(--faint); animation:none; }

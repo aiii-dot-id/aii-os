@@ -375,3 +375,70 @@ func TestACitedTurnTheConversationNoLongerHoldsIsSaidSo(t *testing.T) {
 		t.Fatalf("the view must be told the turn differs: %+v", approval)
 	}
 }
+
+// EVERY OTHER CURRENT RELATIONSHIP IS ON THE IDENTITY PAGE, WHOLE: whom it is
+// with, its role, its text, the operator's words its entry cites and its
+// latest entry. A peer's is Ring 1 too, and was on no page but as one record
+// among the rest. Ring 1's own is the charter above it, and a superseded one
+// is history, read in the record.
+func TestTheIdentityPageShowsEveryOtherCurrentRelationshipWhole(t *testing.T) {
+	c := newCharterIdentity(t)
+	c.say("Yes, that is our charter.")
+	c.upsert(map[string]any{"id": "rel_others_op", "counterpart_name": "Quinn", "counterpart_role": "operator", "charter_text": firstCharter})
+	olaYes := "Yes, Ola can be a peer of yours."
+	nOla := c.say(olaYes)
+	olaText := "Ola and I compare notes.\n\n" + strings.Repeat("We answer within a day. ", 120)
+	c.upsert(map[string]any{"id": "rel_others_ola", "counterpart_name": "Ola", "counterpart_role": "peer", "relationship_type": "peer", "charter_text": olaText})
+	c.say("Yes, Rue too.")
+	c.upsert(map[string]any{"id": "rel_others_rue_was", "counterpart_name": "Rue", "counterpart_role": "peer", "relationship_type": "peer", "charter_text": "Rue and I trade drafts."})
+	rueYes := "Yes, Rue's new terms."
+	nRue := c.say(rueYes)
+	c.upsert(map[string]any{"id": "rel_others_rue", "counterpart_name": "Rue", "counterpart_role": "peer", "relationship_type": "peer",
+		"supersedes": "rel_others_rue_was", "charter_text": "Rue and I trade drafts, and neither speaks for the other."})
+
+	st, err := c.app.buildLiveHandler().GetIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Relationships []struct {
+			ID       string        `json:"id"`
+			Name     string        `json:"name"`
+			Role     string        `json:"role"`
+			Charter  string        `json:"charter"`
+			Approval *wireApproval `json:"approval"`
+			Record   uint64        `json:"record"`
+		} `json:"relationships"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Relationships) != 2 || wire.Relationships[0].ID != "rel_others_ola" || wire.Relationships[1].ID != "rel_others_rue" {
+		t.Fatalf("the Identity page must be sent the two other current relationships, oldest first, and neither Ring 1's nor a superseded one: %s", raw)
+	}
+	for _, w := range []struct {
+		i        int
+		id, text string
+		words    string
+		turn     uint64
+	}{{0, "rel_others_ola", olaText, olaYes, nOla}, {1, "rel_others_rue", "Rue and I trade drafts, and neither speaks for the other.", rueYes, nRue}} {
+		got := wire.Relationships[w.i]
+		rel, _, err := c.app.store.RelationshipAsHeld(w.id)
+		if err != nil || rel == nil {
+			t.Fatalf("%s: %v", w.id, err)
+		}
+		if got.Role != "peer" || got.Charter != w.text || got.Record != rel.CreatedSeq {
+			t.Errorf("%s is not sent whole: role %q, %d characters of %d, record %d (want %d)", w.id, got.Role, len(got.Charter), len(w.text), got.Record, rel.CreatedSeq)
+		}
+		if got.Approval == nil || got.Approval.State != "said" || got.Approval.Excerpt != w.words || got.Approval.Turn != w.turn || got.Approval.Record != rel.CreatedSeq {
+			t.Errorf("%s is not sent the operator's words its entry cites, turn %d: %+v", w.id, w.turn, got.Approval)
+		}
+	}
+	if wire.Relationships[0].Name != "Ola" || wire.Relationships[1].Name != "Rue" {
+		t.Errorf("the names: %q, %q", wire.Relationships[0].Name, wire.Relationships[1].Name)
+	}
+}

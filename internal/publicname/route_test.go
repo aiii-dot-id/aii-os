@@ -91,13 +91,13 @@ func TestDirectRouteIsTheWholeAnswerNotTheFirstInterface(t *testing.T) {
 		{"192.0.2.6", certs.RecordA, "192.0.2.6"},
 		{"fd00::6", certs.RecordAAAA, "fd00::6"},
 	} {
-		got, err := directRoute(routeCfg(tc.host, "", ""))
+		got, _, err := directRoute(routeCfg(tc.host, "", ""))
 		if err != nil || len(got) != 1 || got[0].Type != tc.kind || got[0].Value != tc.value {
 			t.Fatalf("bind %s: %v %v", tc.host, got, err)
 		}
 	}
 	// Loopback is reachable from nowhere else: an empty route, not an error.
-	got, err := directRoute(routeCfg("127.0.0.1", "", ""))
+	got, _, err := directRoute(routeCfg("127.0.0.1", "", ""))
 	if err != nil || len(got) != 0 {
 		t.Fatalf("loopback: %v %v", got, err)
 	}
@@ -106,7 +106,7 @@ func TestDirectRouteIsTheWholeAnswerNotTheFirstInterface(t *testing.T) {
 	explicit := []string{"203.0.113.9", "fd00::9"}
 	cfg := routeCfg("0.0.0.0", "", "")
 	cfg.Certificate.DirectAddresses = &explicit
-	got, err = directRoute(cfg)
+	got, _, err = directRoute(cfg)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("explicit: %v %v", got, err)
 	}
@@ -114,14 +114,14 @@ func TestDirectRouteIsTheWholeAnswerNotTheFirstInterface(t *testing.T) {
 	// and must not read the same as absent.
 	empty := []string{}
 	cfg.Certificate.DirectAddresses = &empty
-	got, err = directRoute(cfg)
+	got, _, err = directRoute(cfg)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("explicitly empty: %v %v", got, err)
 	}
 	// A bad address in the list is refused, not skipped.
 	bad := []string{"not-an-address"}
 	cfg.Certificate.DirectAddresses = &bad
-	if _, err := directRoute(cfg); err == nil {
+	if _, _, err := directRoute(cfg); err == nil {
 		t.Fatal("a non-address was accepted into direct_addresses")
 	}
 }
@@ -147,7 +147,7 @@ func TestAWildcardBindDoesNotGuessBetweenInterfaces(t *testing.T) {
 
 	// One per family is that family's answer: dual stack publishes both.
 	interfaceAddrs = mk("10.0.0.5/24", "fd00::5/64", "127.0.0.1/8", "fe80::1/64")
-	got, err := directRoute(cfg)
+	got, _, err := directRoute(cfg)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("dual stack: %v %v", got, err)
 	}
@@ -155,7 +155,7 @@ func TestAWildcardBindDoesNotGuessBetweenInterfaces(t *testing.T) {
 	// TWO IPv4 addresses is a question only the operator can settle. The
 	// old code took the first interface and called it the address.
 	interfaceAddrs = mk("10.0.0.5/24", "192.168.1.5/24")
-	_, err = directRoute(cfg)
+	_, _, err = directRoute(cfg)
 	if err == nil {
 		t.Fatal("a wildcard bind guessed between two IPv4 addresses")
 	}
@@ -168,7 +168,7 @@ func TestAWildcardBindDoesNotGuessBetweenInterfaces(t *testing.T) {
 	// A FAILED ENUMERATION IS NOT AN EMPTY SET: withdrawing a live route
 	// because the OS would not answer once is the worst outcome here.
 	interfaceAddrs = func() ([]net.Addr, error) { return nil, errors.New("no") }
-	got, err = directRoute(cfg)
+	got, _, err = directRoute(cfg)
 	if err == nil {
 		t.Fatalf("an enumeration failure became an empty route: %v", got)
 	}
@@ -592,5 +592,70 @@ func TestTheRouteOwnerStartsOnceAndOnlyLaterCallersSignal(t *testing.T) {
 	}
 	if app.startRouteOwner() {
 		t.Fatal("a second call claimed to start the owner again")
+	}
+}
+
+func TestTheRouteOwnerLooksTheNameUpFromThisMachine(t *testing.T) {
+	owned := func(t *testing.T, answer func() ([]string, error)) (*Runtime, chan string, func() string) {
+		t.Helper()
+		a, _, _, b := auditQuietRoute(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		a.w.Ctx = func() context.Context { return ctx }
+		asked := make(chan string, 16)
+		a.LookupHost = func(_ context.Context, host string) ([]string, error) {
+			asked <- host
+			return answer()
+		}
+		return a, asked, b.String
+	}
+	waitFor := func(t *testing.T, a *Runtime, what string, ok func(dashboard.PublicNameState) bool) dashboard.PublicNameState {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			st := a.State()
+			if ok(st) {
+				return st
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: resolves_to %q resolve_error %q", what, st.ResolvesTo, st.ResolveError)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	a, asked, logged := owned(t, func() ([]string, error) { return []string{"2001:db8::6", "192.0.2.6"}, nil })
+	a.startRouteOwner()
+	st := waitFor(t, a, "THE NAME WAS NOT LOOKED UP FROM THIS MACHINE AFTER THE OWNER'S LOOK", func(st dashboard.PublicNameState) bool { return st.ResolvesTo != "" })
+	if host := <-asked; host != "audit.example.test" {
+		t.Fatalf("the lookup asked for %q, not the name", host)
+	}
+	if st.ResolvesTo != "192.0.2.6, 2001:db8::6" || st.ResolveError != "" {
+		t.Fatalf("resolves_to %q resolve_error %q", st.ResolvesTo, st.ResolveError)
+	}
+	if !strings.Contains(logged(), "audit.example.test resolves from this machine to 192.0.2.6, 2001:db8::6") {
+		t.Fatalf("the answer was not told: %q", logged())
+	}
+
+	dead := &net.DNSError{Err: "no such host", Name: "audit.example.test", IsNotFound: true}
+	b, _, logged := owned(t, func() ([]string, error) { return nil, dead })
+	b.startRouteOwner()
+	st = waitFor(t, b, "A NAME THAT DOES NOT RESOLVE FROM HERE IS NOT SAID", func(st dashboard.PublicNameState) bool { return st.ResolveError != "" })
+	if st.ResolvesTo != "" || !strings.Contains(st.ResolveError, "no such host") {
+		t.Fatalf("resolves_to %q resolve_error %q", st.ResolvesTo, st.ResolveError)
+	}
+	if !strings.Contains(logged(), "audit.example.test does not resolve from this machine: lookup audit.example.test: no such host") {
+		t.Fatalf("the failure was not told: %q", logged())
+	}
+
+	c, asked, _ := owned(t, func() ([]string, error) { return []string{"192.0.2.6"}, nil })
+	c.mu.Lock()
+	c.status = StatusPrepared
+	c.mu.Unlock()
+	c.lookUpName(context.Background())
+	select {
+	case host := <-asked:
+		t.Fatalf("a name only prepared was looked up: %q", host)
+	default:
 	}
 }

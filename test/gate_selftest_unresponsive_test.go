@@ -41,7 +41,7 @@ func TestReferenceGateOwnsItsRunThroughCompletion(t *testing.T) {
 			// like the browser fixtures whose interrupted profiles were leaked.
 			const driver = `#!/bin/bash
 if [ "$*" = version ]; then echo 'go version reference-fixture'; exit 0; fi
-[ "$*" = 'test -v -race -count=1 -timeout 45m ./...' ] || exit 81
+[ "$*" = 'test -v -race -count=1 -timeout 90m ./...' ] || exit 81
 set -eu
 printf '%s\n' "$PPID" > "$FIXTURE_STATE/runner"
 printf '%s\n' "$TMPDIR" > "$FIXTURE_STATE/tmpdir"

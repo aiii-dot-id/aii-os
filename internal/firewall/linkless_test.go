@@ -56,14 +56,14 @@ func TestAPlaceNoLinkCanReachIsNotWalkedForAFilesOtherNames(t *testing.T) {
 		p := DefaultPolicy()
 		p.SetPlaces([]*Rule{{ID: "sub.processes", Kind: KindSubstrate, Path: table, Reason: "kept", Enforced: true, Linkless: linkless}})
 		walked := p.Check("read", twin)
-		held := p.KeptAs(info, nil)
+		held, heldErr := p.KeptAs(info, nil)
 		if linkless {
-			if !walked.Allowed || held != nil {
-				t.Fatalf("a file with two names in the home was refused for a place no link can reach: %+v %+v", walked.Rule, held)
+			if !walked.Allowed || holds(held, heldErr) {
+				t.Fatalf("a file with two names in the home was refused for a place no link can reach: %+v %v %+v %v", walked.Rule, walked.Err, held, heldErr)
 			}
 		} else {
-			if walked.Allowed || walked.Rule.Kind != KindUnasked || held == nil || held.Kind != KindUnasked {
-				t.Fatalf("the control: a walked place that stops at an entry it may not read refuses a file with two names, got %+v %+v", walked.Rule, held)
+			if walked.Allowed || uncheckedOf(walked.Err) == nil || walked.Rule != nil || uncheckedOf(heldErr) == nil || held != nil {
+				t.Fatalf("the control: a walked place that stops at an entry it may not read refuses a file with two names, got %+v %v %+v %v", walked.Rule, walked.Err, held, heldErr)
 			}
 		}
 		// Every other question asks it as any place.
@@ -71,7 +71,7 @@ func TestAPlaceNoLinkCanReachIsNotWalkedForAFilesOtherNames(t *testing.T) {
 			if v := p.Check("read", path); v.Allowed || v.Rule.ID != "sub.processes" {
 				t.Fatalf("linkless=%v: %s inside the place was not refused by it: %+v", linkless, path, v)
 			}
-			if p.Covered(path) == nil {
+			if !holds(p.Covered(path)) {
 				t.Fatalf("linkless=%v: %s inside the place is not covered", linkless, path)
 			}
 		}
@@ -113,7 +113,7 @@ func TestAWalkThatCannotReadAStemsEntryNamesWhereItStopped(t *testing.T) {
 	p.SetPlaces([]*Rule{{ID: "sub.temp", Kind: KindSubstrate, Path: filepath.Join(base, "tmp", "aii-plugin-"), Stem: true, Reason: "kept", Enforced: true}})
 	v := p.Check("read", twin)
 	want := filepath.Join("tmp", "aii-plugin-x-1", "inner")
-	if v.Allowed || v.Rule.Kind != KindUnasked || !strings.Contains(v.Rule.Reason, "could not read "+want+",") {
-		t.Fatalf("a file with two names while a stem's entry cannot be read: refused, naming %s, got %+v", want, v.Rule)
+	if v.Allowed || uncheckedOf(v.Err) == nil || !strings.Contains(v.Err.Error(), "could not read "+want+",") {
+		t.Fatalf("a file with two names while a stem's entry cannot be read: refused, naming %s, got %+v", want, v)
 	}
 }

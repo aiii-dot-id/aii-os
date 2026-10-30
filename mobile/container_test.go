@@ -130,6 +130,42 @@ func TestAmbiguousIdentityRecordsRefuse(t *testing.T) {
 	}
 }
 
+func TestAmbiguousIdentityRecordsBringUpThePage(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(home)
+	dead := filepath.Join(t.TempDir(), "DD60E10E-DEAD", "Documents")
+	writeIdentityFile(t, filepath.Join(home, "data", "ledger.jsonl"), "original")
+	writeIdentityFile(t, filepath.Join(home, "ledger.jsonl"), "forked")
+	path := filepath.Join(home, "config.json")
+	stale := filepath.Join(dead, "data", "ledger.jsonl")
+	raw := `{"identity":{"ledger_path":"` + filepath.ToSlash(stale) + `"},"dashboard":{"host":"127.0.0.1","port":0,"tls":false},"genesis":{"server_url":"http://127.0.0.1:1","firewall_url":"http://127.0.0.1:1","bootstrap_url":"http://127.0.0.1:1"},"certificate":{"server_url":"none"}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Start(path, home, newTestKeystore())
+	if err != nil {
+		t.Fatalf("THE START ENDED IN A SENTENCE, not the page: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := r.Shutdown(); err != nil {
+			t.Error(err)
+		}
+	})
+	reason, safe := r.a.SafeMode()
+	if !safe || r.DashboardURL() == "" || !strings.Contains(reason, "ledger_path is ambiguous") {
+		t.Fatalf("not the refused page: safe=%v url=%q reason=%q", safe, r.DashboardURL(), reason)
+	}
+	cfg, err := app.ReadConfig(path)
+	if err != nil || filepath.Clean(cfg.Identity.LedgerPath) != stale {
+		t.Fatalf("the start chose for the operator: %+v %v", cfg, err)
+	}
+	for p, body := range map[string]string{filepath.Join(home, "data", "ledger.jsonl"): "original", filepath.Join(home, "ledger.jsonl"): "forked"} {
+		if got, err := os.ReadFile(p); err != nil || string(got) != body {
+			t.Fatalf("%s was touched: %q %v", p, got, err)
+		}
+	}
+}
+
 // A path already inside the container, or a relative one, is correct as
 // written — chdir handles relatives, and an absolute inside the live
 // container is where it should be.
@@ -199,7 +235,7 @@ func TestUnreadableConfigIsQuarantinedNotFatal(t *testing.T) {
 }
 
 func TestEmptyContainerDirIsRefused(t *testing.T) {
-	if _, err := Start("config.json", ""); err == nil {
+	if _, err := Start("config.json", "", newTestKeystore()); err == nil {
 		t.Fatal("an empty container dir was accepted")
 	}
 }
@@ -220,8 +256,8 @@ func TestQuarantineSalvagesIdentityLocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("quarantine failed: %v", err)
 	}
-	if !capture.Contains("config.decision: mobile: salvaged from the unreadable config: ") {
-		t.Fatalf("the salvage is not told as a configuration decision:\n%s", capture.String())
+	if !capture.Contains("started from what could be read of it (not kept: llm)") {
+		t.Fatalf("the log does not say what was not kept:\n%s", capture.String())
 	}
 	if cfg.Identity.LedgerPath != "vault/ledger.jsonl" || cfg.Identity.KeyPath != "vault/identity.sec" || cfg.Identity.DBPath != "vault/aii.db" {
 		t.Fatalf("identity locations were not salvaged: %+v", cfg.Identity)
@@ -235,6 +271,31 @@ func TestQuarantineSalvagesIdentityLocations(t *testing.T) {
 	for _, want := range []string{"vault/ledger.jsonl", "vault/identity.sec", "vault/aii.db"} {
 		if !strings.Contains(string(ondisk), want) {
 			t.Fatalf("persisted config lost the salvage (%q missing):\n%s", want, ondisk)
+		}
+	}
+}
+
+func TestQuarantineKeepsTheOperatorsRestrictions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	raw := `{"llm":{"endpoint":"https://api.openai.com/v1"},"tools":{"disabled":["web_fetch","shell"]},"plugins":{"autoload":"none"}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.LoadConfig(path); err == nil {
+		t.Fatal("fixture is wrong: this config should not parse strictly")
+	}
+	cfg, err := quarantineUnreadableConfig(path, os.ErrInvalid)
+	if err != nil {
+		t.Fatalf("quarantine failed: %v", err)
+	}
+	ondisk, err := app.ReadConfig(path)
+	if err != nil {
+		t.Fatalf("the file written from what was kept does not read: %v", err)
+	}
+	for _, c := range []*app.Config{cfg, ondisk} {
+		if strings.Join(c.Tools.Disabled, ",") != "web_fetch,shell" || c.Plugins.Autoload != "none" {
+			t.Fatalf("the operator's restrictions were reset: tools.disabled %q, plugins.autoload %q", c.Tools.Disabled, c.Plugins.Autoload)
 		}
 	}
 }

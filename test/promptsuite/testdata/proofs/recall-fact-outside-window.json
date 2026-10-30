@@ -1,0 +1,100 @@
+{
+  "task": "recall-fact-outside-window",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "storage locker is number 4417",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "Which locker number",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "archive locker"
+                }
+              }
+            ]
+          },
+          {
+            "text": "LOCKER: 4417\nDEPOT: Harbor Street"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "E2: a fact older than the window is guessed, not recalled",
+    "fails": [
+      1,
+      2,
+      3
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "storage locker is number 4417",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "Which locker number",
+        "steps": [
+          {
+            "text": "LOCKER: 17\nDEPOT: Main Street"
+          }
+        ]
+      }
+    ]
+  },
+  "absent": {
+    "on": "Which locker number",
+    "texts": [
+      "4417",
+      "Harbor Street"
+    ]
+  }
+}

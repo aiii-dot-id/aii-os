@@ -55,13 +55,13 @@ func TestLauncherReopensItsSlotWithoutWMICOrStartingAnotherProcess(t *testing.T)
 	var opened []string
 	openURL := func(url string) error { opened = append(opened, url); return nil }
 	missingExecutable := filepath.Join(dir, "not-a-real-daemon.exe")
-	if err := runSlot(missingExecutable, dir, 1, true, openURL, serving); err != nil {
+	if err := runSlot(missingExecutable, dir, 1, true, openURL, install.Serving); err != nil {
 		t.Fatal(err)
 	}
 	if len(opened) != 0 {
 		t.Fatal("sign-in opened a browser")
 	}
-	if err := runSlot(missingExecutable, dir, 1, false, openURL, serving); err != nil {
+	if err := runSlot(missingExecutable, dir, 1, false, openURL, install.Serving); err != nil {
 		t.Fatal(err)
 	}
 	if len(opened) != 1 || opened[0] != fmt.Sprintf("http://127.0.0.1:%d", port) {
@@ -80,7 +80,7 @@ func TestLauncherDoesNotOpenAnUnidentifiedPortOrMistakeAPrefixSlot(t *testing.T)
 	dir, _ := launcherSlot(t)
 	holdLauncherSlot(t, filepath.Join(filepath.Dir(dir), "identity-10"))
 	opened := false
-	err := runSlot(filepath.Join(dir, "missing.exe"), dir, 1, false, func(string) error { opened = true; return nil }, serving)
+	err := runSlot(filepath.Join(dir, "missing.exe"), dir, 1, false, func(string) error { opened = true; return nil }, install.Serving)
 	if err == nil || opened || !strings.Contains(err.Error(), "could not be identified") {
 		t.Fatalf("unidentified port: opened=%v error=%v", opened, err)
 	}

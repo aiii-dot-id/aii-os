@@ -23,13 +23,10 @@ import (
 func TestTheRecordPageReadsALiveIdentitysWholeRecord(t *testing.T) {
 	a, dir, _ := maintApp(t)
 	a.databaseView.Store(&databaseView{store: a.store})
-	old, err := a.door.Append(ledger.EventExperienceCreate, 3, map[string]any{
+	old := a.door.appendAsAnEarlierRelease(t, ledger.EventExperienceCreate, 3, map[string]any{
 		"id": "exp_marked", "content": "words a note once called sealed " + strings.Repeat("x", 9000),
 		"category": "observation", "provenance": "self", "private": true,
-	}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 	h := &dashboard.WSHandler{}
 	a.wireRecordHooks(h)
 	if h.Record == nil || h.RecordSettings == nil {

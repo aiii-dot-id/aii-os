@@ -50,7 +50,7 @@ func fakeUninstall(t *testing.T) (calls *[]string, mdir string) {
 				return nil, nil
 			},
 			SlotDirs:    install.SlotDirs,
-			Name:        func(string) string { return "Vega" },
+			Name:        func(string) string { return "Example" },
 			SlotKey:     func(string) (*crypto.KeyPair, error) { return nil, os.ErrNotExist },
 			SlotService: func(string) (string, error) { return "", nil },
 			SlotRunning: func(string) (bool, error) { return registered, nil },
@@ -99,7 +99,7 @@ func answer(t *testing.T, s string) {
 func TestUninstallAsksBeforeItActs(t *testing.T) {
 	calls, _ := fakeUninstall(t)
 	var stdout, stderr bytes.Buffer
-	if code := runUninstall([]string{"-plan"}, &stdout, &stderr); code != 0 || len(*calls) != 0 || !strings.Contains(stdout.String(), "stop and unregister identity-0 (Vega)") {
+	if code := runUninstall([]string{"-plan"}, &stdout, &stderr); code != 0 || len(*calls) != 0 || !strings.Contains(stdout.String(), "stop and unregister identity-0 (Example)") {
 		t.Fatalf("-plan: exit %d, calls %q, said %q", code, *calls, stdout.String())
 	}
 	for _, said := range []string{"", "no\n", "y\n", "YES please\n"} {

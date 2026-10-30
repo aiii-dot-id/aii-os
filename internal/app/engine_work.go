@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
 type engineWork struct {
@@ -19,7 +18,7 @@ type engineWork struct {
 	idle chan struct{}
 }
 
-const engineJoinBound = pluginhost.StopBudget
+func (a *App) engineJoinBound() time.Duration { return a.childBounds().StopBudget() }
 
 func (w *engineWork) start(name string, work func()) {
 	w.mu.Lock()
@@ -78,10 +77,11 @@ func (w *engineWork) join(bound time.Duration) []string {
 }
 
 func (a *App) joinEngineWork() error {
-	left := a.engines.join(engineJoinBound)
+	bound := a.engineJoinBound()
+	left := a.engines.join(bound)
 	if len(left) == 0 {
 		return nil
 	}
-	logsink.Error("plugins.error", "%d engine-bound goroutine(s) still ran %s after the plugins closed; the store closes under them: %v", len(left), engineJoinBound, left)
-	return fmt.Errorf("%d engine-bound goroutine(s) still running %s after the plugins closed: %s", len(left), engineJoinBound, strings.Join(left, "; "))
+	logsink.Error("plugins.error", "%d engine-bound goroutine(s) still ran %s after the plugins closed; the store closes under them: %v", len(left), bound, left)
+	return fmt.Errorf("%d engine-bound goroutine(s) still running %s after the plugins closed: %s", len(left), bound, strings.Join(left, "; "))
 }

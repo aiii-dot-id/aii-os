@@ -19,7 +19,7 @@ import (
 // root, else the home — and the resolved path relative to it.
 func TestAdmitIsTheOneRuleForTheIdentitysWorld(t *testing.T) {
 	base := t.TempDir()
-	home := filepath.Join(base, "vega")
+	home := filepath.Join(base, "example")
 	data := filepath.Join(home, "data")
 	work := filepath.Join(home, "work")
 	outside := filepath.Join(base, "elsewhere")

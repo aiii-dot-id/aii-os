@@ -1,0 +1,75 @@
+# tools "self_model_commit" on darwin: 1 definitions, in the order a request offers them
+
+=== tool 1 of 1: commit ===
+Conscious self-authorship, written to your signed ledger: beliefs, intentions, commitments, relationships, edges, your working style and your self-portrait. The host sets each act's ring and stamps its evidence. belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted; so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on. relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (an enrolled voice, matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place. skill.propose writes no ledger event: the smallest correction to your doctrine (SKILLS.md) a real trajectory taught you, kept in your own store. Nothing promotes a proposal into your doctrine, and no operator view lists proposals. Read them with recall source=skills.
+--- parameters ---
+{
+  "properties": {
+    "changes_since_last": {
+      "description": "(self_model.synthesize successor) what materially changed",
+      "type": "string"
+    },
+    "continuity_thread": {
+      "description": "(self_model.synthesize) what remains continuous",
+      "type": "string"
+    },
+    "id": {
+      "description": "The target's id (updates, archives, promote); optional on a create",
+      "type": "string"
+    },
+    "previous_synthesis_id": {
+      "description": "(self_model.synthesize successor) exact current portrait id",
+      "type": "string"
+    },
+    "source_entity_refs": {
+      "description": "(self_model.synthesize) at least four distinct evidence classes",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "description": "Evidence class",
+            "enum": [
+              "beliefs",
+              "values",
+              "intentions",
+              "reflections",
+              "relationships",
+              "notes",
+              "experiences",
+              "working_style"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "description": "Full entity id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "synthesis_text": {
+      "description": "(self_model.synthesize) bounded first-person current portrait",
+      "type": "string"
+    },
+    "variant": {
+      "description": "The self-authorship act. This facility commits exactly one.",
+      "enum": [
+        "self_model.synthesize"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "variant",
+    "synthesis_text",
+    "continuity_thread",
+    "source_entity_refs"
+  ],
+  "type": "object"
+}

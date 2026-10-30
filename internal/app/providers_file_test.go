@@ -177,7 +177,7 @@ func TestExplicitFormerClaudeVersionRemainsAnOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(back), `"client_version": "2.1.257"`) {
+	if !strings.Contains(strings.ReplaceAll(string(back), " ", ""), `"client_version":"2.1.257"`) {
 		t.Fatal("explicit client version was lost on save")
 	}
 	for _, key := range []string{`"billing_text"`, `"header_user-agent"`} {

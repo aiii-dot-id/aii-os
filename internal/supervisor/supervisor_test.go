@@ -22,9 +22,19 @@ import (
 
 var fakechildBin string
 
+// treeHostEnv names the fake child to a test binary run as a plugin host
+// that its test then kills (TestOnMacOSATreeEndsWhenItsHostIsKilled).
+const treeHostEnv = "AII_SUPERVISOR_TREE_HOST"
+
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if flag.Lookup("test.list").Value.String() != "" {
+		os.Exit(m.Run())
+	}
+	if bin := os.Getenv(treeHostEnv); bin != "" {
+		// A host a test kills (tree_darwin_test.go): it runs the parent's
+		// fake child, and a host killed outright removes nothing.
+		fakechildBin = bin
 		os.Exit(m.Run())
 	}
 	started := time.Now()

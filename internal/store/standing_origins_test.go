@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
@@ -270,5 +271,227 @@ func TestTheOriginsWalkOpensEachSourceOfARingOnce(t *testing.T) {
 	}
 	if r.DistinctSources != 3 || r.DistinctOrigins != 1 || r.OriginsUnopened != 0 {
 		t.Fatalf("two beliefs in a ring and one observation: %d source(s), %d origin(s), %d unopened; want 3, 1 and 0", r.DistinctSources, r.DistinctOrigins, r.OriginsUnopened)
+	}
+}
+
+func TestADreamsNoteIsOneOrigin(t *testing.T) {
+	s, mat := reportStore(t)
+	edge := func(id, from, to, kind string) {
+		t.Helper()
+		mat(ledger.EventEdgeCreate, 3, map[string]any{"id": id, "from_id": from, "to_id": to, "edge_type": kind})
+	}
+	report := func(standing string, sources, origins int, why string) {
+		t.Helper()
+		r, err := s.StandingReportFor("claim")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Standing != standing || r.DistinctSources != sources || r.DistinctOrigins != origins {
+			t.Fatalf("%s: standing %q from %d source(s) on %d origin(s); want %q, %d, %d", why, r.Standing, r.DistinctSources, r.DistinctOrigins, standing, sources, origins)
+		}
+		if got := mustStanding(t, s, "claim"); got != standing {
+			t.Fatalf("%s: the verdict alone says %q; want %q", why, got, standing)
+		}
+	}
+
+	// A dream reads twenty experiences and lands one note, then its marker.
+	var read []string
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("seen%02d", i)
+		mat(ledger.EventExperienceCreate, 3, map[string]any{"id": id, "content": fmt.Sprintf("observation %d", i), "provenance": "self"})
+		read = append(read, id)
+	}
+	mat(ledger.EventExperienceCreate, 3, map[string]any{"id": "note", "content": "what the dream noticed across them", "provenance": "dream"})
+	var noted uint64
+	if err := s.db.QueryRow(`SELECT created_seq FROM experiences WHERE id = 'note'`).Scan(&noted); err != nil {
+		t.Fatal(err)
+	}
+	mat(ledger.EventDreamRun, 3, map[string]any{"inputs": read, "outputs": []uint64{noted}})
+	// Two beliefs drawn from the note.
+	for _, b := range []string{"drawn1", "drawn2"} {
+		mat(ledger.EventBeliefUpsert, 3, map[string]any{"id": b, "statement": b, "ring": 3, "confidence": 0.5})
+		edge("d_"+b, "note", b, "DERIVED_FROM")
+	}
+	edge("s0", "note", "claim", "SUPPORTS")
+	edge("s1", "drawn1", "claim", "SUPPORTS")
+	edge("s2", "drawn2", "claim", "SUPPORTS")
+	report("new", 3, 1, "a dream's note of twenty experiences and two beliefs drawn from it")
+
+	// Three of the experiences its dream read, beside it, are three
+	// origins, and the note adds none to them.
+	edge("s3", "seen00", "claim", "SUPPORTS")
+	edge("s4", "seen01", "claim", "SUPPORTS")
+	report("new", 5, 2, "the note beside two experiences its dream read")
+	edge("s5", "seen02", "claim", "SUPPORTS")
+	report("confirmed", 6, 3, "the note beside three experiences its dream read")
+}
+
+func TestTheOriginsOfDreamNotesAreTheSameInEveryOrderOfTheirIDs(t *testing.T) {
+	// A shape: what each note's dream read (0..exps-1 an experience, exps+j
+	// the j-th note, read only by a later one), and which experiences and
+	// notes support the claim.
+	type shape struct {
+		exps          int
+		reads         [][]int
+		byExp, byNote []int
+		want          int // the count, where the case is named; 0 where not
+	}
+	shapes := []shape{
+		{exps: 2, reads: [][]int{{0}, {0, 1}, {1}}, byNote: []int{0, 1, 2}, want: 1},
+		// A note whose dream read an earlier note says again what that
+		// note's dream read.
+		{exps: 2, reads: [][]int{{0}, {2}}, byExp: []int{0, 1}, byNote: []int{1}, want: 2},
+	}
+	rng := rand.New(rand.NewPCG(5, 175))
+	for len(shapes) < 42 {
+		sh := shape{exps: 4}
+		for j := 0; j < 3; j++ {
+			var read []int
+			for len(read) == 0 {
+				for i := 0; i < sh.exps+j; i++ {
+					if rng.IntN(3) == 0 {
+						read = append(read, i)
+					}
+				}
+			}
+			sh.reads = append(sh.reads, read)
+		}
+		for i := 0; i < sh.exps; i++ {
+			if rng.IntN(3) == 0 {
+				sh.byExp = append(sh.byExp, i)
+			}
+		}
+		for j := range sh.reads {
+			if rng.IntN(4) != 0 {
+				sh.byNote = append(sh.byNote, j)
+			}
+		}
+		if len(sh.byExp)+len(sh.byNote) >= 3 {
+			shapes = append(shapes, sh)
+		}
+	}
+	orders := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+
+	for n, sh := range shapes {
+		// Before: each note is what its dream read, opened in turn.
+		var expand func(i int) []int
+		expand = func(i int) []int {
+			if i < sh.exps {
+				return []int{i}
+			}
+			var out []int
+			for _, r := range sh.reads[i-sh.exps] {
+				out = append(out, expand(r)...)
+			}
+			return out
+		}
+		before := map[int]bool{}
+		for _, i := range sh.byExp {
+			before[i] = true
+		}
+		for _, j := range sh.byNote {
+			for _, i := range expand(sh.exps + j) {
+				before[i] = true
+			}
+		}
+
+		s, mat := reportStore(t)
+		counts := map[int][][]int{}
+		for o, order := range orders {
+			name := func(i int) string {
+				if i < sh.exps {
+					return fmt.Sprintf("o%d-x%d", o, i)
+				}
+				return fmt.Sprintf("o%d-n%c", o, 'a'+order[i-sh.exps])
+			}
+			for i := 0; i < sh.exps; i++ {
+				mat(ledger.EventExperienceCreate, 3, map[string]any{"id": name(i), "content": name(i), "provenance": "self"})
+			}
+			for j, read := range sh.reads {
+				id := name(sh.exps + j)
+				mat(ledger.EventExperienceCreate, 3, map[string]any{"id": id, "content": id, "provenance": "dream"})
+				var seq uint64
+				if err := s.db.QueryRow(`SELECT created_seq FROM experiences WHERE id = ?`, id).Scan(&seq); err != nil {
+					t.Fatal(err)
+				}
+				var inputs []string
+				for _, i := range read {
+					inputs = append(inputs, name(i))
+				}
+				mat(ledger.EventDreamRun, 3, map[string]any{"inputs": inputs, "outputs": []uint64{seq}})
+			}
+			claim := fmt.Sprintf("o%d-claim", o)
+			mat(ledger.EventBeliefUpsert, 3, map[string]any{"id": claim, "statement": claim, "ring": 3, "confidence": 0.5})
+			support := func(i int) {
+				mat(ledger.EventEdgeCreate, 3, map[string]any{"id": claim + "-" + name(i), "from_id": name(i), "to_id": claim, "edge_type": "SUPPORTS"})
+			}
+			for _, i := range sh.byExp {
+				support(i)
+			}
+			for _, j := range sh.byNote {
+				support(sh.exps + j)
+			}
+			r, err := s.StandingReportFor(claim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			counts[r.DistinctOrigins] = append(counts[r.DistinctOrigins], order)
+		}
+		if len(counts) != 1 {
+			t.Fatalf("shape %d %+v: the count differs with the order of the notes' ids (count: orders) %v", n, sh, counts)
+		}
+		for got := range counts {
+			if got > len(before) || got < 1 {
+				t.Fatalf("shape %d %+v: %d origin(s); want 1 to %d (the count before a note was one origin)", n, sh, got, len(before))
+			}
+			if sh.want != 0 && got != sh.want {
+				t.Fatalf("shape %d %+v: %d origin(s); want %d", n, sh, got, sh.want)
+			}
+		}
+	}
+}
+
+// AN UNOPENED INPUT KEEPS THE COUNT A FLOOR. Two notes whose dreams each
+// read an earlier note, both of which read one observation, are one group
+// and one origin. When the walk's bound leaves those earlier notes
+// unopened, it cannot see that the two groups meet; it takes every group
+// an unopened input touches as one, so the count is still at most what
+// the record holds, and it says what it left unopened.
+func TestAnInputTheOriginsWalkDidNotOpenJoinsTheGroupsItTouches(t *testing.T) {
+	s, mat := reportStore(t)
+	note := func(id string, read ...string) {
+		t.Helper()
+		mat(ledger.EventExperienceCreate, 3, map[string]any{"id": id, "content": id, "provenance": "dream"})
+		var seq uint64
+		if err := s.db.QueryRow(`SELECT created_seq FROM experiences WHERE id = ?`, id).Scan(&seq); err != nil {
+			t.Fatal(err)
+		}
+		mat(ledger.EventDreamRun, 3, map[string]any{"inputs": read, "outputs": []uint64{seq}})
+	}
+	support := func(from string) {
+		t.Helper()
+		mat(ledger.EventEdgeCreate, 3, map[string]any{"id": "s_" + from, "from_id": from, "to_id": "claim", "edge_type": "SUPPORTS"})
+	}
+	note("inner_a", "exp")
+	note("inner_b", "exp")
+	note("note_a", "inner_a")
+	note("note_b", "inner_b")
+	support("note_a")
+	support("note_b")
+	// The claim's other sources spend the rest of the walk's bound.
+	for i := 0; i < standingOriginBound-2; i++ {
+		id := fmt.Sprintf("obs_%03d", i)
+		mat(ledger.EventExperienceCreate, 3, map[string]any{"id": id, "content": id, "provenance": "self"})
+		support(id)
+	}
+	r, err := s.StandingReportFor("claim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.DistinctSources != standingOriginBound || r.OriginsUnopened != 2 {
+		t.Fatalf("rig: %d source(s), %d unopened; want %d and the two earlier notes", r.DistinctSources, r.OriginsUnopened, standingOriginBound)
+	}
+	if want := standingOriginBound - 2 + 1; r.DistinctOrigins != want {
+		t.Fatalf("two notes whose unopened inputs may meet: %d origin(s); want %d (the observations, and the two notes as one)", r.DistinctOrigins, want)
 	}
 }

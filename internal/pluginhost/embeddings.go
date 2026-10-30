@@ -14,7 +14,7 @@ import (
 const (
 	EmbeddingsInterfaceID = "aii.embeddings"
 
-	EmbeddingsInterfaceVersion = 1
+	EmbeddingsInterfaceVersion = 2
 
 	EmbeddingsFamily = "provider_bridge"
 
@@ -88,10 +88,14 @@ func (e *EmbeddingsError) Error() string {
 type Embeddings struct {
 	PluginID string
 	Embed    string
-	Decl     EmbeddingsDecl
+
+	Version int
+	Decl    EmbeddingsDecl
 
 	ModelSHA256 string
 }
+
+func (e *Embeddings) Tells() bool { return e.Version >= 2 }
 
 func (e *Embeddings) Basis() string {
 	return fmt.Sprintf("%s/%s/f%d", e.PluginID, e.ModelSHA256[:12], e.Decl.Form)
@@ -166,7 +170,7 @@ func ParseEmbeddings(raw []byte) (*EmbeddingsDecl, error) {
 	return &d, nil
 }
 
-func declaresEmbeddings(m *packagefmt.Manifest) (bool, error) {
+func declaresEmbeddings(m *packagefmt.Manifest) (version int, err error) {
 	var decl *packagefmt.InterfaceDecl
 	interfaces := 0
 	if m.Interfaces != nil {
@@ -179,35 +183,35 @@ func declaresEmbeddings(m *packagefmt.Manifest) (bool, error) {
 		}
 	}
 	if decl == nil {
-		return false, nil
+		return 0, nil
 	}
 
 	if interfaces != 1 {
-		return false, &EmbeddingsError{PluginID: m.ID,
+		return 0, &EmbeddingsError{PluginID: m.ID,
 			Detail: fmt.Sprintf("a source of vectors declares %s and no other interface; the package declares %d", EmbeddingsInterfaceID, interfaces)}
 	}
 	if m.PluginFamily != EmbeddingsFamily {
-		return false, &EmbeddingsError{PluginID: m.ID, Detail: "declares " + EmbeddingsInterfaceID + " but plugin_family is " + m.PluginFamily +
+		return 0, &EmbeddingsError{PluginID: m.ID, Detail: "declares " + EmbeddingsInterfaceID + " but plugin_family is " + m.PluginFamily +
 			"; the interface is accepted only under " + EmbeddingsFamily}
 	}
-	if decl.Version != EmbeddingsInterfaceVersion {
-		return false, &EmbeddingsError{PluginID: m.ID,
-			Detail: fmt.Sprintf("declares %s@%d; this host speaks @%d", EmbeddingsInterfaceID, decl.Version, EmbeddingsInterfaceVersion)}
+	if decl.Version < 1 || decl.Version > EmbeddingsInterfaceVersion {
+		return 0, &EmbeddingsError{PluginID: m.ID,
+			Detail: fmt.Sprintf("declares %s@%d; this host speaks @1 to @%d", EmbeddingsInterfaceID, decl.Version, EmbeddingsInterfaceVersion)}
 	}
 	if len(decl.Methods) != 1 || decl.Methods[0] != MethodEmbed {
-		return false, &EmbeddingsError{PluginID: m.ID,
-			Detail: fmt.Sprintf("%s@%d has one operation, %s; the package declares %d", EmbeddingsInterfaceID, EmbeddingsInterfaceVersion, MethodEmbed, len(decl.Methods))}
+		return 0, &EmbeddingsError{PluginID: m.ID,
+			Detail: fmt.Sprintf("%s@%d has one operation, %s; the package declares %d", EmbeddingsInterfaceID, decl.Version, MethodEmbed, len(decl.Methods))}
 	}
-	return true, nil
+	return decl.Version, nil
 }
 
 func admitEmbeddings(pkgPath string, res *packagefmt.Result, held map[string][]byte, m *packagefmt.Manifest) (*Embeddings, error) {
-	declared, err := declaresEmbeddings(m)
+	version, err := declaresEmbeddings(m)
 	if err != nil {
 		return nil, err
 	}
 	_, member := res.FileDigests[EmbeddingsFile]
-	if !declared {
+	if version == 0 {
 		if member {
 			return nil, &EmbeddingsError{PluginID: m.ID, Detail: "carries " + EmbeddingsFile + " and declares no " + EmbeddingsInterfaceID + " interface"}
 		}
@@ -288,5 +292,5 @@ func admitEmbeddings(pkgPath string, res *packagefmt.Result, held map[string][]b
 	if err != nil {
 		return nil, err
 	}
-	return &Embeddings{PluginID: m.ID, Embed: name, Decl: *decl, ModelSHA256: hash}, nil
+	return &Embeddings{PluginID: m.ID, Embed: name, Version: version, Decl: *decl, ModelSHA256: hash}, nil
 }

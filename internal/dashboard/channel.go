@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ICEServer struct {
@@ -28,6 +29,12 @@ type ChannelSettings struct {
 	StallMS          int
 	ICEServers       []ICEServer
 	ICEServersNamed  bool
+
+	ServersExpire time.Time
+}
+
+func (c ChannelSettings) readyWithin() time.Duration {
+	return time.Duration(c.WaitMS+c.ReadyAllowanceMS) * time.Millisecond
 }
 
 func (c ChannelSettings) InForce() ChannelSettings { return c.held() }

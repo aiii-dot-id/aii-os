@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"net/http"
 	"os"
@@ -388,8 +389,10 @@ func (a *App) VoiceConfigured() bool {
 
 func (a *App) HearUtterance(ctx context.Context, pcm []byte, sampleRate, channels int, answer bool) error {
 
-	if reason, inSafe := a.SafeMode(); inSafe {
-		return fmt.Errorf("this identity is in SAFE; nothing heard is recorded while it holds (%s)", reason)
+	if h, held := a.Hold(); held && h.Waiting {
+		return fmt.Errorf("nothing heard is recorded %s (%s)", hold.While, h.Reason)
+	} else if held {
+		return fmt.Errorf("this identity is in SAFE; nothing heard is recorded while it holds (%s)", h.Reason)
 	}
 	sc := a.configSnapshot().Speech.STT
 	client, err := a.resolveSpeech()

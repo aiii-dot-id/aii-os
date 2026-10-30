@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 )
 
@@ -13,8 +14,10 @@ var _ identity.VoicePort = voiceModeAdapter{}
 func (v voiceModeAdapter) Mode() (listen, speak string, set bool) { return v.a.voiceMode() }
 
 func (v voiceModeAdapter) SetMode(listen, speak string) (string, error) {
-	if why, inSafe := v.a.SafeMode(); inSafe {
-		return "", fmt.Errorf("the mode cannot change while this identity is in SAFE (%s): your operator clears SAFE, and the mode is yours again", why)
+	if h, held := v.a.Hold(); held && h.Waiting {
+		return "", fmt.Errorf("the mode cannot change %s (%s): when the start completes, the mode is yours again", hold.While, h.Reason)
+	} else if held {
+		return "", fmt.Errorf("the mode cannot change while this identity is in SAFE (%s): your operator clears SAFE, and the mode is yours again", h.Reason)
 	}
 	if listen == listenInteractive || listen == listenMeeting {
 		switch st, why, _ := v.a.VoiceStatus(); st {

@@ -31,6 +31,8 @@ func (e *CachePolicyError) Error() string {
 	return fmt.Sprintf("cache policy %s: %s", e.Field, e.Reason)
 }
 
+const ResponsesCachePolicyRefusal = "the Responses API takes a routing key and caches by itself; retention and breakpoint controls are not declared for it"
+
 func ValidateCachePolicy(p CachePolicy, dialect Dialect, explicit bool) error {
 	refuse := func(field, reason string) error { return &CachePolicyError{field, reason} }
 	switch p.Mode {
@@ -43,7 +45,7 @@ func ValidateCachePolicy(p CachePolicy, dialect Dialect, explicit bool) error {
 	}
 	if dialect == DialectResponses {
 		if p.TTL != "" || p.TailTTL != "" || p.Diagnostics || p.Mode == CacheExplicit || p.Mode == CacheOff {
-			return refuse("policy", "ChatGPT subscription supports routing keys and automatic caching; API retention/breakpoint controls are not declared")
+			return refuse("policy", ResponsesCachePolicyRefusal)
 		}
 		return nil
 	}

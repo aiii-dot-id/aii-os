@@ -2,19 +2,26 @@ package dashboard
 
 import (
 	"context"
+	"errors"
+	"fmt"
 )
 
-func (s *Server) wsSandboxSet(ctx context.Context, conn carrier, msg ClientMessage) {
+func (s *Server) wsSandboxChange(ctx context.Context, conn carrier, msg ClientMessage) {
 	h := s.currentHandler()
-	if h.SetSandbox == nil {
+	if h.ChangeSandbox == nil {
 		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
 		return
 	}
-	if err := h.SetSandbox(msg.Roots); err != nil {
+	if err := h.ChangeSandbox(msg.Root, msg.Type == "sandbox_add"); err != nil {
 		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+
+		if h.GetSandbox != nil {
+			s.sendSandbox(ctx, conn, h, "")
+		}
 		return
 	}
 	s.sendSandbox(ctx, conn, h, msg.RequestID)
+	s.broadcastSandbox(ctx, conn)
 }
 
 func (s *Server) wsSandboxSwitch(ctx context.Context, conn carrier, msg ClientMessage) {
@@ -39,6 +46,37 @@ func (s *Server) wsSandboxSwitch(ctx context.Context, conn carrier, msg ClientMe
 		s.fanOut(ctx, s.conns(func(c carrier, _ *wsClient) bool { return c != conn }), ServerMessage{Type: "sandbox", Sandbox: sb})
 	}
 }
+
+func (s *Server) wsAgentNotesCopy(ctx context.Context, conn carrier, msg ClientMessage) {
+	h := s.currentHandler()
+	if h.CopyAgentNotes == nil || h.GetSandbox == nil {
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
+		return
+	}
+	said, err := h.CopyAgentNotes(ctx)
+	sb, readErr := h.GetSandbox()
+	switch {
+	case err != nil:
+		var refused *AgentNotesRefusal
+		code := ""
+		if errors.As(err, &refused) {
+			code = refused.Code
+		}
+		s.sendRequestError(ctx, conn, msg.RequestID, code, err.Error())
+		if readErr == nil {
+			s.sendMsg(ctx, conn, ServerMessage{Type: "sandbox", Sandbox: sb})
+		}
+	case readErr != nil:
+		s.sendErrorFor(ctx, conn, msg.RequestID, said+fmt.Sprintf(sandboxNotReadAgain, readErr))
+	default:
+		s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "sandbox", Sandbox: sb, Message: said})
+	}
+	if readErr == nil {
+		s.fanOut(ctx, s.conns(func(c carrier, _ *wsClient) bool { return c != conn }), ServerMessage{Type: "sandbox", Sandbox: sb})
+	}
+}
+
+const sandboxNotReadAgain = " (The sandbox could not be read again: %v.)"
 
 func (s *Server) wsProject(ctx context.Context, conn carrier, msg ClientMessage) {
 	h := s.currentHandler()

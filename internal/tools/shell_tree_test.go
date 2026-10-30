@@ -36,17 +36,18 @@ func TestShellTimeoutKillsProcessTree(t *testing.T) {
 			if perr != nil {
 				t.Fatalf("could not parse child pid from %q", line)
 			}
-			// Signal 0 probes existence; ESRCH is the passing grade.
-			// One grace beat for the kernel to reap.
+			// Gone is the passing grade (shellProcess finds it by the
+			// number the shell gave it). One grace beat for the kernel to
+			// reap.
 			deadline := time.Now().Add(2 * time.Second)
 			for {
-				err := syscall.Kill(pid, 0)
-				if err == syscall.ESRCH {
+				host, alive := shellProcess(t, st, pid)
+				if !alive {
 					return
 				}
 				if time.Now().After(deadline) {
-					_ = syscall.Kill(pid, syscall.SIGKILL) // do not leak it into the suite
-					t.Fatalf("child %d survived the ceiling (kill(0) => %v)", pid, err)
+					_ = syscall.Kill(host, syscall.SIGKILL) // do not leak it into the suite
+					t.Fatalf("child %d survived the ceiling", pid)
 				}
 				time.Sleep(50 * time.Millisecond)
 			}

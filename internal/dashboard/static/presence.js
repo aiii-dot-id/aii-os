@@ -14,11 +14,11 @@ export function renderPresence() {
   orb.className = 'orb-wrap';
   if (!S.connected) orb.classList.add('offline');
   else if (mode === 'safe') orb.classList.add('safe');
-  else if (mode === 'degraded_witness') orb.classList.add('degraded');
+  else if (mode === 'degraded_witness' || mode === 'degraded_ring5') orb.classList.add('degraded');
   if (S.thinking) orb.classList.add('thinking');
   $('p-name').textContent = S.identityExists ? S.stats.name : 'AII OS';
   const st = $('p-state');
-  st.className = 'p-state' + (mode === 'safe' ? ' safe' : mode === 'degraded_witness' ? ' degraded' : '');
+  st.className = 'p-state' + (mode === 'safe' ? ' safe' : mode === 'degraded_witness' || mode === 'degraded_ring5' ? ' degraded' : '');
   const asleep = phoneAsleep(S.connected, S.stats, location.hostname);
   const state = asleep ? '<b>asleep</b> \u2014 this identity runs on a phone and answers while its app is open; this page reconnects by itself'
     : !S.connected ? '<b>offline</b>'
@@ -27,6 +27,7 @@ export function renderPresence() {
     : S.thinking ? '<b>thinking</b>'
     : mode === 'safe' ? '<b>SAFE</b> — record frozen'
     : mode === 'degraded_witness' ? '<b>degraded</b> — witness dark'
+    : mode === 'degraded_ring5' ? '<b>degraded</b> — waiting for Ring 5'
     : '<b>present</b>';
   if (st.innerHTML !== state) st.innerHTML = state;
 

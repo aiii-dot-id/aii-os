@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -123,6 +124,8 @@ func waitingNote(r waitReason, to string) string {
 	switch r {
 	case waitSafe:
 		return "Held: nothing leaves in safe mode. It is sent once safe mode ends."
+	case waitStart:
+		return "Held: nothing leaves " + hold.While + ". It is sent once the start completes."
 	case waitAddressing:
 		return "Held: its addressing from an earlier version is unresolved. Correct it under Held mail."
 	case waitNoContact:

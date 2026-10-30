@@ -16,7 +16,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/jsonschema"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
-	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
 // heardReadScript asks for one recall with the given raw arguments, then
@@ -48,29 +47,24 @@ func TestAHeardReadNamedWithAFoldedDuplicateKeyKeepsItsBoundary(t *testing.T) {
 	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "what was said?"}}); err != nil {
 		t.Fatal(err)
 	}
-	var handed string
+	refused := false
 	for _, m := range model.handed {
 		if strings.Contains(m.Content, "withheld banking sentence") {
-			handed = m.Content
+			t.Fatalf("heard words reached the model from a call that names an unknown argument: %q", m.Content)
 		}
+		refused = refused || strings.Contains(m.Content, "recall does not take SOURCE; nothing ran.")
 	}
-	if handed == "" {
-		t.Fatal("the heard read did not run: the probe cannot see the boundary")
-	}
-	if open := strings.Index(handed, untrusted.Open); open < 0 || open > strings.Index(handed, "withheld banking sentence") {
-		t.Fatalf("heard words reached the model outside the untrusted boundary: %q", handed)
+	if !refused {
+		t.Fatal("the call with a folded duplicate key was not refused naming it")
 	}
 	turns, err := a.store.RecentTurnsIncludingSystem(50)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	recorded := false
 	for _, turn := range turns {
-		recorded = recorded || strings.Contains(turn.Content, "withheld banking sentence")
-	}
-	if !recorded {
-		t.Fatal("the record of a heard read does not hold the words the identity read")
+		if strings.Contains(turn.Content, "withheld banking sentence") {
+			t.Fatalf("the record holds heard words a refused call never read: %q", turn.Content)
+		}
 	}
 }
 
@@ -127,7 +121,7 @@ func TestHeardCallableProviderRoundTrip(t *testing.T) {
 	stubWake(t, func() (string, error) { wakes.Add(1); return "reply", nil })
 	a.voiceEngineEvent(nil, uuidFinal(h.id, 7, "track-a", "retained cobalt context"), page.enqueue)
 	a.voiceEngineEvent(nil, pendingHeard(h.id, 20, 7, "track-a"), page.enqueue)
-	const args = `{"after_seq":0,"after_edge":"","id":"","decay":"none","exact":false,"limit":20,"query":"","source":"heard"}`
+	const args = `{"after_seq":0,"after_edge":"","id":"","decay":"none","exact":false,"limit":20,"part":"","query":"","source":"heard"}`
 	checked := make(chan error, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

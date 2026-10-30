@@ -1,0 +1,65 @@
+{
+  "task": "voice-no-steps-narration",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Read inbox/a.txt and inbox/b.txt",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt begins with alpha, b.txt with beta."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C2: the turn contract's words are narrated to the operator",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Read inbox/a.txt and inbox/b.txt",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "Declaring steps=2. a.txt begins with alpha, b.txt with beta."
+          }
+        ]
+      }
+    ]
+  }
+}

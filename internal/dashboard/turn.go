@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -32,12 +33,22 @@ func (s *Server) serverTurnCtx() context.Context {
 	return context.Background()
 }
 
+type refusalOnReceiptKey struct{}
+
+func withRefusalOnReceipt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, refusalOnReceiptKey{}, true)
+}
+
 func (s *Server) runOperatorMessage(ctx context.Context, conn carrier, h *WSHandler, message string, recorded func(ChatRecording), requestIDs ...string) {
 	s.runOperatorRequest(ctx, conn, h, message, nil, recorded, requestIDs...)
 }
 
 func (s *Server) runOperatorRequest(ctx context.Context, conn carrier, h *WSHandler, message string, options *conversation.RequestOptions, recorded func(ChatRecording), requestIDs ...string) {
 	turnCtx := s.serverTurnCtx()
+
+	if said := interaction.SaidOf(ctx); said != "" {
+		turnCtx = interaction.WithSaid(turnCtx, said)
+	}
 	receiptID := ""
 	if len(requestIDs) > 0 {
 		receiptID = requestIDs[0]
@@ -59,6 +70,9 @@ func (s *Server) runOperatorRequest(ctx context.Context, conn carrier, h *WSHand
 	}
 
 	refuse := func(message string) {
+		if ctx.Value(refusalOnReceiptKey{}) != nil {
+			return
+		}
 		id := ""
 		if len(requestIDs) > 0 {
 			id = requestIDs[0]

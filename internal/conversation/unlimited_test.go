@@ -29,8 +29,8 @@ func TestALocalModelsTurnPassesAMillionTokensWithNoWrapUp(t *testing.T) {
 	if res.Usage.TotalTokens < 1_000_000 || len(client.seen) != 5 {
 		t.Fatalf("the turn spent %d tokens over %d requests; want past a million over five", res.Usage.TotalTokens, len(client.seen))
 	}
-	if res.ContinuedAtTokenBudget || strings.Contains(res.Spoken, "token budget") || res.Spoken != "the whole answer" {
-		t.Fatalf("a turn with no fence was wrapped up at one: %q (%+v)", res.Spoken, res)
+	if res.ContinuedAtTokenBudget || strings.Contains(res.Said(), "token budget") || res.Said() != "the whole answer" {
+		t.Fatalf("a turn with no fence was wrapped up at one: %q (%+v)", res.Said(), res)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestAnUnlimitedTurnIsStillFittedToTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.ContinuedAtPressure || !strings.Contains(res.Spoken, "The context filled during this turn after") {
-		t.Fatalf("an unlimited turn was not fitted to its window: %q (%+v)", res.Spoken, res)
+	if !res.ContinuedAtPressure || !strings.Contains(res.Said(), "The context filled during this turn after") {
+		t.Fatalf("an unlimited turn was not fitted to its window: %q (%+v)", res.Said(), res)
 	}
 }

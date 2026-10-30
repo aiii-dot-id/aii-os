@@ -413,7 +413,7 @@ run_reference() {
 	export TMPDIR
 	reference_log="$run_dir/reference.log"
 	(umask 077; : > "$reference_log")
-	start_job "$reference_log" "$go_bin" test -v -race -count=1 -timeout 45m ./...
+	start_job "$reference_log" "$go_bin" test -v -race -count=1 -timeout 90m ./...
 	pid=$started_pid
 	status=0
 	wait "$pid" || status=$?

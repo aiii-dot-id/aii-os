@@ -94,7 +94,7 @@ func (s *Store) NextOutcomes(window int) (OutcomeBatch, error) {
 				evt.Seq, typ, err, ring.Valid)
 			continue
 		}
-		o := Outcome{Seq: evt.Seq, ID: p.ID, State: p.State}
+		o := Outcome{Seq: evt.Seq, ID: p.ID, State: p.State, At: evt.Timestamp}
 		switch {
 		case typ == string(ledger.EventIntentionStateChange) && (p.State == "completed" || p.State == "abandoned"):
 			o.Kind, o.Said = "intention", p.Outcome

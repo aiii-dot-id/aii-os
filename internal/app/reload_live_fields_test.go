@@ -15,7 +15,9 @@ import (
 // use, and logs.group and logs.taps, which the reload hands to the log.
 // An operator who changed the meaning source in the file had memories
 // going to a provider's endpoint on the next pass, under one line that
-// said the change waits for a restart.
+// said the change waits for a restart. So were updates.repo and
+// updates.api_url, which the checker reads at each request: the next
+// check asked the new source while the log said it waited for a boot.
 func TestAReloadDoesNotCallALiveChangeSavedForNextBoot(t *testing.T) {
 	out := reloadLog(t, func(c *Config) { c.Memory.MeaningSource = meaningChoiceNone })
 	if strings.Contains(out, "SAVED FOR NEXT BOOT") {
@@ -44,6 +46,27 @@ func TestAReloadDoesNotCallALiveChangeSavedForNextBoot(t *testing.T) {
 			t.Errorf("%s: the reload applied it and said it waits for a boot:\n%s", what, out)
 		}
 		if !strings.Contains(out, "logs.group and logs.taps applied live") {
+			t.Errorf("%s took effect without a line that names it:\n%s", what, out)
+		}
+	}
+	// The release source is read at each request, so a hand edit of it
+	// reaches the next check and is said as applied live.
+	for what, edit := range map[string]func(*Config){
+		"updates.repo":    func(c *Config) { c.Updates.Repo = "someone/their-fork" },
+		"updates.api_url": func(c *Config) { c.Updates.APIURL = "https://mirror.example:8443" },
+	} {
+		a, b := *defaultConfig(), *defaultConfig()
+		edit(&b)
+		blankLiveAppliable(&a)
+		blankLiveAppliable(&b)
+		if !reflect.DeepEqual(a, b) {
+			t.Errorf("%s is read at each request and survives blankLiveAppliable: a reload calls it saved for next boot", what)
+		}
+		out := reloadLog(t, edit)
+		if strings.Contains(out, "SAVED FOR NEXT BOOT") {
+			t.Errorf("%s: the next check reads it and the reload said it waits for a boot:\n%s", what, out)
+		}
+		if !strings.Contains(out, "automatic updates and the release source") {
 			t.Errorf("%s took effect without a line that names it:\n%s", what, out)
 		}
 	}

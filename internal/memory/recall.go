@@ -17,6 +17,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/memory/fuse"
 	"github.com/aiii-dot-id/aii-os/internal/memory/trigram"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
 const (
@@ -115,6 +116,8 @@ type Hit struct {
 	Fuzz float64
 
 	Similarity float64
+
+	MeaningRead int
 
 	Graph float64
 
@@ -307,7 +310,7 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 						if held, seen := byKey[k]; !seen {
 							byKey[k] = &h
 						} else {
-							held.Similarity = h.Similarity
+							held.Similarity, held.MeaningRead = h.Similarity, h.MeaningRead
 						}
 						if !exactKeys[k] && !counted[k] && !carriesAllWords(words, h.Text) {
 							src.Matched++
@@ -1124,6 +1127,12 @@ func Excerpt(text string, words []string, max int) string {
 		}
 	}
 	out := strings.Join(tokens[start:end], " ")
+	if insideFrame(tokens[:start]) {
+		out = untrusted.Open + " " + out
+	}
+	if insideFrame(tokens[:end]) {
+		out += " " + untrusted.Close
+	}
 	if start > 0 {
 		out = "…" + out
 	}
@@ -1131,4 +1140,16 @@ func Excerpt(text string, words []string, max int) string {
 		out += "…"
 	}
 	return out
+}
+
+func insideFrame(tokens []string) bool {
+	for i := len(tokens) - 1; i >= 0; i-- {
+		switch {
+		case strings.HasPrefix(tokens[i], untrusted.Open):
+			return true
+		case strings.HasPrefix(tokens[i], untrusted.Close):
+			return false
+		}
+	}
+	return false
 }

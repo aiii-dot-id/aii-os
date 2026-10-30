@@ -233,10 +233,14 @@ func TestWithAVerifiedEscrowReceiptTheSnapshotIsEncryptedAndIsTheProvedSet(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"ledger.jsonl", SnapshotDB, snapshotReceiptName, SnapshotSums} {
+	for _, want := range []string{"ledger.jsonl", SnapshotDB, snapshotReceiptName, SnapshotSums, escrow.SumsSigName} {
 		if !strings.Contains(","+strings.Join(names, ",")+",", ","+want+",") {
 			t.Fatalf("the encrypted snapshot lacks %s: %v", want, names)
 		}
+	}
+	everyFileNamed(t, out, names)
+	if signed, err := escrow.VerifySumsSig(out, a.door.kp.PublicKeyBytes()); err != nil || signed.LastSeq != captured {
+		t.Fatalf("the encrypted snapshot's list is not signed by the identity for record %d: %+v %v", captured, signed, err)
 	}
 	head, held, err := store.InspectCopy(t.Context(), filepath.Join(out, SnapshotDB))
 	if err != nil || head.Seq != captured || held.Ephemeral["conversations"] != 3 {

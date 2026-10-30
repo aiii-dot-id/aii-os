@@ -6,6 +6,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -103,7 +104,9 @@ func (a *App) noticeRouteState() *dashboard.NoticeRoute {
 		st.Lines = append(st.Lines, dashboard.NoticeLine{Name: l.Name, Channel: l.Channel, Carried: ok})
 		carried = carried || ok
 	}
-	switch _, safe := a.SafeMode(); {
+	switch h, safe := a.Hold(); {
+	case safe && h.Waiting:
+		st.Held = "nothing leaves " + hold.While
 	case safe:
 		st.Held = "nothing leaves in safe mode"
 	case len(st.Lines) == 0:

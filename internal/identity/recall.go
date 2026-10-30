@@ -28,8 +28,13 @@ type recallStore interface {
 	ListIntentions() ([]store.Intention, error)
 	SearchLedgerMirror(q string, beforeSeq uint64, limit int) ([]store.LedgerEventRow, int, error)
 	ReasoningPage(terms []string, beforeSeq uint64, limit int) ([]store.Reasoning, error)
+	InboundByID(id string) (store.Inbound, bool, error)
+	ArrivalsBefore(beforeSeq uint64, limit, previewChars int) ([]store.ListedArrival, error)
 	ReasoningOfTurn(turnSeq uint64) (store.Reasoning, bool, error)
+	RecalledTurn(seq uint64) (store.RecalledTurn, bool, error)
 	ReasoningTurns(turns []uint64) (map[uint64]bool, error)
+	WorkCalls(session string, terms []string, beforeSeq uint64, limit, head int, openTurn string) ([]store.WorkCall, error)
+	WorkCallByTex(tex string) (store.WorkCall, bool, error)
 	StandingFor(id string) (string, error)
 	StandingDetail(ctx context.Context, id string, cur *store.StandingCursor) (*store.StandingReport, error)
 }
@@ -54,6 +59,8 @@ func recallSourceName(storeName string) string {
 	return storeName
 }
 
+const recallNotASource = "recall source %q is not a source — the record's stores are experiences, syntheses, conversation and ledger (listed newest-first) and beliefs, intentions, commitments, relationships and inbound (read ranked, one alone), your reasoning is reasoning, and the calls of your work sessions are work; the standing sources are alarms, projects, skills, curiosity and continuity; Ring 3 and your brief read whole as ring3 and brief; omit it to recall across the record"
+
 func (e *Engine) verbRecall(ctx context.Context, args map[string]any) (string, error) {
 	query, _ := args["query"].(string)
 	if query == "" {
@@ -72,6 +79,28 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]any) (string, e
 	if edge != "" && source != "standing" {
 		return "", fmt.Errorf("after_edge is only valid with source=standing")
 	}
+
+	id, _ := args["id"].(string)
+	part, version, partGiven, err := wholePart(args)
+	if err != nil {
+		return "", err
+	}
+	if source == "ring3" || source == "brief" || source == "inbound" && strings.TrimSpace(id) != "" {
+		read := "source=" + source
+		if source == "inbound" {
+			read += " id=" + arrivalReadRef(strings.TrimSpace(id))
+		}
+		switch {
+		case cursor > 0:
+			return "", refuseWhole("whole.with_cursor", wholeCursorWhy, read)
+		case query != "":
+			return "", refuseWhole("whole.with_query", wholeQueryWhy, read)
+		}
+		return e.recallWhole(ctx, source, strings.TrimSpace(id), part, version)
+	}
+	if partGiven {
+		return "", refuseWhole("whole.part_alone", wholeAloneWhy)
+	}
 	if source == "heard" {
 		if e.heardHistory == nil {
 			return "", fmt.Errorf("heard history is unavailable on this host")
@@ -86,20 +115,36 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]any) (string, e
 
 		return e.heardHistory(query, cursor, limit)
 	}
+	if source == "work" {
+		exact, _ := args["exact"].(bool)
+		return e.recallWork(ctx, strings.TrimSpace(id), query, exact, cursor, limit, limitNote)
+	}
 	if source == "reasoning" {
 		exact, _ := args["exact"].(bool)
 		if cursor > 0 && !exact && turnRef.MatchString(query) {
 			return "", fmt.Errorf("query=%q reads one turn whole; after_seq pages word searches and listings — drop one of them", query)
 		}
-		return e.recallReasoning(query, exact, cursor, limit, limitNote)
+		return e.recallReasoning(ctx, query, exact, cursor, limit, limitNote)
+	}
+	if source == "inbound" && query == "" && strings.TrimSpace(id) == "" {
+
+		return e.recallArrivals(ctx, cursor, limit, limitNote)
+	}
+	if source == "conversation" {
+		exact, _ := args["exact"].(bool)
+		if m := turnRef.FindStringSubmatch(query); m != nil && !exact {
+			if cursor > 0 {
+				return "", fmt.Errorf("query=%q reads one turn whole; after_seq pages word searches and listings — drop one of them", query)
+			}
+			return e.recallTurn(ctx, m[1], m[2])
+		}
 	}
 	switch source {
 	case "", "experiences", "syntheses", "conversation", "ledger":
 	case "beliefs", "intentions", "commitments", "relationships", "inbound":
 
 	case "standing":
-		id, _ := args["id"].(string)
-		id = strings.TrimSpace(id)
+		id := strings.TrimSpace(id)
 		if id == "" {
 			return "", fmt.Errorf("source=standing requires id=<belief id> and query=\"\"")
 		}
@@ -123,7 +168,7 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]any) (string, e
 		}
 		return e.recallStanding(ctx, source, query, int(min(cursor, uint64(math.MaxInt32))))
 	default:
-		return "", fmt.Errorf("recall source %q is not a source — the record's stores are experiences, syntheses, conversation and ledger (listed newest-first) and beliefs, intentions, commitments, relationships and inbound (read ranked, one alone), and your reasoning is reasoning; the standing sources are alarms, projects, skills, curiosity and continuity; omit it to recall across the record", source)
+		return "", fmt.Errorf(recallNotASource, source)
 	}
 	if cursor > 0 && source == "" {
 		return "", fmt.Errorf("after_seq=%d needs a source: sequence numbers are per-source, and this one means a different position in each. Pass source=experiences|syntheses|conversation|ledger|reasoning with the seq that source reported", cursor)
@@ -223,25 +268,8 @@ func recallCursor(args map[string]any) (uint64, error) {
 }
 
 func recallLimitWords() string {
-	var pages []string
-	for _, p := range []struct {
-		source string
-		page   int
-	}{
-		{"experiences", recallExperiencePage}, {"syntheses", recallSelfModelPage}, {"conversation", recallConversationPage},
-		{"ledger", recallLedgerPage}, {"reasoning", recallReasoningPage},
-	} {
-		pages = append(pages, fmt.Sprintf("%s %d", p.source, p.page))
-	}
-	return fmt.Sprintf("How many to return, at most %[1]d: a larger limit is read as %[1]d, and the answer says so. "+
-		"A recall across sources shares it among them (default %[2]d). "+
-		"A named source returns up to limit of its own: a ranked source every match up to it (default %[1]d); "+
-		"a listing that many a page (default: %[3]s), and the answer names the after_seq of the next page. "+
-		"Unused by source=beliefs with query=\"\" (every belief, as many as fit, paged with after_seq), by the standing sources (alarms, projects, skills, curiosity, continuity), "+
-		"and by the listing of every source (no source and no query: each source's own page). "+
-		"An answer longer than a tool result may be leaves out its last rows, or cuts its one row short, and says so. "+
-		"Standing inspection returns at most 10 evidence edges per page.",
-		memory.MaxLimit, memory.DefaultLimit, strings.Join(pages, ", ")+", heard: the host's speech.heard_history.page_rows")
+	return fmt.Sprintf("How many, at most %[1]d (default %[2]d across all sources, %[1]d for a ranked source; a listing's own page size). The answer names the after_seq of the next page and says when it cut.",
+		memory.MaxLimit, memory.DefaultLimit)
 }
 
 func RecallHostNote(args map[string]any) string {
@@ -252,11 +280,8 @@ func RecallHostNote(args map[string]any) string {
 	return note
 }
 
-func (e *Engine) recallBound() int {
-	if n := e.toolResultChars; n > 0 && n < recallAnswerChars {
-		return n
-	}
-	return recallAnswerChars
+func (e *Engine) recallBound(ctx context.Context) int {
+	return min(recallAnswerChars, e.ResultLimit(ctx))
 }
 
 var rankedWithin = map[string]string{
@@ -277,8 +302,6 @@ func recallMark(h memory.Hit) string {
 	}
 	return h.Match + " (" + strings.Join(parts, " + ") + ")"
 }
-
-const RecallOrder = "Hits are ordered by score (fused rank × strength × graph, shown on each hit); the limit is shared across sources, not per source, and a cut answer says so."
 
 const recallMarksLegend = "Marks — exact_words: every word of the cue is in the text. fuzzy: near-spellings of its words are. meaning: the text is near the cue in the model's sense, at or above the floor, whatever its words. both: more than one of these found it, named in brackets, meaning with its similarity; only a mark that names meaning says the meaning layer found it. A similarity close to the floor is a weak match."
 
@@ -366,6 +389,9 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 	case memory.StatusSourceUnavailable:
 		meaningLine = "\nMeaning layer: unavailable — " + res.Meaning.Detail
 	}
+	if meaningLine != "" && res.Meaning.Status != memory.StatusSourceUnavailable {
+		meaningLine += cueReadNote(res.Meaning)
+	}
 	warningsOf := func(warnings []string) string {
 		if len(warnings) == 0 {
 			return ""
@@ -407,7 +433,7 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 		return strings.Join(out, "\n")
 	}
 
-	bound := e.recallBound()
+	bound := e.recallBound(ctx)
 	shown := len(res.Hits)
 	fit := func(warnings []string) string {
 		answer := render(shown, bound, warnings)
@@ -470,11 +496,18 @@ func unmetabolizedMark(h memory.Hit) string {
 	return ""
 }
 
-func conversationRecallText(h memory.Hit, text string) string {
-	if h.Attribution == "tool" || h.Attribution == "operator_act" {
+func conversationRecallText(attribution, text string) string {
+	if attribution == "tool" || attribution == "operator_act" {
 		return untrusted.Wrap("operator-authorized tool/report", text)
 	}
 	return text
+}
+
+func wholeTurnRoute(h memory.Hit, shown string) string {
+	if shown == h.Text {
+		return ""
+	}
+	return fmt.Sprintf(" [shortened: recall source=conversation query=\"turn:%d\" reads it whole]", h.Seq)
 }
 
 func recallRankedLine(h memory.Hit, rank int, standing string) string {
@@ -482,6 +515,7 @@ func recallRankedLine(h memory.Hit, rank int, standing string) string {
 	if h.Match == memory.MatchMeaning {
 		tail += fmt.Sprintf(", similarity %.3f", h.Similarity)
 	}
+	tail += meaningReadNote(h)
 	tail += fmt.Sprintf(", score %.5f (fused %.5f × strength %.2f × graph %.2f)", h.Score, h.Fused, h.Strength, h.Graph)
 	switch h.Store {
 	case "experiences":
@@ -492,16 +526,47 @@ func recallRankedLine(h memory.Hit, rank int, standing string) string {
 				line += fmt.Sprintf(" (more; recall source=ledger query=%q)", h.ID)
 			}
 		}
-		return line + " " + h.Snippet
+		return line + " " + foreignRecallText(h, h.Snippet)
 	case "beliefs":
 		return fmt.Sprintf("  [%s, %s, ring %d | %s] %s", h.ID, standing, h.Ring, tail, h.Snippet)
 	case "self_model_synthesis":
 		return fmt.Sprintf("  [seq %d, %s | %s] %s", h.Seq, h.ID, tail, h.Snippet)
 	case "conversations":
-		return fmt.Sprintf("  [seq %d, turn %d, %s, %s | %s] %s", h.Seq, h.Seq, h.Attribution, h.Time.Format(time.RFC3339), tail, conversationRecallText(h, h.Snippet))
+		return fmt.Sprintf("  [seq %d, turn %d, %s, %s | %s] %s", h.Seq, h.Seq, h.Attribution, h.Time.Format(time.RFC3339), tail, conversationRecallText(h.Attribution, h.Snippet)) + wholeTurnRoute(h, h.Snippet)
 	default:
-		return fmt.Sprintf("  [%s, %s | %s] %s", h.ID, h.Attribution, tail, h.Snippet)
+		return fmt.Sprintf("  [%s, %s | %s] %s", h.ID, h.Attribution, tail, foreignRecallText(h, h.Snippet))
 	}
+}
+
+func foreignRecallText(h memory.Hit, text string) string {
+	if h.Attribution == "external" {
+		return untrusted.Wrap("", text)
+	}
+	return text
+}
+
+func meaningReadNote(h memory.Hit) string {
+	if !slices.Contains(h.Layers, memory.MatchMeaning) {
+		return ""
+	}
+	n := utf8.RuneCountInString(h.Text)
+	switch {
+	case h.MeaningRead > 0 && h.MeaningRead < n:
+		return fmt.Sprintf(", meaning read the first %d of its %d characters (what lies past them is found by words alone)", h.MeaningRead, n)
+	case h.MeaningRead == 0 && n > memory.MaxEmbedChars:
+		return fmt.Sprintf(", meaning was handed the first %d of its %d characters (what lies past them is found by words alone)", memory.MaxEmbedChars, n)
+	}
+	return ""
+}
+
+func cueReadNote(m memory.MeaningStatus) string {
+	switch {
+	case m.CueRead > 0 && m.CueRead < m.CueChars:
+		return fmt.Sprintf(" Of the cue, meaning read the first %d of its %d characters; the rest of it was matched by words alone.", m.CueRead, m.CueChars)
+	case m.CueRead == 0 && m.CueChars > memory.MaxEmbedChars:
+		return fmt.Sprintf(" Of the cue, meaning was handed the first %d of its %d characters; the rest of it was matched by words alone.", memory.MaxEmbedChars, m.CueChars)
+	}
+	return ""
 }
 
 func recallRankedCoverage(sources []memory.Source) string {
@@ -538,7 +603,12 @@ func (e *Engine) ringStateMatches(q string) []string {
 		if q != "" && !strings.Contains(hay, q) {
 			return
 		}
-		lines = append(lines, fmt.Sprintf("  [%s] %s", label, recallExcerpt(content, 240)))
+		line := fmt.Sprintf("  [%s] %s", label, recallExcerpt(content, 240))
+
+		if whole := strings.SplitN(label, "/", 2)[0]; (whole == "ring3" || whole == "brief") && recallExcerpt(content, 240) != content {
+			line += fmt.Sprintf(ringStateWhole, whole)
+		}
+		lines = append(lines, line)
 	}
 	if rc := e.rings.GetContent(ring.Ring2); rc != "" {
 		matchRing("ring2/self-model", rc)
@@ -651,6 +721,10 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 		pageOf["experiences"] = size(recallExperiencePage)
 		if hits, more, ok := page("experiences", "experiences", pageOf["experiences"]); ok {
 			p := &recallPart{heading: "Experiences", source: "experiences", covered: true, more: more}
+
+			for i := range hits {
+				hits[i].Text = foreignRecallText(hits[i], hits[i].Text)
+			}
 			for _, h := range hits {
 
 				p.items = append(p.items, fmt.Sprintf("  [seq %d, %s, %s%s] %s", h.Seq, h.ID, h.Attribution, unmetabolizedMark(h), h.Text))
@@ -666,7 +740,8 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 			p := &recallPart{heading: "Conversation", source: "conversation", covered: true, more: more}
 			thinking := e.thinkingKept(hits)
 			for _, h := range hits {
-				line := fmt.Sprintf("  [seq %d, turn %d, %s, %s] %s", h.Seq, h.Seq, h.Attribution, h.Time.Format(time.RFC3339Nano), conversationRecallText(h, recallExcerpt(h.Text, 200)))
+				shown := recallExcerpt(h.Text, 200)
+				line := fmt.Sprintf("  [seq %d, turn %d, %s, %s] %s", h.Seq, h.Seq, h.Attribution, h.Time.Format(time.RFC3339Nano), conversationRecallText(h.Attribution, shown)) + wholeTurnRoute(h, shown)
 				if thinking[h.Seq] {
 					line += thinkingRoute(h.Seq)
 				}
@@ -693,7 +768,11 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 				if ev.Ring < 0 {
 					ringLabel = "meta"
 				}
-				p.items = append(p.items, fmt.Sprintf("  [seq %d, %s, %s, %s] %s\n%s", ev.Seq, ev.Type, ringLabel, ev.Timestamp, ev.Payload, ledgerRecallCitation(ev)))
+				payload := ev.Payload
+				if ev.External {
+					payload = untrusted.Wrap("", payload)
+				}
+				p.items = append(p.items, fmt.Sprintf("  [seq %d, %s, %s, %s] %s\n%s", ev.Seq, ev.Type, ringLabel, ev.Timestamp, payload, ledgerRecallCitation(ev)))
 				p.seqs = append(p.seqs, ev.Seq)
 			}
 			parts = append(parts, p)
@@ -716,7 +795,7 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 	if limitNote != "" {
 		limitNote = "\n" + limitNote
 	}
-	bound := e.recallBound()
+	bound := e.recallBound(ctx)
 	if recorded == 0 {
 
 		if source != "" {
@@ -792,6 +871,7 @@ type recallPart struct {
 	trailer string
 	items   []string
 	seqs    []uint64
+	scope   string
 	more    bool
 	covered bool
 	left    int
@@ -806,6 +886,8 @@ func (p *recallPart) readAlone() string {
 		return fmt.Sprintf(`recall source=reasoning query="turn:%d" reads it whole`, p.seqs[0])
 	case p.source == "beliefs":
 		return fmt.Sprintf(`recall source=beliefs query="" after_seq=%d shows it first, with the whole of an answer's room`, p.seqs[0]+1)
+	case p.source == "work":
+		return fmt.Sprintf(workReadAlone, p.scope, p.seqs[0]+1)
 	}
 	return fmt.Sprintf(`recall source=%s query="" after_seq=%d limit=1 shows it alone, with the whole of an answer's room`, p.source, p.seqs[0]+1)
 }
@@ -864,16 +946,16 @@ func fitParts(parts []*recallPart, bound int, render func(fits bool) string) str
 }
 
 func cutShort(item string, by int) (string, bool) {
-	if strings.Contains(item, untrusted.Open) {
-		return item, false
-	}
-	body := []rune(strings.TrimSuffix(item, " "+recallCutMark))
+	body := strings.TrimSuffix(item, " "+recallCutMark)
 	head := 0
-	if i := strings.Index(string(body), "]"); i >= 0 {
-		head = utf8.RuneCountInString(string(body)[:i+1])
+	if i := strings.Index(body, "]"); i >= 0 {
+		head = utf8.RuneCountInString(body[:i+1])
 	}
-	keep := max(head, utf8.RuneCountInString(item)-by-utf8.RuneCountInString(" "+recallCutMark))
-	out := strings.TrimRight(string(body[:min(keep, len(body))]), " ") + " " + recallCutMark
+	keep := utf8.RuneCountInString(item) - by - utf8.RuneCountInString(" "+recallCutMark)
+	if untrusted.Contains(body) {
+		keep -= utf8.RuneCountInString(" " + untrusted.Close)
+	}
+	out := strings.TrimRight(untrusted.Cut(body, max(head, keep), ""), " ") + " " + recallCutMark
 	if utf8.RuneCountInString(out) >= utf8.RuneCountInString(item) {
 		return item, false
 	}
@@ -1004,9 +1086,9 @@ const (
 	recallReasoningTaste = 300
 )
 
-func (e *Engine) recallReasoning(query string, exact bool, cursor uint64, limit int, limitNote string) (string, error) {
+func (e *Engine) recallReasoning(ctx context.Context, query string, exact bool, cursor uint64, limit int, limitNote string) (string, error) {
 	if m := turnRef.FindStringSubmatch(query); m != nil && !exact {
-		return e.recallReasoningOfTurn(m[1], m[2])
+		return e.recallReasoningOfTurn(ctx, m[1], m[2])
 	}
 	var terms []string
 	switch {
@@ -1053,12 +1135,12 @@ func (e *Engine) recallReasoning(query string, exact bool, cursor uint64, limit 
 	p := &recallPart{source: "reasoning", more: more}
 	accounts := make([]bool, len(rows))
 	for i, r := range rows {
-		excerpt, route := reasoningHit(r, terms)
+		excerpt, route := reasoningHit(r, terms, partRunes(e.recallBound(ctx), recallPartLabels))
 		p.items = append(p.items, fmt.Sprintf("  [turn %d, %s%s] %s — %s", r.TurnSeq, r.CreatedAt, modelsSuffix(r.Models), excerpt, route))
 		p.seqs = append(p.seqs, r.TurnSeq)
 		accounts[i] = r.AccountMarked()
 	}
-	bound := e.recallBound()
+	bound := e.recallBound(ctx)
 	return fitParts([]*recallPart{p}, bound, func(fits bool) string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s, newest first, %d a page:", reasoningHeading, n)
@@ -1076,7 +1158,7 @@ func (e *Engine) recallReasoning(query string, exact bool, cursor uint64, limit 
 	}), nil
 }
 
-func (e *Engine) recallReasoningOfTurn(n, partArg string) (string, error) {
+func (e *Engine) recallReasoningOfTurn(ctx context.Context, n, partArg string) (string, error) {
 	seq, err := strconv.ParseUint(n, 10, 64)
 	if err != nil || seq > math.MaxInt64 {
 		return fmt.Sprintf("%s:\nTurn %s is not a recorded turn.", reasoningHeading, n), nil
@@ -1088,19 +1170,9 @@ func (e *Engine) recallReasoningOfTurn(n, partArg string) (string, error) {
 	if !ok {
 		return fmt.Sprintf("%s:\nTurn %d has no reasoning recorded. %s", reasoningHeading, seq, reasoningKept), nil
 	}
-	runes := []rune(r.Content)
-	parts := (len(runes) + recallReasoningPart - 1) / recallReasoningPart
-	part := 1
-	if partArg != "" {
-		if p, err := strconv.Atoi(partArg); err == nil && p >= 1 && p <= parts {
-			part = p
-		} else {
-			return fmt.Sprintf("%s:\nTurn %d's reasoning has %d part(s); part %s is not one of them.", reasoningHeading, seq, parts, partArg), nil
-		}
-	}
-	lo, hi := (part-1)*recallReasoningPart, part*recallReasoningPart
-	if hi > len(runes) {
-		hi = len(runes)
+	body, part, parts, ok := partOf(r.Content, partArg, partRunes(e.recallBound(ctx), recallPartLabels))
+	if !ok {
+		return fmt.Sprintf("%s:\nTurn %d's reasoning has %d part(s); part %s is not one of them.", reasoningHeading, seq, parts, partArg), nil
 	}
 	head := fmt.Sprintf("%s — turn %d, %s%s", reasoningHeading, seq, r.CreatedAt, modelsSuffix(r.Models))
 	if parts > 1 {
@@ -1111,7 +1183,7 @@ func (e *Engine) recallReasoningOfTurn(n, partArg string) (string, error) {
 	} else {
 		head += ":"
 	}
-	out := head + "\n\n" + string(runes[lo:hi])
+	out := head + "\n\n" + body
 
 	out += fmt.Sprintf("\n\n[end of turn %d's reasoning, part %d of %d — your own deliberation, not something you said or did", seq, part, parts)
 	if part < parts {
@@ -1122,18 +1194,71 @@ func (e *Engine) recallReasoningOfTurn(n, partArg string) (string, error) {
 	return out, nil
 }
 
-func reasoningHit(r store.Reasoning, terms []string) (string, string) {
+func partOf(text, partArg string, size int) (body string, part, parts int, ok bool) {
+	runes := []rune(text)
+	parts = max(1, (len(runes)+size-1)/size)
+	part = 1
+	if partArg != "" {
+		p, err := strconv.Atoi(partArg)
+		if err != nil || p < 1 || p > parts {
+			return "", 0, parts, false
+		}
+		part = p
+	}
+	return string(runes[(part-1)*size : min(part*size, len(runes))]), part, parts, true
+}
+
+func partRunes(bound, labels int) int {
+	return max(recallPartFloor, min(recallReasoningPart, bound-labels))
+}
+
+const (
+	recallPartLabels = 600
+
+	recallPartFloor = 200
+)
+
+func (e *Engine) recallTurn(ctx context.Context, n, partArg string) (string, error) {
+	seq, err := strconv.ParseUint(n, 10, 64)
+	if err != nil || seq > math.MaxInt64 {
+		return fmt.Sprintf("Conversation:\nTurn %s is not a recorded turn.", n), nil
+	}
+	t, ok, err := e.store.RecalledTurn(seq)
+	if err != nil {
+		return "", fmt.Errorf("conversation turn %d: %w", seq, err)
+	}
+	if !ok {
+		return fmt.Sprintf("Conversation:\nTurn %d holds no words recall reads: yours, your operator's or a participant's, or a report your operator authorized.", seq), nil
+	}
+	body, part, parts, ok := partOf(t.Content, partArg, partRunes(e.recallBound(ctx), recallPartLabels))
+	if !ok {
+		return fmt.Sprintf("Conversation:\nTurn %d has %d part(s); part %s is not one of them.", seq, parts, partArg), nil
+	}
+	head := fmt.Sprintf("Conversation — turn %d, %s, %s", seq, t.Attribution, t.CreatedAt)
+	if parts > 1 {
+		head += fmt.Sprintf(", part %d of %d", part, parts)
+	}
+	out := head + ":\n\n" + conversationRecallText(t.Attribution, body)
+
+	out += fmt.Sprintf("\n\n[end of turn %d, part %d of %d", seq, part, parts)
+	if part < parts {
+		return out + fmt.Sprintf("; continues: query=\"turn:%d part:%d\"]", seq, part+1), nil
+	}
+	return out + "]", nil
+}
+
+func reasoningHit(r store.Reasoning, terms []string, size int) (string, string) {
 	runes := []rune(r.Content)
 	at := -1
 	if len(terms) > 0 {
 		at = runeIndex(foldRunes(runes), foldRunes([]rune(terms[0])))
 	}
-	parts := (len(runes) + recallReasoningPart - 1) / recallReasoningPart
+	parts := (len(runes) + size - 1) / size
 	route := fmt.Sprintf("query=\"turn:%d\" reads it whole", r.TurnSeq)
 	if at < 0 {
 		return recallExcerpt(r.Content, recallReasoningTaste), route
 	}
-	if part := at/recallReasoningPart + 1; parts > 1 {
+	if part := at/size + 1; parts > 1 {
 		route = fmt.Sprintf("the match is in query=\"turn:%d part:%d\" (of %d)", r.TurnSeq, part, parts)
 	}
 	lo := at - recallReasoningTaste/3
@@ -1210,7 +1335,7 @@ func (e *Engine) recallBeliefInspect(ctx context.Context, id string, cur *store.
 		out = append(out, fmt.Sprintf("  Qualifying evidence: %d edge(s) from %d distinct source(s) — showing %d:", r.QualifyingTotal, r.DistinctSources, len(r.Qualifying)))
 
 		if r.DistinctSources >= 3 && r.DistinctOrigins < r.DistinctSources {
-			out = append(out, fmt.Sprintf("  Those %d sources rest on %d origin(s): a belief counts as what it rests on in turn, a dream's note as the experiences its dream read.", r.DistinctSources, r.DistinctOrigins))
+			out = append(out, fmt.Sprintf("  Those %d sources rest on %d origin(s): a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted.", r.DistinctSources, r.DistinctOrigins))
 		}
 
 		if r.OriginsUnopened > 0 {

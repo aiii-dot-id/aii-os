@@ -54,7 +54,6 @@ run(() => {
 	modules["/presence.js"] = []byte(`export function setThinking() {} export function toolPulse() {} export function renderPresence() {}`)
 	modules["/app.js"] = []byte(`export function toast() {}`)
 	modules["/views/model-picker.js"] = []byte(`export function fillModelPicker() {}`)
-	modules["/pending.js"] = []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`)
 	runPageInEngines(t, page, modules)
 }
 

@@ -158,6 +158,20 @@ func (s *Server) sendSandbox(ctx context.Context, conn carrier, h *WSHandler, re
 	s.sendMsg(ctx, conn, ServerMessage{RequestID: requestID, Type: "sandbox", Sandbox: sb})
 }
 
+func (s *Server) BroadcastSandbox() { s.broadcastSandbox(context.Background(), nil) }
+
+func (s *Server) broadcastSandbox(ctx context.Context, skip carrier) {
+	h := s.currentHandler()
+	if h == nil || h.GetSandbox == nil {
+		return
+	}
+	sb, err := h.GetSandbox()
+	if err != nil {
+		return
+	}
+	s.fanOut(ctx, s.conns(func(c carrier, _ *wsClient) bool { return c != skip }), ServerMessage{Type: "sandbox", Sandbox: sb})
+}
+
 func (s *Server) sendWorkspace(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetWorkspace == nil {
 		s.sendError(ctx, conn, "not available")
@@ -265,6 +279,18 @@ func (s *Server) BroadcastProviders() {
 		return
 	}
 	s.broadcast(providersMessage("", h.GetProviders()))
+}
+
+func (s *Server) BroadcastContinuity() {
+	h := s.currentHandler()
+	if h == nil || h.GetContinuity == nil {
+		return
+	}
+	cont, err := h.GetContinuity()
+	if err != nil {
+		return
+	}
+	s.broadcast(ServerMessage{Type: "continuity", Continuity: cont})
 }
 
 func (s *Server) BroadcastProjects() {

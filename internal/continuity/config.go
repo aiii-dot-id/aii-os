@@ -13,6 +13,8 @@ type MaintenanceConfig struct {
 	BackupKeep int `json:"backup_keep,omitempty"`
 
 	OnDemandSpacingSeconds int `json:"on_demand_spacing_seconds,omitempty"`
+
+	RestoreUploadIdleSeconds int `json:"restore_upload_idle_seconds,omitempty"`
 }
 
 type Settings struct {

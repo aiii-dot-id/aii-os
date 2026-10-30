@@ -212,12 +212,14 @@ type engineSession interface {
 
 	InputClosed() <-chan struct{}
 	InputCompletionReason() string
+
+	ControlBound() time.Duration
 }
 
 func (h *voiceHandle) ID() string { return h.id }
 
 func (h *voiceHandle) Finish(ctx context.Context, endSample int64) error {
-	ctx, cancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	ctx, cancel := context.WithTimeout(ctx, h.v.ControlBound())
 	defer cancel()
 	return engineUnavailable(h.v.FinishInputFor(ctx, h.id, h.b.InputHandle, endSample))
 }
@@ -230,7 +232,7 @@ func (h *voiceHandle) Close(ctx context.Context, mode string) error {
 	if mode == "abort" {
 		h.hushNow("the session was aborted")
 	}
-	ctx, cancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	ctx, cancel := context.WithTimeout(ctx, h.v.ControlBound())
 	defer cancel()
 	return engineUnavailable(h.askClose(ctx, mode, "operator"))
 }
@@ -250,7 +252,7 @@ func (h *voiceHandle) Interrupt(ctx context.Context) error {
 	synthID := h.loadInflight().id
 	h.admit.Unlock()
 	h.hushNow("the operator spoke")
-	ctx, cancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	ctx, cancel := context.WithTimeout(ctx, h.v.ControlBound())
 	defer cancel()
 	return engineUnavailable(h.fence(ctx, synthID, "operator"))
 }
@@ -280,7 +282,7 @@ func (h *voiceHandle) Released() <-chan struct{}     { return h.b.Released() }
 func (h *voiceHandle) PlaybackReport(ctx context.Context, r dashboard.PlaybackReport) error {
 
 	synth := h.v.SynthesisFor(r.Stream)
-	ctx, cancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	ctx, cancel := context.WithTimeout(ctx, h.v.ControlBound())
 	defer cancel()
 	if err := h.v.PlaybackReportFor(ctx, h.id, pluginhost.PlaybackReport{Stream: r.Stream, Rendered: r.Rendered, Rate: r.Rate, Channels: r.Channels, Terminal: r.Terminal, Outcome: r.Outcome}); err != nil {
 		return err
@@ -351,7 +353,7 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 			break
 		}
 		h.admit.Unlock()
-		fctx, fcancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+		fctx, fcancel := context.WithTimeout(ctx, h.v.ControlBound())
 		err := h.fence(fctx, prior, "a newer reply took its place")
 		fcancel()
 		if err != nil {
@@ -372,7 +374,7 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 		return textOnly(), ""
 	}
 	synthID := fmt.Sprintf("%s-syn-%d", sessionID, a.voiceSeq.Add(1))
-	ectx, ecancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	ectx, ecancel := context.WithTimeout(ctx, h.v.ControlBound())
 	await, err := h.v.SynthesizeForEnqueue(ectx, h.id, synthID, reply)
 	ecancel()
 	if err == nil {
@@ -384,7 +386,7 @@ func (a *App) admitReply(ctx context.Context, sessionID string, gen uint64, repl
 		refuse("not dispatched: " + err.Error())
 		return replySuperseded, ""
 	}
-	actx, acancel := context.WithTimeout(ctx, pluginhost.SessionControlBound)
+	actx, acancel := context.WithTimeout(ctx, h.v.ControlBound())
 	err = await(actx)
 	acancel()
 	if err != nil {
@@ -617,7 +619,7 @@ func (a *App) hushTakenOver(session string, t takenOver, why string) {
 }
 
 func (h *voiceHandle) fenceBounded(synthID, cause string) error {
-	fctx, cancel := context.WithTimeout(context.Background(), pluginhost.SessionControlBound)
+	fctx, cancel := context.WithTimeout(context.Background(), h.v.ControlBound())
 	defer cancel()
 	return h.fence(fctx, synthID, cause)
 }
@@ -765,7 +767,7 @@ func (a *App) voiceObserved(ev voiceFrame) {
 
 				if synthID := h.loadInflight().id; synthID != "" {
 					a.runBackground(func() {
-						ctx, cancel := context.WithTimeout(a.lifetime(), pluginhost.SessionControlBound)
+						ctx, cancel := context.WithTimeout(a.lifetime(), h.v.ControlBound())
 						defer cancel()
 						if err := h.fence(ctx, synthID, "the engine heard the operator speak"); err != nil {
 							logsink.Warn("voice.refusal", "speech did not fence synthesis %s on %s: %v", synthID, h.id, err)
@@ -925,7 +927,7 @@ func (a *App) handOverSessions(prev *pluginhost.ActivePlugin, bound time.Duratio
 		return func() {}, nil
 	}
 	if bound <= 0 {
-		bound = pluginhost.HandOverBudget
+		bound = a.childBounds().HandOverBudget()
 	}
 
 	ctx, cancel := context.WithTimeout(a.lifetime(), bound)
@@ -943,7 +945,7 @@ func (a *App) handOverSessions(prev *pluginhost.ActivePlugin, bound time.Duratio
 	}
 	for _, h := range a.sessionsOn(prev) {
 		logsink.Warn("voice.session", "session %s on %s %s did not end within %s of its successor being ready — ended as the operator's stop ends one, so that one release writes the plugin's storage at a time", h.id, prev.ID, prev.Version, bound)
-		sctx, scancel := context.WithTimeout(a.lifetime(), pluginhost.StopBudget)
+		sctx, scancel := context.WithTimeout(a.lifetime(), prev.StopBudget())
 		if cerr := h.Close(sctx, "abort"); cerr != nil {
 			logsink.Warn("voice.error", "session %s could not be asked to end: %v", h.id, cerr)
 		}
@@ -1656,7 +1658,8 @@ func voiceEventFor(ev voiceFrame, safe bool) (dashboard.VoiceEvent, bool) {
 
 func (a *App) voicePageEvent(ev voiceFrame, safe bool) (dashboard.VoiceEvent, bool) {
 	ve, shown := voiceEventFor(ev, safe)
-	if shown && ev.Type == pluginhost.EventTranscriptPartial && a.speakerPolicyNow().restricted() {
+	if shown && ev.Type == pluginhost.EventTranscriptPartial &&
+		(a.speakerPolicyNow().restricted() || ev.body.TrackDeclared && !ev.segment().valid()) {
 		a.speakerWithheldPartials.Add(1)
 		return dashboard.VoiceEvent{}, false
 	}

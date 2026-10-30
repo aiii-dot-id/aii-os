@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/limits"
 )
 
 func readHome(t *testing.T, files map[string]string) (*Registry, string) {
@@ -62,13 +64,15 @@ func TestReadNumbersEachLineWithTheFilesOwnNumber(t *testing.T) {
 
 // The byte cap counts the numbers; a page ends on a whole line and names
 // the next one; a line longer than the cap keeps its number in every
-// chunk.
+// chunk. The cap is the window of a call made outside a turn, less the
+// room a page leaves for the lines after it.
 func TestReadNumbersSurviveTheCapAndALongLine(t *testing.T) {
+	pageCap := limits.DefaultToolResultChars - readPageRoom
 	var b strings.Builder
 	for i := 1; i <= 6000; i++ {
 		fmt.Fprintf(&b, "%09d\n", i) // 9 bytes of text, 7 of number
 	}
-	long := strings.Repeat("z", 60000)
+	long := strings.Repeat("z", 2*pageCap+8800) // three chunks, the last 8,800 bytes
 	r, _ := readHome(t, map[string]string{"many.txt": b.String(), "long.txt": "a\nb\n" + long + "\nd\n"})
 
 	res := modelCall(t, r, "read", map[string]any{"file_path": "many.txt"})
@@ -79,7 +83,7 @@ func TestReadNumbersSurviveTheCapAndALongLine(t *testing.T) {
 	page, note := res.Output[:i], res.Output[i+1:]
 	lines := strings.Split(page, "\n")
 	n := len(lines)
-	if len(page) > 51200 {
+	if len(page) > pageCap {
 		t.Errorf("the page is %d bytes: the cap must count the line numbers", len(page))
 	}
 	if last := fmt.Sprintf("%6d\t%09d", n, n); lines[n-1] != last {
@@ -90,11 +94,11 @@ func TestReadNumbersSurviveTheCapAndALongLine(t *testing.T) {
 	}
 
 	res = modelCall(t, r, "read", map[string]any{"file_path": "long.txt", "offset": 3})
-	if !strings.HasPrefix(res.Output, "     3\tzzz") || !strings.Contains(res.Output, "Continue with offset 3 and byte_offset 51200.") {
+	if !strings.HasPrefix(res.Output, "     3\tzzz") || !strings.Contains(res.Output, fmt.Sprintf("Continue with offset 3 and byte_offset %d.", pageCap)) {
 		t.Fatalf("the long line's first chunk: %q", res.Output[:40])
 	}
-	res = modelCall(t, r, "read", map[string]any{"file_path": "long.txt", "offset": 3, "byte_offset": 51200})
-	if want := "     3\t" + strings.Repeat("z", 60000-51200) + "\n[end of line 3 — continue at offset 4]"; res.Output != want {
+	res = modelCall(t, r, "read", map[string]any{"file_path": "long.txt", "offset": 3, "byte_offset": 2 * pageCap})
+	if want := "     3\t" + strings.Repeat("z", 8800) + "\n[end of line 3 — continue at offset 4]"; res.Output != want {
 		t.Errorf("the continued line lost its number: %q…", res.Output[:min(len(res.Output), 40)])
 	}
 }

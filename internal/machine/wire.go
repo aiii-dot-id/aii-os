@@ -163,11 +163,12 @@ const (
 )
 
 type NeedResult struct {
-	Store   string `json:"store"`
-	State   string `json:"state"`
-	Cause   string `json:"cause,omitempty"`
-	Remedy  string `json:"remedy,omitempty"`
-	AfterMS int64  `json:"after_ms,omitempty"`
+	Store          string `json:"store"`
+	State          string `json:"state"`
+	Cause          string `json:"cause,omitempty"`
+	Remedy         string `json:"remedy,omitempty"`
+	AfterMS        int64  `json:"after_ms,omitempty"`
+	WaitsOnNetwork bool   `json:"waits_on_network,omitempty"`
 }
 
 type ReleaseParams struct {

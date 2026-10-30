@@ -88,12 +88,12 @@ func wsPageModules(wsJS, stateJS []byte) map[string][]byte {
 		"/views/memory.js":   []byte(`export const renderMemory = () => {};`),
 		"/views/identity.js": []byte(`export const renderIdentity = () => {};`),
 		"/views/plugins.js":  []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
-		"/views/settings.js": []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptDashboardToken = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
+		"/views/settings.js": []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
 		"/firstboot.js":      []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
 		"/sections.js":       []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),
 		"/panel.js":          []byte(`export const renderPanel = () => {};`),
 		"/theme.js":          []byte(`export const onTheme = () => {};`),
-		"/overlay.js":        []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {};`),
+		"/overlay.js":        []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {}; export const reloadForTheOverlay = () => {};`),
 		"/voice.js":          []byte(`export const bindTransport = () => {}; export const render = () => {}; export const speak = () => {}; export const connectionLost = () => {};`),
 		"/app.js":            []byte(`export const sysLine = () => {}; export const toast = () => {}; export const go = () => {}; export const renderFirstbootVisibility = () => {};`),
 		"/views/chat.js":     []byte(`export const addMsg = () => null; export const attachSpeaker = () => false; export const sysLine = s => { (window.__chatLines ||= []).push(s); }; export const toolEventLive = () => {}; export const thinkingEvent = () => {}; export const renderInteractionPages = () => {}; export const renderHistory = () => {}; export const renderChatSubstrate = () => {}; export const renderComposer = () => {}; export const acceptSubstrateConfig = () => {}; export const rejectSubstrateConfig = () => {}; export const substrateConnectionLost = () => {}; export const renderSteering = () => {}; export const renderAsks = () => {};`),
@@ -217,7 +217,7 @@ import { assert, report } from './__harness.js';
 import { S } from './state.js';
 import { recoverAuthentication } from './ws.js';
 try {
-  window.fetch = async () => ({ status: 401, ok: false });
+  window.fetch = async () => ({ status: 401, ok: false, headers: new Headers() });
   let prompts = 0;
   window.prompt = () => { prompts++; return null; };
   await recoverAuthentication();
@@ -250,7 +250,7 @@ import { S } from '/state.js';
 let visible = true, online = true, fetches = 0;
 Object.defineProperty(document, 'visibilityState', {get:()=>visible?'visible':'hidden'});
 Object.defineProperty(navigator, 'onLine', {get:()=>online});
-window.fetch = async () => { fetches++; return {status:200}; };
+window.fetch = async () => { fetches++; return {status:200, headers: new Headers()}; };
 const timers = [], sockets = []; let sequence = 0;
 window.setTimeout = (fn, delay) => {const t={id:++sequence,fn,delay};timers.push(t);return t.id;};
 window.clearTimeout = id => {const i=timers.findIndex(t=>t.id===id);if(i>=0)timers.splice(i,1);};
@@ -339,11 +339,11 @@ run(async assert=>{
  const pending=ws.recoverAuthentication();
  assert(fetches===1,'visible auth check did not start');
  visible=false;document.dispatchEvent(new Event('visibilitychange'));
- resolveFetch({status:401});await pending;
+ resolveFetch({status:401, headers: new Headers()});await pending;
  assert(prompts===0 && !document.getElementById('dashboard-signin'),'a late auth response prompted a hidden page');
  await ws.recoverAuthentication();assert(fetches===1,'hidden auth check sent traffic');
  visible=true;
- const resumed=ws.recoverAuthentication();resolveFetch({status:401});await resumed;
+ const resumed=ws.recoverAuthentication();resolveFetch({status:401, headers: new Headers()});await resumed;
  assert(prompts===0 && document.getElementById('dashboard-signin'),'suspension permanently suppressed legitimate inline authentication');
 });</script></body></html>`
 	wsJS, err := staticFS.ReadFile("static/ws.js")

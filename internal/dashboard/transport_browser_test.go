@@ -4,6 +4,7 @@ package dashboard
 
 import "testing"
 
+// - a page that is left ends its channel, once, with its peer connection;
 func TestThePageSettlesWhatCarriesItsSession(t *testing.T) {
 	runTokenPromptProbe(t, `
 import { report } from '/__harness.js';
@@ -109,22 +110,69 @@ try {
   remoteReady(); await tick();
   assert(!r.pc.candidates && r.adopted.length === 1 && r.adopted[0] === r.socket, 'late answer changed the settled carrier');
 
-  r = rig();
-  r.socket.onmessage(text({ type: 'transport_setup', ready_within_ms: 4000 }));
-  await tick(); await tick();
+  // Offered: ready on the channel, answered there; the channel is the
+  // session's once the identity closes the socket. The socket closing first says nothing.
+  const readyOnChannel = r => {
+    r.pc.dc.readyState = 'open'; r.pc.dc.onopen({});
+    for (const p of cutIntoPieces(JSON.stringify({ type: 'transport_ready', carrier: 'channel' }), 64)) r.pc.dc.onmessage({ data: p.buffer });
+  };
+  const answeredOnChannel = r => {
+    const join = pieceJoiner(); let whole = null;
+    for (const p of r.pc.dc.sent) { whole = join(p.buffer) || whole; if (whole) break; }
+    return !!whole && JSON.parse(whole.data).type === 'transport_ready' && JSON.parse(whole.data).carrier === 'channel';
+  };
+  const offeredRig = async () => { const r = rig(); r.socket.onmessage(text({ type: 'transport_setup', ready_within_ms: 4000 })); await tick(); await tick(); return r; };
+
+  // Ready on the channel with the socket still open: answered, and the
+  // socket is kept. Ready then on the socket makes the socket the carrier.
+  r = await offeredRig();
+  readyOnChannel(r);
+  assert(answeredOnChannel(r) && r.adopted.length === 0 && !r.pc.closed, 'ready on the channel was not answered there, or the channel was taken before the identity had the answer');
+  r.socket.onmessage(text({ type: 'transport_ready', carrier: 'socket' }));
+  assert(r.adopted.length === 1 && r.adopted[0] === r.socket && r.pc.closed && r.lost === 0, 'a channel that never carried its round trip did not leave the session on the socket');
+
+  // Answered, and then the socket closes: the channel carries the session.
+  r = await offeredRig();
+  readyOnChannel(r);
+  r.socket.onclose({});
+  assert(r.adopted.length === 1 && r.adopted[0] !== r.socket && r.lost === 0, 'the socket closing after the answer did not make the channel the carrier');
+  // The page is left: its channel ends then, once, with its peer connection.
+  dispatchEvent(new Event('pagehide'));
+  dispatchEvent(new Event('pagehide'));
+  assert(r.ended === 1 && r.adopted[0].readyState === 3 && r.pc.closed && r.pc.dc.readyState === 'closed', 'a page that was left kept its channel open, or ended it more than once: ended ' + r.ended);
+
+  // Answered, and the channel ends before the socket closes: the channel is
+  // not taken dead; the session is lost, and the page reconnects.
+  r = await offeredRig();
+  readyOnChannel(r);
+  r.pc.connectionState = 'failed'; r.pc.onconnectionstatechange();
+  r.socket.onclose({});
+  assert(r.adopted.length === 0 && r.lost === 1, 'a channel that had ended was taken to carry the session: adopted ' + r.adopted.length + ', lost ' + r.lost);
+
+  // Answered, and the session's first message on the channel comes before
+  // the socket's close: the channel carries the session, and the message is
+  // the session's.
+  r = await offeredRig();
+  readyOnChannel(r);
+  for (const p of cutIntoPieces(JSON.stringify({ type: 'status' }), 64)) r.pc.dc.onmessage({ data: p.buffer });
+  assert(r.adopted.length === 1 && r.adopted[0] !== r.socket && r.seen.length === 1 && JSON.parse(r.seen[0]).type === 'status', 'the session\'s first message on the channel did not make it the carrier, or was lost');
+  r.socket.onclose({});
+  assert(r.adopted.length === 1 && r.lost === 0, 'the socket closing after the channel was taken did something');
+
+  r = await offeredRig();
   r.socket.onclose({});
   assert(r.lost === 0 && r.adopted.length === 0, 'the socket closing during an attempt was read as the session lost');
-  r.pc.dc.readyState = 'open'; r.pc.dc.onopen({});
-  for (const p of cutIntoPieces(JSON.stringify({ type: 'transport_ready', carrier: 'channel' }), 64)) r.pc.dc.onmessage({ data: p.buffer });
-  assert(r.adopted.length === 1 && r.adopted[0] !== r.socket && r.adopted[0].readyState === 1, 'ready on the channel did not make the channel the carrier');
+  readyOnChannel(r);
+  assert(r.adopted.length === 1 && r.adopted[0] !== r.socket && r.adopted[0].readyState === 1, 'ready on the channel, after the socket had closed, did not make the channel the carrier');
   const channel = r.adopted[0];
   channel.send(JSON.stringify({ type: 'probe' })); channel.send(new Uint8Array([1, 2, 3]).buffer);
-  assert(r.pc.dc.sent.length === 2 && r.pc.dc.sent[0][0] === 2 && r.pc.dc.sent[1][0] === 3 && r.pc.dc.sent[1].length === 4, 'what the page sent on the channel was not cut into headed pieces');
+  assert(r.pc.dc.sent.length === 3 && answeredOnChannel(r) && r.pc.dc.sent[1][0] === 2 && r.pc.dc.sent[2][0] === 3 && r.pc.dc.sent[2].length === 4, 'what the page sent on the channel was not its answer and then headed pieces');
   for (const p of cutIntoPieces('a reply', 64)) r.pc.dc.onmessage({ data: p.buffer });
   assert(r.seen.join() === 'a reply', 'a message on the channel did not reach the session');
   r.pc.connectionState = 'failed'; r.pc.onconnectionstatechange();
   r.pc.dc.onclose({});
   assert(r.ended === 1 && channel.readyState === 3, 'the path failing did not end the carrier exactly once: ' + r.ended);
+  assert(r.pc.closed && r.pc.dc.readyState === 'closed', 'a channel whose path failed was left open, still asking its servers for a path');
 
   r = rig();
   r.socket.onmessage(text({ type: 'transport_setup', ready_within_ms: 60 }));

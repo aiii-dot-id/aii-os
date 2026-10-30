@@ -8,8 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/app"
 	"github.com/aiii-dot-id/aii-os/internal/install"
+)
+
+var (
+	firstPort   = install.Port
+	servingWait = install.ConfiguredStartWait
 )
 
 func runInit(args []string, stdout, stderr io.Writer) int {
@@ -34,14 +42,25 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "init:", err)
 		return 1
 	}
+
+	port, err := install.NextFreePort(root, firstPort(n)-1, install.DefaultPortSearchSpan, install.PortFree)
+	if err != nil {
+		fmt.Fprintln(stderr, "init:", err)
+		return 1
+	}
 	dir, err := install.Create(root, n)
 	if err != nil {
 		fmt.Fprintln(stderr, "init:", err)
 		return 1
 	}
-
 	slot := install.SlotName(n)
-	port := install.Port(n)
+	if port != install.Port(n) {
+
+		if err := app.SetDashboardPort(install.ConfigPathIn(dir), port); err != nil {
+			fmt.Fprintf(stderr, "init: %s is made, but its dashboard could not be moved to the free port %d: %v\n", dir, port, err)
+			return 1
+		}
+	}
 
 	fmt.Fprintf(stdout, "Created %s (dashboard port %d)\n", dir, port)
 
@@ -68,11 +87,33 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	}
 
 	registerMachineService(stderr)
-
+	if code := awaitServing("init", slot, dir, port, stderr); code != 0 {
+		return code
+	}
 	fmt.Fprintf(stdout, "Started %s%s\n", install.Unit, slot)
 	fmt.Fprintf(stdout, "\nOpen http://127.0.0.1:%d to meet them.\n", port)
 	fmt.Fprint(stdout, tokenWords(dir, "The"))
 	return 0
+}
+
+func awaitServing(verb, slot, dir string, port int, stderr io.Writer) int {
+	var ns *install.NotServingError
+	switch err := install.WaitServing(port, dir, servingWait(dir)); {
+	case err == nil:
+		return 0
+	case !errors.As(err, &ns):
+		fmt.Fprintf(stderr, "%s: %v\n", verb, err)
+		return 1
+	case ns.Other:
+		fmt.Fprintf(stderr, "%s: the service manager started %s%s, but port %d is answered without this identity's proof: another program holds the port.\n"+
+			"Move this identity's dashboard to a free port with:\n  aii dashboard-port -dir %s <port>\nthen start it again with:\n  aii register %s\n",
+			verb, install.Unit, slot, port, dir, slot)
+	default:
+		fmt.Fprintf(stderr, "%s: the service manager started %s%s, but this identity did not answer on port %d within %s.\n"+
+			"Its log is %s. Once what it names is mended, start it again with:\n  aii register %s\n",
+			verb, install.Unit, slot, port, install.Seconds(ns.Within), filepath.Join(dir, "log", "aii.log"), slot)
+	}
+	return install.ExitNotServing
 }
 
 func tokenWords(dir, lead string) string {
@@ -170,6 +211,10 @@ func runRegister(args []string, stdout, stderr io.Writer) int {
 
 	registerMachineService(stderr)
 	recordWithMachine(slot, dir, stderr)
+	n, _ := strconv.Atoi(strings.TrimPrefix(slot, "identity-"))
+	if code := awaitServing("register", slot, dir, install.ConfiguredPort(dir, n), stderr); code != 0 {
+		return code
+	}
 	fmt.Fprintf(stdout, "Started %s%s\n", install.Unit, slot)
 	return 0
 }

@@ -55,7 +55,9 @@ func TestAContainedNativeChildCannotHaveLaunchServicesStartAProgram(t *testing.T
 			t.Skipf("rig (%s): uncontained, LaunchServices started nothing in this session, so its refusal cannot be shown:\n%s", how.name, out)
 		}
 		os.Remove(marker)
-		argv, wall, err := containArgv(context.Background(), []string{fakechildBin, "reach", ask}, nil, nativeFiles{own: standInTools})
+		// The bundle is handed to the child to read, so that `open` finds it
+		// and the refusal is LaunchServices', not the view's.
+		argv, wall, err := containArgv(context.Background(), []string{fakechildBin, "reach", ask}, nil, nativeFiles{own: standInTools, read: []string{dir}})
 		if err != nil {
 			t.Fatalf("containment refused on a host that can build it: %v", err)
 		}

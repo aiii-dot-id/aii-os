@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -165,6 +166,8 @@ func RevokeView(view, key string) error {
 }
 
 func CopyCapabilities(from, to string) error {
+	daclMu.Lock()
+	defer daclMu.Unlock()
 	caps, err := Capabilities(from)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -175,11 +178,18 @@ func CopyCapabilities(from, to string) error {
 	return setProtected(to, caps, windows.NO_INHERITANCE)
 }
 
+var daclMu sync.Mutex
+
+var editingDACL = func(string) {}
+
 func addCapability(path string, sid *windows.SID) error {
+	daclMu.Lock()
+	defer daclMu.Unlock()
 	caps, err := Capabilities(path)
 	if err != nil {
 		return err
 	}
+	editingDACL(path)
 	for _, c := range caps {
 		if windows.EqualSid(c, sid) {
 			return ensureProtected(path, caps)
@@ -189,10 +199,13 @@ func addCapability(path string, sid *windows.SID) error {
 }
 
 func removeCapability(path string, sid *windows.SID) error {
+	daclMu.Lock()
+	defer daclMu.Unlock()
 	caps, err := Capabilities(path)
 	if err != nil {
 		return err
 	}
+	editingDACL(path)
 	keep := caps[:0]
 	for _, c := range caps {
 		if !windows.EqualSid(c, sid) {

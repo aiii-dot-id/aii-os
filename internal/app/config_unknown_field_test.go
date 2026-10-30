@@ -13,11 +13,11 @@ import (
 
 func TestARetiredFolderGrantDoesNotStopTheBoot(t *testing.T) {
 	logs := logsink.CaptureForTest(t)
-	written := `{"tools":{"cwd":".","extra_roots":["/srv/example/identity/vega/work"]},
+	written := `{"tools":{"cwd":".","extra_roots":["/srv/example/identity/example/work"]},
 	 "plugins":{"autoload":"T3","runtime":{"max_installed_bytes":1073741825},"grants":{
 	  "id.example.memory":{"kv":true,"memory":true},
 	  "id.aiii.codequality":{"hosts":["api.typesafe.ai:443"],"credential_handles":["id.aiii.codequality.api_key"],
-	   "roots":[{"name":"work","path":"/srv/example/identity/vega/work","write":true}]}}}}`
+	   "roots":[{"name":"work","path":"/srv/example/identity/example/work","write":true}]}}}}`
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(written), 0o600); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestARetiredFolderGrantDoesNotStopTheBoot(t *testing.T) {
 		t.Fatalf("every other value loads as written: %+v %+v", cfg.Plugins.Runtime, cfg.Tools)
 	}
 	if strings.Count(logs.String(), "plugins.grants.id.aiii.codequality.roots") != 1 ||
-		!logs.Contains("/srv/example/identity/vega/work") || !logs.Contains("Settings → Sandbox") || !logs.Contains("tick files") {
+		!logs.Contains("/srv/example/identity/example/work") || !logs.Contains("Settings → Sandbox") || !logs.Contains("tick files") {
 		t.Fatalf("the drop is named, with the folders and where they belong now: %s", logs.String())
 	}
 	if _, err := saveConfig(cfg); err != nil {
@@ -172,5 +172,61 @@ func TestEveryRetiredConfigKeyLoads(t *testing.T) {
 	}
 	if _, err := LoadConfig(path); err != nil {
 		t.Fatalf("the saved file must load: %v", err)
+	}
+}
+
+// AN UNKNOWN LOGS KEY IS REFUSED, AND NAMED. Every other section refuses a
+// key it does not declare; logs read its bytes with a lenient decoder, so a
+// misspelt key loaded, kept the default and said nothing. Every key a
+// released version wrote still loads (the section's keys have only been
+// added since the first release that had it), and the section is still
+// read over its defaults.
+func TestAnUnknownLogsKeyIsRefusedAndNamed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	for _, body := range []string{
+		`{"logs":{"max_backup":3}}`,
+		`{"logs":{"level":"debug","categories":{"dream":"trace"}}}`,
+		`{"logs":{"taps":{"prompts":{"until":"2026-10-23T00:00:00Z","colour":true}}}}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		if err == nil {
+			t.Fatalf("an unknown logs key loaded: %s", body)
+		}
+		var key string
+		switch {
+		case strings.Contains(body, "max_backup\""):
+			key = "max_backup"
+		case strings.Contains(body, "categories"):
+			key = "categories"
+		default:
+			key = "colour"
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Fatalf("the refusal of %s does not name %q: %v", body, key, err)
+		}
+	}
+	every := `{"logs":{"dir":"log","max_backups":4,"compress_days":2,"max_days":9,"max_bytes":2097152,"max_total_bytes":8388608,"detail":{"dream":"debug"},"group":{"mine":["dream"]},"level":"warn"}}`
+	if err := os.WriteFile(path, []byte(every), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("every key the section declares must load: %v", err)
+	}
+	if cfg.Logs.MaxBackups != 4 || cfg.Logs.MaxDays != 9 || cfg.Logs.Level != "warn" || cfg.Logs.Detail["dream"] != "debug" {
+		t.Fatalf("the section did not load as written: %+v", cfg.Logs)
+	}
+	if err := os.WriteFile(path, []byte(`{"logs":{"level":"debug"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def := defaultConfig().Logs; cfg.Logs.Dir != def.Dir || cfg.Logs.MaxBackups != def.MaxBackups {
+		t.Fatalf("a file naming only the level must keep the other defaults: %+v, want dir %q and %d backups", cfg.Logs, def.Dir, def.MaxBackups)
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -201,8 +202,8 @@ func TestTheFloorFollowsALinkRetargetedWhileTheFilesStandUnchanged(t *testing.T)
 	// The operator moves the backups onto the granted disk. Neither file changes.
 	relink(t, second, backups)
 	a.reloadIfChanged()
-	if rule := a.ensureRing5Policy().Covered(inside); rule == nil || rule.ID != "sub.data.backups" {
-		t.Fatalf("THE FLOOR DID NOT FOLLOW THE LINK WITHIN A BEAT: %s is kept by %+v, places %v", inside, rule, a.ensureRing5Policy().Places())
+	if rule, err := a.ensureRing5Policy().Covered(inside); err != nil || rule == nil || rule.ID != "sub.data.backups" {
+		t.Fatalf("THE FLOOR DID NOT FOLLOW THE LINK WITHIN A BEAT: %s is kept by %+v (%v), places %v", inside, rule, err, a.ensureRing5Policy().Places())
 	}
 	var kept *tools.SubstrateError
 	if _, _, err := a.toolReg.Admit("read", inside); !errors.As(err, &kept) {
@@ -719,7 +720,17 @@ func TestAConfigThatDoesNotDecodeIsSaidOnceAndEndsTheCount(t *testing.T) {
 	if logs.Contains("unreadable") {
 		t.Fatalf("A CONFIG.JSON THAT DOES NOT DECODE WAS SAID AGAIN AT A LOOK OVER THE SAME BYTES:\n%s", logs.String())
 	}
-	r.name(t, "new", nil)
+	// The operator puts the file right by hand: a save over a file that
+	// does not read is refused (unreadableFileError), so it is written whole.
+	right := *r.cfg
+	right.LLM.Model = "new"
+	whole, err := json.MarshalIndent(&right, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.cfg.SourcePath, whole, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r.look(t, 2, "the look at the file put right")
 	if !logs.Contains("llm refused, current substrate kept") || !logs.Contains("next in about 45s") {
 		t.Fatalf("A FILE THAT DID NOT DECODE DID NOT END THE COUNT: the address it names again was not said as a first refusal:\n%s", logs.String())

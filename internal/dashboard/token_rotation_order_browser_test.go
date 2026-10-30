@@ -21,7 +21,7 @@ try {
   let answer, statusChecks = 0;
   window.fetch = async (url, options = {}) => {
     if (url === '/auth/' + act) return new Promise(resolve => { answer = resolve; });
-    if (url === '/auth/token') { statusChecks++; return { status: 204, ok: true }; }
+    if (url === '/auth/token') { statusChecks++; return { status: 204, ok: true, headers: new Headers() }; }
     return nativeFetch(url, options);
   };
   const sockets = [];
@@ -41,18 +41,18 @@ try {
   if (order === 'replacement_before_reply') { connect(); sockets[1].open(); }
   assert(statusChecks === 0, 'recovery checked the old cookie during the HTTP act');
   const ok = order !== 'refused';
-  answer({ ok, status: ok ? 204 : 403, text: async () => 'refused' });
+  answer({ ok, status: ok ? 204 : 403, text: async () => 'refused', headers: new Headers() });
   const result = await change;
   assert(result.ok === ok, 'HTTP outcome changed');
   if (order === 'refused') {
     assert(result.text === 'refused' && old.closed === 0 && S.connected, 'a refusal retired the valid session');
-    query('dashboard_token');
-    assert(old.sent.some(m => m.query === 'dashboard_token'), 'a refusal prevented use of the valid carrier');
+    query('logs');
+    assert(old.sent.some(m => m.query === 'logs'), 'a refusal prevented use of the valid carrier');
   } else {
     if (order !== 'replacement_before_reply') {
       assert(!S.connected && document.getElementById('send-btn').disabled, 'the revoked connection was presented as ready');
-      assert(query('dashboard_token') === '', 'a reveal query was sent before the new connection opened');
-      assert(!old.sent.some(m => m.query === 'dashboard_token'), 'a secret query used the revoked carrier');
+      assert(query('logs') === '', 'a query was sent before the new connection opened');
+      assert(!old.sent.some(m => m.query === 'logs'), 'a query used the revoked carrier');
       assert(sockets.length === 2 && sockets[1].readyState === 0, 'success did not reconnect once');
       sockets[1].open();
     }
@@ -60,9 +60,9 @@ try {
     assert(current.closed === 0 && S.connected, 'a replacement carrier was retired');
     lateClose({});
     assert(S.connected && !document.getElementById('send-btn').disabled, 'a late old close retired the replacement');
-    query('dashboard_token');
-    assert(current.sent.filter(m => m.query === 'dashboard_token').length === 1, 'the new carrier did not receive one reveal query');
-    assert(!old.sent.some(m => m.query === 'dashboard_token'), 'the query went to the old carrier');
+    query('logs');
+    assert(current.sent.filter(m => m.query === 'logs').length === 1, 'the new carrier did not receive the one query');
+    assert(!old.sent.some(m => m.query === 'logs'), 'the query went to the old carrier');
     assert(!document.getElementById('dashboard-signin'), 'rotation asked the initiating page to sign in again');
   }
   report('OK');

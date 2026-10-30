@@ -84,17 +84,14 @@ func nativePathsProbe(t *testing.T, privateConfig bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-
 	blockedFile, unprotectedFile := external, ""
-	if runtime.GOOS == "linux" && !privateConfig {
-		blockedFile, unprotectedFile = "", external
-	}
+	readProject, unreachedProject := "", project
 	script := `check() {
 for p in "$1/data/credentials/key" "$1/data/private/sibling/state" "$1/secret-link" "$2" "$1/data/models/selected/private-credentials/secret" "$1/data/selected-models/private-credentials/secret"; do
   value=$(cat "$p") || value=
   case "$value" in canary-secret*) echo "LEAK:$p"; exit 21;; esac
 done
-for p in "$1/data/selected-models/weights" "$1/outside-model-link/weights" "$1/data/runtime/selected/library" "$1/shared/project" "$1/data/ui-layout.json"; do
+for p in "$1/data/selected-models/weights" "$1/outside-model-link/weights" "$1/data/runtime/selected/library" ${4:+"$4"} "$1/data/ui-layout.json"; do
   value=$(cat "$p") || exit 22
   test "$value" = working-material || exit 23
 done
@@ -102,25 +99,26 @@ if test -n "$3"; then
   value=$(cat "$3") || exit 28
   case "$value" in canary-secret*) :;; *) exit 29;; esac
 fi
+if test -n "$5" && value=$(cat "$5" 2>&1); then exit 30; fi
 }
-check "$1" "$2" "$3"
+check "$1" "$2" "$3" "$4" "$5"
 echo ready
 read go || exit 24
-check "$1" "$2" "$3"
+check "$1" "$2" "$3" "$4" "$5"
 value=$(cat "$1/data/credentials/later") || value=
 test "$value" != canary-secret-later || exit 25
 test "$(cat "$1/data/private/selected/state")" = private-later || exit 26
 if (echo bad > "$1/data/new-file"); then exit 27; fi
 echo passed`
-	argv, wall, err := containArgv(ctx, []string{"/bin/sh", "-c", script, "probe", root, blockedFile, unprotectedFile}, nil, files)
+	argv, wall, err := containArgv(ctx, []string{"/bin/sh", "-c", script, "probe", root, blockedFile, unprotectedFile, readProject, unreachedProject}, nil, files)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(wall.Description, nativePathLimit) {
 		t.Fatalf("missing scope limit: %s", wall.Description)
 	}
-	if runtime.GOOS == "linux" && !strings.Contains(wall.Description, "standalone files outside masked directories are NOT protected") {
-		t.Fatalf("Linux overstated its file protection: %s", wall.Description)
+	if runtime.GOOS == "linux" && !strings.Contains(wall.Description, "showing only") {
+		t.Fatalf("Linux does not say what the child is shown: %s", wall.Description)
 	}
 	cmd := walled(t, exec.CommandContext(ctx, argv[0], argv[1:]...), wall)
 	stdin, err := cmd.StdinPipe()

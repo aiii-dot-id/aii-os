@@ -71,7 +71,19 @@ type SpeechConfigState struct {
 
 	OperatorSpeakers []string `json:"operator_speakers,omitempty"`
 
+	Voices    []SpeakerVoice `json:"voices,omitempty"`
+	VoicesCut bool           `json:"voices_cut,omitempty"`
+
 	Mode *VoiceModeState `json:"mode,omitempty"`
+}
+
+type SpeakerVoice struct {
+	UUID     string `json:"uuid"`
+	Label    string `json:"label,omitempty"`
+	Heard    bool   `json:"heard"`
+	Enrolled bool   `json:"enrolled"`
+	Mine     bool   `json:"mine"`
+	WhyNot   string `json:"why_not,omitempty"`
 }
 
 type VoiceModeState struct {

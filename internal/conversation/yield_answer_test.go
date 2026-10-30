@@ -42,9 +42,9 @@ func TestYieldWithAnswerSpeaksItAndFlagsTheResult(t *testing.T) {
 	if !res.Yielded {
 		t.Fatal("Result.Yielded must be set by a yield")
 	}
-	ai, ci := strings.Index(res.Spoken, "Best current answer: Established: X. Missing: Y."), strings.Index(res.Spoken, "Turn yielded after")
+	ai, ci := strings.Index(res.Said(), "Best current answer: Established: X. Missing: Y."), strings.Index(res.Said(), "Turn yielded after")
 	if ai < 0 || ci < 0 || ai > ci {
-		t.Fatalf("the answer must be spoken before the closing line:\n%s", res.Spoken)
+		t.Fatalf("the answer must be spoken before the closing line:\n%s", res.Said())
 	}
 	if res.ContinuedAtCap || res.ExhaustedBudget {
 		t.Fatal("a yield is neither a cap nor an exhausted run")
@@ -60,7 +60,7 @@ func TestYieldWithoutAnswerIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Yielded || strings.Contains(res.Spoken, "Best current answer") {
-		t.Fatalf("unexpected: yielded=%v spoken=%q", res.Yielded, res.Spoken)
+	if !res.Yielded || strings.Contains(res.Said(), "Best current answer") {
+		t.Fatalf("unexpected: yielded=%v spoken=%q", res.Yielded, res.Said())
 	}
 }

@@ -1,0 +1,79 @@
+{
+  "task": "dyad-search-before-repeat",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "silver birch",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_search",
+                "args": {
+                  "query": "find which file mentions a phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "silver birch",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "Yes: a lesson says one grep finds it.\nFILE: notes/n7.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A4: no prior lesson is looked for; the files are read one by one",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "silver birch",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n1.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "notes/n7.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n7.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-keeps",
+    "planning": "planning"
+  }
+}

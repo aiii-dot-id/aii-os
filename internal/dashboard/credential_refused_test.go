@@ -102,7 +102,7 @@ func (g *walled) send(t *testing.T, req *http.Request, cookie string, origin ...
 	return w.Result()
 }
 
-func (g *walled) current(value string) string { return "aii_token_" + g.port + "=" + value }
+func (g *walled) current(value string) string { return tlsCookieName(g.port) + "=" + value }
 
 func verifierOf(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -120,7 +120,7 @@ var cookieRoutes = []struct {
 	{http.MethodHead, "/auth/token", http.StatusUnauthorized},
 	{http.MethodPost, "/auth/rotate", http.StatusUnauthorized},
 	{http.MethodGet, "/ws", http.StatusForbidden},
-	{http.MethodGet, "/p/p1/notes.md", http.StatusNotFound},
+	{http.MethodGet, "/p/p1/notes.md", http.StatusUnauthorized},
 	{http.MethodGet, "/sections/hello/index.html", http.StatusNotFound},
 	{http.MethodGet, "/interaction/detail", http.StatusUnauthorized},
 	{http.MethodGet, "/interaction/thinking", http.StatusUnauthorized},
@@ -128,6 +128,7 @@ var cookieRoutes = []struct {
 	{http.MethodGet, "/record/payload", http.StatusUnauthorized},
 	{http.MethodGet, "/sent", http.StatusUnauthorized},
 	{http.MethodGet, "/sent/body", http.StatusUnauthorized},
+	{http.MethodGet, "/work/export", http.StatusUnauthorized},
 	{http.MethodGet, "/overlay/replacements", http.StatusUnauthorized},
 	{http.MethodPost, "/overlay/set-aside", http.StatusUnauthorized},
 	{http.MethodPost, "/speech/say", http.StatusUnauthorized},
@@ -189,22 +190,24 @@ func TestARequestWithNoCookieIsRefusedAtOnceAndNotCalledAGuess(t *testing.T) {
 }
 
 // The right cookie is never slowed and never written down, and no route
-// answers it as it answers a wrong one — which is what makes each of them a
-// place a guess could be checked.
+// answers it, with the page key beside it, as it answers a wrong one — which
+// is what makes each of them a place a guess could be checked.
 func TestTheRightCookieIsNeitherSlowedNorLogged(t *testing.T) {
 	g := newWalled(t, "the-right-token")
-	right := g.current(g.accessHash())
+	right, key := g.current(g.accessHash()), pageKeyFor(g.Server)
 	for _, route := range cookieRoutes {
 		name := route.method + " " + route.path
 		if route.path == "/ws" {
-			conn, err := dialWSToken(g.addr, g.accessHash())
+			conn, err := dialWSToken(g.addr, g.accessHash(), pageKeyFor(g.Server))
 			if err != nil {
 				t.Fatalf("%s: the right cookie was refused: %v", name, err)
 			}
 			conn.Close(websocket.StatusNormalClosure, "")
 			continue
 		}
-		res := g.ask(t, route.method, route.path, right)
+		req := httptest.NewRequest(route.method, "https://"+g.addr+route.path, nil)
+		req.Header.Set(pageKeyHeader, key)
+		res := g.send(t, req, right)
 		// The section is not registered here, so its route answers 404 to
 		// everyone; a registered one is TestSectionFilesRequireTheAccessToken's.
 		if res.StatusCode == route.refused && !strings.HasPrefix(route.path, "/sections/") {
@@ -238,7 +241,7 @@ func TestTheTypedLoginRefusesThroughTheSameOwner(t *testing.T) {
 	}
 	g.lines.Reset()
 	res := post("the-right-token")
-	if c := findCookie(res.Cookies(), "aii_token_"+g.port); res.StatusCode != http.StatusNoContent || c == nil || c.Value != g.accessHash() {
+	if c := findCookie(res.Cookies(), tlsCookieName(g.port)); res.StatusCode != http.StatusNoContent || c == nil || c.Value != g.accessHash() {
 		t.Fatalf("the right token: %d, cookies %v", res.StatusCode, res.Cookies())
 	}
 	if got := g.waits.take(); len(got) != 0 || g.lines.Contains("access token refused") {
@@ -306,8 +309,10 @@ func TestAStaleTabPaysOnlyForACookieThatIsWrong(t *testing.T) {
 	// A browser last signed in by a release that kept the raw token in the
 	// cookie holds the right token in an older form. The socket does not take
 	// that form and refuses it — as before, at once, and without calling it a
-	// refused token — the status check that follows replaces it, and the
-	// socket then opens.
+	// refused token — and the status check that follows asks it to sign in
+	// once more, as cheaply: the status once replaced such a cookie in place,
+	// which could never give the page its key, so that ended with the page
+	// key. The refusal touches no cookie.
 	for _, name := range []string{"aii_token_%s", legacyDashboardCookieName} {
 		t.Run("holding the right token in an older cookie, "+name, func(t *testing.T) {
 			g := newWalled(t, old)
@@ -319,15 +324,9 @@ func TestAStaleTabPaysOnlyForACookieThatIsWrong(t *testing.T) {
 				t.Errorf("the socket's refusal left no line: %q", g.lines.String())
 			}
 			res := g.ask(t, http.MethodGet, "/auth/token", older)
-			upgraded := findCookie(res.Cookies(), "aii_token_"+g.port)
-			if res.StatusCode != http.StatusNoContent || upgraded == nil || upgraded.Value != g.accessHash() {
-				t.Fatalf("the status check did not replace the older cookie: %d %v", res.StatusCode, res.Cookies())
+			if res.StatusCode != http.StatusUnauthorized || res.Header.Get(pageKeyHeader) != "" || len(res.Cookies()) != 0 {
+				t.Fatalf("the status check took an older cookie form: %d %v", res.StatusCode, res.Cookies())
 			}
-			conn, err := dialWSToken(g.addr, upgraded.Value)
-			if err != nil {
-				t.Fatalf("the replaced cookie was refused: %v", err)
-			}
-			conn.Close(websocket.StatusNormalClosure, "")
 			quiet(t, g, "a browser holding the right token in an older cookie")
 		})
 	}
@@ -337,7 +336,7 @@ func TestAStaleTabPaysOnlyForACookieThatIsWrong(t *testing.T) {
 	// read: no cookie, to it.
 	t.Run("after a restart on another port", func(t *testing.T) {
 		g := newWalled(t, old)
-		elsewhere := "aii_token_1=" + g.accessHash()
+		elsewhere := tlsCookieName("1") + "=" + g.accessHash()
 		for _, path := range []string{"/ws", "/auth/token"} {
 			if res := g.ask(t, http.MethodGet, path, elsewhere); res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("GET %s with another port's cookie: %d", path, res.StatusCode)
@@ -369,4 +368,37 @@ func TestAStaleTabPaysOnlyForACookieThatIsWrong(t *testing.T) {
 		}
 		quiet(t, g, "a cookie offered while no token is in force")
 	})
+}
+
+func TestASessionRefusedAtItsHandshakeSaysWhatItLacked(t *testing.T) {
+	const token = "the-token-in-force"
+	for _, c := range []struct {
+		what, cookie, origin string
+		token                string
+		want                 sessionLack
+	}{
+		{"no Origin", "", "", token, lackOrigin},
+		{"another site's page", "", "https://elsewhere.example", token, lackOwnOrigin},
+		{"no cookie", "", "own", token, lackCookie},
+		{"the token itself in an older cookie", legacyDashboardCookieName + "=" + token, "own", token, lackCurrentForm},
+		{"a token asked for and none in force", "", "own", "", lackToken},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			g := newWalled(t, c.token)
+			origin := c.origin
+			if origin == "own" {
+				origin = "https://" + g.addr
+			}
+			if res := g.ask(t, http.MethodGet, "/ws", c.cookie, origin); res.StatusCode != http.StatusForbidden {
+				t.Fatalf("the session was answered %d", res.StatusCode)
+			}
+			lines := refusalLines(g.lines.String(), "failed auth")
+			if len(lines) != 1 || !strings.HasSuffix(lines[0], "failed auth: "+string(c.want)) {
+				t.Fatalf("the refusal does not say what the session lacked, %q: %q", c.want, lines)
+			}
+			if c.token != "" && strings.Contains(lines[0], c.token) {
+				t.Fatalf("the refusal line carries the token: %q", lines[0])
+			}
+		})
+	}
 }

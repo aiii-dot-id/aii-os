@@ -25,6 +25,7 @@ func signedIndexAt(t *testing.T, plat *packagetest.Role, version, generated stri
 	md = []byte("# Catalog\n\n```json\n" + string(block) + "\n```\n")
 	sig, err := plat.Sign(ArtifactKindPluginCatalog, map[string]any{
 		"catalog_version": 1, "generated": generated, "catalog_sha256": sigenvelope.SHA256Prefixed(md),
+		"host_line": OwnLine(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestAVerifiedIndexIsNeverReplacedByAnOlderOne(t *testing.T) {
 
 	// The operator's way past it, as the refusal says: with the kept copy
 	// removed, a host that starts holds nothing and adopts what verifies.
-	for _, name := range []string{CatalogFile, CatalogSigFile} {
+	for _, name := range []string{CatalogFileFor(OwnLine()), CatalogFileFor(OwnLine()) + ".sig"} {
 		if err := os.Remove(filepath.Join(cache, name)); err != nil {
 			t.Fatal(err)
 		}

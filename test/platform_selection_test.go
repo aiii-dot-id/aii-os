@@ -126,8 +126,9 @@ func TestThePlatformSelectionGuardsRefuseWhatTheyAreFor(t *testing.T) {
 
 // buildModeTags are the tree's tags that are not a platform: a file
 // behind one is selected when its build asks for it, on the rows its
-// other terms allow.
-var buildModeTags = []string{"acceptance"}
+// other terms allow. live is the opt-in runs against real providers,
+// which spend the operator's quota (internal/app/prompt_cache_live_test.go).
+var buildModeTags = []string{"acceptance", "live"}
 
 // selectionFinding is one refused file and why.
 type selectionFinding struct{ path, why string }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 const (
@@ -58,6 +59,43 @@ func operatorSpeakersFromChange(v any) ([]string, error) {
 	}
 	return ids, nil
 }
+
+const maxListedVoices = 32
+
+func (a *App) speakerVoices(c Config) ([]dashboard.SpeakerVoice, bool) {
+	named := map[string]bool{}
+	for _, id := range c.Speech.OperatorSpeakers {
+		named[id] = true
+	}
+	var heard []store.HeardVoice
+	cut := false
+	if a.store != nil {
+		var err error
+		if heard, cut, err = a.store.HeardVoices(a.lifetime(), maxListedVoices); err != nil {
+			logsink.Warn("voice.error", "the voices the record heard could not be read for the Your voice card: %v", err)
+		}
+	}
+	out := make([]dashboard.SpeakerVoice, 0, len(heard)+len(named))
+	for _, v := range heard {
+		sv := dashboard.SpeakerVoice{UUID: v.UUID, Label: v.Label, Heard: true, Enrolled: v.Enrolled, Mine: named[v.UUID]}
+		if !v.Enrolled {
+			sv.WhyNot = voiceNotEnrolled
+		}
+		delete(named, v.UUID)
+		out = append(out, sv)
+	}
+	for _, id := range c.Speech.OperatorSpeakers {
+		if named[id] {
+			out = append(out, dashboard.SpeakerVoice{UUID: id, Mine: true, WhyNot: voiceNotHeard})
+		}
+	}
+	return out, cut
+}
+
+const (
+	voiceNotEnrolled = "This voice cannot count as yours: the speech engine has not identified it as an enrolled voice. It is a grouping of what it heard, which no enrollment stands behind. Enroll your voice with the speech engine's guided capture, then name the UUID it reports."
+	voiceNotHeard    = "No speech engine has reported this voice in this identity's record, so it is not known to be an enrolled one. Your words count as yours once the engine identifies them as this enrolled voice."
+)
 
 func validateSpeakerPolicy(c SpeakerPolicyConfig) error {
 	mode := c.Mode

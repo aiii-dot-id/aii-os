@@ -6,9 +6,10 @@ import { setThinking, toolPulse } from '../presence.js';
 import { toast } from '../app.js';
 import { announce, announceWords } from '../announce.js';
 import { fillModelPicker } from './model-picker.js';
-import { pendingSlot } from '../pending.js';
+import { pendingSlot, pendingKeyed, notTaken, NOT_SENT, LOST } from '../pending.js';
 import { displayInteractions, foldTurns, locationKey } from '../interaction-display.js';
 import { attachmentsForSend, attachmentsSent, drawAttached, drawReply, wireAttach } from './attach.js';
+import { signedFetch } from '../pagekey.js';
 
 let thinkingEl = null;
 
@@ -401,6 +402,27 @@ export function rejectSubstrateConfig(message, requestID) {
 }
 
 const askCards = new Map();
+const askWaits = pendingKeyed();
+const closedAsks = new Map();
+const askNotes = new Map();
+function reopenAsk(id, note, unsure) {
+  const d = askCards.get(id);
+  if (!d) return false;
+  d.querySelectorAll('button, input').forEach(b => { b.disabled = false; });
+  d.querySelector('.ask-note').textContent = note;
+  if (unsure) d.dataset.askUnsure = '1';
+  return true;
+}
+S.askRefused = (requestID, text) => {
+  const id = askWaits.refused(requestID);
+  if (id === null) return false;
+  const note = notTaken(text);
+  if (reopenAsk(id, note)) return true;
+  const closed = closedAsks.get(id);
+  if (closed) closed.querySelector('.ask-note').textContent = note;
+  askNotes.set(id, note);
+  return true;
+};
 export function renderAsks(asks) {
   const inner = $('thread-inner');
   if (!inner) return;
@@ -408,12 +430,23 @@ export function renderAsks(asks) {
   (asks || []).forEach(a => {
     seen.add(a.id);
     if (askCards.has(a.id)) return;
-    const d = document.createElement('div');
+    const back = closedAsks.get(a.id);
+    closedAsks.delete(a.id);
+    const again = !!(back && back.isConnected);
+    const typed = again && back.querySelector('.ask-input') ? back.querySelector('.ask-input').value : '';
+    const d = again ? back : document.createElement('div');
     d.className = 'msg ask ask-' + a.kind;
     d.dataset.askId = a.id;
+    delete d.dataset.askUnsure;
     d.innerHTML = askCardHTML(a);
     wireAskCard(d, a);
-    appendThread(d);
+    if (typed) {
+      if (!d.querySelector('.ask-input')) d.querySelector('[data-ask-else]')?.onclick();
+      const inp = d.querySelector('.ask-input');
+      if (inp) inp.value = typed;
+    }
+    if (askNotes.has(a.id)) { d.querySelector('.ask-note').textContent = askNotes.get(a.id); askNotes.delete(a.id); }
+    if (!again) appendThread(d);
     askCards.set(a.id, d);
     announceWords(d.querySelector('.who').textContent, d.querySelector('.ask-text').textContent);
   });
@@ -422,8 +455,9 @@ export function renderAsks(asks) {
     d.classList.add('closed');
     d.querySelectorAll('button, input').forEach(b => { b.disabled = true; });
     const note = d.querySelector('.ask-note');
-    if (note && !note.textContent) note.textContent = 'closed';
+    if (note && (!note.textContent || d.dataset.askUnsure)) note.textContent = 'closed';
     askCards.delete(id);
+    closedAsks.set(id, d);
   });
   S.interactionPositioned?.();
   renderJump();
@@ -445,6 +479,11 @@ function askCardHTML(a) {
       bar = (a.choices || []).map(c => '<button class="btn" data-ask-choice="' + esc(c) + '">' + esc(c) + '</button>').join('') +
         '<button class="btn ghost" data-ask-else="1">Something else…</button><button class="btn ghost" data-ask-answer="not_now">Not now</button>';
       break;
+    case 'word':
+      head = 'Confirm your spoken words';
+      body = '<div class="ask-text">' + esc(a.text) + '</div>';
+      bar = '<button class="btn" data-ask-answer="confirm">These are my words</button><button class="btn ghost" data-ask-answer="no">No</button>';
+      break;
     case 'connect':
       head = who + ' asks to connect ' + esc(a.connector || 'something');
       body = '<div class="ask-text">' + esc(a.text) + '</div><div class="store-hint">You set it up on the Plugins page: installing, granting and any credential stay yours. Read only lets it look; read and modify lets it act.</div>';
@@ -458,24 +497,27 @@ function askCardHTML(a) {
   return '<div class="who">' + head + '</div><div class="body">' + body + '<div class="savebar ask-bar">' + bar + '</div><div class="ask-note"></div></div>';
 }
 function wireAskCard(d, a) {
-  const settle = (note) => {
+  const sent = (frame, note) => {
+    if (!askWaits.sent(a.id, send(frame))) { d.querySelector('.ask-note').textContent = NOT_SENT; return false; }
+    delete d.dataset.askUnsure;
     d.querySelectorAll('button, input').forEach(b => { b.disabled = true; });
     d.querySelector('.ask-note').textContent = note;
+    return true;
   };
-  const answer = (ans) => { send({ type: 'ask', ask: Object.assign({ id: a.id }, ans) }); };
+  const answer = (ans, note) => sent({ type: 'ask', ask: Object.assign({ id: a.id }, ans) }, note);
   d.querySelectorAll('[data-ask-act]').forEach(b => { b.onclick = () => {
     const act = b.dataset.askAct;
-    settle(act === 'confirm' ? 'Running…' : act === 'always' ? 'Running… and from now on without asking (revoke on the Plugins page)' : 'Dropped');
-    send({ type: 'plugin', plugin: { action: act, id: a.plugin, act: a.id } });
+    sent({ type: 'plugin', plugin: { action: act, id: a.plugin, act: a.id } },
+      act === 'confirm' ? 'Running…' : act === 'always' ? 'Running… and from now on without asking (revoke on the Plugins page)' : 'Dropped');
   }; });
-  d.querySelectorAll('[data-ask-choice]').forEach(b => { b.onclick = () => { settle('You chose: ' + b.dataset.askChoice); answer({ answer: 'chose', choice: b.dataset.askChoice }); }; });
+  d.querySelectorAll('[data-ask-choice]').forEach(b => { b.onclick = () => { answer({ answer: 'chose', choice: b.dataset.askChoice }, 'You chose: ' + b.dataset.askChoice); }; });
   d.querySelectorAll('[data-ask-connect]').forEach(b => { b.onclick = () => {
-    settle('Set it up on the Plugins page');
-    answer({ answer: 'connect', scope: b.dataset.askConnect });
+    if (!answer({ answer: 'connect', scope: b.dataset.askConnect }, 'Set it up on the Plugins page')) return;
     S.connectRequest = { connector: a.connector || '', scope: b.dataset.askConnect };
     if (S.go) S.go('plugins');
   }; });
-  d.querySelectorAll('[data-ask-answer]').forEach(b => { b.onclick = () => { settle(b.dataset.askAnswer === 'no' ? 'You said no' : 'Not now'); answer({ answer: b.dataset.askAnswer }); }; });
+  const pressed = { no: 'You said no', confirm: 'You confirmed them' };
+  d.querySelectorAll('[data-ask-answer]').forEach(b => { b.onclick = () => { answer({ answer: b.dataset.askAnswer }, pressed[b.dataset.askAnswer] || 'Not now'); }; });
   const els = d.querySelector('[data-ask-else]');
   if (els) els.onclick = () => {
     const bar = d.querySelector('.ask-bar');
@@ -486,7 +528,7 @@ function wireAskCard(d, a) {
   d.querySelectorAll('[data-ask-say]').forEach(b => { b.onclick = () => {
     const inp = d.querySelector('.ask-input'); const text = (inp && inp.value || '').trim();
     if (!text) { if (inp) inp.focus(); return; }
-    settle('You said: ' + text); answer({ answer: 'said', text });
+    answer({ answer: 'said', text }, 'You said: ' + text);
   }; });
   const inp = d.querySelector('.ask-input');
   if (inp) inp.addEventListener('keydown', e => { if (composing(e)) return; if (e.key === 'Enter') { e.preventDefault(); const b = d.querySelector('[data-ask-say]'); if (b) b.onclick(); } });
@@ -529,6 +571,10 @@ function pendingText(p, text) {
   if (title.textContent !== text) announce(text);
   setText(title, text);
 }
+function keptText(p, text) {
+  p.el.open = true;
+  pendingText(p, text);
+}
 function viewReference(ref) {
   const page = currentPages.get(ref.source);
   if (!page || page.identity !== ref.identity || page.incarnation !== ref.incarnation) {
@@ -545,7 +591,14 @@ S.chatAcknowledged = (id, state) => {
   }
   p.ack = state;
   if (state === 'refused') S.reconcileTurn?.();
-  pendingText(p, state === 'accepted' ? 'Accepted — waiting to be recorded' : 'Not accepted — your text is kept here');
+  if (state === 'accepted') pendingText(p, 'Accepted — waiting to be recorded');
+  else keptText(p, (p.refusal ? 'Not accepted: ' + p.refusal : 'Not accepted') + ' — your text is kept below');
+};
+S.chatRefused = (id, text) => {
+  const p = id && pendingMessages.get(id);
+  if (!p || p.lost) return false;
+  p.refusal = text;
+  return true;
 };
 function receiptKey(r) { return JSON.stringify([r.ref?.identity, r.ref?.source, r.ref?.incarnation, r.ref?.id, r.error?.code, r.error?.message]); }
 function validReceipt(r) {
@@ -586,9 +639,13 @@ S.chatReceipt = (id, r) => {
 };
 S.chatConnectionLost = () => {
   pendingMessages.forEach(p => {
+    if (!p.receipt && p.ack !== 'refused') {
+      if (p.lost) pendingText(p, 'Connection lost — delivery unconfirmed; your text is kept below');
+      else keptText(p, 'Connection lost — delivery unconfirmed; your text is kept below');
+    }
     p.lost = true;
-    if (!p.receipt && p.ack !== 'refused') pendingText(p, 'Connection lost — delivery unconfirmed; your text is kept here');
   });
+  askWaits.lost().forEach(id => reopenAsk(id, LOST, true));
 };
 
 function speakerLabel(p) {
@@ -636,7 +693,7 @@ async function retainedText(ref, check, signal) {
   for (;;) {
     check();
     const params = new URLSearchParams({ id: ref.id, source: ref.source, incarnation: ref.incarnation, sha256: ref.sha256, offset: String(offset) });
-    const response = await fetch('/interaction/detail?' + params, { cache: 'no-store', credentials: 'same-origin', signal });
+    const response = await signedFetch('/interaction/detail?' + params, { cache: 'no-store', credentials: 'same-origin', signal });
     check();
     if (!response.ok) throw Error('The retained text is unavailable.');
     const chunk = await response.json(); check();
@@ -672,7 +729,7 @@ function detailReader(ref) {
 const cutLabel = text => { const line = String(text).split('\n')[0]; return line.length > 100 || line.length < String(text).length ? line.slice(0, 100) + ' …' : line; };
 const thinkingLegend = 'Marked “may be a summary”: the provider returned no raw tokens for that call, and this is its own version of the thinking, kept as it came. It may leave things out.';
 async function readThinking(turn, part) {
-  const response = await fetch('/interaction/thinking?' + new URLSearchParams({ turn, part: String(part) }), { cache: 'no-store', credentials: 'same-origin' });
+  const response = await signedFetch('/interaction/thinking?' + new URLSearchParams({ turn, part: String(part) }), { cache: 'no-store', credentials: 'same-origin' });
   if (!response.ok) throw Error('The recorded thinking is unavailable.');
   const a = await response.json();
   if (a.version !== 1 || a.turn !== turn || typeof a.recorded !== 'boolean') throw Error('Invalid thinking answer.');
@@ -989,7 +1046,7 @@ export function renderInteractionPages(pages, navigate, busy, position = '', rea
   const focused = document.activeElement;
   const old = new Map(Array.from(inner.querySelectorAll('.interaction-item[data-interaction-key]')).map(el => [el.dataset.interactionKey, el]));
   const projected = displayInteractions(pages), batch = [], claimed = new Set();
-  const runningSource = S.cont?.mode === 'safe' ? 'transient' : 'recorded';
+  const runningSource = S.cont?.mode === 'safe' || S.cont?.mode === 'degraded_ring5' ? 'transient' : 'recorded';
   liveReceipt = null;
   const firsts = new Map();
   for (const source of ['recorded','transient']) {

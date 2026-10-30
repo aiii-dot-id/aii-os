@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"maps"
 	"net/url"
 	"os"
 	"strings"
@@ -37,7 +38,18 @@ func (a *App) setProviderInfo(in dashboard.ProviderEdit) error {
 	}, !in.ClearKey, !in.SetEmbeddingsModel)
 }
 
-const providerStatusTTL = 60 * time.Second
+const (
+	defaultModelListTimeoutSeconds = 3
+	defaultModelListCacheSeconds   = 60
+)
+
+func (a *App) modelListBounds() (timeout, kept time.Duration) {
+	var c Config
+	if a.cfg != nil {
+		c = a.configSnapshot()
+	}
+	return time.Duration(modelListTimeoutSetting.n(c)) * time.Second, time.Duration(modelListCacheSetting.n(c)) * time.Second
+}
 
 const (
 	probeOK                = "ok"
@@ -57,28 +69,51 @@ type providerProbe struct {
 	key       string
 }
 
-func retainNativeImages(fresh, previous providerProbe) providerProbe {
+func retainNativeCapabilities(fresh, previous providerProbe) providerProbe {
 	if fresh.key != previous.key || fresh.state != probeOK {
 		return fresh
 	}
 	for model, old := range previous.meta {
-		row := fresh.meta[model]
-		if old.Images == nil || row.Images != nil || !modelOffered(fresh.models, fresh.meta, model) {
+		if !old.answers() || !modelOffered(fresh.models, fresh.meta, model) {
 			continue
+		}
+		row := fresh.meta[model]
+
+		row.Input, row.Output = keepUnanswered(row.Input, old.Input), keepUnanswered(row.Output, old.Output)
+		if row.Tools == nil {
+			row.Tools = old.Tools
 		}
 		if fresh.meta == nil {
 			fresh.meta = make(map[string]modelMeta)
 		}
-		row.Images = old.Images
 		fresh.meta[model] = row
 	}
 	return fresh
+}
+
+func keepUnanswered(fresh, old map[string]bool) map[string]bool {
+	out := maps.Clone(fresh)
+	for kind, v := range old {
+		if _, said := out[kind]; !said {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[kind] = v
+		}
+	}
+	return out
 }
 
 func probeKey(e providerEntry) string {
 
 	e.EffortLevels = nil
 	e.CatalogueAuthor = ""
+
+	e.CapabilityCatalogue = nil
+
+	e.ContextLength, e.MaxOutputTokens, e.DefaultModel, e.Default = 0, 0, "", false
+	e.ReasoningEffort, e.ThinkingBudget, e.ThinkingMode, e.ThinkingDisplay = "", 0, "", ""
+	e.Temperature, e.TopP = nil, nil
 
 	e.Speech = nil
 	data, _ := json.Marshal(e)
@@ -87,6 +122,7 @@ func probeKey(e providerEntry) string {
 }
 
 func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
+	_, kept := a.modelListBounds()
 	now := time.Now()
 	a.providers.runtime.mu.Lock()
 	if a.providers.runtime.provStatus == nil {
@@ -99,7 +135,7 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 			continue
 		}
 		st, ok := a.providers.runtime.provStatus[e.Name]
-		if ok && st.key == probeKey(e) && now.Sub(st.checkedAt) < providerStatusTTL {
+		if ok && st.key == probeKey(e) && now.Sub(st.checkedAt) < kept {
 			out[e.Name] = st
 			continue
 		}
@@ -126,7 +162,7 @@ func (a *App) probeProviders(reg *providerRegistry) map[string]providerProbe {
 		for _, r := range results {
 			st := r.st
 			prev := a.providers.runtime.provStatus[r.name]
-			st = retainNativeImages(st, prev)
+			st = retainNativeCapabilities(st, prev)
 
 			if st.state != probeOK && len(prev.models) > 0 {
 				st.models = prev.models
@@ -151,7 +187,8 @@ func (a *App) probeOne(e providerEntry) providerProbe {
 		st.state = probeInvalidURL
 		return st
 	}
-	ctx, cancel := context.WithTimeout(a.lifetime(), 3*time.Second)
+	timeout, _ := a.modelListBounds()
+	ctx, cancel := context.WithTimeout(a.lifetime(), timeout)
 	defer cancel()
 
 	models, meta, err := a.discoverMetaForEntry(ctx, e, e.APIKey)
@@ -271,6 +308,7 @@ func (a *App) providerInfos(reg *providerRegistry) []dashboard.ProviderInfo {
 			ReasoningEffort: e.ReasoningEffort,
 			EffortLevels:    effortLevelsFor(reg.effective(), e, effortModelFor(e)),
 			EffortModel:     effortModelFor(e),
+			Capabilities:    a.capabilityView(reg, e.Name, effortModelFor(e)),
 			SummaryField:    summaryFieldFor(e), SummaryLevels: llm.ReasoningSummaryLevels(entryDialect(e)),
 			ThinkingBudget: e.ThinkingBudget, ThinkingMode: e.ThinkingMode, ThinkingDisplay: displayOnCard(e),
 			Temperature: e.Temperature, TopP: e.TopP, Extra: e.Extra, Cache: cache,
@@ -361,8 +399,10 @@ func (a *App) clientConfigForEntry(eff *effectiveCaps, e providerEntry, cfg LLMC
 	cc.Extra = e.Extra
 	cc.Cache = e.Cache
 	if capability, ok := eff.capabilityFor(model); ok {
-		cc.ExplicitCache = capability.cacheBreakpoints() && cc.Provider != "chatgpt"
-		cc.MaxCompletionTokens = capability.modernOutputLimit() && cc.Provider != "chatgpt"
+
+		responses := llm.DialectFor(cc.Provider) == llm.DialectResponses
+		cc.ExplicitCache = capability.cacheBreakpoints() && !responses
+		cc.MaxCompletionTokens = capability.modernOutputLimit() && !responses
 		cc.CacheRetentions = capability.CacheRetentions
 	}
 	if _, err := llm.ResolveCachePolicy(cc.Cache, cc.Extra, llm.DialectFor(cc.Provider), cc.ExplicitCache, cc.CacheRetentions); err != nil {
@@ -442,15 +482,16 @@ func (a *App) discoveredMeta(provider, model string) (m modelMeta, found bool, l
 	return m, found, len(pr.models), modelOffered(pr.models, pr.meta, model)
 }
 
-func (a *App) discoveredImageSupport(entry providerEntry, model string) *bool {
+func (a *App) discoveredCapabilities(entry providerEntry, model string) (modelMeta, bool) {
 	a.providers.runtime.mu.RLock()
 	defer a.providers.runtime.mu.RUnlock()
 	pr := a.providers.runtime.provStatus[entry.Name]
-	if pr.key != probeKey(entry) || pr.meta[model].Images == nil {
-		return nil
+	row, found := pr.meta[model]
+	if pr.key != probeKey(entry) || !found || !row.answers() && row.Context == 0 && row.MaxOut == 0 {
+		return modelMeta{}, false
 	}
-	value := *pr.meta[model].Images
-	return &value
+	row.Input, row.Output = maps.Clone(row.Input), maps.Clone(row.Output)
+	return row, true
 }
 
 func markPreselect(out []dashboard.ProviderInfo) {
@@ -607,7 +648,15 @@ func seedModelsFor(name string) []string {
 
 func (a *App) askWindowIfUndeclaredIn(reg *providerRegistry, llmCfg LLMConfig) {
 	entry, err := selectProvider(llmCfg, reg)
-	if err != nil || (entry.ContextLength > 0 && entry.MaxOutputTokens > 0) {
+	if err != nil {
+		return
+	}
+	model := llmCfg.Model
+	if model == "" {
+		model = entry.DefaultModel
+	}
+	row, _ := reg.effective().capabilityFor(model)
+	if entry.ContextLength > 0 && entry.MaxOutputTokens > 0 && (!atVendorsAddress(*entry) || row.ContextLength > 0) {
 		return
 	}
 	a.probeProviders(&providerRegistry{Providers: []providerEntry{*entry}})
@@ -617,4 +666,78 @@ func (a *App) askWindowIfUndeclared(llmCfg LLMConfig) {
 	if reg, err := a.loadProviders(); err == nil {
 		a.askWindowIfUndeclaredIn(reg, llmCfg)
 	}
+}
+
+func (a *App) capabilityView(reg *providerRegistry, provider, model string) *dashboard.ModelCapabilities {
+	e := entryNamed(reg, provider)
+	if e == nil || model == "" {
+		return nil
+	}
+	caps := a.modelCapabilitiesFor(reg, *e, model)
+	line := func(kind string, ans capAnswer) dashboard.CapabilityLine {
+		return dashboard.CapabilityLine{Kind: kind, State: ans.state.String(), From: capabilitySaidBy(*e, caps, ans)}
+	}
+	view := &dashboard.ModelCapabilities{Model: model, Tools: line("tools", caps.tools)}
+	for _, kind := range inputKinds {
+		l := line(kind, caps.input[kind])
+		l.Types = sentTypes(entryDialect(*e), kind)
+		l.NotSent = l.State == "yes" && len(l.Types) == 0
+		view.Takes = append(view.Takes, l)
+	}
+	for _, kind := range outputKinds {
+		view.Gives = append(view.Gives, line(kind, caps.output[kind]))
+	}
+	figure := func(figures []capFigure) dashboard.CapabilityFigure {
+		if len(figures) == 0 {
+			return dashboard.CapabilityFigure{From: capabilitySaidBy(*e, caps, capAnswer{})}
+		}
+		f := figures[0]
+		return dashboard.CapabilityFigure{Tokens: f.value, From: capabilitySaidBy(*e, caps, capAnswer{from: f.from, at: f.at})}
+	}
+	view.Window, view.OutputLimit = figure(caps.windows), figure(caps.outLimits)
+	return view
+}
+
+var kindTypes = map[string][]string{
+	"image": {"image/png", "image/jpeg", "image/gif", "image/webp"},
+	"pdf":   {"application/pdf"},
+	"audio": {"audio/wav", "audio/mpeg", "audio/aac", "audio/ogg", "audio/flac", "audio/aiff"},
+	"video": {"video/mp4", "video/mpeg", "video/quicktime", "video/webm", "video/x-flv", "video/x-ms-wmv", "video/3gpp"},
+}
+
+func sentTypes(d llm.Dialect, kind string) []string {
+	var types []string
+	for _, t := range kindTypes[kind] {
+		if llm.Writes(d, t) {
+			types = append(types, t)
+		}
+	}
+	return types
+}
+
+func capabilitySaidBy(e providerEntry, caps modelCaps, ans capAnswer) string {
+	at := func() string { return ans.at.UTC().Format("2006-01-02 15:04 UTC") }
+	switch ans.from {
+	case capFromOperator:
+		return "your providers.json"
+	case capFromMeasured:
+		return "measured when this model was chosen, " + at()
+	case capFromProvider:
+		if e.CapabilityList != nil {
+			return e.Name + "'s capability list"
+		}
+		return e.Name + "'s model list"
+	case capFromCatalogue:
+		host := catalogueFor(e)
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		return "the public catalogue at " + host + ", " + at()
+	case capFromShipped:
+		if caps.source == "" {
+			return "the shipped list"
+		}
+		return "the shipped list (" + caps.source + ", " + caps.asOf + ")"
+	}
+	return "nobody has said"
 }

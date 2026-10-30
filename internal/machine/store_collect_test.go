@@ -5,6 +5,7 @@ package machine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,6 +215,50 @@ func TestPartialsOfWhatIsNotPendingGoAfterTheGrace(t *testing.T) {
 	}
 	if _, err := os.Stat(partials[1]); err == nil {
 		t.Errorf("a partial nothing resumes was kept past its grace")
+	}
+}
+
+func TestAnEndedDownloadKeepsItsPartialForTryAgain(t *testing.T) {
+	slot := slotIn(t, t.TempDir(), "identity-a")
+	f := newFetches()
+	at := func(time.Duration) <-chan time.Time { c := make(chan time.Time, 1); c <- time.Now(); return c }
+	r := newStoreRig(t, "", f, Options{store: storeOptions{after: at}})
+	body := []byte("a model whose link went down half way through it")
+	m := f.model("cut.bin", body)
+	half := int64(len(body) / 2)
+	blob, _ := plugstore.Store{Dir: r.storeDir()}.Blob(m.SHA256)
+	partial := blob + plugstore.PartialSuffix
+	if err := os.WriteFile(partial, body[:half], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.fail[m.URL] = &pluginhost.NetworkError{Cause: errors.New("dial tcp: connect: network is unreachable")}
+	f.mu.Unlock()
+	l := r.link(newKey(t), slot)
+	need := NeedParams{Plugin: "org.example.cut", Works: []pluginhost.StoreWork{viewWork(m)}}
+	l.needUntil(need, NeedEnded, 10*time.Second)
+	if st := r.diskState(); len(st.Pending) != 0 {
+		t.Fatalf("an ended job is still pending: %+v", st.Pending)
+	}
+	r.clock.advance(2 * storeGrace)
+	r.collect()
+	if fi, err := os.Stat(partial); err != nil || fi.Size() != half {
+		t.Fatalf("an ended download's partial was taken by the collector before Try again (%v)", err)
+	}
+	f.mu.Lock()
+	delete(f.fail, m.URL)
+	f.mu.Unlock()
+	need.Retry = true
+	if _, err := l.need(need); err != nil {
+		t.Fatal(err)
+	}
+	need.Retry = false
+	l.needUntil(need, NeedPresent, 10*time.Second)
+	f.mu.Lock()
+	offsets := f.offsets[m.URL]
+	f.mu.Unlock()
+	if last := offsets[len(offsets)-1]; last != half {
+		t.Fatalf("Try again fetched from byte %d, want %d (the partial kept)", last, half)
 	}
 }
 

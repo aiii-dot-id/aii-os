@@ -1142,12 +1142,12 @@ func TestDeliverCommitmentPathOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := engine.ExecuteAction(context.Background(), "verb", "work", map[string]any{
-		"action": "deliver", "result": "served: summary attached", "commitment_id": "cm1",
+		"action": "deliver", "result": "served: summary attached",
 	})
 	if err != nil {
 		t.Fatalf("deliver on commitment: %v", err)
 	}
-	if !strings.Contains(res, "commit commitment.state_change") {
+	if !strings.Contains(res, "your own completion of a promise it fulfills") {
 		t.Fatalf("deliver must TEACH the conscious completion path, got: %s", res)
 	}
 	// No commitment.state_change may have been minted by the delivery.

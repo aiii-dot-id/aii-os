@@ -20,8 +20,8 @@ func TestTheFloorKeepsTheRunningProgramsPlace(t *testing.T) {
 	}
 	app, _ := stockSlotApp(t, map[string]string{"notes.md": "mine"})
 	policy := app.ensureRing5Policy()
-	if rule := policy.Covered(exe); rule == nil || rule.ID != "sub.binary" {
-		t.Fatalf("the floor must keep the running program %s, got %+v", exe, rule)
+	if rule, err := policy.Covered(exe); err != nil || rule == nil || rule.ID != "sub.binary" {
+		t.Fatalf("the floor must keep the running program %s, got %+v (%v)", exe, rule, err)
 	}
 	floor := policy.LocalFloor()
 	if !strings.Contains(floor, "- **"+filepath.Base(exe)+"** — Your running program is your body") || strings.Contains(floor, "aii-os") {

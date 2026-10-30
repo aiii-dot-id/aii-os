@@ -1,0 +1,5 @@
+# probe_tool_call: the tool-call probe asked beside it: can this model call a tool?
+
+=== message 0 (user) ===
+Call report_ready with ready=true. Do not answer in words.
+=== tools: the set "probe_report_ready", testdata/whole_prompt/tools/probe_report_ready.<GOOS>.golden ===

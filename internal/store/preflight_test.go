@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -297,18 +298,20 @@ func TestPreflightRefusesDefectiveFacilityRuns(t *testing.T) {
 
 func TestPreflightHoldsCitedTurnsToTheConversationAndReplayDoesNot(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at) VALUES
-		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z'),
-		('c3','s','resident','hello',3,'2026-09-01T00:00:01Z')`); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at, details) VALUES
+		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z','{}'),
+		('c3','s','resident','hello',3,'2026-09-01T00:00:01Z','{}')`); err != nil {
 		t.Fatal(err)
 	}
-
 	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at, kind, details) VALUES
 		('c4','s','operator','[voice] (heard in the room, not addressed to you) lunch?',4,'2026-09-01T00:00:02Z','message','{"channel":"voice","reason":"room speech"}'),
 		('c5','s','operator','👍',5,'2026-09-01T00:00:03Z','message','{"grade":{"session":"s","grade":"up"}}'),
-		('c6','s','operator','the act was approved',6,'2026-09-01T00:00:04Z','message','{"channel":"plugin","actor":"operator"}')`); err != nil {
+		('c6','s','operator','the act was approved',6,'2026-09-01T00:00:04Z','message','{"channel":"plugin","actor":"operator"}'),
+		('c7','s','operator','[ask ask_1] chose: Yes, I affirm',7,'2026-09-01T00:00:05Z','message','{}'),
+		('c8','s','operator','a line the host wrote',8,'2026-09-01T00:00:06Z','message','{}')`); err != nil {
 		t.Fatal(err)
 	}
+	markRows(t, s, map[uint64]string{2: interaction.SaidTyped, 4: saidAtNoDoor, 5: saidAtNoDoor, 6: saidAtNoDoor, 7: interaction.SaidAnswer, 8: saidAtNoDoor})
 	experience := func(turn int) map[string]any {
 		return map[string]any{"id": fmt.Sprintf("x_turn%d", turn), "content": "the operator said so", "provenance": "operator", "source_turn": turn}
 	}
@@ -334,9 +337,11 @@ func TestPreflightHoldsCitedTurnsToTheConversationAndReplayDoesNot(t *testing.T)
 		{ledger.EventExperienceCreate, experience(4), "operator provenance cites turn 4, which the host recorded as the room's speech, not the operator's: fails closed"},
 		{ledger.EventExperienceCreate, experience(5), ""},
 		{ledger.EventExperienceCreate, experience(6), ""},
-		{ledger.EventRelationshipUpsert, operator(4), "operator approval cites turn 4, which is not the operator's own word to the identity (the room's speech, a grade, or a line the host wrote): fails closed"},
-		{ledger.EventRelationshipUpsert, operator(5), "operator approval cites turn 5, which is not the operator's own word to the identity (the room's speech, a grade, or a line the host wrote): fails closed"},
-		{ledger.EventRelationshipUpsert, operator(6), "operator approval cites turn 6, which is not the operator's own word to the identity (the room's speech, a grade, or a line the host wrote): fails closed"},
+		{ledger.EventRelationshipUpsert, operator(4), "operator approval cites turn 4, which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote): fails closed"},
+		{ledger.EventRelationshipUpsert, operator(5), "operator approval cites turn 5, which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote): fails closed"},
+		{ledger.EventRelationshipUpsert, operator(6), "operator approval cites turn 6, which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote): fails closed"},
+		{ledger.EventRelationshipUpsert, operator(7), "operator approval cites turn 7, which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote): fails closed"},
+		{ledger.EventRelationshipUpsert, operator(8), "operator approval cites turn 8, which is not the operator's own word to the identity (a turn they typed or spoke to it; not the room's speech, a grade, a press on an ask card, or a line the host wrote): fails closed"},
 	} {
 		err := s.ValidateEvent(c.typ, legalRing(t, c.typ), mustRaw(t, c.pl))
 		switch {
@@ -391,11 +396,12 @@ func TestPreflightHoldsCitedTurnsToTheConversationAndReplayDoesNot(t *testing.T)
 
 func TestPreflightHoldsAnUpsertOfTheOperatorsRelationshipToTheirApprovalWhateverRoleItNames(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at) VALUES
-		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z'),
-		('c3','s','resident','hello',3,'2026-09-01T00:00:01Z')`); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at, details) VALUES
+		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z','{}'),
+		('c3','s','resident','hello',3,'2026-09-01T00:00:01Z','{}')`); err != nil {
 		t.Fatal(err)
 	}
+	markRows(t, s, map[uint64]string{2: interaction.SaidTyped})
 	typ, ring := ledger.EventRelationshipUpsert, legalRing(t, ledger.EventRelationshipUpsert)
 	founding := probeEvent(1, typ, ring, map[string]any{
 		"id": "rel_op", "counterpart_name": "Quinn", "counterpart_role": "operator",
@@ -639,10 +645,11 @@ func TestARecordedSelfSupersessionStillReplays(t *testing.T) {
 // operator did not affirm, whichever operator it was.
 func TestAnEntryUnderASupersededOperatorsIdOwesTheApprovalToo(t *testing.T) {
 	s := testStore(t)
-	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at) VALUES
-		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z')`); err != nil {
+	if _, err := s.DB().Exec(`INSERT INTO conversations (id, session_id, role, content, turn_seq, created_at, details) VALUES
+		('c2','s','operator','yes',2,'2026-09-01T00:00:00Z','{}')`); err != nil {
 		t.Fatal(err)
 	}
+	markRows(t, s, map[uint64]string{2: interaction.SaidTyped})
 	typ, ring := ledger.EventRelationshipUpsert, legalRing(t, ledger.EventRelationshipUpsert)
 	approved := map[string]any{"operator_approval_excerpt": "yes", "operator_approval_turn": 2, "approval_basis": "conversation_turn"}
 	with := func(pl map[string]any) map[string]any {

@@ -102,16 +102,17 @@ func signedCatalogDir(t *testing.T, dir string, cat plugincatalog.Index) (catDir
 	}
 	block, _ := json.MarshalIndent(cat, "", "  ")
 	md := []byte("# Catalog\n\n```json\n" + string(block) + "\n```\n")
-	if err := os.WriteFile(filepath.Join(catDir, plugincatalog.CatalogFile), md, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(catDir, plugincatalog.CatalogFileFor(plugincatalog.OwnLine())), md, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sig, err := plat.Sign(plugincatalog.ArtifactKindPluginCatalog, map[string]any{
 		"catalog_version": cat.Version, "generated": cat.Generated, "catalog_sha256": sigenvelope.SHA256Prefixed(md),
+		"host_line": plugincatalog.OwnLine(), // this build's line: the checkout holds the file this build reads
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(catDir, plugincatalog.CatalogSigFile), sig, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(catDir, plugincatalog.CatalogFileFor(plugincatalog.OwnLine())+".sig"), sig, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return catDir, rootPath, plat.Env
@@ -507,19 +508,28 @@ func TestCatalogInstallRefusalsAreTypedAndLeaveNothing(t *testing.T) {
 // The package arrives under a temporary name beside the slots and is
 // published whole: while it downloads there is no slot for a first
 // install and no new package in the slot of an update, and afterwards
-// the slot holds exactly the verified bytes — the release it replaces
-// removed, no download left over.
+// the slot holds exactly the verified bytes — the release it replaces,
+// which serves nothing here, removed; no download left over. A release
+// that serves is kept beside the slots until the update serves
+// (plugin_kept_test.go). The packages are real modules: Install
+// verifies what it has fetched before it places it, and places nothing it
+// cannot verify.
 func TestCatalogInstallPublishesOnlyAVerifiedPackage(t *testing.T) {
 	dir := t.TempDir()
-	pkgBytes := []byte("the verified package")
-	url, sha := servePackage(t, pkgBytes)
-	portable := func(u string) []plugincatalog.CatalogPackage {
-		return []plugincatalog.CatalogPackage{{Platform: "*", Arch: "*", URL: u, SHA256: sha, Size: int64(len(pkgBytes))}}
+	bytesOf := map[string][]byte{}
+	entries := []plugincatalog.CatalogEntry{}
+	for _, rel := range []struct{ name, version string }{{"fresh", "1.0.0"}, {"upgrade", "2.0.0"}} {
+		id := "org.example." + rel.name
+		raw, err := os.ReadFile(buildResponderVer(t, dir, id, rel.version, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		url, sha := servePackage(t, raw)
+		bytesOf[id] = raw
+		entries = append(entries, plugincatalog.CatalogEntry{ID: id, Version: rel.version, Tier: "T1",
+			Packages: []plugincatalog.CatalogPackage{{Platform: "*", Arch: "*", URL: url + "/" + rel.name, SHA256: sha, Size: int64(len(raw))}}})
 	}
-	catDir, _, root := signedCatalogDir(t, dir, plugincatalog.Index{Version: 1, Plugins: []plugincatalog.CatalogEntry{
-		{ID: "org.example.fresh", Version: "1.0.0", Tier: "T1", Packages: portable(url + "/fresh")},
-		{ID: "org.example.upgrade", Version: "2.0.0", Tier: "T1", Packages: portable(url + "/upgrade")},
-	}})
+	catDir, _, root := signedCatalogDir(t, dir, plugincatalog.Index{Version: 1, Plugins: entries})
 	app := &App{}
 	app.catalog.Open(catDir, "", root, nil)
 	t.Chdir(dir)
@@ -566,8 +576,8 @@ func TestCatalogInstallPublishesOnlyAVerifiedPackage(t *testing.T) {
 		if err != nil || len(entries) != 1 || entries[0].Name() != tc.file {
 			t.Fatalf("%s: the slot holds exactly %s, got %v (%v)", tc.id, tc.file, entries, err)
 		}
-		if b, err := os.ReadFile(filepath.Join("plugins", tc.id, tc.file)); err != nil || string(b) != string(pkgBytes) {
-			t.Fatalf("%s: the slot holds the verified bytes, got %q (%v)", tc.id, b, err)
+		if b, err := os.ReadFile(filepath.Join("plugins", tc.id, tc.file)); err != nil || string(b) != string(bytesOf[tc.id]) {
+			t.Fatalf("%s: the slot does not hold the verified bytes (%v)", tc.id, err)
 		}
 		if m, _ := filepath.Glob(filepath.Join("plugins", ".download-*")); len(m) != 0 {
 			t.Fatalf("%s: a download was left beside the slots: %v", tc.id, m)
@@ -666,6 +676,38 @@ func TestCatalogViewsCarryTheVerifiedTierBesideTheIndexClaim(t *testing.T) {
 	b, err := json.Marshal(views)
 	if err != nil || strings.Count(string(b), `"installed_tier":"T1"`) != 1 || strings.Count(string(b), `"installed_tier"`) != 1 {
 		t.Fatalf("the page reads the verified tier as installed_tier, on the installed row only: %s (%v)", b, err)
+	}
+}
+
+// BEFORE INSTALL THE ROW SAYS WHICH BUILD THE CATALOG LISTS FOR THIS HOST:
+// the one portable build, or one built for this system, which wins where
+// an entry lists both because it is the one Install would fetch. The index
+// says no more of a build than that, and an entry with no build for this
+// host says neither.
+func TestTheStoreSaysWhichBuildTheCatalogListsBeforeInstall(t *testing.T) {
+	build := func(platform, arch string) plugincatalog.CatalogPackage {
+		return plugincatalog.CatalogPackage{Platform: platform, Arch: arch, URL: "https://h/p.aiiospkg", SHA256: "sha256:aa", Size: 1}
+	}
+	portable, here := build("*", "*"), build(packagefmt.HostPlatform(), packagefmt.HostArch())
+	cat := &plugincatalog.Index{Version: 1, Plugins: []plugincatalog.CatalogEntry{
+		{ID: "org.example.portable", Version: "1.0.0", Tier: "T1", Packages: []plugincatalog.CatalogPackage{portable}},
+		{ID: "org.example.engine", Version: "1.0.0", Tier: "T3", Packages: []plugincatalog.CatalogPackage{here}},
+		{ID: "org.example.both", Version: "1.0.0", Tier: "T3", Packages: []plugincatalog.CatalogPackage{portable, here}},
+		{ID: "org.example.elsewhere", Version: "1.0.0", Tier: "T3", Packages: []plugincatalog.CatalogPackage{build("plan9", "mips")}},
+	}}
+	views := catalogViewsFor(cat, nil, nil)
+	want := map[string]string{"org.example.portable": "portable", "org.example.engine": "system", "org.example.both": "system", "org.example.elsewhere": ""}
+	if len(views) != len(want) {
+		t.Fatalf("every offering is listed: %+v", views)
+	}
+	for _, v := range views {
+		if v.Build != want[v.ID] {
+			t.Errorf("%s: the row says build %q, the catalog lists %q for this host (%+v)", v.ID, v.Build, want[v.ID], v)
+		}
+	}
+	b, err := json.Marshal(views)
+	if err != nil || strings.Count(string(b), `"build":"portable"`) != 1 || strings.Count(string(b), `"build":"system"`) != 2 || strings.Count(string(b), `"build"`) != 3 {
+		t.Fatalf("the page reads it as build, and a row with no build for this host carries none: %s (%v)", b, err)
 	}
 }
 

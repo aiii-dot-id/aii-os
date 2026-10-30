@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -32,6 +33,7 @@ func overrideRefusal(path, requirement string) error {
 
 var overrideRemedy = map[string]string{
 	"agency.subagent_wall_seconds_local": "set agency.subagent_wall_seconds on the local provider instead",
+	"agency.turn_seconds_local":          "set agency.turn_token_budget on the local provider to fence it in tokens instead",
 }
 
 func (o *Overrides) UnmarshalJSON(b []byte) error {
@@ -186,8 +188,12 @@ type limitSource struct {
 }
 
 type Limits struct {
-	cfg    Config
-	Source map[string]limitSource
+	cfg Config
+
+	turnTime time.Duration
+
+	profile string
+	Source  map[string]limitSource
 
 	Held map[string]string
 }
@@ -197,7 +203,7 @@ func (l Limits) Value(s cognitionSetting) limits.Ceiling { return s.value(l.cfg)
 func (l Limits) N(s cognitionSetting) int { return s.n(l.cfg) }
 
 func limitsFor(cfg Config, entry providerEntry, model string) Limits {
-	l := Limits{cfg: cfg, Source: map[string]limitSource{}}
+	l := Limits{cfg: cfg, profile: profileName(entry.Name, model), Source: map[string]limitSource{}}
 	for _, s := range cognitionSettings {
 		level := "main"
 		if s.get(&cfg).IsZero() {
@@ -220,6 +226,12 @@ func limitsFor(cfg Config, entry providerEntry, model string) Limits {
 		if m := sec.models[model]; m != nil {
 			l.lay(m, "model", entry.Name, model)
 		}
+	}
+
+	if entry.Local && l.Source[turnTokenBudgetSetting.key].Level == "default" {
+		l.cfg.Agency.TurnTokenBudget = limits.Unlimited
+		l.Source[turnTokenBudgetSetting.key] = limitSource{Level: "local"}
+		l.turnTime = time.Duration(localTurnSecondsSetting.n(cfg)) * time.Second
 	}
 
 	if l.cfg.Agency.SubagentMaxToolRounds.Above(maxToolRoundsSetting.value(l.cfg)) {
@@ -324,6 +336,7 @@ func (l Limits) residentBounds() conversation.Bounds {
 	return conversation.Bounds{
 		Rounds:          l.Value(maxToolRoundsSetting),
 		TurnTokens:      l.Value(turnTokenBudgetSetting),
+		TurnTime:        l.turnTime,
 		Calls:           l.Value(maxToolCallsSetting),
 		Checkpoint:      l.cfg.Agency.checkpoint(),
 		ToolResultChars: l.N(toolResultCharsSetting),
@@ -358,7 +371,7 @@ func (a *App) applyResidentLimits(l Limits) {
 
 func (l Limits) turnLimitsLine() string {
 	var provider, model string
-	overridden := false
+	overridden := l.turnTime > 0
 	for _, src := range l.Source {
 		if src.Level == "provider" || src.Level == "model" {
 			overridden = true
@@ -373,8 +386,16 @@ func (l Limits) turnLimitsLine() string {
 	part := func(name string, s cognitionSetting) string {
 		return fmt.Sprintf("%s %s (%s)", name, l.Value(s), l.Source[s.key].Level)
 	}
-	return fmt.Sprintf("TURN LIMITS: %s: %s, %s, %s", profileName(provider, model),
+	who := profileName(provider, model)
+	if provider == "" {
+		who = l.profile
+	}
+	line := fmt.Sprintf("TURN LIMITS: %s: %s, %s, %s", who,
 		part("tokens", turnTokenBudgetSetting), part("rounds", maxToolRoundsSetting), part("calls", maxToolCallsSetting))
+	if l.turnTime > 0 {
+		line += fmt.Sprintf(", time %s (%s)", l.turnTime, localTurnSecondsSetting.key)
+	}
+	return line
 }
 
 func promptCeilingFor(cfg Config, entry providerEntry, model string) int {

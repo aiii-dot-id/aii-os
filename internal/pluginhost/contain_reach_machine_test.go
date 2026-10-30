@@ -71,8 +71,9 @@ func machineLink(t *testing.T) (h *machine.Holder, dir string, accepted func() i
 // service listens on and with its directory among the places the app
 // masks. Uncontained the child connects and lists the directory; inside
 // the wall the connection is refused (Linux: no socket can be made, and
-// the runtime directory the link lies in is hidden; macOS: no socket on
-// the file system is reached, and the directory is masked) and the
+// the runtime directory the link lies in is hidden, and the service's
+// directory is not in the child's view; macOS: no socket on the file
+// system is reached, and the directory is masked) and the
 // listener accepts nothing.
 func TestAContainedNativeChildCannotReachTheMachineLink(t *testing.T) {
 	pluginhost.RequireWallForTest(t)
@@ -90,9 +91,9 @@ func TestAContainedNativeChildCannotReachTheMachineLink(t *testing.T) {
 	if !strings.Contains(out, "unix=refused") {
 		t.Errorf("a contained child connected to the machine service's link:\n%s", out)
 	}
-	want := map[string]string{"linux": "list=0", "darwin": "list=refused"}[runtime.GOOS]
+	want := map[string]string{"linux": "list=refused open " + dir + ": no such file or directory", "darwin": "list=refused"}[runtime.GOOS]
 	if !strings.Contains(out, want) {
-		t.Errorf("the machine service's directory is not masked inside the wall (want %q):\n%s", want, out)
+		t.Errorf("the machine service's directory is not hidden inside the wall (want %q):\n%s", want, out)
 	}
 	if n := accepted(); n != 1 {
 		t.Errorf("the link accepted %d connections; only the uncontained probe's is expected", n)

@@ -43,3 +43,36 @@ func TestBootAdviceNamesTheTrustedURLAndNeverTheRootWhenANameIsHeld(t *testing.T
 		}
 	}
 }
+
+// THE ISSUED LINE SAYS THE ROUTE AND REPORTS NO LOOKUP NOBODY MADE. With an
+// address published the console said "not resolving from here yet (DNS TTL
+// 60 s)" at every boot, whether or not the name resolved: nothing has looked
+// the name up from here since the route owner took over publication. And the
+// state's address is the route as the service last answered it, which is not
+// always an address. Nor does the line say "not published yet" of a route
+// the owner has not read yet, which is every boot: it is printed right
+// after the owner is asked to look. Until that look comes back it says
+// nothing of the route, and of a pass that ended before its look, that the
+// route is not confirmed.
+func TestBootAdviceSaysTheRouteAndClaimsNoLookup(t *testing.T) {
+	for _, c := range []struct{ address, routeError, want string }{
+		{"10.0.0.5", "", "; route: 10.0.0.5"},
+		{"relayed through relay.example.test", "", "; route: relayed through relay.example.test"},
+		{"withdrawn", "", "; route: withdrawn"},
+		{"10.0.0.5", "another writer moved the route; recomputing", "; route: 10.0.0.5"},
+		{"", "certificate service: unreachable", "; route not confirmed (see the log)"},
+		{"", "", "nothing to install"},
+	} {
+		st := dashboard.PublicNameState{Status: StatusIssued, Origin: "https://ui.abc.example.test:8180", Address: c.address, RouteError: c.routeError}
+		got := strings.Join(dashboardAdvice(true, "10.0.0.5", st, nil, false), "\n")
+		if !strings.HasSuffix(got, c.want) {
+			t.Errorf("address %q, route error %q: the line does not end %q: %q", c.address, c.routeError, c.want, got)
+		}
+		if strings.Contains(got, "resolving") {
+			t.Errorf("address %q: THE CONSOLE REPORTS A LOOKUP NOBODY MADE: %q", c.address, got)
+		}
+		if strings.Contains(got, "not published") {
+			t.Errorf("address %q, route error %q: THE CONSOLE SAYS NOT PUBLISHED OF A ROUTE NOBODY HAS READ: %q", c.address, c.routeError, got)
+		}
+	}
+}

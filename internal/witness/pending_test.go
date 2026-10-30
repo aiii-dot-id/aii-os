@@ -202,8 +202,19 @@ func TestAReceiptPendingBesideTheLedgerNamesTheEnvelope(t *testing.T) {
 	_, did := enrolledFromRow(t, original)
 	appendRecords(t, lg, kp, 1)
 	time.Sleep(1100 * time.Millisecond)
+	// The envelope kept beside the ledger at enrolment is lost with the
+	// database here, before each case: what is held is the rebuild from the
+	// receipt, the one evidence left (the file itself is held by
+	// envelope_file_test.go).
+	lose := func(t *testing.T) {
+		t.Helper()
+		if err := os.Remove(EnvelopePath(dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
 
 	t.Run("rebuilt to the receipt's identity", func(t *testing.T) {
+		lose(t)
 		lost := &recordStore{lg: lg, born: born}
 		got, _, err := EnsureIdentityEnvelope(key, lost, dir)
 		if err != nil {
@@ -214,6 +225,7 @@ func TestAReceiptPendingBesideTheLedgerNamesTheEnvelope(t *testing.T) {
 		}
 	})
 	t.Run("a row that names another identity is replaced", func(t *testing.T) {
+		lose(t)
 		stranger, _ := enrolled(t, key, time.Now().Add(-time.Hour))
 		lost := &recordStore{lg: lg, born: born, row: stranger}
 		if got, _, err := EnsureIdentityEnvelope(key, lost, dir); err != nil || !bytes.Equal(got, original) {
@@ -221,6 +233,7 @@ func TestAReceiptPendingBesideTheLedgerNamesTheEnvelope(t *testing.T) {
 		}
 	})
 	t.Run("outside the window the record allows: refused, nothing saved", func(t *testing.T) {
+		lose(t)
 		late := &recordStore{lg: lg, born: time.Now().Add(72 * time.Hour)} // a window that cannot hold the envelope
 		_, _, err := EnsureIdentityEnvelope(key, late, dir)
 		if !errors.Is(err, ErrEnvelopeUnrecoverable) || !strings.Contains(err.Error(), did) || late.row != nil {
@@ -228,6 +241,7 @@ func TestAReceiptPendingBesideTheLedgerNamesTheEnvelope(t *testing.T) {
 		}
 	})
 	t.Run("the record names another identity: the fork, refused", func(t *testing.T) {
+		lose(t)
 		_, other := enrolled(t, key, born)
 		named := &memEnvelopeStore{enrolledIDs: []string{other}, born: born, witness: time.Now()}
 		if _, _, err := EnsureIdentityEnvelope(key, named, dir); !errors.Is(err, ErrEnrollmentForked) || named.saves != 0 {

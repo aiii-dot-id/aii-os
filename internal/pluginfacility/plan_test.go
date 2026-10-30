@@ -20,11 +20,11 @@ func planFor(t *testing.T, build func(*Instance)) []string {
 	f.instances[inst.ID] = inst
 	intent := intentOf(inst.ID, inst.Package, inst.PackageHash, inst.ManifestHash, f.policy)
 	// A pass stamps every activation it issues with the admission it was
-	// issued under; a fixture that left them blank would be testing a
-	// state the controller never produces.
+	// issued under, which is of its own bytes; a fixture that left them
+	// blank would be testing a state the controller never produces.
 	for _, a := range inst.Activations {
 		if a.Intent == "" {
-			a.Intent = intent
+			a.Intent = intentOf(inst.ID, a.Package, a.PackageHash, a.ManifestHash, f.policy)
 		}
 	}
 
@@ -183,6 +183,35 @@ func TestAServingReleaseIsAskedAgainWhenItsAdmissionMoved(t *testing.T) {
 		i.ReadmitFor = current
 	}); len(got) != 0 {
 		t.Fatalf("one question at a time: %v", got)
+	}
+}
+
+// WHAT SERVES IS ASKED AGAIN WHATEVER IS DESIRED. Its admission is of its
+// own bytes: a newer release placed beside it, refused or waiting, does not
+// answer for it, and used to leave it unasked when the policy or the trust
+// under it moved.
+func TestAServingReleaseIsAskedAgainWhateverIsDesired(t *testing.T) {
+	older := func(admitted Policy, updateRefused bool) func(*Instance) {
+		return func(i *Instance) {
+			a := NewActivation(1, i.ID, "0.9.0", "old.aiiospkg", "sha256:old", time.Now())
+			a.Role, a.Intent = RoleActive, intentOf(i.ID, "old.aiiospkg", "sha256:old", "", admitted)
+			i.Activations = append(i.Activations, a)
+			if updateRefused {
+				refusedAt(i, 2, StageVerify)
+			}
+		}
+	}
+	if got := planFor(t, older(Policy{Revision: 1}, true)); len(got) != 0 {
+		t.Fatalf("a release admitted under the current policy, its update refused under it, needs nothing: %v", got)
+	}
+	if got := planFor(t, older(Policy{Revision: 0}, true)); len(got) != 1 || got[0] != string(cmdReadmit) {
+		t.Fatalf("a release admitted under an earlier policy must be asked again though its update is refused: %v", got)
+	}
+	if got := planFor(t, older(Policy{Revision: 0}, false)); len(got) != 1 || got[0] != string(cmdReadmit) {
+		t.Fatalf("what serves is asked again before its update is tried: %v", got)
+	}
+	if got := planFor(t, older(Policy{Revision: 1}, false)); len(got) != 1 || got[0] != string(cmdUpdate) {
+		t.Fatalf("a release admitted under the current policy is updated: %v", got)
 	}
 }
 

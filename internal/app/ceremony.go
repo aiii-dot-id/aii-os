@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -219,7 +220,8 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 		RemoveBrokenProvider: a.removeBrokenProvider,
 		HandleGenesis:        a.handleGenesis,
 
-		RestoreNew: &dashboard.RestoreNewHooks{Keys: a.continuity.NewMachineKeys, Upload: a.continuity.NewMachineUpload, Restore: a.continuity.NewMachineRestore},
+		RestoreNew: &dashboard.RestoreNewHooks{Keys: a.continuity.NewMachineKeys, Upload: a.continuity.NewMachineUpload, Restore: a.continuity.NewMachineRestore,
+			UploadIdle: a.continuity.NewMachineUploadIdle, Begun: a.continuity.NewMachineBegun, Withdraw: a.continuity.NewMachineWithdraw},
 
 		GetProviders:        a.providerDirectory,
 		SignInProvider:      a.SignInProvider,
@@ -254,6 +256,10 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 
 	if fileExists(bootCfg.Identity.LedgerPath) {
 		return "", fmt.Errorf("an identity already exists at %s — restart the runtime to load it (a partial birth needs manual cleanup, not a resubmission)", bootCfg.Identity.LedgerPath)
+	}
+
+	if err := a.continuity.NewMachineRefusesBirth(); err != nil {
+		return "", err
 	}
 
 	if a.ring0Content == "" {
@@ -341,7 +347,11 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 		return "", fmt.Errorf("cannot record the provider that will serve this identity: %w", perr)
 	}
 	a.cfgMu.Lock()
-	cfg := *a.cfg
+	cfg, waiting, readErr := a.configAtBirth()
+	if readErr != nil {
+		a.cfgMu.Unlock()
+		return "", readErr
+	}
 	cfg.LLM.Provider = provName
 	cfg.LLM.Model = req.Model
 	published, persistErr := saveConfig(&cfg)
@@ -349,6 +359,11 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 		*a.cfg = cfg
 	}
 	a.cfgMu.Unlock()
+	if published {
+		for _, key := range waiting {
+			logsink.Info("config.decision", "%s was changed in config.json while the birth form showed: the dashboard serving this page keeps what it started with, and the change takes effect at the next start", key)
+		}
+	}
 	if persistErr != nil {
 		if published {
 			return "", fmt.Errorf("substrate pointer was published but directory durability is unconfirmed; birth did not start: %w", persistErr)
@@ -356,7 +371,7 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 		return "", fmt.Errorf("cannot persist the substrate pointer: %w", persistErr)
 	}
 
-	model := req.Model
+	model := bootResp.ModelID
 
 	result, err := genesis.Birth(&genesis.BirthConfig{
 		Name:        name,
@@ -374,9 +389,12 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 		return "", fmt.Errorf("identity created but final ledger durability failed; restart will verify the record before admitting it: %w", err)
 	}
 
+	copied := copyAgentMemory(ctx, cfg)
+
 	if err := a.startLive(); err != nil {
 		return "", fmt.Errorf("identity created but startup failed: %w", err)
 	}
+	a.tellOperatorWhatWasCopied(copied)
 
 	a.runBackground(func() { a.pn.PrepareAtBirth(publicNameSettingsOf(a.configSnapshot())) })
 
@@ -388,6 +406,43 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 			"the chat replay will not show them: %w", rerr)
 	}
 	return greeting, nil
+}
+
+func (a *App) configAtBirth() (cfg Config, waiting []string, err error) {
+	started := *a.cfg
+	if started.SourcePath == "" {
+		return started, nil, nil
+	}
+	fresh, err := ReadConfig(started.SourcePath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return started, nil, nil
+	case err != nil:
+		return Config{}, nil, fmt.Errorf("%s does not read, and a birth writes the substrate it chose into it, so nothing was born: %w — correct the file and click Birth again", started.SourcePath, err)
+	}
+	was, now := started.Identity, fresh.Identity
+	if was.LedgerPath != now.LedgerPath || was.KeyPath != now.KeyPath || was.DBPath != now.DBPath {
+		return Config{}, nil, fmt.Errorf("the identity's paths in %s changed since this program started (identity.ledger_path, key_path or db_path): this program holds %s, and a birth makes the identity only there, so nothing was born — start the program again to use the new paths, then click Birth",
+			started.SourcePath, filepath.Dir(was.LedgerPath))
+	}
+	b, f := started.Dashboard, fresh.Dashboard
+	for _, d := range []struct {
+		key  string
+		same bool
+	}{
+		{"dashboard.host", b.Host == f.Host},
+		{"dashboard.port", b.Port == f.Port},
+		{"dashboard.tls", b.TLS == f.TLS},
+		{"dashboard.access_token", b.AccessToken == f.AccessToken},
+		{"dashboard.require_token", b.RequireToken == f.RequireToken},
+		{"dashboard.origin", b.Origin == f.Origin},
+		{"dashboard.carried_idle_seconds", b.CarriedIdleSeconds == f.CarriedIdleSeconds},
+	} {
+		if !d.same {
+			waiting = append(waiting, d.key)
+		}
+	}
+	return *fresh, waiting, nil
 }
 
 func (a *App) upsertBirthProvider(req *dashboard.GenesisRequest) (string, error) {

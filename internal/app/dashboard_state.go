@@ -16,6 +16,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 func workspaceFiles(entries []os.DirEntry) []dashboard.WorkspaceFile {
@@ -119,10 +120,10 @@ func (a *App) getProjectWorkspace(id string) (*dashboard.WorkspaceState, error) 
 	}
 	ws.WorkCapped = capped
 	for _, s := range sessions {
-		ws.Work = append(ws.Work, dashboard.WorkSessionItem{
+		ws.Work = append(ws.Work, a.recordedOf(dashboard.WorkSessionItem{
 			ID: s.ID, Description: store.SubagentGoal(s.Description),
 			Status: s.Status, Project: s.Project, Result: compactText(s.Result, 240),
-		})
+		}, s))
 	}
 	return ws, nil
 }
@@ -133,36 +134,43 @@ func (a *App) sandboxState() (*dashboard.SandboxState, error) {
 	why, held := a.sandboxHeld(cfg)
 
 	_, open, _ := sandboxOffPlaces(a.activeConfig(cfg), extra)
-	return &dashboard.SandboxState{Root: root, ExtraRoots: extra, Off: a.toolReg.SandboxOff(), HeldWhy: why, Held: held, NotKept: open}, nil
+	return &dashboard.SandboxState{Root: root, ExtraRoots: extra, Off: a.toolReg.SandboxOff(), HeldWhy: why, Held: held, NotKept: open, Labelled: tools.SandboxLabelNote, AgentNotes: agentNotesState(root)}, nil
 }
 
-func (a *App) setSandboxRoots(roots []string) error {
-	normalized := make([]string, 0, len(roots))
-	for _, r := range roots {
-		r = filepath.Clean(strings.TrimSpace(r))
-		if _, err := os.Stat(r); err == nil {
-			r = firewall.ResolvePath(r)
-		}
-		normalized = append(normalized, r)
-	}
+func (a *App) changeSandboxRoot(root string, add bool) error {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
-	for _, r := range roots {
-		if reason := a.toolReg.RootRejectionReason(r); reason != "" {
-			return fmt.Errorf("%q: %s", strings.TrimSpace(r), reason)
+	_, roots := a.toolReg.Roots()
+	if add {
+		if reason := a.toolReg.RootRejectionReason(root); reason != "" {
+			return fmt.Errorf("%q: %s", strings.TrimSpace(root), reason)
 		}
+		root = filepath.Clean(strings.TrimSpace(root))
+		if _, err := os.Stat(root); err == nil {
+			root = firewall.ResolvePath(root)
+		}
+		if slices.Contains(roots, root) {
+			return fmt.Errorf("%q is already an extra root; nothing was changed", root)
+		}
+		roots = append(roots, root)
+	} else {
+		i := slices.Index(roots, root)
+		if i < 0 {
+			return fmt.Errorf("%q is not among the extra roots; nothing was changed", root)
+		}
+		roots = slices.Delete(roots, i, i+1)
 	}
 	candidate := *a.cfg
-	candidate.Tools.ExtraRoots = normalized
+	candidate.Tools.ExtraRoots = roots
 	published, err := a.persistLocked(&candidate, saveConfig)
 	if published {
-		a.toolReg.SetExtraRoots(normalized)
+		a.toolReg.SetExtraRoots(roots)
 
 		if a.toolReg.SandboxOff() {
 			a.applySubstrate(candidate)
 		}
 		a.loadRing5()
-		logsink.Info("ring.decision", "extra sandbox roots -> %v (operator setting, floor updated live)", normalized)
+		logsink.Info("ring.decision", "extra sandbox roots -> %v (operator setting, floor updated live)", roots)
 	}
 	if err != nil {
 		return fmt.Errorf("sandbox roots: %w", err)
@@ -178,8 +186,9 @@ func (a *App) setSandboxOff(off, signedIn bool) error {
 	if off {
 
 		if _, safe := a.SafeMode(); safe {
-			logsink.Warn("ring.refusal", "sandbox switch refused: %v", errSandboxHeldInSafe)
-			return errSandboxHeldInSafe
+			held := a.sandboxHeldInPosture()
+			logsink.Warn("ring.refusal", "sandbox switch refused: %v", held)
+			return held
 		}
 		if held := errSandboxHeldNoToken; !a.accessTokenInForce() || !signedIn {
 			if a.accessTokenInForce() {
@@ -371,6 +380,22 @@ func (a *App) identityState() (*dashboard.IdentityState, error) {
 		}
 	}
 
+	others, err := a.store.OtherCurrentRelationships()
+	if err != nil {
+		return nil, fmt.Errorf("identity state: relationships: %w", err)
+	}
+	for i := range others {
+		r := &others[i]
+		item := dashboard.RelationshipItem{ID: r.ID, Name: r.CounterpartName, Role: r.CounterpartRole, Charter: r.CharterText, Record: r.CreatedSeq}
+		if r.UpdatedSeq != 0 {
+			item.Record = r.UpdatedSeq
+		}
+		if r.CharterText != "" {
+			item.Approval = charterApproval(a.store.CharterApproval(r))
+		}
+		state.Relationships = append(state.Relationships, item)
+	}
+
 	if a.engine != nil {
 		ctx, cancel := context.WithTimeout(a.lifetime(), meaningStateTimeout)
 		defer cancel()
@@ -399,6 +424,10 @@ func charterApproval(c store.CharterApproval, err error) *dashboard.CharterAppro
 func (a *App) wireContinuityHooks(h *dashboard.WSHandler) {
 	h.GetContinuity = a.continuityState
 	a.continuity.WireHooks(h)
+	if a.identityChoice != nil && h.Continuity != nil {
+		h.Continuity.IdentityChoice = a.identityChoiceView
+		h.Continuity.ChooseIdentityFiles = a.chooseIdentityFiles
+	}
 }
 
 func (a *App) continuityState() (*dashboard.ContinuityState, error) {
@@ -426,8 +455,18 @@ func (a *App) continuityState() (*dashboard.ContinuityState, error) {
 
 	switch a.currentMode() {
 	case ModeSafe:
-		c.Mode = "safe"
-		c.SafeReason, _ = func() (string, bool) { return a.SafeMode() }()
+
+		if t, _, _ := a.safeCause(); safePostures[t].degraded {
+			c.Mode = "degraded_ring5"
+			c.DegradedWhy, _ = a.SafeMode()
+		} else {
+			c.Mode = "safe"
+			c.SafeReason, _ = a.SafeMode()
+			c.SafeCleared = a.heldCauseCleared()
+		}
+		a.dash.mu.Lock()
+		c.ServingUnkept = a.dash.servingUnkept
+		a.dash.mu.Unlock()
 	case ModeDegradedWitness:
 		c.Mode = "degraded_witness"
 		if since, why, ok := a.DegradedWitnessSince(); ok {
@@ -453,6 +492,32 @@ func (a *App) continuityState() (*dashboard.ContinuityState, error) {
 	return c, nil
 }
 
+func (a *App) recordedOf(item dashboard.WorkSessionItem, s store.WorkSession) dashboard.WorkSessionItem {
+	item.NextMove = s.NextMove
+	item.ExpectedEvidence = s.ExpectedEvidence
+	item.Falsifier = s.Falsifier
+	item.EvidenceClass = s.Evidence
+	item.EvidenceReadback = s.EvidenceReadback
+	if c, err := a.store.WorkCheckOf(s.ID); err != nil {
+		item.Check = "(could not be read: " + err.Error() + ")"
+	} else if c.Command != "" || c.Ran {
+		item.Check, item.CheckRun = c.Command, checkRunText(c)
+	}
+	return item
+}
+
+func checkRunText(c store.WorkCheck) string {
+	switch {
+	case !c.Ran:
+		return "not run yet"
+	case c.ExitStatus != nil && c.DurationMS != nil:
+		return fmt.Sprintf("exited %d in %.1f s", *c.ExitStatus, float64(*c.DurationMS)/1000)
+	case c.ExitStatus != nil:
+		return fmt.Sprintf("exited %d", *c.ExitStatus)
+	}
+	return c.Outcome + " " + c.ReasonCode
+}
+
 func (a *App) workQueueState() (*dashboard.WorkState, error) {
 	w := &dashboard.WorkState{}
 	live, err := a.store.LiveSubagentSessions()
@@ -460,9 +525,9 @@ func (a *App) workQueueState() (*dashboard.WorkState, error) {
 		return nil, fmt.Errorf("load live work: %w", err)
 	}
 	for _, s := range live {
-		w.Live = append(w.Live, dashboard.WorkSessionItem{
+		w.Live = append(w.Live, a.recordedOf(dashboard.WorkSessionItem{
 			ID: s.ID, Description: store.SubagentGoal(s.Description), Status: s.Status, Project: s.Project,
-		})
+		}, s))
 	}
 	w.Queued, err = a.store.CountLiveWork(identity.SubagentWorkKind)
 	if err != nil {
@@ -479,9 +544,9 @@ func (a *App) workQueueState() (*dashboard.WorkState, error) {
 	}
 	grades := a.gradesOf(ids)
 	for _, s := range done {
-		item := dashboard.WorkSessionItem{
+		item := a.recordedOf(dashboard.WorkSessionItem{
 			ID: s.ID, Description: store.SubagentGoal(s.Description), Status: s.Status, Project: s.Project, Result: compactText(s.Result, 240),
-		}
+		}, s)
 		if g, ok := grades[s.ID]; ok {
 			gv := g
 			item.Grade = &gv

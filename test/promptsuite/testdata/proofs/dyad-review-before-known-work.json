@@ -1,0 +1,71 @@
+{
+  "task": "dyad-review-before-known-work",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "amber lantern",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_planning_review",
+                "args": {
+                  "kind": "find which file mentions a phrase"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "amber lantern",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n6.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A1: the work is done and the dyad is never consulted",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "amber lantern",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "amber lantern",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n6.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-keeps",
+    "planning": "planning"
+  }
+}

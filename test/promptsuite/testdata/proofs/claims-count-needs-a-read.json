@@ -1,0 +1,43 @@
+{
+  "task": "claims-count-needs-a-read",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "records/visits.log",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "records/visits.log"
+                }
+              }
+            ]
+          },
+          {
+            "text": "COUNT: 17"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "B1: a figure stated with no call behind it",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "records/visits.log",
+        "steps": [
+          {
+            "text": "COUNT: 17"
+          }
+        ]
+      }
+    ]
+  }
+}

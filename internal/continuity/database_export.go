@@ -26,6 +26,9 @@ func (d *databaseDownload) Close() error {
 }
 
 func (r *Runtime) ExportDatabase(ctx context.Context) (io.ReadCloser, int64, error) {
+	if r.waiting() {
+		return nil, 0, fmt.Errorf("database export makes a file and is unavailable while this start waits for Ring 5")
+	}
 	if r.w.Safe() {
 		return nil, 0, fmt.Errorf("database export makes a file and is unavailable in SAFE")
 	}

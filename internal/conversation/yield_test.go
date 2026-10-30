@@ -56,8 +56,8 @@ func TestYieldEndsTheTurnWithoutContinuation(t *testing.T) {
 	if !strings.Contains(last, "You yielded this turn") {
 		t.Error("the yield boundary message is missing — the model was not told why the turn is ending")
 	}
-	if !strings.Contains(res.Spoken, "Turn yielded after 2 tool calls") {
-		t.Errorf("the ending does not declare the yield: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "Turn yielded after 2 tool calls") {
+		t.Errorf("the ending does not declare the yield: %q", res.Said())
 	}
 }
 
@@ -83,7 +83,7 @@ func TestYieldOutranksAnArmedSoftCap(t *testing.T) {
 	if got := len(client.seen); got != 7 {
 		t.Fatalf("turn took %d requests, want 7", got)
 	}
-	if !strings.Contains(res.Spoken, "Turn yielded") {
-		t.Errorf("yield ending lost to the cap ending: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "Turn yielded") {
+		t.Errorf("yield ending lost to the cap ending: %q", res.Said())
 	}
 }

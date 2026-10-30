@@ -48,6 +48,19 @@ func OutcomeCursors(src OutcomePublisher) func(rows.OutcomeBatch) Cursor {
 	}
 }
 
+type ToolOutcomePublisher interface {
+	PublishToolOutcomeCursor(batch rows.ToolOutcomeBatch) error
+}
+
+func ToolOutcomeCursors(src ToolOutcomePublisher) func(rows.ToolOutcomeBatch, int) Cursor {
+	return func(batch rows.ToolOutcomeBatch, shown int) Cursor {
+		if src == nil || !batch.MovesCursor() {
+			return Cursor{read: shown}
+		}
+		return Cursor{read: shown, publish: func() error { return src.PublishToolOutcomeCursor(batch) }}
+	}
+}
+
 type Pass struct {
 	Product map[string]any
 

@@ -150,12 +150,22 @@ func TestAJobLeftAfterTheEndingIsKilledAsItIsLeft(t *testing.T) {
 	if ended, err := st.left.end(time.Second); ended != 0 || err != nil {
 		t.Fatalf("nothing was kept: ended %d, %v", ended, err)
 	}
-	res := run(t, st, `echo $$; sleep 30 >/dev/null 2>&1 &`)
-	var pgid int
-	if _, err := fmt.Sscanf(res.Output, "%d\n", &pgid); err != nil || res.Output != fmt.Sprintf("%d\n", pgid) {
-		t.Fatalf("the result is the shell's pid and nothing else, got %q (%v)", res.Output, err)
+	res := run(t, st, `sleep 30 >/dev/null 2>&1 & echo $!`)
+	var pid int
+	if _, err := fmt.Sscanf(res.Output, "%d\n", &pid); err != nil || res.Output != fmt.Sprintf("%d\n", pid) {
+		t.Fatalf("the result is the job's pid and nothing else, got %q (%v)", res.Output, err)
 	}
-	waitGone(t, pgid, 2*time.Second)
+	// The job, found by the number the shell gave it (shellProcess).
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		host, alive := shellProcess(t, st, pid)
+		if !alive {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(host, syscall.SIGKILL)
+			t.Fatalf("the job left after the ending (%d) is still running", pid)
+		}
+	}
 	if jobs := kept(st); len(jobs) != 0 {
 		t.Fatalf("%d jobs are kept after the ending", len(jobs))
 	}

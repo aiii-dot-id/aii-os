@@ -286,6 +286,30 @@ func TestALegacyBackupIsAdoptedThenJudged(t *testing.T) {
 	}
 }
 
+func TestALegacyBackupIsNotRestoredIntoABundle(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "AII OS.app", "Contents", "MacOS", "aii")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("sealed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := t.TempDir()
+	writeFile(t, data, previousFile, "legacy backup")
+	if err := writeRecord(filepath.Join(data, pendingFile), updatePending{Attempts: 1, BackupSHA256: sha256hex([]byte("legacy backup"))}); err != nil {
+		t.Fatal(err)
+	}
+	if rolled := checkRollbackAt(data, exe); rolled != "" {
+		t.Fatalf("a bare backup was restored into a bundle: %q", rolled)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "sealed" {
+		t.Fatalf("the executable inside the bundle was overwritten: %q", got)
+	}
+	if !fileExists(data, previousFile) {
+		t.Fatal("the backup must be kept for the next healthy boot to retire")
+	}
+}
+
 func TestRollbackToUnwritableTargetFails(t *testing.T) {
 	dir := t.TempDir()
 	// The restore target sits in a directory that does not exist, so

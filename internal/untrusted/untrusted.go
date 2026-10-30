@@ -26,26 +26,49 @@ func scrub(s string) string {
 	return s
 }
 
+func Scrub(s string) string { return scrub(s) }
+
 func Contains(s string) bool {
 	return strings.Contains(s, Open) || strings.Contains(s, Close)
 }
 
 func Cut(s string, chars int, mark string) string {
-	r := []rune(s)
-	if len(r) <= chars {
+	if utf8.RuneCountInString(s) <= chars {
 		return s
 	}
-	head := string(r[:max(0, chars-utf8.RuneCountInString(mark))])
-	for _, m := range []string{Open, Close} {
-		for n := len(m) - 1; n >= len("[[["); n-- {
-			if strings.HasSuffix(head, m[:n]) {
-				head = head[:len(head)-n]
-				break
-			}
+	head, _ := Head(s, chars-utf8.RuneCountInString(mark))
+	return head + mark
+}
+
+func Head(text string, most int) (string, int) {
+	if most < 0 {
+		most = 0
+	}
+	if n := utf8.RuneCountInString(text); n <= most {
+		return text, n
+	}
+
+	end, n := 0, 0
+	for end = range text {
+		if n == most {
+			break
+		}
+		n++
+	}
+	head := text[:end]
+	if !Contains(text) {
+		return head, most
+	}
+	for _, mark := range []string{Open, Close} {
+
+		reach := min(len(text), len(head)+len(mark)-1)
+		if at := strings.LastIndex(text[:reach], mark); at >= 0 && at < len(head) && at+len(mark) > len(head) {
+			head = text[:at]
 		}
 	}
+	shown := utf8.RuneCountInString(head)
 	if strings.LastIndex(head, Open) > strings.LastIndex(head, Close) {
-		return strings.TrimRight(head, " \n") + " " + Close + mark
+		head += " " + Close
 	}
-	return head + mark
+	return head, shown
 }

@@ -33,7 +33,7 @@ func rotationApp(t *testing.T) (*App, string) {
 	cfg.Identity.KeyPath = filepath.Join(filepath.Dir(cfg.SourcePath), "identity.sec")
 	cfg.Dashboard = DashboardConfig{Host: "127.0.0.1", Port: 0, RequireToken: true}
 	a := New(cfg)
-	d, err := a.newDashboard(&dashboard.WSHandler{DashboardToken: a.dashboardToken, RotateDashboardToken: a.rotateDashboardAccess})
+	d, err := a.newDashboard(&dashboard.WSHandler{RotateDashboardToken: a.rotateDashboardAccess})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func rotationApp(t *testing.T) (*App, string) {
 func signedIn(t *testing.T, base, token string) *http.Client {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
-	c := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	c := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: keyedTransport()}
 	r, err := c.Post(base+"auth/token", "text/plain", strings.NewReader(token))
 	if err != nil {
 		t.Fatal(err)
@@ -580,6 +580,40 @@ func TestTheBoundOnSlowedRefusalsIsSetAtTheDoor(t *testing.T) {
 	}
 }
 
+func TestTheStrangersBodyBoundIsSetAtTheDoorAndReachesTheDashboard(t *testing.T) {
+	a := routeApp(t, true, serviceOffersRelays)
+	h := &dashboard.WSHandler{}
+	a.wireDashboardAccessHooks(h)
+	if h.StrangerBodySeconds == nil || h.StrangerBodySeconds() != 0 {
+		t.Fatalf("unset, the dashboard is not told to take its default")
+	}
+	st, err := a.applyConfigChange(map[string]any{"dashboard.stranger_body_seconds": float64(30)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.RestartRequired) != 0 {
+		t.Fatalf("the key is read at each request and was held for a restart: %v", st.RestartRequired)
+	}
+	onDisk, err := LoadConfig(a.configSnapshot().SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.Dashboard.StrangerBodySeconds != 30 || h.StrangerBodySeconds() != 30 {
+		t.Fatalf("set to 30: config.json holds %d and the dashboard is told %d", onDisk.Dashboard.StrangerBodySeconds, h.StrangerBodySeconds())
+	}
+	for _, bad := range []any{float64(-1), float64(dashboard.MaxStrangerBodySeconds + 1), "long", 2.5} {
+		if _, err := a.applyConfigChange(map[string]any{"dashboard.stranger_body_seconds": bad}); err == nil || !strings.Contains(err.Error(), "dashboard.stranger_body_seconds") {
+			t.Fatalf("%v was taken, or refused without naming the key: %v", bad, err)
+		}
+	}
+	if got := h.StrangerBodySeconds(); got != 30 {
+		t.Fatalf("a refused change reached the dashboard: %d", got)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"dashboard.stranger_body_seconds": float64(0)}); err != nil || h.StrangerBodySeconds() != 0 {
+		t.Fatalf("zero takes the default: %v, the dashboard is told %d", err, h.StrangerBodySeconds())
+	}
+}
+
 func TestTheUnsignedRateIsSetAtTheDoor(t *testing.T) {
 	a := routeApp(t, true, serviceOffersRelays)
 	told := func() (int, int) {
@@ -612,6 +646,37 @@ func TestTheUnsignedRateIsSetAtTheDoor(t *testing.T) {
 		t.Fatalf("a refused change reached the dashboard: %d a second in bursts of %d", rate, burst)
 	}
 	if _, err := a.applyConfigChange(map[string]any{"dashboard.unsigned_requests_per_second": float64(0), "dashboard.unsigned_request_burst": float64(0)}); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+}
+
+func TestTheTicketSettingsAreSetAtTheDoor(t *testing.T) {
+	a := routeApp(t, true, serviceOffersRelays)
+	h := &dashboard.WSHandler{}
+	a.wireDashboardAccessHooks(h)
+	st, err := a.applyConfigChange(map[string]any{"dashboard.page_ticket_seconds": float64(30), "dashboard.page_tickets": float64(64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.RestartRequired) != 0 {
+		t.Fatalf("the keys are read when a ticket is minted and were held for a restart: %v", st.RestartRequired)
+	}
+	onDisk, err := LoadConfig(a.configSnapshot().SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seconds, most := h.PageTickets(); seconds != 30 || most != 64 || onDisk.Dashboard.PageTicketSeconds != 30 || onDisk.Dashboard.PageTickets != 64 {
+		t.Fatalf("set to 30 seconds and 64: the dashboard is told %d and %d, and config.json holds %d and %d", seconds, most, onDisk.Dashboard.PageTicketSeconds, onDisk.Dashboard.PageTickets)
+	}
+	for key, bad := range map[string]any{"dashboard.page_ticket_seconds": float64(dashboard.MaxPageTicketSeconds + 1), "dashboard.page_tickets": float64(dashboard.MinPageTickets - 1)} {
+		if _, err := a.applyConfigChange(map[string]any{key: bad}); err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s = %v was taken, or refused without naming the key: %v", key, bad, err)
+		}
+	}
+	if seconds, most := h.PageTickets(); seconds != 30 || most != 64 {
+		t.Fatalf("a refused change reached the dashboard: %d seconds, %d tickets", seconds, most)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"dashboard.page_ticket_seconds": float64(0), "dashboard.page_tickets": float64(0)}); err != nil {
 		t.Fatalf("zero takes the default: %v", err)
 	}
 }
@@ -843,7 +908,7 @@ func openApp(t *testing.T) (*App, string) {
 		t.Fatal(err)
 	}
 	a := New(cfg)
-	d, err := a.newDashboard(&dashboard.WSHandler{DashboardToken: a.dashboardToken, RotateDashboardToken: a.rotateDashboardAccess, RequireDashboardToken: a.requireDashboardAccess})
+	d, err := a.newDashboard(&dashboard.WSHandler{RotateDashboardToken: a.rotateDashboardAccess, RequireDashboardToken: a.requireDashboardAccess})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,7 +969,7 @@ func TestAskingForATokenIsOneWriteCarryingBothKeys(t *testing.T) {
 func TestAskingForATokenFromSettingsKeepsTheBrowserThatAsked(t *testing.T) {
 	a, base := openApp(t)
 	jar, _ := cookiejar.New(nil)
-	asker := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	asker := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: keyedTransport()}
 	other := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	if got := statusOf(t, other, base+"auth/token"); got != http.StatusNoContent {
 		t.Fatalf("the open dashboard asked for a token already: %d", got)
@@ -997,5 +1062,40 @@ func TestSessionServersWrittenByHandAreHeldWhenTheFileIsRead(t *testing.T) {
 	}
 	if unset, err := read(`"tls":false`); err != nil || unset.Dashboard.channelSettings().ICEServersNamed {
 		t.Fatalf("a file that names no servers was refused, or read as naming them: %v", err)
+	}
+}
+
+func TestWhatARefusalLineMayCostIsSetAtTheDoor(t *testing.T) {
+	a := routeApp(t, true, serviceOffersRelays)
+	h := &dashboard.WSHandler{}
+	a.wireDashboardAccessHooks(h)
+	st, err := a.applyConfigChange(map[string]any{"dashboard.refusal_lines_per_minute": float64(7)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.RestartRequired) != 0 {
+		t.Fatalf("the key is read at each line and was held for a restart: %v", st.RestartRequired)
+	}
+	onDisk, err := LoadConfig(a.configSnapshot().SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := h.RefusalLinesPerMinute(); lines != 7 || onDisk.Dashboard.RefusalLinesPerMinute != 7 {
+		t.Fatalf("set to 7 lines a minute: the dashboard is told %d, and config.json holds %d", lines, onDisk.Dashboard.RefusalLinesPerMinute)
+	}
+	for _, bad := range []any{float64(dashboard.MaxRefusalLinesPerMinute + 1), float64(-1)} {
+		const key = "dashboard.refusal_lines_per_minute"
+		if _, err := a.applyConfigChange(map[string]any{key: bad}); err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s = %v was taken, or refused without naming the key: %v", key, bad, err)
+		}
+	}
+	if _, err := a.applyConfigChange(map[string]any{"dashboard.refusal_lines_per_minute": "many"}); err == nil {
+		t.Fatal("a count that is not a number was taken")
+	}
+	if lines := h.RefusalLinesPerMinute(); lines != 7 {
+		t.Fatalf("a refused change reached the dashboard: %d lines a minute", lines)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"dashboard.refusal_lines_per_minute": float64(0)}); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
 	}
 }

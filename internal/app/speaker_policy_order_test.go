@@ -78,9 +78,8 @@ func TestVoiceReleasePolicyKeepsHeldFinalOrder(t *testing.T) {
 	// Recorded words carry the channel marker and the room note — these
 	// were heard, not addressed to the identity. The order is what this
 	// probe pins; the marking is pinned where it is made.
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"second utterance" {
-		t.Fatalf("record order differs: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("second utterance") {
+		t.Fatalf("record order differs: %s %q", role, content)
 	}
 }
 
@@ -104,7 +103,7 @@ func TestHeldSpeechAdmitsInOrderWithoutWaitingForInference(t *testing.T) {
 	a.voiceEngineEvent(nil, observationRaw(h.id, 21, map[string]any{"refers_to": 7, "decision": "uncertain"}), page.enqueue)
 	select {
 	case text := <-entered:
-		if text != voiceMarker+"first utterance" {
+		if text != heardFromSomeone("", "first utterance") {
 			t.Fatalf("later words won the turn gate: %q", text)
 		}
 	case <-time.After(5 * time.Second):
@@ -164,9 +163,8 @@ func TestHeldOrderRelaxationCannotOvertakeExistingWords(t *testing.T) {
 	if page.find("transcript_final", 7) == nil || page.find("transcript_final", 8) == nil {
 		t.Fatal("the relaxed policy lost words instead of preserving order")
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"new unrestricted words" {
-		t.Fatalf("the record lost the relaxed order: %+v %v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("new unrestricted words") {
+		t.Fatalf("the record lost the relaxed order: %s %q", role, content)
 	}
 }
 

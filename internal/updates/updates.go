@@ -54,7 +54,34 @@ func validRepo(s string) bool {
 	return true
 }
 
-const CheckInterval = 1 * time.Hour
+const DefaultAPIURL = "https://api.github.com"
+
+func APIBase(raw string) (*neturl.URL, error) {
+	if raw == "" {
+		raw = DefaultAPIURL
+	}
+	u, err := neturl.Parse(raw)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%q is not a URL: %v", raw, err)
+	case u.Scheme != "https":
+		return nil, fmt.Errorf("%q is not https: the release API must be reached over https", raw)
+	case u.Opaque != "" || u.Hostname() == "":
+		return nil, fmt.Errorf("%q names no host", raw)
+	case u.User != nil:
+		return nil, fmt.Errorf("%q carries credentials: the release API is read without them", raw)
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
+		return nil, fmt.Errorf("%q has a query or a fragment: write the server's address, and a path if it serves the API under one", raw)
+	}
+	u.Path, u.RawPath = strings.TrimRight(u.Path, "/"), strings.TrimRight(u.RawPath, "/")
+	return u, nil
+}
+
+const (
+	DefaultCheckIntervalMinutes = 60
+	MinCheckIntervalMinutes     = 15
+	MaxCheckIntervalMinutes     = 1440
+)
 
 const downloadTimeout = 10 * time.Minute
 
@@ -78,6 +105,16 @@ type State struct {
 
 	pkg PackageUpdate
 
+	lists string
+
+	listsNote string
+
+	ownWithdrawn bool
+	ownUnknown   string
+
+	stranded     []StrandedPlugin
+	strandedNote string
+
 	checking atomic.Bool
 }
 
@@ -93,6 +130,12 @@ func (s *State) Snapshot(currentVersion string) StateSnapshot {
 		NeedsRestart:     s.needsRestart,
 		Checking:         s.checking.Load(),
 		Package:          s.pkg,
+		Lists:            s.lists,
+		ListsNote:        s.listsNote,
+		RunningWithdrawn: s.ownWithdrawn,
+		RunningUnknown:   s.ownUnknown,
+		Stranded:         slices.Clone(s.stranded),
+		StrandedNote:     s.strandedNote,
 	}
 }
 
@@ -106,6 +149,22 @@ type StateSnapshot struct {
 	Checking         bool      `json:"checking,omitempty"`
 
 	Package PackageUpdate `json:"package"`
+
+	Lists string `json:"lists,omitempty"`
+
+	ListsNote string `json:"lists_note,omitempty"`
+
+	RunningWithdrawn bool   `json:"running_withdrawn,omitempty"`
+	RunningUnknown   string `json:"running_unknown,omitempty"`
+
+	Stranded     []StrandedPlugin `json:"stranded,omitempty"`
+	StrandedNote string           `json:"stranded_note,omitempty"`
+}
+
+type StrandedPlugin struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	Reason  string `json:"reason"`
 }
 
 func (s *State) beginCheck() bool { return s.checking.CompareAndSwap(false, true) }
@@ -128,6 +187,26 @@ func (s *State) setPackage(p PackageUpdate) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pkg = p
+}
+
+func (s *State) setLists(why, note string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := s.listsNote != note
+	s.lists, s.listsNote = why, note
+	return changed
+}
+
+func (s *State) setStranded(rows []StrandedPlugin, note string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stranded, s.strandedNote = rows, note
+}
+
+func (s *State) setOwn(withdrawn bool, unknown string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ownWithdrawn, s.ownUnknown = withdrawn, unknown
 }
 
 func (s *State) setLastError(err string) {
@@ -180,8 +259,21 @@ type Checker struct {
 	armed    atomic.Bool
 	applying atomic.Bool
 
-	runner  func(work func()) bool
-	repo    func() string
+	runner func(work func()) bool
+
+	lists func(context.Context) (string, error)
+
+	trustSet func() *packagefmt.RevocationStatusSet
+
+	stranded func(ctx context.Context, offered string) ([]StrandedPlugin, string)
+
+	interval func() time.Duration
+	rearm    chan struct{}
+
+	ownSigned json.RawMessage
+	repo      func() string
+
+	apiURL  func() string
 	gate    *quiesce.Gate
 	dataDir string
 
@@ -191,6 +283,8 @@ type Checker struct {
 	badRepoOnce         sync.Once
 	noReleaseOnce       sync.Once
 	saidFailedHere      string
+	saidBelow           string
+	saidSecond          string
 
 	ownRelease    func(context.Context) (*githubRelease, error)
 	mu            sync.Mutex
@@ -198,7 +292,7 @@ type Checker struct {
 
 	afterVerified func()
 
-	hostAllowlist func(string) error
+	hostAllowlist func(source *neturl.URL, raw string) error
 }
 
 func NewChecker(platformRoot func() *sigenvelope.PublicKeyEnvelope, currentVer func() string, automatic func() bool, repo func() string, gate *quiesce.Gate, dataDir string, isSafe, isMobile func() bool) *Checker {
@@ -213,7 +307,8 @@ func NewChecker(platformRoot func() *sigenvelope.PublicKeyEnvelope, currentVer f
 		isSafe:        isSafe,
 		isMobile:      isMobile,
 		afterVerified: func() {},
-		hostAllowlist: gitHubReleaseHost,
+		rearm:         make(chan struct{}, 1),
+		hostAllowlist: releaseHost,
 		httpClient:    &http.Client{},
 	}
 
@@ -221,9 +316,37 @@ func NewChecker(platformRoot func() *sigenvelope.PublicKeyEnvelope, currentVer f
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
 		}
-		return c.hostAllowlist(req.URL.String())
+		return c.hostAllowlist(sourceOf(req.Context()), req.URL.String())
 	}
 	return c
+}
+
+type sourceKey struct{}
+
+func withSource(ctx context.Context, source *neturl.URL) context.Context {
+	return context.WithValue(ctx, sourceKey{}, source)
+}
+
+func sourceOf(ctx context.Context) *neturl.URL {
+	source, _ := ctx.Value(sourceKey{}).(*neturl.URL)
+	return source
+}
+
+var ErrReleaseSourceChanged = errors.New("the release source changed since the check; check again")
+
+func (c *Checker) sameSource(release *githubRelease) error {
+	now, err := c.apiBase()
+	if err != nil {
+		return err
+	}
+	if release.source == nil || release.source.String() != now.String() {
+		then := "no recorded source"
+		if release.source != nil {
+			then = release.source.String()
+		}
+		return fmt.Errorf("%w (read from %s, %s in force now)", ErrReleaseSourceChanged, then, now)
+	}
+	return nil
 }
 
 func (c *Checker) State() *State { return c.state }
@@ -318,6 +441,10 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 		return err
 	}
 
+	if err := tgt.belowHighest(available); err != nil {
+		return err
+	}
+
 	root := c.platformRoot()
 	if root == nil {
 		return fmt.Errorf("no platform_release root pinned — cannot verify updates")
@@ -335,6 +462,9 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	if release == nil {
 		return fmt.Errorf("no cached release — run Check first")
 	}
+	if err := c.sameSource(release); err != nil {
+		return err
+	}
 
 	archiveURL, sigURL, err := findAssets(release, assetName, sigAssetName)
 	if err != nil {
@@ -345,7 +475,7 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 		return fmt.Errorf("find assets: %w", err)
 	}
 
-	archiveBytes, err := c.verifiedArchive(ctx, archiveURL, sigURL, assetName, available, root)
+	archiveBytes, signedPayload, err := c.verifiedArchive(ctx, tgt, release, archiveURL, sigURL, assetName, available, root)
 	if err != nil {
 		return err
 	}
@@ -355,7 +485,11 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("update not installed: %w", err)
 	}
-	handled, already, err := applyIfBundle(tgt, archiveBytes, owner)
+
+	if err := packagefmt.CheckReleaseRevocation(c.revocationRoots(root), artifactKindReleaseSig, signedPayload); err != nil {
+		return fmt.Errorf("update not installed: release REFUSED at the last look: %w", err)
+	}
+	handled, already, err := applyIfBundle(tgt, archiveBytes, c.dataDir, owner, available)
 	if err != nil {
 		return fmt.Errorf("bundle update: %w", err)
 	}
@@ -374,16 +508,16 @@ func (c *Checker) applyTo(ctx context.Context, exePath string) error {
 	return nil
 }
 
-func (c *Checker) verifiedArchive(ctx context.Context, archiveURL, sigURL, assetName, available string, root *sigenvelope.PublicKeyEnvelope) ([]byte, error) {
+func (c *Checker) verifiedArchive(ctx context.Context, tgt target, release *githubRelease, archiveURL, sigURL, assetName, available string, root *sigenvelope.PublicKeyEnvelope) ([]byte, json.RawMessage, error) {
 
-	archiveBytes, err := c.download(ctx, archiveURL)
+	archiveBytes, err := c.download(ctx, release.source, archiveURL)
 	if err != nil {
-		return nil, fmt.Errorf("download archive: %w", err)
+		return nil, nil, fmt.Errorf("download archive: %w", err)
 	}
 
-	sigBytes, err := c.download(ctx, sigURL)
+	sigBytes, err := c.download(ctx, release.source, sigURL)
 	if err != nil {
-		return nil, fmt.Errorf("download signature: %w", err)
+		return nil, nil, fmt.Errorf("download signature: %w", err)
 	}
 
 	archiveHash := sha256hex(archiveBytes)
@@ -391,17 +525,119 @@ func (c *Checker) verifiedArchive(ctx context.Context, archiveURL, sigURL, asset
 	hostPlatform, hostArch := hostTarget()
 	signedPayload, err := verifyReleaseSig(sigBytes, root, archiveHash, available, hostPlatform, hostArch)
 	if err != nil {
-		return nil, fmt.Errorf("signature verification REFUSED: %w", err)
+		return nil, nil, fmt.Errorf("signature verification REFUSED: %w", err)
 	}
 
-	revRoots := packagefmt.ReleaseTrustRoots(filepath.Join(c.dataDir, "trust"), root)
-	if err := packagefmt.CheckReleaseRevocation(revRoots, artifactKindReleaseSig, signedPayload); err != nil {
-		return nil, fmt.Errorf("release REFUSED: %w", err)
+	if err := packagefmt.CheckReleaseRevocation(c.revocationRoots(root), artifactKindReleaseSig, signedPayload); err != nil {
+		return nil, nil, fmt.Errorf("release REFUSED: %w", err)
 	}
 
 	logsink.Info("updates.decision", "signature verified for %s (hash %s)", assetName, archiveHash[:12])
+	verified := highestVerified{
+		Version: available, Platform: hostPlatform, Arch: hostArch, ArchiveSHA256: archiveHash,
+		VerifiedAt: time.Now().UTC(), ReleasePublishedAt: release.PublishedAt,
+	}
 
-	return archiveBytes, nil
+	if err := tgt.secondArchive(verified); err != nil {
+		return nil, nil, err
+	}
+
+	tgt.noteVerified(verified)
+
+	return archiveBytes, signedPayload, nil
+}
+
+func (c *Checker) revocationRoots(root *sigenvelope.PublicKeyEnvelope) packagefmt.TrustRoots {
+	c.mu.Lock()
+	held := c.trustSet
+	c.mu.Unlock()
+	if held != nil {
+		if set := held(); set != nil {
+			return packagefmt.TrustRoots{PlatformRelease: root, Revocation: set}
+		}
+	}
+	return packagefmt.ReleaseTrustRoots(filepath.Join(c.dataDir, "trust"), root)
+}
+
+func (c *Checker) lookAtOwnRelease(ctx context.Context) {
+	root := c.platformRoot()
+	if root == nil || (c.isMobile != nil && c.isMobile()) {
+		c.state.setOwn(false, "")
+		return
+	}
+	roots := c.revocationRoots(root)
+	if roots.Revocation.Entries(packagefmt.KeyTypePlatformRelease) == 0 {
+		c.state.setOwn(false, "")
+		return
+	}
+	signed, err := c.ownReleasePayload(ctx, root)
+	if err != nil {
+		c.state.setOwn(false, err.Error())
+		return
+	}
+	err = packagefmt.CheckReleaseRevocation(roots, artifactKindReleaseSig, signed)
+	var refusal *packagefmt.Error
+	switch {
+	case err == nil:
+		c.state.setOwn(false, "")
+	case errors.As(err, &refusal) && refusal.Reason == packagefmt.ReasonTrustPayloadRevoked:
+		if snap := c.state.Snapshot(""); !snap.RunningWithdrawn {
+			logsink.Warn("updates.decision", "the release this program came from (%s) is withdrawn by its publisher: %v", c.currentVer(), err)
+		}
+		c.state.setOwn(true, "")
+	default:
+		c.state.setOwn(false, err.Error())
+	}
+}
+
+func (c *Checker) ownReleasePayload(ctx context.Context, root *sigenvelope.PublicKeyEnvelope) (json.RawMessage, error) {
+	c.mu.Lock()
+	cached := c.ownSigned
+	c.mu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+	current := c.currentVer()
+	own := c.ownRelease
+	if own == nil {
+		own = func(ctx context.Context) (*githubRelease, error) { return c.fetchRelease(ctx, "tags/v"+current) }
+	}
+	release, err := own(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the release %s could not be read: %w", current, err)
+	}
+	name := assetName(current)
+	if exe, err := os.Executable(); err == nil {
+		if tgt, err := targetOf(exe); err == nil && tgt.bundle {
+			name = bundleAssetName(current)
+		}
+	}
+	_, sigURL, err := findAssets(release, name, SigAssetName(name))
+	if err != nil {
+		return nil, fmt.Errorf("the release %s does not carry this install's signed asset: %w", current, err)
+	}
+	sig, err := c.download(ctx, release.source, sigURL)
+	if err != nil {
+		return nil, fmt.Errorf("the signature of %s could not be fetched: %w", name, err)
+	}
+	platform, arch := hostTarget()
+	signed, payload, err := decodeReleaseSig(artifactKindReleaseSig, sig, root)
+	if err == nil && (payload.Version != current || payload.Platform != platform || payload.Arch != arch) {
+		err = fmt.Errorf("it binds %s %s/%s, this program is %s %s/%s", payload.Version, payload.Platform, payload.Arch, current, platform, arch)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("the signature of %s is refused: %w", name, err)
+	}
+	c.mu.Lock()
+	c.ownSigned = signed
+	c.mu.Unlock()
+	return signed, nil
+}
+
+func (c *Checker) SetTrustSet(held func() *packagefmt.RevocationStatusSet) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trustSet = held
 }
 
 func installBinary(tgt target, archiveBytes []byte, dataDir, owner, version string) (already bool, err error) {
@@ -473,15 +709,27 @@ func (c *Checker) Run(ctx context.Context) {
 
 	c.armed.Store(true)
 
-	tk := quiesce.NewTicker(c.gate, CheckInterval)
-	defer tk.Stop()
+	every := c.checkInterval()
+	tk := quiesce.NewTicker(c.gate, every)
+	defer func() { tk.Stop() }()
+	follow := func() {
+		if d := c.checkInterval(); d != every {
+			tk.Stop()
+			every = d
+			tk = quiesce.NewTicker(c.gate, every)
+		}
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-c.rearm:
+			follow()
+			continue
 		case <-tk.C:
 		}
+		follow()
 
 		if c.isSafe() {
 			continue
@@ -496,6 +744,12 @@ func (c *Checker) tick(ctx context.Context) {
 	available := c.Check(ctx)
 
 	c.completeIfIncomplete(ctx)
+
+	listsErr := c.BringTrustLists(ctx)
+
+	c.lookAtOwnRelease(ctx)
+
+	c.lookAtStranded(ctx, available)
 
 	if available == "" {
 		return
@@ -521,23 +775,40 @@ func (c *Checker) tick(ctx context.Context) {
 		return
 	}
 
+	if errors.Is(listsErr, ErrReleaseListBehind) {
+		logsink.Warn("updates.refusal", "%s not installed automatically: %v", available, listsErr)
+		return
+	}
+
 	var failedHere *FailedHereError
+	var below *BelowHighestVerifiedError
+	var second *SecondArchiveError
 	if err := c.Apply(ctx); errors.Is(err, ErrUpdatePending) || errors.Is(err, ErrAlreadyApplying) {
 
 		logsink.Warn("updates.refusal", "%s not installed by this attempt — %v", available, err)
 	} else if errors.As(err, &failedHere) {
 
-		c.state.setLastError(err.Error())
-		c.mu.Lock()
-		said := c.saidFailedHere == failedHere.Version
-		c.saidFailedHere = failedHere.Version
-		c.mu.Unlock()
-		if !said {
-			logsink.Warn("updates.refusal", "%v", err)
-		}
+		c.sayRefusal(err, failedHere.Version, &c.saidFailedHere)
+	} else if errors.As(err, &below) {
+
+		c.sayRefusal(err, below.Offered, &c.saidBelow)
+	} else if errors.As(err, &second) {
+
+		c.sayRefusal(err, second.Version, &c.saidSecond)
 	} else if err != nil {
 		logsink.Warn("updates.error", "apply failed: %v", err)
 		c.state.setLastError(err.Error())
+	}
+}
+
+func (c *Checker) sayRefusal(err error, release string, said *string) {
+	c.state.setLastError(err.Error())
+	c.mu.Lock()
+	again := *said == release
+	*said = release
+	c.mu.Unlock()
+	if !again {
+		logsink.Warn("updates.refusal", "%v", err)
 	}
 }
 
@@ -586,6 +857,99 @@ func (c *Checker) SetRunner(run func(work func()) bool) {
 	c.runner = run
 }
 
+var ErrReleaseListBehind = errors.New("the release withdrawal list announced is not on this machine")
+
+func (c *Checker) SetInterval(every func() time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.interval = every
+}
+
+func (c *Checker) SetAPIURL(get func() string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.apiURL = get
+}
+
+func (c *Checker) apiBase() (*neturl.URL, error) {
+	c.mu.Lock()
+	get := c.apiURL
+	c.mu.Unlock()
+	raw := ""
+	if get != nil {
+		raw = get()
+	}
+	base, err := APIBase(raw)
+	if err != nil {
+		return nil, fmt.Errorf("updates.api_url: %w", err)
+	}
+	return base, nil
+}
+
+func (c *Checker) Rearm() {
+	select {
+	case c.rearm <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Checker) Interval() time.Duration { return c.checkInterval() }
+
+func (c *Checker) checkInterval() time.Duration {
+	c.mu.Lock()
+	every := c.interval
+	c.mu.Unlock()
+	if every != nil {
+		if d := every(); d > 0 {
+			return d
+		}
+	}
+	return DefaultCheckIntervalMinutes * time.Minute
+}
+
+func (c *Checker) SetTrustLists(bring func(context.Context) (note string, err error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lists = bring
+}
+
+func (c *Checker) SetStranded(look func(ctx context.Context, offered string) ([]StrandedPlugin, string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stranded = look
+}
+
+func (c *Checker) lookAtStranded(ctx context.Context, offered string) {
+	c.mu.Lock()
+	look := c.stranded
+	c.mu.Unlock()
+	if look == nil || offered == "" {
+		c.state.setStranded(nil, "")
+		return
+	}
+	c.state.setStranded(look(ctx, offered))
+}
+
+func (c *Checker) BringTrustLists(ctx context.Context) error {
+	c.mu.Lock()
+	bring := c.lists
+	c.mu.Unlock()
+	if bring == nil {
+		return nil
+	}
+	note, err := bring(ctx)
+	why := ""
+	if err != nil {
+		logsink.Warn("updates.error", "withdrawal lists: %v", err)
+		why = err.Error()
+	}
+
+	if c.state.setLists(why, note) && note != "" {
+		logsink.Info("updates.decision", "withdrawal lists: %s", note)
+	}
+	return err
+}
+
 func (c *Checker) run(work func()) bool {
 	c.mu.Lock()
 	runner := c.runner
@@ -600,6 +964,10 @@ func (c *Checker) run(work func()) bool {
 type githubRelease struct {
 	TagName string        `json:"tag_name"`
 	Assets  []githubAsset `json:"assets"`
+
+	PublishedAt string `json:"published_at,omitempty"`
+
+	source *neturl.URL
 }
 
 type githubAsset struct {
@@ -614,8 +982,12 @@ func (c *Checker) fetchLatestRelease(ctx context.Context) (*githubRelease, error
 func (c *Checker) fetchRelease(ctx context.Context, which string) (*githubRelease, error) {
 	ctx, cancel := context.WithTimeout(ctx, metadataTimeout)
 	defer cancel()
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/%s", c.resolveRepo(), which)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	base, err := c.apiBase()
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/repos/%s/releases/%s", base, c.resolveRepo(), which)
+	req, err := http.NewRequestWithContext(withSource(ctx, base), "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -633,13 +1005,21 @@ func (c *Checker) fetchRelease(ctx context.Context, which string) (*githubReleas
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("github API returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("release API %s returned %d: %s", base, resp.StatusCode, string(body))
 	}
 
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read release: %w", err)
+	}
+	if int64(len(raw)) > maxDownloadSize {
+		return nil, fmt.Errorf("the release metadata from %s exceeds the %d byte limit", base, int64(maxDownloadSize))
+	}
 	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(raw, &release); err != nil {
 		return nil, fmt.Errorf("decode release: %w", err)
 	}
+	release.source = base
 	return &release, nil
 }
 
@@ -660,11 +1040,38 @@ func gitHubReleaseHost(raw string) error {
 	return nil
 }
 
-func (c *Checker) download(ctx context.Context, url string) ([]byte, error) {
-	if err := c.hostAllowlist(url); err != nil {
+func releaseHost(base *neturl.URL, raw string) error {
+	if base == nil {
+		return errors.New("refusing a release URL with no recorded release source")
+	}
+	if def, _ := APIBase(""); strings.EqualFold(base.Hostname(), def.Hostname()) {
+		return gitHubReleaseHost(raw)
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("unparseable URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("refusing a non-https release URL (%s)", u.Scheme)
+	}
+	if !strings.EqualFold(u.Hostname(), base.Hostname()) || httpsPort(u) != httpsPort(base) {
+		return fmt.Errorf("refusing a release URL off the release source %s (%s)", base.Host, u.Host)
+	}
+	return nil
+}
+
+func httpsPort(u *neturl.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	return "443"
+}
+
+func (c *Checker) download(ctx context.Context, source *neturl.URL, url string) ([]byte, error) {
+	if err := c.hostAllowlist(source, url); err != nil {
 		return nil, fmt.Errorf("download egress: %w", err)
 	}
-	dlCtx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	dlCtx, cancel := context.WithTimeout(withSource(ctx, source), downloadTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(dlCtx, "GET", url, nil)
@@ -719,25 +1126,9 @@ func verifyReleaseSig(sigBytes []byte, root *sigenvelope.PublicKeyEnvelope, arch
 }
 
 func verifySigOfKind(kind string, sigBytes []byte, root *sigenvelope.PublicKeyEnvelope, archiveHash, version, platform, arch string) (json.RawMessage, error) {
-
-	if err := packagefmt.ValidatePlatformReleaseRoot(root); err != nil {
-		return nil, fmt.Errorf("release signature root refused: %w", err)
-	}
-
-	raw, err := sigenvelope.VerifyPayload(sigBytes, root, kind, crypto.ProfileRoot)
+	raw, payload, err := decodeReleaseSig(kind, sigBytes, root)
 	if err != nil {
-		return nil, fmt.Errorf("signature does not verify against platform root: %w", err)
-	}
-
-	var payload releaseArchivePayload
-	if err := canonicaljson.DecodeStrict(raw, &payload); errors.Is(err, canonicaljson.ErrTrailingContent) {
-		return nil, fmt.Errorf("trailing data after payload object")
-	} else if err != nil {
-		return nil, fmt.Errorf("signature payload is not the closed {archive_hash} object: %w", err)
-	}
-
-	if payload.Version == "" {
-		return nil, fmt.Errorf("signature payload carries no bound version — pre-binding format (before 2026-08-26); re-sign the release with the full manifest payload")
+		return nil, err
 	}
 	if payload.ArchiveHash != archiveHash {
 		return nil, fmt.Errorf("signature binds archive_hash %s, recomputed %s — mismatch", payload.ArchiveHash, archiveHash)
@@ -748,11 +1139,35 @@ func verifySigOfKind(kind string, sigBytes []byte, root *sigenvelope.PublicKeyEn
 	if payload.Platform != platform || payload.Arch != arch {
 		return nil, fmt.Errorf("signature binds platform/arch %s/%s, this host selected %s/%s — cross-platform replay refused", payload.Platform, payload.Arch, platform, arch)
 	}
-	if payload.SourceRev == "" {
-		return nil, fmt.Errorf("signature payload carries no source_rev — the signer must state build provenance")
-	}
 
 	return raw, nil
+}
+
+func decodeReleaseSig(kind string, sigBytes []byte, root *sigenvelope.PublicKeyEnvelope) (json.RawMessage, releaseArchivePayload, error) {
+
+	if err := packagefmt.ValidatePlatformReleaseRoot(root); err != nil {
+		return nil, releaseArchivePayload{}, fmt.Errorf("release signature root refused: %w", err)
+	}
+
+	raw, err := sigenvelope.VerifyPayload(sigBytes, root, kind, crypto.ProfileRoot)
+	if err != nil {
+		return nil, releaseArchivePayload{}, fmt.Errorf("signature does not verify against platform root: %w", err)
+	}
+
+	var payload releaseArchivePayload
+	if err := canonicaljson.DecodeStrict(raw, &payload); errors.Is(err, canonicaljson.ErrTrailingContent) {
+		return nil, releaseArchivePayload{}, fmt.Errorf("trailing data after payload object")
+	} else if err != nil {
+		return nil, releaseArchivePayload{}, fmt.Errorf("signature payload is not the closed {archive_hash} object: %w", err)
+	}
+
+	if payload.Version == "" {
+		return nil, releaseArchivePayload{}, fmt.Errorf("signature payload carries no bound version — pre-binding format (before 2026-08-26); re-sign the release with the full manifest payload")
+	}
+	if payload.SourceRev == "" {
+		return nil, releaseArchivePayload{}, fmt.Errorf("signature payload carries no source_rev — the signer must state build provenance")
+	}
+	return raw, payload, nil
 }
 
 type updatePending struct {
@@ -809,10 +1224,18 @@ func withdrawSwap(tgt target, pend updatePending) error {
 	for _, path := range besideBackups(tgt, pend) {
 		errs = append(errs, withdraw(path))
 	}
-	if !tgt.bundle {
-		errs = append(errs, withdraw(tgt.backup))
-	}
+	errs = append(errs, withdrawBackup(tgt))
 	return errors.Join(append(errs, withdraw(tgt.record))...)
+}
+
+func withdrawBackup(tgt target) error {
+	if !tgt.bundle {
+		return withdraw(tgt.backup)
+	}
+	if err := os.RemoveAll(tgt.backup); err != nil {
+		return fmt.Errorf("could not withdraw %s: %w", tgt.backup, err)
+	}
+	return nil
 }
 
 type target struct {
@@ -824,6 +1247,8 @@ type target struct {
 	backup string
 	failed string
 
+	highest string
+
 	incomplete string
 }
 
@@ -832,7 +1257,7 @@ func targetOf(exePath string) (target, error) {
 
 		return target{}, errors.New("the running program's path is unknown")
 	}
-	exe, err := filepath.EvalSymlinks(exePath)
+	exe, err := resolveLinks(exePath)
 	if err != nil {
 		return target{}, fmt.Errorf("resolve the running program %s: %w", exePath, err)
 	}
@@ -853,9 +1278,9 @@ func Program() (string, error) {
 
 func Leftovers(exe string) []string {
 	t := targetAt(exe)
-	names := []string{t.lock, t.record, t.backup}
-	if t.failed != "" {
-		names = append(names, t.failed, t.incomplete)
+	names := []string{t.lock, t.record, t.backup, t.failed, t.highest}
+	if t.incomplete != "" {
+		names = append(names, t.incomplete)
 	}
 	return append(names, besideBackups(t, updatePending{})...)
 }
@@ -889,9 +1314,11 @@ func targetAt(exe string) target {
 	if app, ok := bundleRoot(exe); ok {
 		dir := filepath.Dir(app)
 		return target{path: app, exe: exe, bundle: true,
-			lock:   filepath.Join(dir, ".aii-os-update.lock"),
-			record: filepath.Join(dir, ".aii-os-update.json"),
-			backup: filepath.Join(dir, previousBundleName)}
+			lock:    filepath.Join(dir, ".aii-os-update.lock"),
+			record:  filepath.Join(dir, ".aii-os-update.json"),
+			backup:  filepath.Join(dir, previousBundleName),
+			failed:  filepath.Join(dir, ".aii-os-update.failed.json"),
+			highest: filepath.Join(dir, ".aii-os-update.highest.json")}
 	}
 	dir, base := filepath.Split(exe)
 	return target{path: exe, exe: exe,
@@ -899,6 +1326,7 @@ func targetAt(exe string) target {
 		record:     filepath.Join(dir, "."+base+".update.json"),
 		backup:     filepath.Join(dir, "."+base+".previous"),
 		failed:     filepath.Join(dir, "."+base+".update.failed.json"),
+		highest:    filepath.Join(dir, "."+base+".update.highest.json"),
 		incomplete: filepath.Join(dir, "."+base+".update.incomplete.json")}
 }
 
@@ -945,7 +1373,7 @@ func ownerOf(dataDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(abs)
+	return resolveLinks(abs)
 }
 
 func lockTarget(tgt target) (release func(), err error) {
@@ -1316,7 +1744,7 @@ func recoveryOf(dataDir, exePath string) (r recovery, ok bool, err error) {
 		return recovery{}, false, terr
 	}
 	mine, _, err := claimOf(dataDir, tgt)
-	if !mine || tgt.bundle {
+	if !mine {
 		return recovery{}, false, err
 	}
 	return recovery{dataDir: dataDir, backup: tgt.backup, record: tgt.record, tgt: tgt}, true, nil
@@ -1375,6 +1803,39 @@ func requireSettledAt(dataDir, exePath string) error {
 	return nil
 }
 
+type AnothersUpdateError struct{ Owner string }
+
+func (e *AnothersUpdateError) Error() string {
+	return fmt.Sprintf("the program was updated by the identity whose data is at %s, and that update has not completed a boot", e.Owner)
+}
+func (e *AnothersUpdateError) Is(target error) bool { return target == ErrBootRecoveryPending }
+
+func UnsettledBesideProgram(dataDir string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the running program to read its update state: %w", err)
+	}
+	return unsettledBesideAt(dataDir, exePath)
+}
+
+func unsettledBesideAt(dataDir, exePath string) error {
+	if err := requireSettledAt(dataDir, exePath); err != nil {
+		return err
+	}
+	tgt, err := targetOf(exePath)
+	if err != nil || tgt.bundle {
+		return nil
+	}
+	mine, other, _ := claimOf(dataDir, tgt)
+	if mine || other == "" {
+		return nil
+	}
+	if _, err := os.Stat(tgt.backup); err != nil {
+		return statRefusal(tgt.backup, err)
+	}
+	return &AnothersUpdateError{Owner: other}
+}
+
 func WriteBootMarker(dataDir string) {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -1392,6 +1853,7 @@ func writeBootMarkerAt(dataDir, exePath string) {
 		return
 	}
 
+	legacy, _ := readPending(dataDir)
 	os.Remove(filepath.Join(dataDir, pendingFile))
 	os.Remove(filepath.Join(dataDir, previousFile))
 
@@ -1404,6 +1866,7 @@ func writeBootMarkerAt(dataDir, exePath string) {
 		logsink.Warn("updates.refusal", "%v — an update record beside it, if any, is left for a later boot", err)
 		return
 	}
+	noteIncomplete(tgt, legacy)
 	mine, other, _ := claimOf(dataDir, tgt)
 	if !mine {
 		if other != "" {
@@ -1421,6 +1884,10 @@ func writeBootMarkerAt(dataDir, exePath string) {
 		return
 	} else if cut {
 		logsink.Info("updates.decision", "an update of %s was cut off before its binary was published — what it had written beside it is put back", tgt.path)
+	}
+	if keptForTheOperator(tgt, pend) {
+		r.keepForTheOperator()
+		return
 	}
 	if err := withdrawSwap(tgt, pend); err != nil {
 		logsink.Warn("updates.error", "this healthy boot could not retire its update of %s: %v", tgt.path, err)
@@ -1548,6 +2015,10 @@ func (r recovery) settle(uncounted bool) string {
 	if _, err := os.Stat(markerPath); err == nil {
 
 		pend, _, _ := readRecord(r.record)
+		if !r.legacy && keptForTheOperator(r.tgt, pend) {
+			r.keepForTheOperator()
+			return ""
+		}
 		r.retire(pend)
 		return ""
 	} else if refusal := statRefusal(markerPath, err); refusal != nil {
@@ -1602,9 +2073,17 @@ func (r recovery) rollback(pend updatePending) string {
 		return ""
 	}
 
-	if ok, why := canStageBesideAt(exePath); !ok {
+	if ok, why := canStageBesideAt(r.tgt.path); !ok {
 		logsink.Warn("updates.refusal", "ROLLBACK DEFERRED — %s; the previous binary is kept at %s (restore it with your package manager, or from data/backups/)", why, r.backup)
 		return ""
+	}
+	if r.tgt.bundle {
+		if r.legacy {
+
+			logsink.Warn("updates.refusal", "ROLLBACK DEFERRED — the previous program %s, kept in the data directory by an earlier build, is a bare binary and %s is a sealed application bundle that only a whole bundle replaces; it is kept, and the next healthy boot retires it", r.backup, r.tgt.path)
+			return ""
+		}
+		return r.exchangeBack(pend)
 	}
 
 	prevBytes, err := atomicfile.ReadFile(r.backup)
@@ -1658,27 +2137,70 @@ func (r recovery) rollback(pend updatePending) string {
 		return r.backup
 	}
 
-	if r.tgt.failed != "" && pend.Version != "" {
-		raw, err := json.Marshal(failedUpdate{Version: pend.Version, NewSHA256: pend.NewSHA256, At: time.Now().UTC()})
-		if err == nil {
-			err = writeFileAtomic(r.tgt.failed, raw, 0o644)
-		}
-		if err != nil {
-			logsink.Warn("updates.error", "the rollback could not record which release it undid (%v) — the restored program may install %s again", err, pend.Version)
-		}
-	}
+	r.noteFailed(pend)
 	r.retire(pend)
 	logsink.Warn("updates.end", "ROLLBACK — restored previous binary (update failed to boot)")
 	return r.backup
 }
 
+func (r recovery) noteFailed(pend updatePending) bool {
+	if r.tgt.failed == "" || pend.Version == "" {
+		return false
+	}
+	raw, err := json.Marshal(failedUpdate{Version: pend.Version, NewSHA256: pend.NewSHA256, At: time.Now().UTC()})
+	if err == nil {
+		err = writeFileAtomic(r.tgt.failed, raw, 0o644)
+	}
+	if err != nil {
+		logsink.Warn("updates.error", "the rollback could not record which release it undid (%v) — the restored program may install %s again", err, pend.Version)
+		return false
+	}
+	return true
+}
+
+func keptForTheOperator(tgt target, pend updatePending) bool {
+	return tgt.bundle && pend.Version == ""
+}
+
+func (r recovery) keepForTheOperator() {
+	if err := withdraw(r.record); err != nil {
+		logsink.Warn("updates.error", "the update of %s was installed by an earlier release; its record could not be retired: %v", r.tgt.path, err)
+		return
+	}
+	logsink.Info("updates.decision", "the update of %s was installed by an earlier release, which kept no count of its boots: it is not rolled back, and the app it replaced is kept at %s until the next update replaces it", r.tgt.path, r.backup)
+}
+
+func PreviousKept() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return previousKeptAt(exe)
+}
+
+func previousKeptAt(exePath string) string {
+	tgt, err := targetOf(exePath)
+	if err != nil || !tgt.bundle {
+		return ""
+	}
+	if _, err := os.Stat(tgt.record); !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if fi, err := os.Stat(tgt.backup); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return tgt.backup
+}
+
 func (r recovery) retire(pend updatePending) {
-	if !r.legacy {
+	if r.legacy {
+		os.Remove(r.backup)
+	} else {
 		for _, path := range besideBackups(r.tgt, pend) {
 			os.Remove(path)
 		}
+		_ = withdrawBackup(r.tgt)
 	}
-	os.Remove(r.backup)
 	os.Remove(r.record)
 }
 

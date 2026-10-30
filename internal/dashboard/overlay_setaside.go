@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"time"
 
@@ -26,6 +27,8 @@ type OverlaySetAside struct {
 	Path string `json:"path"`
 	To   string `json:"to,omitempty"`
 }
+
+const notSetAsidable = "names neither a shipped dashboard file that an overlay file replaces nor custom.css or custom.js"
 
 const maxSetAsideBody = 64 << 10
 
@@ -103,10 +106,47 @@ func setAsideSuffix() string {
 	return ".set-aside-" + v
 }
 
-var errNotAReplacement = errors.New("does not name a shipped dashboard file that an overlay file replaces")
+var additiveFiles = []string{"custom.css", "custom.js"}
+
+func setAsidable(rel string) bool {
+	return replacesShipped(rel) || slices.Contains(additiveFiles, rel)
+}
+
+func (s *Server) overlayAdditions() ([]OverlayReplacement, error) {
+	s.secMu.RLock()
+	dir := s.overlayDir
+	s.secMu.RUnlock()
+	out := []OverlayReplacement{}
+	if dir == "" {
+		return out, nil
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	defer root.Close()
+	for _, rel := range additiveFiles {
+		st, ok := servedReplacement(root, rel)
+		if !ok {
+			continue
+		}
+		if isOverlayScript(rel) {
+			if data, read := readOverlayFile(root, rel); !read || !s.scriptApproved(rel, data) {
+				continue
+			}
+		}
+		out = append(out, OverlayReplacement{Path: rel, Size: st.Size(), MTime: st.ModTime().UTC()})
+	}
+	return out, nil
+}
+
+var errNotAReplacement = errors.New(notSetAsidable)
 
 func (s *Server) setAside(rel string) (string, error) {
-	if !replacesShipped(rel) {
+	if !setAsidable(rel) {
 		return "", fmt.Errorf("%q %w", rel, errNotAReplacement)
 	}
 	s.secMu.RLock()
@@ -142,7 +182,11 @@ func (s *Server) setAside(rel string) (string, error) {
 	if err := root.Rename(rel, to); err != nil {
 		return "", err
 	}
-	logsink.Info("dashboard.decision", "set aside %s as %s: it replaced a shipped dashboard file", rel, to)
+	why := "it replaced a shipped dashboard file"
+	if !replacesShipped(rel) {
+		why = "it changed the dashboard"
+	}
+	logsink.Info("dashboard.decision", "set aside %s as %s: %s", rel, to, why)
 	return to, nil
 }
 
@@ -152,13 +196,17 @@ func (s *Server) handleOverlayReplacements(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	files, err := s.overlayReplacements()
+	var additions []OverlayReplacement
+	if err == nil {
+		additions, err = s.overlayAdditions()
+	}
 	if err != nil {
 		sayRefused(w, http.StatusInternalServerError, "the dashboard's customizations could not be read: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_ = json.NewEncoder(w).Encode(map[string]any{"files": files})
+	_ = json.NewEncoder(w).Encode(map[string]any{"files": files, "additions": additions})
 }
 
 func (s *Server) handleOverlaySetAside(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +231,7 @@ func (s *Server) handleOverlaySetAside(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, p := range req.Paths {
-		if !replacesShipped(p) {
+		if !setAsidable(p) {
 			sayRefused(w, http.StatusBadRequest, fmt.Sprintf("%q %v; nothing was set aside", p, errNotAReplacement))
 			return
 		}

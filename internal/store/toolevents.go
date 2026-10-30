@@ -53,6 +53,27 @@ func windowSince(q interface {
 	return min.Int64, stamp, min.Valid, nil
 }
 
+const SeveralActive = "several_active"
+
+func actingSessionSQL(child string) string {
+	return `SELECT id, COUNT(*) OVER () FROM work_sessions WHERE status='active' AND NOT ` + child + ` ORDER BY rowid DESC LIMIT 1`
+}
+
+func (s *Store) ActingSession() (id string, several bool, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	child, args, err := s.childTest()
+	if err != nil {
+		return "", false, err
+	}
+	var n int
+	err = s.db.QueryRow(actingSessionSQL(child), args...).Scan(&id, &n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return id, n > 1, err
+}
+
 func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, providerCallID, tool, args string) error {
 	changed := false
 	defer s.notifyInteraction(&changed)
@@ -69,11 +90,15 @@ func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, provid
 	case "operator":
 		why = "operator_act"
 	case "main", "safe":
-		err = tx.QueryRow(`SELECT id FROM work_sessions WHERE status='active' AND NOT `+queuedChild("")+` ORDER BY rowid DESC LIMIT 1`, SubagentWorkKind, SubagentWorkKind).Scan(&work)
-		if errors.Is(err, sql.ErrNoRows) {
+		var active int
+		err = tx.QueryRow(actingSessionSQL(queuedChild("")), SubagentWorkKind, SubagentWorkKind).Scan(&work, &active)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			why = "no_session"
-		} else if err != nil {
+		case err != nil:
 			return err
+		case active > 1:
+			why = SeveralActive
 		}
 	default:
 		project = ""
@@ -84,7 +109,7 @@ func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, provid
 			return err
 		}
 	}
-	_, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_call_" + id, Kind: interaction.ToolCall, Role: interaction.System, TurnID: turnID, ProjectID: project, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, ""), Details: interaction.Details{WorkSession: work, SessionReason: why, Tool: tool, Actor: actor, Model: model, ProviderCallID: providerCallID, Ordinal: ordinal, ArgsRecord: metaRecord(args)}})
+	_, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_call_" + id, Kind: interaction.ToolCall, Role: interaction.System, TurnID: turnID, ProjectID: project, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, "", 0), Details: interaction.Details{WorkSession: work, SessionReason: why, Tool: tool, Actor: actor, Model: model, ProviderCallID: providerCallID, Ordinal: ordinal, ArgsRecord: metaRecord(args)}})
 	if err != nil {
 		return err
 	}

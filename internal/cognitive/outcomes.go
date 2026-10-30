@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive/landing"
@@ -38,20 +39,21 @@ func (c *ConsolidateFacility) SetOutcomes(src OutcomeSource) {
 
 func (c *ConsolidateFacility) OutcomesWired() bool { return c.outcomes != nil }
 
-func (c *ConsolidateFacility) OutcomesPending() bool {
+func (c *ConsolidateFacility) OutcomesPendingSince() (bool, time.Time) {
 	if c.outcomes == nil {
-		return false
+		return false, time.Time{}
 	}
 	batch, err := c.outcomes.NextOutcomes(c.cfg().OutcomeWindow)
 	if err != nil {
 		logsink.Warn("consolidate.error", "outcome probe failed: %v — nothing considered, the cursor stands", err)
-		return false
+		return false, time.Time{}
 	}
 	if len(batch.Outcomes) > 0 {
-		return true
+		at, _ := time.Parse(time.RFC3339Nano, batch.Outcomes[0].At)
+		return true, at
 	}
 	c.passOver(batch)
-	return false
+	return false, time.Time{}
 }
 
 func (c *ConsolidateFacility) passOver(batch rows.OutcomeBatch) {

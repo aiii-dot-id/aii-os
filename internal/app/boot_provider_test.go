@@ -175,11 +175,10 @@ func TestDelayedBootCapabilityDiscoveryPushesTheConnectedPagesConfig(t *testing.
 				APIKey: "synthetic-key", DefaultModel: model, Default: true,
 				ContextLength: 65536, MaxOutputTokens: 8192,
 			}
-			catalogueURL := ""
 			if catalogue {
-				catalogueURL = server.URL
+				entry.CapabilityCatalogue = &server.URL
 			}
-			raw, err := json.Marshal(providerRegistry{Providers: []providerEntry{entry}, ModelCatalogueURL: &catalogueURL})
+			raw, err := json.Marshal(providerRegistry{Providers: []providerEntry{entry}})
 			if err != nil {
 				t.Fatal(err)
 			}

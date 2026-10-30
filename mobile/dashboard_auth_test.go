@@ -21,7 +21,7 @@ func TestMobileStartRequiresAuthenticationAndRecoversOnRestart(t *testing.T) {
 	}
 	var first string
 	for boot := 0; boot < 2; boot++ {
-		rt, err := Start(path, home)
+		rt, err := Start(path, home, newTestKeystore())
 		if err != nil {
 			t.Fatal(err)
 		}

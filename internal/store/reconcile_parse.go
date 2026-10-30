@@ -82,6 +82,9 @@ func validateSchemaAnnotations(text string, ref *schemaDescription) error {
 			sources[source] = target
 		}
 	}
+	if err := validateSuccessorMarks(text, ref); err != nil {
+		return err
+	}
 	for table, columns := range declaredRetiredColumns(text) {
 		for _, column := range sortedKeys(columns) {
 			if _, still := ref.Shapes[table][column]; still {
@@ -114,16 +117,8 @@ func declaredRenames(sqlText string) map[string]map[string]string {
 				continue
 			}
 
-			decl := annotation.prefix
-			if i := strings.Index(decl, "--"); i >= 0 {
-				decl = decl[:i]
-			}
-			nm := leadingIdentRe.FindStringSubmatch(strings.TrimSpace(decl))
-			if nm == nil {
-				continue
-			}
-			newCol := strings.ToLower(nm[1])
-			if tableConstraint[newCol] {
+			newCol, ok := annotation.column()
+			if !ok {
 				continue
 			}
 			if out[table] == nil {
@@ -133,6 +128,83 @@ func declaredRenames(sqlText string) map[string]map[string]string {
 		}
 	}
 	return out
+}
+
+func (c schemaComment) column() (string, bool) {
+	decl := c.prefix
+	if i := strings.Index(decl, "--"); i >= 0 {
+		decl = decl[:i]
+	}
+	nm := leadingIdentRe.FindStringSubmatch(strings.TrimSpace(decl))
+	if nm == nil {
+		return "", false
+	}
+	col := strings.ToLower(nm[1])
+	if tableConstraint[col] {
+		return "", false
+	}
+	return col, true
+}
+
+var (
+	successorColumnRe = regexp.MustCompile(`(?i)^--\s*successor-column:\s*([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z.]+)?)\s*$`)
+	successorTableRe  = regexp.MustCompile(`(?i)^--\s*successor-table:\s*([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z.]+)?)\s*$`)
+	successorWordRe   = regexp.MustCompile(`(?i)^--\s*successor-(column|table)\b`)
+)
+
+func successorColumns(statement string) map[string]string {
+	out := map[string]string{}
+	for _, c := range schemaComments(statement) {
+		if m := successorColumnRe.FindStringSubmatch(c.text); m != nil {
+			if col, ok := c.column(); ok {
+				out[col] = m[1]
+			}
+		}
+	}
+	return out
+}
+
+func successorTable(statement string) (string, bool) {
+	for _, c := range schemaComments(statement) {
+		if m := successorTableRe.FindStringSubmatch(c.text); m != nil {
+			if _, onColumn := c.column(); !onColumn {
+				return m[1], true
+			}
+		}
+	}
+	return "", false
+}
+
+func validateSuccessorMarks(text string, ref *schemaDescription) error {
+	prov, _ := parseProvenance(text)
+	for _, table := range sortedKeys(declaredTableSQL(text)) {
+		statement := declaredTableSQL(text)[table]
+		tableMarks := 0
+		for _, c := range schemaComments(statement) {
+			w := successorWordRe.FindStringSubmatch(c.text)
+			if w == nil {
+				continue
+			}
+			col, onColumn := c.column()
+			switch {
+			case strings.EqualFold(w[1], "column") && successorColumnRe.MatchString(c.text) && onColumn:
+				if prov[table].Provenance == Derived {
+					return fmt.Errorf("successor column %s.%s is in a derived table, which every binary rebuilds from the record: no mark is needed or read", table, col)
+				}
+				if shape := ref.Shapes[table][col]; shape.NotNull || shape.PK != 0 {
+					return fmt.Errorf("successor column %s.%s must be nullable and no key: an earlier binary drops it, and a later one adds it to rows written without it", table, col)
+				}
+			case strings.EqualFold(w[1], "table") && successorTableRe.MatchString(c.text) && !onColumn:
+				tableMarks++
+			default:
+				return fmt.Errorf("%s: a successor mark that does not read as one (%q): it is written \"-- successor-column: X.Y.Z\" on the column's line or \"-- successor-table: X.Y.Z\" on a line of its own", table, strings.TrimSpace(c.text))
+			}
+		}
+		if tableMarks > 1 {
+			return fmt.Errorf("%s: %d successor-table marks; a table is added once", table, tableMarks)
+		}
+	}
+	return nil
 }
 
 var provenanceRe = regexp.MustCompile(`(?i)^--\s*provenance:\s*(derived|ephemeral)\s*(?:,\s*clear-order\s+([0-9]+))?\s*$`)

@@ -86,7 +86,7 @@ func TestTheOperatorsTypedOrSpokenMessageStartsANewChain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("turn failed: %v", err)
 			}
-			if want := "capped here\n\n" + continuesLine; reply != want {
+			if want := "capped here\n\n" + continuesLine; recordedReply(t, app, reply) != want {
 				t.Fatalf("the operator's %s message did not start a new chain: the reply = %q, want %q", path, reply, want)
 			}
 			waitUntil(t, func() bool {
@@ -155,7 +155,7 @@ func TestTheOperatorsWordsSaidWhileATurnRunsStartANewChain(t *testing.T) {
 			if !read {
 				t.Fatal("rig: the words said mid-turn were not read at a tool boundary of that turn")
 			}
-			if reply != want {
+			if recordedReply(t, app, reply) != want {
 				t.Fatalf("%s words read at a tool boundary: the reply = %q, want %q", c.name, reply, want)
 			}
 		})
@@ -212,7 +212,7 @@ func TestAStandDownAtTheOperatorsBoundIsToldOnThePage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turn failed: %v", err)
 	}
-	if want := "capped here\n\n" + continuesLine; reply != want {
+	if want := "capped here\n\n" + continuesLine; recordedReply(t, app, reply) != want {
 		t.Fatalf("rig: the operator's turn did not hand its work on: %q", reply)
 	}
 
@@ -222,8 +222,8 @@ func TestAStandDownAtTheOperatorsBoundIsToldOnThePage(t *testing.T) {
 		return page != ""
 	}, "the first leg's reply on the operator's page")
 	want := "leg capped\n\n" + nothingContinues(7, "the host has already started 1 fresh turn in a row, its limit (agency.max_turn_continuations)")
-	if page != want {
-		t.Fatalf("at the stand-down the operator's page shows %q, want %q", page, want)
+	if page != "leg capped" {
+		t.Fatalf("at the stand-down the operator's outbox holds %q, want the identity's words", page)
 	}
 	if got := recordedReply(t, app, "leg capped"); got != want {
 		t.Errorf("at the stand-down the identity's history holds %q, want %q", got, want)

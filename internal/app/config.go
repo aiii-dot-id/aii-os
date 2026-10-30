@@ -1,15 +1,18 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"path/filepath"
 
 	configdir "github.com/aiii-dot-id/aii-os/config"
+	"github.com/aiii-dot-id/aii-os/internal/agentmemory"
 	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
@@ -51,6 +54,9 @@ type LLMConfig struct {
 	RetryBackoffMS      int   `json:"retry_backoff_ms"`
 
 	RefusedRetryMaxSeconds int `json:"refused_retry_max_seconds,omitempty"`
+
+	ModelListTimeoutSeconds int `json:"model_list_timeout_seconds,omitempty"`
+	ModelListCacheSeconds   int `json:"model_list_cache_seconds,omitempty"`
 }
 
 type SpeechConfig struct {
@@ -233,10 +239,21 @@ type DashboardConfig struct {
 
 	RefusedPauses int `json:"refused_pauses,omitempty"`
 
+	StrangerBodySeconds int `json:"stranger_body_seconds,omitempty"`
+
 	UnsignedRequestsPerSecond int `json:"unsigned_requests_per_second,omitempty"`
 	UnsignedRequestBurst      int `json:"unsigned_request_burst,omitempty"`
 
+	PageTicketSeconds int `json:"page_ticket_seconds,omitempty"`
+	PageTickets       int `json:"page_tickets,omitempty"`
+
+	RefusalLinesPerMinute int `json:"refusal_lines_per_minute,omitempty"`
+
 	CarriedIdleSeconds int `json:"carried_idle_seconds,omitempty"`
+
+	StartWaitSeconds int `json:"start_wait_seconds,omitempty"`
+
+	PortSearchSpan int `json:"port_search_span,omitempty"`
 
 	Channels               *bool                  `json:"channels,omitempty"`
 	DirectWaitMS           int                    `json:"direct_wait_ms,omitempty"`
@@ -302,9 +319,15 @@ func (d DashboardConfig) inForce() []dashboard.SettingRead {
 		"dashboard.skip_signin_with_valid_token": dashboard.OnOff(d.skipSignInWithValidToken()),
 		"dashboard.access_code_seconds":          number(accessCodeSeconds(d.AccessCodeSeconds), "seconds"),
 		"dashboard.refused_pauses":               number(held(d.RefusedPauses, dashboard.DefaultRefusedPauses, dashboard.MinRefusedPauses, dashboard.MaxRefusedPauses), ""),
+		"dashboard.stranger_body_seconds":        number(held(d.StrangerBodySeconds, dashboard.DefaultStrangerBodySeconds, dashboard.MinStrangerBodySeconds, dashboard.MaxStrangerBodySeconds), "seconds"),
 		"dashboard.unsigned_requests_per_second": number(held(d.UnsignedRequestsPerSecond, dashboard.DefaultUnsignedRequestsPerSecond, dashboard.MinUnsignedRequestsPerSecond, dashboard.MaxUnsignedRequestsPerSecond), ""),
 		"dashboard.unsigned_request_burst":       number(held(d.UnsignedRequestBurst, dashboard.DefaultUnsignedRequestBurst, dashboard.MinUnsignedRequestBurst, dashboard.MaxUnsignedRequestBurst), ""),
+		"dashboard.page_ticket_seconds":          number(held(d.PageTicketSeconds, dashboard.DefaultPageTicketSeconds, dashboard.MinPageTicketSeconds, dashboard.MaxPageTicketSeconds), "seconds"),
+		"dashboard.page_tickets":                 number(held(d.PageTickets, dashboard.DefaultPageTickets, dashboard.MinPageTickets, dashboard.MaxPageTickets), ""),
+		"dashboard.refusal_lines_per_minute":     number(held(d.RefusalLinesPerMinute, dashboard.DefaultRefusalLinesPerMinute, dashboard.MinRefusalLinesPerMinute, dashboard.MaxRefusalLinesPerMinute), ""),
 		"dashboard.carried_idle_seconds":         number(held(d.CarriedIdleSeconds, dashboard.DefaultCarriedIdleSeconds, dashboard.MinCarriedIdleSeconds, dashboard.MaxCarriedIdleSeconds), "seconds"),
+		"dashboard.start_wait_seconds":           number(install.HeldStartWaitSeconds(d.StartWaitSeconds), "seconds"),
+		"dashboard.port_search_span":             number(install.HeldPortSearchSpan(d.PortSearchSpan), ""),
 		"dashboard.channels":                     dashboard.OnOff(!set.Off),
 		"dashboard.direct_wait_ms":               number(set.WaitMS, "ms"),
 		"dashboard.direct_ready_allowance_ms":    number(set.ReadyAllowanceMS, "ms"),
@@ -342,18 +365,43 @@ type ToolsConfig struct {
 
 	ShellTimeoutSeconds    int `json:"shell_timeout_seconds"`
 	WebFetchTimeoutSeconds int `json:"webfetch_timeout_seconds,omitempty"`
+
+	WebFetchMaxBytes int `json:"webfetch_max_bytes,omitempty"`
+
+	ShellWallDevices []string `json:"shell_wall_devices,omitempty"`
+
+	WallStartSeconds int `json:"wall_start_seconds,omitempty"`
+
+	ShellWindowsUTF8 *bool `json:"shell_windows_utf8,omitempty"`
 }
+
+func (c ToolsConfig) shellWindowsUTF8() bool { return c.ShellWindowsUTF8 == nil || *c.ShellWindowsUTF8 }
 
 type PluginsConfig struct {
 	Autoload string `json:"autoload"`
 
 	CertifierRoot string `json:"certifier_root,omitempty"`
-	ReviewerRoot  string `json:"reviewer_root,omitempty"`
-	PlatformRoot  string `json:"platform_root,omitempty"`
+
+	NativeView   []string `json:"native_view,omitempty"`
+	ReviewerRoot string   `json:"reviewer_root,omitempty"`
+	PlatformRoot string   `json:"platform_root,omitempty"`
 
 	CatalogDir string `json:"catalog_dir,omitempty"`
 
 	CatalogURL string `json:"catalog_url,omitempty"`
+
+	CatalogRefreshMinutes int `json:"catalog_refresh_minutes,omitempty"`
+
+	CatalogMaxIndexBytes         int64 `json:"catalog_max_index_bytes,omitempty"`
+	CatalogMaxSignatureBytes     int64 `json:"catalog_max_signature_bytes,omitempty"`
+	CatalogFetchTimeoutSeconds   int   `json:"catalog_fetch_timeout_seconds,omitempty"`
+	CatalogRefreshTimeoutSeconds int   `json:"catalog_refresh_timeout_seconds,omitempty"`
+	CatalogFirstRefreshSeconds   int   `json:"catalog_first_refresh_seconds,omitempty"`
+
+	TrustListMaxBytes int64 `json:"trust_list_max_bytes,omitempty"`
+
+	ContextProviders int `json:"context_providers,omitempty"`
+	ContextTimeoutMs int `json:"context_timeout_ms,omitempty"`
 
 	Grants map[string]broker.Grant `json:"grants,omitempty"`
 
@@ -397,7 +445,13 @@ type PromptConfig struct {
 
 	SurfacingMaxChars int `json:"surfacing_max_chars,omitempty"`
 
+	OperatorBeliefsMaxChars int `json:"operator_beliefs_max_chars,omitempty"`
+
 	SelfModelMaxTokens int `json:"self_model_max_tokens,omitempty"`
+
+	Ring2EvidenceMaxChars int `json:"ring2_evidence_max_chars,omitempty"`
+
+	CharterMaxTokens int `json:"charter_max_tokens,omitempty"`
 
 	DreamConversationMaxChars int `json:"dream_conversation_max_chars,omitempty"`
 
@@ -407,9 +461,19 @@ type PromptConfig struct {
 
 	AlarmFirings int `json:"alarm_firings,omitempty"`
 
+	StandingMaxChars int `json:"standing_max_chars,omitempty"`
+
+	PlaybookMaxBytes int `json:"playbook_max_bytes,omitempty"`
+
 	ExcerptChars int `json:"excerpt_chars,omitempty"`
 
 	Ring3RecentExperiences int `json:"ring3_recent_experiences,omitempty"`
+
+	WorkCardBeliefs int `json:"work_card_beliefs,omitempty"`
+}
+
+type RecordConfig struct {
+	ToolResultRunes int `json:"tool_result_runes,omitempty"`
 }
 
 type CognitionConfig struct {
@@ -452,6 +516,9 @@ type AgencyConfig struct {
 
 	OutcomeWindow int `json:"outcome_window,omitempty"`
 
+	ToolOutcomeMin    int `json:"tool_outcome_min,omitempty"`
+	ToolOutcomeWindow int `json:"tool_outcome_window,omitempty"`
+
 	QueueWorkers int `json:"queue_workers"`
 
 	HarvestWake *bool `json:"harvest_wake,omitempty"`
@@ -466,6 +533,8 @@ type AgencyConfig struct {
 
 	TurnTokenBudget limits.Ceiling `json:"turn_token_budget"`
 
+	TurnSecondsLocal int `json:"turn_seconds_local,omitempty"`
+
 	ToolSchemaRefusals int `json:"tool_schema_refusals,omitempty"`
 
 	TurnCheckpointCalls       limits.Ceiling `json:"turn_checkpoint_calls,omitzero"`
@@ -477,6 +546,8 @@ type AgencyConfig struct {
 	ContinuationWallSeconds int `json:"continuation_wall_seconds,omitempty"`
 	AlarmWallSeconds        int `json:"alarm_wall_seconds,omitempty"`
 	HarvestWallSeconds      int `json:"harvest_wall_seconds,omitempty"`
+
+	WorkLineMaxChars int `json:"work_line_max_chars,omitempty"`
 }
 
 func (ag AgencyConfig) checkpoint() conversation.Checkpoint {
@@ -487,8 +558,20 @@ func (ag AgencyConfig) checkpoint() conversation.Checkpoint {
 const maxToolSchemaRefusals = 32
 
 type RoleRoute struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	Description string `json:"description,omitempty"`
+}
+
+func (ag AgencyConfig) roleNotes() map[string]string {
+	if len(ag.Roles) == 0 {
+		return nil
+	}
+	notes := make(map[string]string, len(ag.Roles))
+	for name, r := range ag.Roles {
+		notes[name] = r.Description
+	}
+	return notes
 }
 
 type WitnessConfig struct {
@@ -496,6 +579,15 @@ type WitnessConfig struct {
 	IntervalEvents     int    `json:"interval_events"`
 	PlatformPubkeyPath string `json:"platform_pubkey_path"`
 	TLSSPKISHA256      string `json:"tls_spki_sha256"`
+
+	AskAgainSeconds int `json:"ask_again_seconds,omitempty"`
+}
+
+func validWitnessAskAgain(key string, w WitnessConfig) error {
+	if n := w.AskAgainSeconds; n != 0 && (n < witnessAskAgainMinSeconds || n > witnessAskAgainMaxSeconds) {
+		return fmt.Errorf("%s must be zero (take the default, %d) or between %d and %d", key, int(defaultWitnessAskAgain/time.Second), witnessAskAgainMinSeconds, witnessAskAgainMaxSeconds)
+	}
+	return nil
 }
 
 type GenesisConfig struct {
@@ -505,6 +597,10 @@ type GenesisConfig struct {
 
 	FetchAttempts  int `json:"fetch_attempts,omitempty"`
 	FetchTimeoutMs int `json:"fetch_timeout_ms,omitempty"`
+
+	Ring5RetrySeconds int `json:"ring5_retry_seconds,omitempty"`
+
+	AgentMemory *AgentMemoryConfig `json:"agent_memory,omitempty"`
 }
 
 const (
@@ -520,6 +616,9 @@ func validGenesisPatience(g GenesisConfig) error {
 	if g.FetchTimeoutMs != 0 && (g.FetchTimeoutMs < genesisFetchTimeoutMinMs || g.FetchTimeoutMs > genesisFetchTimeoutMaxMs) {
 		return fmt.Errorf("genesis.fetch_timeout_ms must be zero (take the default, %d) or between %d and %d", genesis.DefaultFetchTimeout.Milliseconds(), genesisFetchTimeoutMinMs, genesisFetchTimeoutMaxMs)
 	}
+	if g.Ring5RetrySeconds < 0 || g.Ring5RetrySeconds > ring5RetryMaxSeconds {
+		return fmt.Errorf("genesis.ring5_retry_seconds must be zero (take the default, %d) or between 1 and %d", int(defaultRing5Retry/time.Second), ring5RetryMaxSeconds)
+	}
 	return nil
 }
 
@@ -530,10 +629,43 @@ func (g GenesisConfig) client(life context.Context) *genesis.GenesisClient {
 		WithLifetime(life)
 }
 
+type AgentMemoryConfig struct {
+	Off bool `json:"off,omitempty"`
+
+	Stores []agentmemory.Store `json:"stores,omitempty"`
+
+	Extensions []string `json:"extensions,omitempty"`
+
+	MaxFileBytes int64 `json:"max_file_bytes,omitempty"`
+	MaxBytes     int64 `json:"max_bytes,omitempty"`
+	MaxFiles     int   `json:"max_files,omitempty"`
+	MaxEntries   int   `json:"max_entries,omitempty"`
+	MaxDepth     int   `json:"max_depth,omitempty"`
+
+	SecretPatterns []string `json:"secret_patterns,omitempty"`
+}
+
+func validAgentMemory(am *AgentMemoryConfig) error {
+	if am == nil {
+		return nil
+	}
+	if am.MaxFileBytes < 0 || am.MaxBytes < 0 || am.MaxFiles < 0 || am.MaxEntries < 0 || am.MaxDepth < 0 {
+		return fmt.Errorf("genesis.agent_memory: max_file_bytes, max_bytes, max_files, max_entries and max_depth must each be zero (take the default) or positive")
+	}
+	if _, err := agentmemory.CompileSecrets(am.SecretPatterns); err != nil {
+		return fmt.Errorf("genesis.agent_memory.secret_patterns: %w", err)
+	}
+	return nil
+}
+
 type UpdatesConfig struct {
 	Automatic bool `json:"automatic"`
 
 	Repo string `json:"repo"`
+
+	APIURL string `json:"api_url,omitempty"`
+
+	CheckIntervalMinutes int `json:"check_interval_minutes,omitempty"`
 
 	HandoverWaitSeconds int `json:"handover_wait_seconds,omitempty"`
 }
@@ -565,21 +697,27 @@ type LogsConfig struct {
 
 	Level string `json:"level,omitempty"`
 
-	present bool `json:"-"`
+	dirNamed bool `json:"-"`
 }
 
 func (l *LogsConfig) UnmarshalJSON(data []byte) error {
 	type plain LogsConfig
-	p := plain{}
 	if string(data) == "null" {
-		*l = (LogsConfig)(p)
+		*l = LogsConfig{}
 		return nil
 	}
-	if err := json.Unmarshal(data, &p); err != nil {
+	p := plain(*l)
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
 		return err
 	}
-	*l = (LogsConfig)(p)
-	l.present = true
+	var named struct {
+		Dir *string `json:"dir"`
+	}
+	_ = json.Unmarshal(data, &named)
+	*l = LogsConfig(p)
+	l.dirNamed = p.dirNamed || named.Dir != nil
 	return nil
 }
 
@@ -606,6 +744,7 @@ type Config struct {
 
 	Overrides   Overrides                    `json:"overrides,omitempty"`
 	Cognition   CognitionConfig              `json:"cognition,omitzero"`
+	Record      RecordConfig                 `json:"record,omitzero"`
 	Timezone    string                       `json:"timezone"`
 	Witness     WitnessConfig                `json:"witness_server"`
 	Certificate publicname.CertificateConfig `json:"certificate"`
@@ -620,6 +759,8 @@ type Config struct {
 	contactsPresent bool
 
 	cognitionHeld map[string]string
+
+	stated []byte
 
 	SourcePath string `json:"-"`
 }
@@ -658,6 +799,11 @@ type PluginRuntimeConfig struct {
 	MaxInflightReceipts int `json:"max_inflight_receipts,omitempty"`
 
 	MaxInputSchemaBytes int `json:"max_input_schema_bytes,omitempty"`
+
+	StopMS           int `json:"stop_ms,omitempty"`
+	HandOverMS       int `json:"hand_over_ms,omitempty"`
+	SessionControlMS int `json:"session_control_ms,omitempty"`
+	RestartAttempts  int `json:"restart_attempts,omitempty"`
 }
 
 var r104ByteDefaults = struct{ installed, file, compressed int64 }{1 << 30, 512 << 20, 512 << 20}
@@ -736,7 +882,7 @@ func applyDefaults(cfg *Config) {
 		cfg.LLM.APIKeyEnv = "OPENAI_API_KEY"
 	}
 
-	if !cfg.Logs.present && cfg.Logs.Dir == "" {
+	if !cfg.Logs.dirNamed && cfg.Logs.Dir == "" {
 		cfg.Logs.Dir = "log"
 	}
 	if cfg.LLM.ProbeTimeoutSeconds == 0 {
@@ -755,9 +901,7 @@ func applyDefaults(cfg *Config) {
 
 		cfg.Agency.MaxToolRounds = limits.Of(limits.DefaultRounds)
 	}
-	if cfg.Agency.TurnTokenBudget.IsZero() {
-		cfg.Agency.TurnTokenBudget = limits.Of(limits.DefaultTurnTokens)
-	}
+
 	if cfg.Agency.SubagentMaxToolRounds.IsZero() {
 
 		cfg.Agency.SubagentMaxToolRounds = limits.Of(limits.DefaultSubRounds)
@@ -807,7 +951,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Plugins.Autoload = "T1"
 	}
 	if cfg.Dashboard.Port == 0 {
-		cfg.Dashboard.Port = 8080
+		cfg.Dashboard.Port = install.DefaultPort
 	}
 	applyRuled(cfg)
 }

@@ -22,15 +22,15 @@ func TestTokenRelaxationDoesNotRevokeSessions(t *testing.T) {
 }
 
 func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
-	s := New("127.0.0.1", 0, &WSHandler{DashboardToken: func() string { return "the-token-in-force" }})
+	s := New("127.0.0.1", 0, &WSHandler{})
 	s.SetAccessToken(true, "old-token")
 	addr, err := s.Start(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Shutdown(context.Background())
-	oldHash := s.accessHash()
-	conn, err := dialWSToken(addr, oldHash)
+	oldHash, oldKey := s.accessHash(), pageKeyFor(s)
+	conn, err := dialWSToken(addr, oldHash, oldKey)
 	if err != nil {
 		t.Fatalf("the token in force was refused: %v", err)
 	}
@@ -38,11 +38,10 @@ func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
 
 	s.SetAccessToken(true, "rotated-token")
 
-	// The old session is over: nothing it asks is answered, least of all
-	// the token.
+	// The old session is over: nothing it asks is answered.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"dashboard_token","request_id":"after-rotation"}`))
+	_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"ui_layout","request_id":"after-rotation"}`))
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
@@ -52,15 +51,15 @@ func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
 			break
 		}
 		var msg ServerMessage
-		if json.Unmarshal(raw, &msg) == nil && msg.DashboardToken != "" {
-			t.Fatalf("the old session was handed a token after the rotation: %q", msg.DashboardToken)
+		if json.Unmarshal(raw, &msg) == nil && msg.Type == "layout" {
+			t.Fatal("the old session was answered after the rotation")
 		}
 	}
 	if c, err := dialWSToken(addr, oldHash); err == nil {
 		c.CloseNow()
 		t.Fatal("the old token still opens a session")
 	}
-	fresh, err := dialWSToken(addr, s.accessHash())
+	fresh, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatalf("the rotated token was refused: %v", err)
 	}
@@ -69,7 +68,7 @@ func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
 	// THE SAME POLICY ARMED AGAIN CUTS NOBODY OFF: a reload that changed
 	// nothing here is not a rotation.
 	s.SetAccessToken(true, "rotated-token")
-	if err := fresh.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"dashboard_token","request_id":"same-policy"}`)); err != nil {
+	if err := fresh.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"ui_layout","request_id":"same-policy"}`)); err != nil {
 		t.Fatalf("the session was closed by a policy that did not change: %v", err)
 	}
 	for {
@@ -78,7 +77,7 @@ func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
 			t.Fatalf("the session was closed by a policy that did not change: %v", err)
 		}
 		var msg ServerMessage
-		if json.Unmarshal(raw, &msg) == nil && msg.DashboardToken == "the-token-in-force" {
+		if json.Unmarshal(raw, &msg) == nil && msg.Type == "layout" {
 			return
 		}
 	}
@@ -91,7 +90,7 @@ func TestARotatedTokenCutsOffTheSessionsAdmittedUnderTheOldOne(t *testing.T) {
 // one run in four. The registration reads the policy again, under the
 // same lock.
 func TestARotationDuringAdmissionCutsThatSessionOffToo(t *testing.T) {
-	s := New("127.0.0.1", 0, &WSHandler{DashboardToken: func() string { return "the-token-in-force" }})
+	s := New("127.0.0.1", 0, &WSHandler{})
 	s.SetAccessToken(true, "old-token")
 	var once sync.Once
 	s.wsAdmitHook = func() { once.Do(func() { s.SetAccessToken(true, "rotated-token") }) }
@@ -100,15 +99,15 @@ func TestARotationDuringAdmissionCutsThatSessionOffToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Shutdown(context.Background())
-	oldHash := s.accessHash()
-	conn, err := dialWSToken(addr, oldHash)
+	oldHash, oldKey := s.accessHash(), pageKeyFor(s)
+	conn, err := dialWSToken(addr, oldHash, oldKey)
 	if err != nil {
 		t.Fatalf("the cookie check refused the token in force: %v", err)
 	}
 	defer conn.CloseNow()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"dashboard_token","request_id":"in-the-window"}`))
+	_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"query","query":"ui_layout","request_id":"in-the-window"}`))
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
@@ -118,12 +117,12 @@ func TestARotationDuringAdmissionCutsThatSessionOffToo(t *testing.T) {
 			break
 		}
 		var msg ServerMessage
-		if json.Unmarshal(raw, &msg) == nil && msg.DashboardToken != "" {
-			t.Fatalf("a session admitted during the rotation was handed a token: %q", msg.DashboardToken)
+		if json.Unmarshal(raw, &msg) == nil && msg.Type == "layout" {
+			t.Fatal("a session admitted during the rotation was answered")
 		}
 	}
 	s.wsAdmitHook = nil
-	fresh, err := dialWSToken(addr, s.accessHash())
+	fresh, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatalf("the rotated token was refused: %v", err)
 	}

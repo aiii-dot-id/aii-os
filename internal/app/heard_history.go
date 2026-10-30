@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/memory"
 )
 
@@ -210,7 +211,7 @@ func (a *App) recallHeard(query string, after uint64, limit int) (string, error)
 	a.mode.mu.RLock()
 	defer a.mode.mu.RUnlock()
 	if a.mode.mode == ModeSafe {
-		return "", fmt.Errorf("heard history withheld under SAFE: %s", a.mode.reason)
+		return "", fmt.Errorf("heard history withheld under %s: %s", hold.Hold{Waiting: safePostures[a.mode.trigger].degraded}.Name(), a.mode.reason)
 	}
 	if len(query) > 4096 {
 		return "", fmt.Errorf("heard history query exceeds 4096 bytes")

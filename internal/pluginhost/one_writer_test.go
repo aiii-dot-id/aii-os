@@ -8,12 +8,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/plugstore"
 )
 
 // heldFetch is a server whose transfer the test holds open: it says when a
@@ -126,6 +131,69 @@ func TestTwoAcquisitionsOfOneModelDoNotWriteItAtOnce(t *testing.T) {
 	}
 	if _, err := os.Stat(blobPartial(w, decl)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a partial was left behind: %v", err)
+	}
+}
+
+func TestAnotherProcessWritesNothingInAStoreThisOneHolds(t *testing.T) {
+	data := bytes.Repeat([]byte("p"), 4096)
+	sum := sha256.Sum256(data)
+	decl := ModelDecl{Name: "one.bin", URL: "https://models.example.test/one.bin", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))}
+	work := viewWork([]string{decl.Name}, decl)
+
+	if dir := os.Getenv(storeWriterChild); dir != "" {
+		w, err := plugstore.OpenWriter(dir)
+		if errors.Is(err, plugstore.ErrHeld) {
+			fmt.Println("CHILD: the store is held")
+			return
+		}
+		if err != nil {
+			t.Fatalf("CHILD: %v", err)
+		}
+		defer w.Close()
+		whole := func(_ context.Context, _ string, offset int64, out io.Writer) (int64, error) {
+			n, err := out.Write(data[offset:])
+			return int64(n), err
+		}
+		fmt.Printf("CHILD: wrote the store: %v\n", EnsureEntry(context.Background(), w, work, whole, Adoption{}, nil))
+		return
+	}
+
+	w := openStore(t)
+	server := newHeldFetch(data)
+	done := make(chan error, 1)
+	go func() { done <- EnsureEntry(context.Background(), w, work, server.fetch, Adoption{}, nil) }()
+	select {
+	case <-server.began:
+	case <-time.After(15 * time.Second):
+		t.Fatal("rig: this process's transfer never began")
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), exe, "-test.run=^TestAnotherProcessWritesNothingInAStoreThisOneHolds$", "-test.count=1")
+	cmd.Env = append(os.Environ(), storeWriterChild+"="+w.Dir)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "CHILD: the store is held") {
+		t.Fatalf("a second process must be refused the store this one writes: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(blobOf(w, decl)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the model took its name while this process's transfer was open: %v", err)
+	}
+
+	close(server.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("this process's acquisition never returned")
+	}
+	got, err := os.ReadFile(blobOf(w, decl))
+	if err != nil || !bytes.Equal(got, data) || server.total.Load() != 1 {
+		t.Fatalf("the model is this process's one transfer: %d bytes, %v, %d transfer(s)", len(got), err, server.total.Load())
 	}
 }
 

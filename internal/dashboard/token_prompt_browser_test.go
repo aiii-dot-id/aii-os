@@ -21,10 +21,10 @@ try {
     if (url !== '/auth/token') return nativeFetch(url, options);
     const method = options.method || 'GET';
     calls.push({ method, body: options.body || '' });
-    if (method === 'GET') return { status: authorized ? 204 : 401, ok: authorized };
-    if (options.body === 'right-token') { authorized = true; return { status: 204, ok: true }; }
-    if (options.body === 'code-seen') return { status: 403, ok: false, text: async () => 'the host said why\n' };
-    return { status: 401, ok: false, text: async () => 'words that are not for the person' };
+    if (method === 'GET') return { status: authorized ? 204 : 401, ok: authorized, headers: new Headers() };
+    if (options.body === 'right-token') { authorized = true; return { status: 204, ok: true, headers: new Headers() }; }
+    if (options.body === 'code-seen') return { status: 403, ok: false, text: async () => 'the host said why\n', headers: new Headers() };
+    return { status: 401, ok: false, text: async () => 'words that are not for the person', headers: new Headers() };
   };
 
   let asks = 0;
@@ -105,7 +105,7 @@ try {
  const nativeFetch=window.fetch.bind(window);
  window.fetch=async(url,options={})=>{
   if(url!=='/auth/token')return nativeFetch(url,options);
-  if(options.method!=='POST')return {status:authorized?204:401};
+  if(options.method!=='POST')return {status:authorized?204:401,headers:new Headers()};
   posts++;return new Promise(resolve=>{resolvePost=resolve;});
  };
  window.prompt=()=>{throw Error('modal prompt used')};
@@ -117,7 +117,8 @@ try {
  assert(posts===1 && input.value==='','secret was retained or submit failed');
  form.querySelector('button[type="button"]').click();
  assert(form.hidden && box.textContent.includes('paused'),'cancel did not dismiss the form');
- authorized=true;resolvePost({status:204,ok:true});await Promise.resolve();await Promise.resolve();await Promise.resolve();
+ // The answer passes through the page key's keeper (pagekey.js signIn) on its way: a few turns, not a timer.
+ authorized=true;resolvePost({status:204,ok:true, headers: new Headers()});for(let i=0;i<10;i++)await Promise.resolve();
  assert(form.hidden && !box.textContent.includes('not accepted'),'late response reopened/overwrote the cancelled form');
  assert(socket,'late success did not revalidate the connection');
  socket.readyState=1;socket.onopen();assert(!document.getElementById('dashboard-signin'),'confirmed cookie left a stale sign-in form');
@@ -159,12 +160,12 @@ func wsProbeModules(t *testing.T, script string) map[string][]byte {
 		"/views/memory.js":   stubModule("renderMemory"),
 		"/views/identity.js": stubModule("renderIdentity"),
 		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction", "applyPluginStored"),
-		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptDashboardToken", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
+		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
 		"/firstboot.js":      stubModule("renderProviderOptions", "setModelOptions", "fbHint", "fbResult", "acceptDiscoveryResponse", "firstbootConnectionLost", "discoveryAnswered", "discoveryFailed"),
 		"/sections.js":       stubModule("publish", "onSections", "onLayout", "onTokensChanged"),
 		"/panel.js":          stubModule("renderPanel"),
 		"/theme.js":          stubModule("onTheme"),
-		"/overlay.js":        stubModule("onOverlayChanged", "holdReloadWhile"),
+		"/overlay.js":        stubModule("onOverlayChanged", "holdReloadWhile", "reloadForTheOverlay"),
 		"/voice.js":          stubModule("bindTransport", "render", "speak", "connectionLost"),
 	}
 	return modules
@@ -184,8 +185,8 @@ try {
   const sent = [];
   window.fetch = async (url, options = {}) => {
     sent.push(url + ' ' + options.method + ' ' + options.body);
-    if (options.body === 'SEEN') return { status: 403, ok: false, text: async () => 'the host said why\n' };
-    return { status: 401, ok: false, text: async () => 'words that are not for the person' };
+    if (options.body === 'SEEN') return { status: 403, ok: false, text: async () => 'the host said why\n', headers: new Headers() };
+    return { status: 401, ok: false, text: async () => 'words that are not for the person', headers: new Headers() };
   };
   const note = document.getElementById('note');
   const waitFor = async (predicate, label) => {

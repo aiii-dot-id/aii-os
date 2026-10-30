@@ -13,7 +13,7 @@ func TestProviderCardSaveKeepsFileOnlyFieldsAndHonorsEditableClears(t *testing.T
 	path := writeProvidersFor(t, a, `{"providers":[{"name":"metal","api_type":"openai","url":"http://127.0.0.1:9/v1",`+
 		`"models":["m","m2"],"default_model":"m","api_key":"fixture-key","api_key_env":"OLD_KEY",`+
 		`"reasoning_effort":"medium","embeddings_model":"bge-m3","local":true,"catalogue_author":"operator-catalog",`+
-		`"replay_reasoning":true}]}`)
+		`"replay_reasoning":true,"capability_list":"http://127.0.0.1:9/api/v1/models"}]}`)
 	if err := a.setProviderInfo(dashboard.ProviderEdit{ProviderInfo: dashboard.ProviderInfo{
 		Name: "metal", APIType: "openai", Endpoint: "http://127.0.0.1:9/v1",
 		DefaultModel: "m2", ConfiguredModels: []string{"m", "m2"},
@@ -26,7 +26,8 @@ func TestProviderCardSaveKeepsFileOnlyFieldsAndHonorsEditableClears(t *testing.T
 		t.Fatalf("saved registry did not reopen: %+v %v", reg, err)
 	}
 	e := reg.Providers[0]
-	if e.EmbeddingsModel != "bge-m3" || !e.Local || e.CatalogueAuthor != "operator-catalog" || !e.ReplayReasoning {
+	if e.EmbeddingsModel != "bge-m3" || !e.Local || e.CatalogueAuthor != "operator-catalog" || !e.ReplayReasoning ||
+		e.CapabilityList == nil || *e.CapabilityList != "http://127.0.0.1:9/api/v1/models" {
 		t.Fatalf("card erased file-only provider settings: %+v", e)
 	}
 	if e.APIKey != "fixture-key" {
@@ -38,7 +39,7 @@ func TestProviderCardSaveKeepsFileOnlyFieldsAndHonorsEditableClears(t *testing.T
 	raw, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(raw), `"embeddings_model": "bge-m3"`) ||
 		!strings.Contains(string(raw), `"local": true`) || !strings.Contains(string(raw), `"catalogue_author": "operator-catalog"`) ||
-		!strings.Contains(string(raw), `"replay_reasoning": true`) {
+		!strings.Contains(string(raw), `"replay_reasoning": true`) || !strings.Contains(string(raw), `"capability_list": "http://127.0.0.1:9/api/v1/models"`) {
 		t.Fatalf("file-only values were not persisted: %s %v", raw, err)
 	}
 }

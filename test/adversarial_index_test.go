@@ -77,6 +77,7 @@ func TestTheTreeGuardsCarryTheirMarker(t *testing.T) {
 		"internal/store/tree_writes_test.go": {"TestNoCodeOutsideTheStoreWritesItsTables"},
 		"test/private_terms_test.go":         {"TestNoPrivateTermInTheTree", "TestThePrivateTermsGuardRefusesWhatItIsFor"},
 		"test/decode_end_check_test.go":      {"TestADecodersMoreIsAskedOnlyInALoop", "TestTheDecodeEndGuardRefusesWhatItIsFor"},
+		"test/restart_sites_test.go":         {"TestOnlyTheListedSitesAskForARestart", "TestTheRestartGuardRefusesWhatItIsFor"},
 	} {
 		src, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {

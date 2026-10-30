@@ -40,7 +40,7 @@ func readAnthropicStream(r io.Reader) (anthResponse, error) {
 			return nil
 		}
 		if e.Type == "error" {
-			return fmt.Errorf("Anthropic stream error: %s", e.Error)
+			return &StreamFailure{Text: string(e.Error), Generated: len(blocks) > 0 || block != nil}
 		}
 		if e.Type != "message_start" && !started {
 			return fmt.Errorf("%s before message_start", e.Type)

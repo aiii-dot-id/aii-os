@@ -43,6 +43,11 @@ func TestAContinuationEndsWithTheAppsLifetime(t *testing.T) {
 	a, _ := dispatchApp(t)
 	t.Cleanup(func() { stopApp(t, a) })
 	asked := hangingModel(t, a)
+	// The leg's session is the active one, as a queued leg's is (a leg
+	// whose session is not in hand stands down before asking anything).
+	if err := a.store.StartWorkSession(t.Context(), "ws_lifetime", "lifetime work"); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan struct{})
 	go func() {
 		a.continueCappedTurn("ws_lifetime", 1, capDeclared, "")
@@ -64,7 +69,7 @@ func TestAContinuationEndsWithTheAppsLifetime(t *testing.T) {
 	// not run" is for a leg that never started, and is not said of this one.
 	// It was cut short before it said a word, and that is said (row 9.51,
 	// extended to a leg cut during its first request): no cut leg is silent.
-	if got, want := outboxReply(t, a, "continuation_"), "The next part of ws_lifetime was cut short: the identity was stopping."; got != want {
+	if got, want := outboxReply(t, a, "continuation_"), "The next part of lifetime work was cut short: the identity was stopping."; got != want {
 		t.Errorf("a leg cut with its request at the model is told to the operator as %q, want %q", got, want)
 	}
 }
@@ -258,7 +263,7 @@ func TestAHungEngineDoesNotHoldShutdown(t *testing.T) {
 		t.Fatal("the job was refused")
 	}
 	time.Sleep(50 * time.Millisecond) // the interrupt is in flight
-	ctx, cancel := context.WithTimeout(context.Background(), pluginhost.SessionControlBound+5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pluginhost.DefaultSessionControlBound+5*time.Second)
 	defer cancel()
 	if err := a.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown with an interrupt in flight against a hung engine: %v", err)

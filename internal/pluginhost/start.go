@@ -130,7 +130,7 @@ func (s *Staged) start(ctx context.Context, reg *tools.Registry, registerNow boo
 		Interfaces: interfaceNames(m.Interfaces), Capabilities: append([]string(nil), envelope...),
 		Runtime: variant.ExecutionRuntime, PackageHash: m.PackageHash,
 		reg: reg, binding: binding, envelope: envelope, validation: validation,
-		schemaBound: schemaBound,
+		schemaBound: schemaBound, bounds: opts.bounds(),
 	}
 	if binding != nil {
 		binding.SetPublisher(ap)

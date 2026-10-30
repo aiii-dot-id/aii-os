@@ -16,7 +16,6 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
-	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
@@ -64,6 +63,10 @@ func (a *App) StartEmbedded() (err error) {
 		}
 	}()
 	choice, err := a.chooseBoot()
+	var page *IdentityChoiceRefusal
+	if errors.As(err, &page) {
+		return a.startAtChoice(page.Choice)
+	}
 	if err != nil {
 		return err
 	}
@@ -184,13 +187,21 @@ func (a *App) Run() {
 	}
 
 	choice, err := a.chooseBoot()
+	var page *IdentityChoiceRefusal
+	if errors.As(err, &page) {
+		err = nil
+	}
 	if err != nil {
 		log.Fatalf("Startup refused: %v", err)
 	}
 
 	stopCh := watchStopRequest()
 
-	if choice == bootFirstboot {
+	if page != nil {
+		if err := a.startAtChoice(page.Choice); err != nil {
+			log.Fatalf("Startup failed: %v", err)
+		}
+	} else if choice == bootFirstboot {
 		if err := a.startFirstboot(); err != nil {
 			log.Fatalf("Startup failed: %v", err)
 		}
@@ -413,14 +424,14 @@ func (a *App) closeLiveResources() error {
 	}
 
 	for _, ap := range retiring {
-		ctx, cancel := context.WithTimeout(context.Background(), pluginhost.StopBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), ap.StopBudget())
 		if err := ap.CloseQuiet(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("stop pinned predecessor %s: %w", ap.ID, err))
 		}
 		cancel()
 	}
 	for _, ap := range plugins {
-		ctx, cancel := context.WithTimeout(context.Background(), pluginhost.StopBudget)
+		ctx, cancel := context.WithTimeout(context.Background(), ap.StopBudget())
 		if err := ap.Deactivate(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("deactivate plugin %s: %w", ap.ID, err))
 		}

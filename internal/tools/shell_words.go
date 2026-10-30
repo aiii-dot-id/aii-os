@@ -37,14 +37,44 @@ func wordsHolding(cmd, word string) []string {
 }
 
 func shellWords(cmd string, v bashVersion) []string {
-	escapes := shellDialect == "bash"
 	var words []string
+	for _, w := range shellWordsIn(cmd, v, shellDialect == "bash") {
+		words = append(words, w.text)
+	}
+	return words
+}
+
+type shellWord struct {
+	text   string
+	quoted bool
+}
+
+func shellWordsQuoted(cmd, word string) []shellWord {
+	escapes := shellDialect == "bash"
+	vs := shellVersions(cmd)
+	for _, v := range vs {
+		ws := shellWordsIn(cmd, v, escapes)
+		if slices.ContainsFunc(ws, func(w shellWord) bool { return w.text == word }) {
+			return ws
+		}
+	}
+	return shellWordsIn(cmd, vs[0], escapes)
+}
+
+func shellWordsQuotedIn(cmd string, escapes bool) []shellWord {
+	return shellWordsIn(cmd, bash5, escapes)
+}
+
+func shellWordsIn(cmd string, v bashVersion, escapes bool) []shellWord {
+	var words []shellWord
 	var cur strings.Builder
+	quoted := true
 	end := func() {
 		if cur.Len() > 0 {
-			words = append(words, cur.String())
+			words = append(words, shellWord{text: cur.String(), quoted: quoted})
 			cur.Reset()
 		}
+		quoted = true
 	}
 	rs := []rune(cmd)
 	for i := 0; i < len(rs); i++ {
@@ -70,6 +100,7 @@ func shellWords(cmd string, v bashVersion) []string {
 		case escapes && c == '$' && i+1 < len(rs) && rs[i+1] == '$':
 
 			cur.WriteString("$$")
+			quoted = false
 			i++
 		case escapes && v != asWritten && c == '$' && i+1 < len(rs) && rs[i+1] == '\'':
 
@@ -89,11 +120,13 @@ func shellWords(cmd string, v bashVersion) []string {
 
 			if rs[i] != '\n' {
 				cur.WriteRune(rs[i])
+				quoted = false
 			}
 		case unicode.IsSpace(c) || strings.ContainsRune(shellSeparators, c):
 			end()
 		default:
 			cur.WriteRune(c)
+			quoted = false
 		}
 	}
 	end()
@@ -262,6 +295,8 @@ type shellToken struct {
 	fragment bool
 
 	literal bool
+
+	code bool
 }
 
 func (r *Registry) shellTokens(base, cmd string) []shellToken {
@@ -274,9 +309,9 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 		}
 	}
 	for _, v := range shellVersions(cmd) {
-		var read func(arg string, fragment, literal bool)
-		read = func(arg string, fragment, literal bool) {
-			tok := shellToken{text: arg, fragment: fragment, literal: literal}
+		var read func(arg string, fragment, literal bool, code map[string]bool)
+		read = func(arg string, fragment, literal bool, code map[string]bool) {
+			tok := shellToken{text: arg, fragment: fragment, literal: literal, code: code[arg]}
 			pieces := shellWords(arg, v)
 			if fragment || len(pieces) == 0 || len(pieces) == 1 && pieces[0] == arg {
 				add(tok)
@@ -287,16 +322,17 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 				(r.inExtraRoot(from(base, arg)) || isRooted(arg) && !r.isOutsideSandbox(arg))
 			add(tok)
 			for i, p := range pieces {
-				read(p, tok.name && (i == 0 || !escapeShaped(p)), literal)
+				read(p, tok.name && (i == 0 || !escapeShaped(p)), literal, code)
 			}
 		}
 		text, docs := hereDocs(cmd, v)
 		for _, w := range shellWords(text, v) {
-			read(w, false, false)
+			read(w, false, false, nil)
 		}
 		for _, d := range docs {
+			code := programCode(d.lang, d.body)
 			for _, w := range shellWords(d.body, v) {
-				read(w, false, d.literal)
+				read(w, false, d.literal, code)
 			}
 		}
 	}
@@ -306,6 +342,7 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 type hereDoc struct {
 	body    string
 	literal bool
+	lang    string
 }
 
 var hereDocReaders = map[string]bool{
@@ -319,13 +356,28 @@ func hereDocReader(prog string) bool {
 	return hereDocReaders[prog] || versioned && v != "" && strings.Trim(v, "0123456789") == ""
 }
 
+func programLang(words []string) string {
+	if len(words) == 0 || !hereDocReader(words[0]) || len(words) > 1 && words[1] != "-" {
+		return ""
+	}
+	switch prog := filepath.Base(words[0]); prog {
+	case "ruby", "node":
+		return prog
+	case "perl", "php":
+		return ""
+	}
+	return "python"
+}
+
 func hereDocs(cmd string, v bashVersion) (string, []hereDoc) {
 	if shellDialect != "bash" || !strings.Contains(cmd, "<<") {
 		return cmd, nil
 	}
+
 	type pending struct {
-		delim          string
-		strip, literal bool
+		delim                 string
+		strip, literal        bool
+		stage, op, opEnd, end int
 	}
 	var (
 		text  strings.Builder
@@ -457,11 +509,14 @@ func hereDocs(cmd string, v bashVersion) (string, []hereDoc) {
 				}
 				literal = len(words) > 0 && hereDocReader(words[0])
 			}
-			queue = append(queue, pending{delim.String(), strip, literal})
+			queue = append(queue, pending{delim: delim.String(), strip: strip, literal: literal, stage: stage, op: text.Len(), opEnd: text.Len() + j, end: -1})
 			n = j
 		case c == '\n' && len(queue) > 0:
 			i++
 			for _, p := range queue {
+				if p.end < 0 {
+					p.end = text.Len()
+				}
 				var body strings.Builder
 				ended := false
 				for i < len(cmd) && !ended {
@@ -480,7 +535,16 @@ func hereDocs(cmd string, v bashVersion) (string, []hereDoc) {
 				if !ended {
 					return whole()
 				}
-				docs = append(docs, hereDoc{body.String(), p.literal})
+				lang := ""
+				if p.literal {
+					t := text.String()
+					words := shellWords(t[p.stage:p.op]+" "+t[p.opEnd:p.end], v)
+					for len(words) > 0 && isAssignment(words[0]) {
+						words = words[1:]
+					}
+					lang = programLang(words)
+				}
+				docs = append(docs, hereDoc{body.String(), p.literal, lang})
 			}
 			queue = nil
 			text.WriteByte('\n')
@@ -492,6 +556,11 @@ func hereDocs(cmd string, v bashVersion) (string, []hereDoc) {
 		text.WriteString(rest[:n])
 		i += n
 		if len(open) == 0 && strings.IndexByte(";&|\n", c) >= 0 {
+			for k := range queue {
+				if queue[k].end < 0 {
+					queue[k].end = text.Len()
+				}
+			}
 			stage = text.Len()
 		}
 	}

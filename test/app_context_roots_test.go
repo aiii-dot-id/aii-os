@@ -19,14 +19,14 @@ var appContextRoots = []appContextRoot{
 	// The shutdown path's own roots: the lifetime is already cancelled.
 	{"lifecycle.go", "App.Run", 1, "a shutdown root: the process leaves once the teardown has, each step of which carries its own bound"},
 	{"lifecycle.go", "App.stop", 1, "a shutdown root: the lifetime is already cancelled when it runs"},
-	{"lifecycle.go", "App.closeLiveResources", 2, "teardown roots bounded by pluginhost.StopBudget, serving Shutdown and a failed birth's teardown alike"},
+	{"lifecycle.go", "App.closeLiveResources", 2, "teardown roots bounded by each plugin's own stop (ActivePlugin.StopBudget), serving Shutdown and a failed birth's teardown alike"},
 	// Boot before the lifetime runs anything.
 	{"boot.go", "App.startLive", 3, "boot roots: each step of the integrity ladder finishes or fails before the lifetime runs anything"},
 	// Record writers that must complete, whose caller carries no context.
 	{"grades.go", "App.gradeResult", 1, "a record writer that must complete: the grade was admitted, and the page's hook carries no ctx"},
 	{"interaction_record.go", "App.wireProjectInteractionRecorder", 1, "a record writer that must complete: the manifest is saved, and project.Manager's recorder carries no ctx"},
 	// Bounded fences that must outlive their caller.
-	{"pluginruntime.go", "App.watchPinnedPredecessor", 2, "bounded fences (pluginhost.StopBudget): the pinned predecessor's stop and abort outlive every caller; its watcher is engine work, joined after the plugin teardown"},
+	{"pluginruntime.go", "App.watchPinnedPredecessor", 2, "bounded fences (the plugin's own stop, ActivePlugin.StopBudget): the pinned predecessor's stop and abort outlive every caller; its watcher is engine work, joined after the plugin teardown"},
 	{"voice_session.go", "voiceHandle.fenceBounded", 1, "a bounded fence (voiceAdmissionBound): a cancelled caller still fences what it admitted; its caller's join joins it (the hush's fence: engine work)"},
 	{"voice_session.go", "App.abortVoiceSessionsUnderSafe", 1, "a bounded fence (10 s): SAFE's abort outlives its caller; it is engine work, ended by the plugin teardown's close of the engine and joined after it"},
 }

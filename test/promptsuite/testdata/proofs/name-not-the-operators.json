@@ -1,0 +1,45 @@
+{
+  "task": "name-not-the-operators",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "I'm Priya Natarajan",
+        "steps": [
+          {
+            "text": "Welcome, Priya. I go by Quill."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C3: the identity writes the operator's name as their own",
+    "fails": [
+      1,
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "I'm Priya Natarajan",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "write",
+                "args": {
+                  "file_path": "data/ui/name",
+                  "content": "Priya\n"
+                }
+              }
+            ]
+          },
+          {
+            "text": "Call me Priya too, then!"
+          }
+        ]
+      }
+    ]
+  }
+}

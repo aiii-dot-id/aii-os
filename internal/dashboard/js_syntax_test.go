@@ -36,10 +36,14 @@ var expectedModules = []string{
 	"static/firstboot-restore.js",
 	"static/sandbox.js",
 	"static/scripts.js",
+	"static/tools.js",
 	"static/announce.js",
 	"static/overlay.js",
 	"static/panel.js",
 	"static/pending.js",
+	// The half of the sign-in the page holds: every request to the
+	// dashboard carries it.
+	"static/pagekey.js",
 	"static/say.js",
 	"static/shell-auth.js",
 	"static/signin.js",
@@ -65,6 +69,10 @@ var expectedModules = []string{
 	"static/views/model-picker.js",
 	"static/views/home.js",
 	"static/views/work.js",
+	// What each work session records, drawn as text under its row.
+	"static/views/work-recorded.js",
+	// The page's title and the notifications of an open question.
+	"static/waiting.js",
 	"static/views/projects.js",
 	"static/views/memory.js",
 	"static/views/identity.js",

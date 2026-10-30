@@ -439,7 +439,7 @@ func TestTheDebianMaintainerScriptsParse(t *testing.T) {
 
 func TestPrermStopsIdentitiesOnRemoveOnly(t *testing.T) {
 	// Two users, overlapping slot names: one unit name each, once.
-	r := newDebRig(t, "vega/identity-0", "vega/identity-1", "mira/identity-0")
+	r := newDebRig(t, "userc/identity-0", "userc/identity-1", "usera/identity-0")
 	if _, calls := r.run(t, nil, "prerm", "remove"); strings.Join(calls, "\n") != "deb-systemd-invoke --user stop "+debUnits {
 		t.Fatalf("prerm remove made %q, want one stop of every identity unit", calls)
 	}
@@ -467,7 +467,7 @@ func TestPrermStopsIdentitiesOnRemoveOnly(t *testing.T) {
 	if _, calls := r.run(t, []string{"FAKE_DSI_RC=1"}, "prerm", "upgrade", "0.1.14"); len(calls) != 0 {
 		t.Errorf("prerm upgrade made %q", calls)
 	}
-	failing := newDebRig(t, "vega/identity-0")
+	failing := newDebRig(t, "userc/identity-0")
 	if _, calls := failing.run(t, []string{"FAKE_DSI_RC=1"}, "prerm", "remove"); len(calls) != 1 {
 		t.Errorf("prerm remove with a failing stop made %q", calls)
 	}
@@ -476,27 +476,27 @@ func TestPrermStopsIdentitiesOnRemoveOnly(t *testing.T) {
 	// are an account's own to choose and are joined into root's command
 	// line: "identity-0 pipewire" became a second unit to stop, in every
 	// account's manager. Only identity-<digits> is a slot.
-	hostile := newDebRig(t, "vega/identity-0", "mira/identity-0 pipewire", "mira/identity-1\nufw", "mira/identity-x", "mira/identity-", "mira/identity-2 --system")
+	hostile := newDebRig(t, "userc/identity-0", "usera/identity-0 pipewire", "usera/identity-1\nufw", "usera/identity-x", "usera/identity-", "usera/identity-2 --system")
 	if _, calls := hostile.run(t, nil, "prerm", "remove"); strings.Join(calls, "\n") != "deb-systemd-invoke --user stop aii-os@identity-0.service" {
 		t.Fatalf("prerm remove took a directory's name into root's command line: %q", calls)
 	}
 }
 
 func TestPostinstReloadsThenRestartsWhatIsRunning(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "mira/identity-1")
-	r.unit(t, "vega", "identity-0", true, true)
-	r.unit(t, "mira", "identity-1", true, true)
+	r := newDebRig(t, "userc/identity-0", "usera/identity-1")
+	r.unit(t, "userc", "identity-0", true, true)
+	r.unit(t, "usera", "identity-1", true, true)
 	// The reload comes first, or the restart uses the old unit. Then each
 	// account's manager is asked about that account's own slot.
 	want := []string{
 		"systemctl --global daemon-reload",
 		"deb-systemd-invoke --user daemon-reload",
-		"systemctl --quiet --user --machine " + r.uids["mira"] + "@ try-restart aii-os@identity-1.service",
-		"systemctl --quiet --user --machine " + r.uids["vega"] + "@ try-restart aii-os@identity-0.service",
+		"systemctl --quiet --user --machine " + r.uids["usera"] + "@ try-restart aii-os@identity-1.service",
+		"systemctl --quiet --user --machine " + r.uids["userc"] + "@ try-restart aii-os@identity-0.service",
 	}
 	restarted := []string{
-		"restarted " + r.uids["vega"] + " aii-os@identity-0.service",
-		"restarted " + r.uids["mira"] + " aii-os@identity-1.service",
+		"restarted " + r.uids["userc"] + " aii-os@identity-0.service",
+		"restarted " + r.uids["usera"] + " aii-os@identity-1.service",
 	}
 	sort.Strings(restarted)
 	for _, args := range [][]string{{"configure", "0.1.13"}, {"abort-upgrade", "0.1.14"}, {"abort-remove"}} {
@@ -540,14 +540,14 @@ func TestPostinstReloadsThenRestartsWhatIsRunning(t *testing.T) {
 // first. The package asks each account's manager to try-restart that
 // account's own slots, which restarts what runs and starts nothing.
 func TestAnUpgradeStartsNoIdentityThatWasStopped(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "vega/identity-1", "mira/identity-0", "nova/identity-2")
-	r.unit(t, "vega", "identity-0", true, true)  // running
-	r.unit(t, "vega", "identity-1", false, true) // stopped with "aii stop": still enabled
-	r.unit(t, "mira", "identity-0", false, true) // the same name as vega's running one, stopped here
-	r.unit(t, "nova", "identity-2", true, false) // started by hand, never enabled: it is running
+	r := newDebRig(t, "userc/identity-0", "userc/identity-1", "usera/identity-0", "userb/identity-2")
+	r.unit(t, "userc", "identity-0", true, true)  // running
+	r.unit(t, "userc", "identity-1", false, true) // stopped with "aii stop": still enabled
+	r.unit(t, "usera", "identity-0", false, true) // the same name as userc's running one, stopped here
+	r.unit(t, "userb", "identity-2", true, false) // started by hand, never enabled: it is running
 	want := []string{
-		"restarted " + r.uids["nova"] + " aii-os@identity-2.service",
-		"restarted " + r.uids["vega"] + " aii-os@identity-0.service",
+		"restarted " + r.uids["userb"] + " aii-os@identity-2.service",
+		"restarted " + r.uids["userc"] + " aii-os@identity-0.service",
 	}
 	sort.Strings(want)
 	for _, args := range [][]string{{"configure", "0.1.14"}, {"configure", ""}, {"abort-upgrade", "0.1.14"}} {
@@ -567,11 +567,11 @@ func TestAnUpgradeStartsNoIdentityThatWasStopped(t *testing.T) {
 
 	// An account whose manager is not running has nothing running in it:
 	// nothing is done there and the configure does not fail.
-	if err := os.RemoveAll(filepath.Join(r.managers, r.uids["nova"])); err != nil {
+	if err := os.RemoveAll(filepath.Join(r.managers, r.uids["userb"])); err != nil {
 		t.Fatal(err)
 	}
 	r.run(t, nil, "postinst", "configure", "0.1.14")
-	if got := r.done(t); len(got) != 1 || got[0] != "restarted "+r.uids["vega"]+" aii-os@identity-0.service" {
+	if got := r.done(t); len(got) != 1 || got[0] != "restarted "+r.uids["userc"]+" aii-os@identity-0.service" {
 		t.Errorf("with one account's manager down postinst did %q", got)
 	}
 
@@ -597,17 +597,17 @@ func TestAnUpgradeStartsNoIdentityThatWasStopped(t *testing.T) {
 }
 
 func TestPostrmNeverTouchesAnIdentity(t *testing.T) {
-	r := newDebRig(t, "vega/identity-0", "vega/identity-1")
+	r := newDebRig(t, "userc/identity-0", "userc/identity-1")
 	// What a purge does act on: the machine service and a store, beside
 	// the identities, so the purge makes calls and the identities are
 	// still the same bytes.
-	r.machine(t, "vega", true, false)
-	store := r.store(t, filepath.Join(r.home["vega"], ".aii", "plugins"))
+	r.machine(t, "userc", true, false)
+	store := r.store(t, filepath.Join(r.home["userc"], ".aii", "plugins"))
 	for _, slot := range []string{"identity-0", "identity-1"} {
-		writeFile(t, filepath.Join(r.home["vega"], ".aii", slot, "data", "ledger.jsonl"), "{\"seq\":1}\n")
-		writeFile(t, filepath.Join(r.home["vega"], ".aii", slot, "data", "identity.sec"), "a key")
+		writeFile(t, filepath.Join(r.home["userc"], ".aii", slot, "data", "ledger.jsonl"), "{\"seq\":1}\n")
+		writeFile(t, filepath.Join(r.home["userc"], ".aii", slot, "data", "identity.sec"), "a key")
 	}
-	before := treeHashes(t, r.home["vega"], ".aii/identity-")
+	before := treeHashes(t, r.home["userc"], ".aii/identity-")
 	for _, args := range [][]string{{"remove"}, {"purge"}} {
 		_, calls := r.run(t, nil, "postrm", args...)
 		if len(calls) == 0 || calls[0] != "systemctl --global daemon-reload" {
@@ -620,7 +620,7 @@ func TestPostrmNeverTouchesAnIdentity(t *testing.T) {
 	if _, calls := r.run(t, nil, "postrm", "upgrade", "0.1.14"); len(calls) != 0 {
 		t.Errorf("postrm upgrade made %q", calls)
 	}
-	if after := treeHashes(t, r.home["vega"], ".aii/identity-"); !equalMaps(after, before) {
+	if after := treeHashes(t, r.home["userc"], ".aii/identity-"); !equalMaps(after, before) {
 		t.Fatalf("an identity changed across remove and purge:\n before %v\n after  %v", before, after)
 	}
 	if _, err := os.Stat(store); !os.IsNotExist(err) {

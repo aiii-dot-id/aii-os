@@ -21,7 +21,7 @@ import (
 // make.
 func boundWalk(t *testing.T, e *Engine, r *rand.Rand, source string, base map[string]any) []uint64 {
 	t.Helper()
-	bound := e.recallBound()
+	bound := e.recallBound(context.Background())
 	var walked []uint64
 	cursor := uint64(0)
 	for call := 0; ; call++ {
@@ -275,8 +275,6 @@ func TestACursorPastTheOldestRowSaysThereAreNoOlderRows(t *testing.T) {
 	}
 }
 
-// The schema's limit words state each listing's default page, and each is
-// the page the listing serves.
 func TestTheLimitWordsStateThePagesTheListingsServe(t *testing.T) {
 	var desc string
 	for _, v := range Verbs() {
@@ -284,10 +282,18 @@ func TestTheLimitWordsStateThePagesTheListingsServe(t *testing.T) {
 			desc = v.Params["properties"].(map[string]any)["limit"].(map[string]any)["description"].(string)
 		}
 	}
+	e, st, _, _, _ := setupEngine(t)
+	seedPagedSources(t, e, st, 4)
 	for source, page := range pagedSourceDefaults {
-		m := regexp.MustCompile(source + ` (\d+)`).FindStringSubmatch(desc)
-		if m == nil || m[1] != strconv.Itoa(page) {
-			t.Fatalf("the limit words state %v for %s; the listing serves %d: %s", m, source, page, desc)
+		if regexp.MustCompile(source + ` \d+`).MatchString(desc) {
+			t.Errorf("the limit words state a page for %s: %s", source, desc)
 		}
+		out := advertisedRecallCall(t, e, map[string]any{"source": source, "query": limitCue})
+		if !strings.Contains(out, fmt.Sprintf("%d a page", page)) {
+			t.Errorf("source=%s does not state its page of %d:\n%.400s", source, page, out)
+		}
+	}
+	if !strings.Contains(desc, "names the after_seq of the next page") {
+		t.Errorf("the limit words do not say a page names the next: %s", desc)
 	}
 }

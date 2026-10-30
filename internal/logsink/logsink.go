@@ -169,7 +169,7 @@ func (s *Sink) installStream() {
 	slog.SetDefault(slog.New(newHandler(file, stderrOrNil())))
 
 	s.stop = make(chan struct{})
-	go digestEvery(time.Hour, s.stop)
+	go beat(time.Hour, s.stop, s.file)
 
 }
 

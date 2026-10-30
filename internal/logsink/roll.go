@@ -1,6 +1,7 @@
 package logsink
 
 import (
+	"errors"
 	"os"
 	"sync"
 
@@ -50,6 +51,37 @@ func (l *liveLog) roll() (string, error) {
 	_ = l.f.Close()
 	l.f = f
 	return name, nil
+}
+
+func (l *liveLog) measure() (disk, counted int64, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return 0, 0, os.ErrClosed
+	}
+	fi, err := l.f.Stat()
+	if err != nil {
+		return 0, l.size, err
+	}
+	disk, counted = fi.Size(), l.size
+	l.size = disk
+	return disk, counted, nil
+}
+
+func (l *liveLog) noteSize() {
+	if l == nil {
+		return
+	}
+	disk, counted, err := l.measure()
+	switch {
+	case errors.Is(err, os.ErrClosed):
+	case err != nil:
+		Warn("logs.error", "the size of the live log %s could not be read: %v", LiveName, err)
+	case disk != counted:
+		Warn("logs.error", "the live log %s holds %d bytes, and the host wrote %d to it: something other than the host changed it", LiveName, disk, counted)
+	default:
+		Info("logs.pass", "the live log %s holds %d bytes", LiveName, disk)
+	}
 }
 
 func (l *liveLog) Close() error {

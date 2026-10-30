@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
+	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 )
 
 // heldCloseEngine is an engine whose close answers only when released, or
@@ -194,10 +195,10 @@ func TestASafeAbortInFlightIsJoinedByShutdown(t *testing.T) {
 		var err error
 		select {
 		case err = <-stopped:
-		case <-time.After(engineJoinBound + 5*time.Second):
+		case <-time.After(pluginhost.DefaultStopBudget + 5*time.Second):
 			t.Fatal("a SAFE abort the engine never answers held Shutdown past the join's bound")
 		}
-		if took := time.Since(began); took < engineJoinBound {
+		if took := time.Since(began); took < pluginhost.DefaultStopBudget {
 			t.Fatalf("Shutdown returned after %s, before the join's bound: the abort was not waited for", took)
 		}
 		if err == nil || !strings.Contains(err.Error(), "the SAFE abort of session vs-deaf") {

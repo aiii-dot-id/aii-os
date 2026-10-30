@@ -1,0 +1,16 @@
+# tools "probe_report_ready" on linux: 1 definitions, in the order a request offers them
+
+=== tool 1 of 1: report_ready ===
+Report that you are ready. Call this to answer.
+--- parameters ---
+{
+  "properties": {
+    "ready": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ready"
+  ],
+  "type": "object"
+}

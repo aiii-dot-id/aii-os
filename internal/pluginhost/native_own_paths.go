@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 )
@@ -37,4 +38,14 @@ func (f nativeFiles) ownPaths() ([]nativePath, error) {
 		}
 	}
 	return paths, nil
+}
+
+func nativeView(added []string) []string {
+	view := slices.Clone(DefaultNativeView)
+	for _, p := range added {
+		if !slices.Contains(view, p) {
+			view = append(view, p)
+		}
+	}
+	return view
 }

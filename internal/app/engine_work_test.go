@@ -269,11 +269,11 @@ func TestAWedgedEngineGoroutineIsBoundedAndNamed(t *testing.T) {
 	go func() { stopped <- a.Shutdown(context.Background()) }()
 	select {
 	case err = <-stopped:
-	case <-time.After(engineJoinBound + 5*time.Second):
+	case <-time.After(pluginhost.DefaultStopBudget + 5*time.Second):
 		t.Fatal("a wedged engine goroutine held Shutdown past its bound")
 	}
-	if took := time.Since(began); took < engineJoinBound {
-		t.Fatalf("Shutdown returned after %s, before the join's bound (%s): the drain was never waited for", took, engineJoinBound)
+	if took := time.Since(began); took < pluginhost.DefaultStopBudget {
+		t.Fatalf("Shutdown returned after %s, before the join's bound (%s): the drain was never waited for", took, pluginhost.DefaultStopBudget)
 	}
 	if err == nil || !strings.Contains(err.Error(), "the drain after vs-wedged's input") {
 		t.Fatalf("a teardown that left an engine goroutine running returned %v — it must fail, naming what it left", err)
@@ -294,8 +294,8 @@ func TestAWedgedEngineGoroutineIsBoundedAndNamed(t *testing.T) {
 func awaitAppWork(t testing.TB, a *App) {
 	t.Helper()
 	a.bgWG.Wait()
-	if left := a.engines.join(engineJoinBound); len(left) > 0 {
-		t.Fatalf("engine work still running after %s: %v", engineJoinBound, left)
+	if left := a.engines.join(pluginhost.DefaultStopBudget); len(left) > 0 {
+		t.Fatalf("engine work still running after %s: %v", pluginhost.DefaultStopBudget, left)
 	}
 	a.bgWG.Wait()
 }

@@ -446,13 +446,17 @@ func (b *Binding) dispatchMemoryRecall(ctx context.Context, p invokeParams) ([]b
 			"score": h.Score, "strength": h.Strength, "fused": h.Fused,
 			"attribution": h.Attribution, "ring": h.Ring, "time": h.Time.UTC().Format(time.RFC3339Nano),
 			"accesses": h.Accesses, "class": string(h.Class), "similarity": h.Similarity, "graph": h.Graph,
+
+			"meaning_read": h.MeaningRead,
 		})
 	}
 	payload := map[string]any{
 		"hits": hits, "status": src.Status, "matched": src.Matched, "shown": src.Shown,
 		"policy": res.Policy, "truncated": res.Truncated, "warnings": res.Warnings,
 		"selection_context": selectionContext,
-		"meaning":           map[string]any{"status": res.Meaning.Status, "detail": res.Meaning.Detail, "basis": res.Meaning.Basis, "floor": res.Meaning.Floor},
+
+		"meaning": map[string]any{"status": res.Meaning.Status, "detail": res.Meaning.Detail, "basis": res.Meaning.Basis, "floor": res.Meaning.Floor,
+			"cue_chars": res.Meaning.CueChars, "cue_read": res.Meaning.CueRead},
 	}
 	or, err := json.Marshal(payload)
 	for err == nil && len(or) > resultBudget && len(hits) > 0 {

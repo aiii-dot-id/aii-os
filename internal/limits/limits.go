@@ -2,6 +2,7 @@ package limits
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -109,3 +110,25 @@ const (
 	DefaultRetries            = 1
 	DefaultRetryBackoffMS     = 2000
 )
+
+const DefaultTurnSecondsLocal = DefaultContinuationWall
+
+const DefaultWebFetchMaxBytes = 4_000_000
+
+type toolResultCharsKey struct{}
+
+func WithToolResultChars(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, toolResultCharsKey{}, n)
+}
+
+func ToolResultChars(ctx context.Context) int {
+	if n, ok := ctx.Value(toolResultCharsKey{}).(int); ok && n > 0 {
+		return n
+	}
+	return DefaultToolResultChars
+}
+
+func CarriedToolResultChars(ctx context.Context) (int, bool) {
+	n, ok := ctx.Value(toolResultCharsKey{}).(int)
+	return n, ok && n > 0
+}

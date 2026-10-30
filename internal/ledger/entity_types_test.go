@@ -125,3 +125,43 @@ func TestEventTypeVocabularyIsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestTheEventTypesAreTheOnesTheReleasedPredecessorReplays(t *testing.T) {
+	predecessor := map[EventType]bool{
+		"ring0.genesis":           true,
+		"relationship.upsert":     true,
+		"belief.promote":          true,
+		"experience.create":       true,
+		"belief.upsert":           true,
+		"edge.create":             true,
+		"self_model.synthesize":   true,
+		"intention.create":        true,
+		"intention.state_change":  true,
+		"commitment.promised":     true,
+		"commitment.state_change": true,
+		"working_style.upsert":    true,
+		"consolidation.run":       true,
+		"dream.run":               true,
+		"belief.archive":          true,
+		"belief.supersede":        true,
+		"edge.archive":            true,
+		"system.witnessed":        true,
+		"trust.epoch_accepted":    true,
+		"network.name_claimed":    true,
+	}
+	here := map[EventType]bool{}
+	for _, et := range AllEventTypes() {
+		if here[et] {
+			t.Errorf("event type %q is registered twice", et)
+		}
+		here[et] = true
+		if !predecessor[et] {
+			t.Errorf("EVENT TYPE %q IS NOT ONE THE RELEASED PREDECESSOR (0.1.23) REPLAYS: a record holding it stops that release at its SAFE page after a rollback", et)
+		}
+	}
+	for et := range predecessor {
+		if !here[et] {
+			t.Errorf("event type %q, which the released predecessor (0.1.23) knows, is gone from this release's vocabulary", et)
+		}
+	}
+}

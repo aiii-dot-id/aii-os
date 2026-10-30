@@ -23,6 +23,10 @@ type Skip struct {
 	Dir, Package string
 	ID, Tier     string
 	Reason       string
+
+	Version      string
+	Native       bool
+	Capabilities []string
 }
 
 const (
@@ -129,7 +133,8 @@ func (f *Facility) Rescan(pol Policy) {
 			f.cfg.Log("plugin dir %s: note — directory name differs from verified id %q (identity comes from the signature)", fd.Dir, id)
 		}
 		if ok, why := pol.allows(memo.ev); !ok {
-			skips = append(skips, Skip{Kind: SkipPolicy, Dir: fd.Dir, Package: fd.Package, ID: id, Tier: memo.ev.Tier, Reason: why})
+			skips = append(skips, Skip{Kind: SkipPolicy, Dir: fd.Dir, Package: fd.Package, ID: id, Tier: memo.ev.Tier, Reason: why,
+				Version: memo.ev.Version, Native: memo.ev.Native, Capabilities: memo.ev.Capabilities})
 			f.cfg.Log("plugin %s (%s): %s — present, verified, NOT loaded", id, memo.ev.Tier, why)
 			continue
 		}

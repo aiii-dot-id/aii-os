@@ -1,0 +1,109 @@
+{
+  "task": "voice-no-host-note-replayed",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "one at a time",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt begins with alpha."
+          }
+        ]
+      },
+      {
+        "on": "Go on, finish the job",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/c.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "c.txt begins with gamma."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "C2: the host's note on the last turn is spoken as the identity's own",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "one at a time",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/a.txt"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/b.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "a.txt begins with alpha."
+          }
+        ]
+      },
+      {
+        "on": "Go on, finish the job",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "file_path": "inbox/c.txt"
+                }
+              }
+            ]
+          },
+          {
+            "text": "[This turn reached its limit of 1 tool calls and was finished without further tools. Ask again to continue.]\nc.txt begins with gamma."
+          }
+        ]
+      }
+    ]
+  }
+}

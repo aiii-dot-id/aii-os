@@ -4,6 +4,9 @@ import { renderInto } from '../announce.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
+export const EXPERT_WORDS = 'Show technical controls';
+export const EXPERT_TIP = 'Shows the technical operator\u2019s controls: on Chat, the switch that sends your notices to you off the dashboard while no page is open; in Settings \u2192 Dashboard, the public name\u2019s route, its relay and port, and the direct addresses. Showing or hiding them changes nothing else.';
+
 const KEYS = { expert: 'dashboard.expert', route: 'dashboard.notices_off_dashboard' };
 const slots = { expert: pendingSlot(), route: pendingSlot() };
 const said = { expert: '', route: '' };
@@ -47,11 +50,19 @@ function panelHTML() {
 }
 
 export function renderExpert() {
+  renderBar();
+  if (S.renderExpertPlaces) S.renderExpertPlaces();
+}
+
+function renderBar() {
   const bar = document.getElementById('expert-bar');
   if (!bar) return;
   if (!S.stats || !S.identityExists) { bar.hidden = true; return; }
   bar.hidden = false;
   const expert = inForce('expert');
+  const label = bar.querySelector('[data-expert-label]');
+  label.title = EXPERT_TIP;
+  label.querySelector('[data-expert-words]').textContent = EXPERT_WORDS;
   const box = bar.querySelector('[data-expert]');
   box.checked = expert;
   box.disabled = !!slots.expert.waiting();
@@ -68,6 +79,20 @@ export function renderExpert() {
   const route = panel.querySelector('[data-notice-route]');
   if (route) route.onchange = () => save('route', route.checked);
   box.onchange = () => save('expert', box.checked);
+}
+
+export function expertShown() { return inForce('expert'); }
+
+export function expertBoxState() { return JSON.stringify([inForce('expert'), !!slots.expert.waiting(), said.expert]); }
+
+export function expertBoxHTML() {
+  return '<label class="expert-toggle" data-expert-here-label title="' + esc(EXPERT_TIP) + '"><input type="checkbox" data-expert-here' +
+    (inForce('expert') ? ' checked' : '') + (slots.expert.waiting() ? ' disabled' : '') + '> ' + esc(EXPERT_WORDS) + '</label>' +
+    (said.expert ? ' <span class="config-result bad" data-expert-here-said data-announce>' + esc(said.expert) + '</span>' : '');
+}
+
+export function wireExpertBoxes(root) {
+  root.querySelectorAll('[data-expert-here]').forEach(box => { box.onchange = () => save('expert', box.checked); });
 }
 
 function save(which, value) {

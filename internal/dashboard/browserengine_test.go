@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -259,7 +260,15 @@ func runPageInOneEngine(t *testing.T, engine browserEngine, path string, page st
 	t.Helper()
 	results := make(chan string, 4)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var served servedLog
+	defer func() {
+		if t.Failed() {
+			t.Logf("%s (%s): the page's server answered:\n%s", engine.name, path, served.String())
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		w := &statusWriter{ResponseWriter: rw, status: http.StatusOK}
+		defer served.add(r.Method, r.URL.Path, w)
 		if r.URL.Path == "/__result" {
 			// The whole body, bounded: one Read returns whatever has arrived,
 			// and a page that reports what it MEASURED sends more than "OK".
@@ -412,7 +421,7 @@ func runServerInOneEngine(t testing.TB, engine browserEngine, path, startURL str
 		if measured, ok := strings.CutPrefix(result, "OK\n"); ok {
 			t.Logf("%s measured:\n%s", engine.name, measured)
 		} else if result != "OK" {
-			t.Fatalf("%s (%s): %s", engine.name, path, result)
+			t.Fatalf("%s (%s): %s\nthe browser said:\n%s", engine.name, path, result, browserSaid(outputPath))
 		}
 	}
 	var settled <-chan time.Time
@@ -450,6 +459,56 @@ func runServerInOneEngine(t testing.TB, engine browserEngine, path, startURL str
 			t.Fatalf("%s (%s): page never reported a result within the timeout; the browser said:\n%s", engine.name, path, browserSaid(outputPath))
 		}
 	}
+}
+
+// servedLog is what a rig's page server was asked for and answered, in
+// order, bounded so a page that loops cannot grow it without end.
+type servedLog struct {
+	mu    sync.Mutex
+	lines []string
+	more  int
+}
+
+const servedLogMax = 200
+
+func (l *servedLog) add(method, path string, w *statusWriter) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.lines) >= servedLogMax {
+		l.more++
+		return
+	}
+	l.lines = append(l.lines, fmt.Sprintf("%s %s %d (%d bytes)", method, path, w.status, w.n))
+}
+
+func (l *servedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.lines) == 0 {
+		return "(nothing: no request reached it)"
+	}
+	out := strings.Join(l.lines, "\n")
+	if l.more > 0 {
+		out += fmt.Sprintf("\n(and %d more)", l.more)
+	}
+	return out
+}
+
+// statusWriter keeps the status and the size of what a handler wrote.
+type statusWriter struct {
+	http.ResponseWriter
+	status, n int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.n += n
+	return n, err
 }
 
 // browserSaid is the end of what the browser wrote to its output, for a
@@ -775,7 +834,7 @@ export function wake() {}
 		"/presence.js":       stubModule("renderPresence", "setThinking"),
 		"/sections.js":       stubModule("initSections", "sectionTitle", "publish", "onSections", "onLayout", "onTokensChanged"),
 		"/theme.js":          stubModule("onTheme"),
-		"/overlay.js":        stubModule("restoreDraft", "onOverlayChanged", "holdReloadWhile"),
+		"/overlay.js":        stubModule("restoreDraft", "onOverlayChanged", "holdReloadWhile", "reloadForTheOverlay"),
 		"/voice.js":          stubModule("wireMic", "bindTransport", "speak", "render", "connectionLost"),
 		"/views/chat.js":     stubModule("scrollThread", "addMsg", "attachSpeaker", "sysLine", "toolEventLive", "thinkingEvent", "renderInteractionPages", "renderHistory", "renderChatSubstrate", "renderComposer", "acceptSubstrateConfig", "rejectSubstrateConfig", "substrateConnectionLost", "renderSteering", "renderAsks"),
 		"/views/home.js":     stubModule("renderHome"),
@@ -784,7 +843,7 @@ export function wake() {}
 		"/views/identity.js": stubModule("renderIdentity"),
 		"/views/plugins.js":  stubModule("renderPlugins", "rejectPluginAction", "applyPluginStored"),
 		"/views/record.js":   stubModule("renderRecord"),
-		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptDashboardToken", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
+		"/views/settings.js": stubModule("renderSettings", "acceptSettingsConfig", "rejectSettingsConfig", "acceptProviderSave", "rejectProviderSave", "acceptSpeechLists", "rejectSpeechLists", "acceptAccessCode", "rejectAccessCode", "settingsConnectionLost"),
 	}
 }
 

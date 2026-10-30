@@ -30,13 +30,15 @@ func (t *LsTool) Parameters() map[string]any {
 			"path":      map[string]any{"type": "string", "description": "Directory or file (default: your home)"},
 			"recursive": map[string]any{"type": "boolean"},
 			"pattern":   map[string]any{"type": "string", "description": "Glob on names: *.go"},
-			"depth":     map[string]any{"type": "integer", "description": "Maximum listed levels; positive depth requires recursive=true. With recursive=true, zero means no depth bound."},
+			"depth":     map[string]any{"type": "integer", "description": lsDepthWords},
 			"sort":      map[string]any{"type": "string", "enum": []string{"name", "mtime"}, "description": "mtime: newest first"},
 			"limit":     map[string]any{"type": "integer"},
 			"offset":    map[string]any{"type": "integer"},
 		},
 	}
 }
+
+const lsDepthWords = "Maximum listed levels; a positive depth lists recursively. With recursive=true, zero means no depth bound."
 
 type lsQuery struct {
 	recursive bool
@@ -64,11 +66,12 @@ func lsQueryOf(args map[string]any) (lsQuery, error) {
 	if q.depth, err = intArg(args, "depth", 0); err != nil {
 		return q, fmt.Errorf("depth: %w", err)
 	}
+
 	switch {
 	case q.depth < 0:
 		return q, fmt.Errorf("depth must not be negative, got %d", q.depth)
-	case q.depth > 0 && !q.recursive:
-		return q, fmt.Errorf("depth bounds a recursive listing; pass recursive=true with it")
+	case q.depth > 0:
+		q.recursive = true
 	case !q.recursive:
 		q.depth = 1
 	}
@@ -104,11 +107,11 @@ func (t *LsTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 	path, _ := args["path"].(string)
 	q, err := lsQueryOf(args)
 	if err != nil {
-		return Result{Error: err.Error()}, nil
+		return failed(ReasonArgumentInvalid, err.Error()), nil
 	}
 
 	if _, err := os.Stat(path); err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 	root := firewall.ResolvePath(path)
 	l := lsWalk{walkCoverage: walkCoverage{depth: q.depth}}
@@ -117,7 +120,7 @@ func (t *LsTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 		deny = func(p string) bool { return t.deny(ctx, p) }
 	}
 	if err := l.walk(ctx, q, root, deny); err != nil {
-		return Result{Error: err.Error()}, nil
+		return failedOn(err), nil
 	}
 	if q.byTime {
 		l.newestFirst()

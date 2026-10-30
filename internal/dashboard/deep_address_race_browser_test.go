@@ -54,7 +54,7 @@ func TestADeepAddressSurvivesTheSocketOpening(t *testing.T) {
 	modules["/panel.js"] = []byte("export function renderPanel() {}\n")
 	modules["/views/record.js"] = rec("renderRecord")
 	modules["/views/projects.js"] = append(rec("renderProjects"), []byte("export function renderProjPill() {}\nexport function viewProject(id) { (window.__did ||= []).push('viewProject:' + id); }\n")...)
-	modules["/views/settings.js"] = append(rec("renderSettings"), []byte("export function acceptSettingsConfig() {}\nexport function rejectSettingsConfig() {}\nexport function acceptProviderSave() {}\nexport function rejectProviderSave() {}\nexport function acceptSpeechLists() {}\nexport function rejectSpeechLists() {}\nexport function acceptDashboardToken() {}\nexport function settingsConnectionLost() {}\n")...)
+	modules["/views/settings.js"] = append(rec("renderSettings"), []byte("export function acceptSettingsConfig() {}\nexport function rejectSettingsConfig() {}\nexport function acceptProviderSave() {}\nexport function rejectProviderSave() {}\nexport function acceptSpeechLists() {}\nexport function rejectSpeechLists() {}\nexport function settingsConnectionLost() {}\n")...)
 	modules["/views/backups.js"] = stubModule("forgetBackupsSecrets")
 	modules["/announce.js"] = stubModule("announce")
 	runPageInEngines(t, deepAddressRacePage, modules)

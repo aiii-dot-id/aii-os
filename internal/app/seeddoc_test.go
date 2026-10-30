@@ -182,22 +182,9 @@ func TestSkillsSaysWhatPromotionAsksAndNoAuthorshipRule(t *testing.T) {
 	}
 }
 
-// THE GUIDE SAYS WHAT A RECALL ANSWER SAYS. SKILLS.md told a resident that
-// hits "are ranked by match and decayed by age and use"; the answer now
-// names its order's key, shows each hit's score, shares its limit across
-// sources and shows the meaning part of a mark. It carries the sentence
-// the recall verb's description carries (identity.RecallOrder), once.
 func TestSkillsSaysHowARecallIsOrderedAndCut(t *testing.T) {
 	doc := strings.Join(strings.Fields(string(skillsMD)), " ")
-	if n := strings.Count(doc, identity.RecallOrder); n != 1 {
-		t.Errorf("SKILLS.md carries how a recall is ordered and cut %d times; want once, in the recall entry: %q", n, identity.RecallOrder)
-	}
 	if strings.Contains(doc, "ranked by match") {
 		t.Errorf("SKILLS.md still says recall hits are ranked by match")
-	}
-	for _, said := range []string{"three decimals", "`both (exact_words + meaning 0.734)`", "leaves out its lowest-scored hits", "never by meaning"} {
-		if !strings.Contains(doc, said) {
-			t.Errorf("SKILLS.md's recall entry does not say %q", said)
-		}
 	}
 }

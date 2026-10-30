@@ -127,7 +127,7 @@ func (a *App) tagSpokenTurn(seq uint64, msg string) {
 	held := append([]*voiceBinding(nil), a.turnVoice...)
 	a.turnMu.Unlock()
 	for _, b := range held {
-		if b != nil && b.seq != 0 && voiceMarker+b.text == msg {
+		if b != nil && b.seq != 0 && b.said == msg {
 			a.annotateVoiceTurn(seq, b)
 			return
 		}

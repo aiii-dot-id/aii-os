@@ -44,6 +44,10 @@ func notMinted(t *testing.T, a *Anchorer, lg *ledger.Ledger, kp *crypto.KeyPair,
 	if p, perr := readPendingRequest(dir); perr != nil || p != nil {
 		t.Fatalf("the bookmark whose answer cannot stand is kept beside the ledger to be sent again: %+v (%v)", p, perr)
 	}
+	kept, kerr := ReadKeptConflict(dir)
+	if kerr != nil || (kept != nil) == witnessSide || (kept != nil && (!kept.Local || kept.Record != last || !strings.Contains(kept.Answer, why))) {
+		t.Fatalf("the answer kept beside the ledger is wrong for this side (the witness's row: %v): %+v (%v)", witnessSide, kept, kerr)
+	}
 	bootVerifies(t, lg, kp, platform)
 }
 

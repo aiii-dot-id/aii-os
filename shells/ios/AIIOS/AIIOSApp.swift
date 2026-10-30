@@ -132,8 +132,17 @@ final class TimeWakeScheduler: NSObject, MobileWakeSchedulerProtocol {
         let current = snapshot()
         if current.runtime != nil || (current.error != nil && retryFrom != nil) { return current.runtime }
         let home = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
+        var homeURL = URL(fileURLWithPath: home, isDirectory: true)
+        var noBackup = URLResourceValues()
+        noBackup.isExcludedFromBackup = true
+        do {
+            try homeURL.setResourceValues(noBackup)
+        } catch {
+            publish(RuntimeState(error: "The identity's directory could not be kept out of this phone's backups, so the identity was not started: \(error.localizedDescription)"))
+            return nil
+        }
         var error: NSError?
-        if let runtime = MobileStart(home + "/config.json", home, &error) {
+        if let runtime = MobileStart(home + "/config.json", home, DeviceKeystore.shared, &error) {
             attach(runtime)
             return runtime
         }

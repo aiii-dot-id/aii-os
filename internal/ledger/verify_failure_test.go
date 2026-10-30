@@ -170,8 +170,8 @@ func TestARefusalNamesTheRecordAndWhatWasProved(t *testing.T) {
 		"a record with no proof in the tail": {
 			damage: func(t *testing.T, path string) {
 				l := tailLines(t, path)
-				i := bytes.Index(l[7], []byte(`"sig":"`)) // record 28
-				l[7] = append(bytes.Clone(l[7][:i]), []byte(`"sig":""}`)...)
+				i := bytes.Index(l[7], []byte(`,"sig":"`)) // record 28
+				l[7] = append(bytes.Clone(l[7][:i]), '}')
 				writeTail(t, path, l)
 			},
 			is: ErrUnsignedRecord, seq: 28, container: tail, proved: 27, traversed: 28,

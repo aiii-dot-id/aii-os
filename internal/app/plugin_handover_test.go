@@ -111,13 +111,21 @@ func TestTheSwitchEndsThePredecessorsSessionsFirst(t *testing.T) {
 
 	// The session outlasts the bound: it is ended as the operator's stop
 	// ends one, and the switch follows the engine's word that it is over.
+	// The bound is the operator's (plugins.runtime.hand_over_ms), read at
+	// the switch by the sessions' hand-over and the mechanics' alike.
 	last := stand(true)
 	driver := &endsWhenAborted{fakeEngineSession: &fakeEngineSession{}, ends: make(chan struct{})}
 	open = session("vs-earbuds", next, driver)
 	go func() { <-driver.ends; close(open) }()
-	rt.handOver = 200 * time.Millisecond
+	a.cfg = &Config{}
+	a.cfg.Plugins.Runtime.HandOverMS = 200
+	a.pluginOpts.Bounds = pluginhost.ChildBounds{HandOver: 200 * time.Millisecond}
+	began := time.Now()
 	if err := rt.Redirect(next, last); err != nil {
 		t.Fatalf("the switch past the bound: %v", err)
+	}
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("the switch waited %s for a session past the operator's 200ms hand-over", took)
 	}
 	driver.mu.Lock()
 	closed := strings.Join(driver.closed, "; ")

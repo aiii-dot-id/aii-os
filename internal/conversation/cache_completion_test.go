@@ -70,12 +70,12 @@ func TestCacheBadTotalCannotBypassTokenFence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a turn was refused for its provider's token counts: %v", err)
 			}
-			if len(ft.calls) != tc.rounds || result.ContinuedAtTokenBudget != tc.fenced || strings.Contains(result.Spoken, "token budget (1500) is spent") != tc.fenced {
+			if len(ft.calls) != tc.rounds || result.ContinuedAtTokenBudget != tc.fenced || strings.Contains(result.Said(), "token budget (1500) is spent") != tc.fenced {
 				t.Fatalf("the 1500-token fence, charged by the estimate: %d tool round(s), fenced=%t, want %d and %t; spoken %q",
-					len(ft.calls), result.ContinuedAtTokenBudget, tc.rounds, tc.fenced, result.Spoken)
+					len(ft.calls), result.ContinuedAtTokenBudget, tc.rounds, tc.fenced, result.Said())
 			}
-			if !strings.Contains(result.Spoken, "done") {
-				t.Fatalf("the replies were not kept: %q", result.Spoken)
+			if !strings.Contains(result.Said(), "done") {
+				t.Fatalf("the replies were not kept: %q", result.Said())
 			}
 			if u := result.Usage; u.Calls != tc.rounds+1 || u.Silent != tc.rounds || u.TotalTokens != 1010 || u.PromptTokens != 1000 || u.CompletionTokens != 10 || u.CachedPromptTokens != 900 || u.Complete() {
 				t.Fatalf("the turn's usage holds counts that were not a measurement, or calls them complete: %+v", u)
@@ -117,8 +117,8 @@ func TestCacheWrapUpDisclosesProviderStop(t *testing.T) {
 			if requests.Load() != 2 || result.Usage.CachedPromptTokens != 1800 {
 				t.Fatalf("fixture did not run two cached requests: n=%d usage=%+v", requests.Load(), result.Usage)
 			}
-			if !strings.Contains(result.Spoken, tc.expected) {
-				t.Fatalf("provider stop %q disappeared from wrap-up; result=%q", tc.stop, result.Spoken)
+			if !strings.Contains(result.Said(), tc.expected) {
+				t.Fatalf("provider stop %q disappeared from wrap-up; result=%q", tc.stop, result.Said())
 			}
 		})
 	}
@@ -163,8 +163,8 @@ func TestAReplyTheOutputLimitCutInsideItsOnlyCallEndsAsTheDeclaredCut(t *testing
 			if err != nil {
 				t.Fatalf("a reply cut inside its only call failed the turn: %v (the identity is told %q)", err, result.Interrupted)
 			}
-			if result.Spoken != declared || result.Interrupted != "" {
-				t.Fatalf("spoken %q interrupted %q, want only the declared cut", result.Spoken, result.Interrupted)
+			if result.Said() != declared || result.Interrupted != "" {
+				t.Fatalf("spoken %q interrupted %q, want only the declared cut", result.Said(), result.Interrupted)
 			}
 			if len(ft.calls) != 0 || requests.Load() != 1 {
 				t.Fatalf("the cut call ran or the turn went on: calls=%v requests=%d", ft.calls, requests.Load())
@@ -183,8 +183,8 @@ func TestAReplyTheOutputLimitCutInsideItsOnlyCallEndsAsTheDeclaredCut(t *testing
 func TestCacheOrdinaryFinalReplyStaysClean(t *testing.T) {
 	r := textResp("done")
 	r.Choices[0].FinishReason = "stop"
-	result, model, err := finalResponse(&r, "fixture")
-	if err != nil || result != "done" || model != "" {
+	result, notes, model, err := finalResponse(&r, "fixture")
+	if err != nil || result != "done" || model != "" || len(notes) != 0 {
 		t.Fatalf("ordinary final response changed: %q %q %v", result, model, err)
 	}
 }

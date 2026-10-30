@@ -46,11 +46,9 @@ func TestAMarkedNotesWordsReachEveryOperatorSurface(t *testing.T) {
 	if _, err := app.engine.ExecuteAction(t.Context(), "verb", "note", map[string]any{"content": byVerb, "private": true}); err != nil {
 		t.Fatalf("the note verb, sent private = true: %v", err)
 	}
-	if _, err := app.door.Append(ledger.EventExperienceCreate, 3, map[string]any{
+	app.door.appendAsAnEarlierRelease(t, ledger.EventExperienceCreate, 3, map[string]any{
 		"id": "exp_marked_by_record", "content": byRecord, "category": "reflection", "provenance": "self", "private": true,
-	}, ""); err != nil {
-		t.Fatalf("a record carrying private = true: %v", err)
-	}
+	})
 	notes := map[string]string{"the verb's": byVerb, "the record's": byRecord}
 
 	// THE IDENTITY PAGE lists both, and counts nothing in place of a note.

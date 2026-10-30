@@ -60,6 +60,9 @@ func waitFor(t *testing.T, what string, within time.Duration, ok func() bool) {
 func TestTwoGatesStartedTogetherTheSecondWaitsAndSaysForWhom(t *testing.T) {
 	guardRig(t)
 	root := repoRoot(t)
+	if err := exec.Command("git", "-C", root, "rev-parse", "--git-dir").Run(); err != nil {
+		t.Skip("an extracted source archive: the gate refuses without a tree, which the gate's own test proves")
+	}
 	scratch := t.TempDir()
 	lock, hold := filepath.Join(scratch, "gate.lock"), filepath.Join(scratch, "hold")
 	gate := func(who, only, hold string) (*exec.Cmd, *lockedBuffer) {

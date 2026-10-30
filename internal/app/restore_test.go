@@ -222,7 +222,7 @@ func TestARestoreKilledAtAnyStepPreservesBothSets(t *testing.T) {
 	// there is not a move), and the two boundaries around cleanup.
 	var steps []string
 	func() {
-		r, _, _ := restoreAsked(t)
+		r, _, _ := restoreAskedWith(t, witnessOperationAt, witnessOperationAfter)
 		done, err := r.bootThroughChoice(t, func(a *App) {
 			a.continuity.RestoreStep = func(step string) { steps = append(steps, step) }
 		})
@@ -237,8 +237,12 @@ func TestARestoreKilledAtAnyStepPreservesBothSets(t *testing.T) {
 
 	for _, dieAt := range steps {
 		t.Run(dieAt, func(t *testing.T) {
-			r, at, later := restoreAsked(t)
+			r, at, later := restoreAskedWith(t, witnessOperationAt, witnessOperationAfter)
 			wasLive, err := os.ReadFile(r.ledgerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wasEnvelope, err := os.ReadFile(witness.EnvelopePath(r.dir))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -283,6 +287,27 @@ func TestARestoreKilledAtAnyStepPreservesBothSets(t *testing.T) {
 			if kept, err := os.ReadFile(filepath.Join(sets[0].Path, "ledger.jsonl")); err != nil || !bytes.Equal(kept, wasLive) {
 				t.Errorf("killed at %s: the preserved record is not the bytes that were live (%v)", dieAt, err)
 			}
+			if kept, err := os.ReadFile(filepath.Join(sets[0].Path, witness.EnvelopeFileName)); err != nil || !bytes.Equal(kept, wasEnvelope) {
+				t.Errorf("killed at %s: the live witness envelope is not in the set aside, as it was (%v)", dieAt, err)
+			}
+			if _, err := os.Stat(witness.EnvelopePath(r.dir)); !os.IsNotExist(err) {
+				t.Errorf("killed at %s: an envelope stands beside a record restored to before it existed (%v)", dieAt, err)
+			}
+			// THE WITNESS MEMBERS, after the moves and none of them: the
+			// newer operation and both archives that were live went aside;
+			// the snapshot's operation and archive stand beside the record.
+			if got, err := os.ReadFile(filepath.Join(sets[0].Path, witness.OperationFileName)); err != nil || !bytes.Equal(got, operationFixture(t, "head")) {
+				t.Errorf("killed at %s: the witness operation is not in the set aside, as it was (%v)", dieAt, err)
+			}
+			if got := archivesIn(t, sets[0].Path); len(got) != 2 {
+				t.Errorf("killed at %s: the set aside holds %d operation archives, want the two that were live", dieAt, len(got))
+			}
+			if got, err := os.ReadFile(filepath.Join(r.dir, witness.OperationFileName)); err != nil || !bytes.Equal(got, operationFixture(t, "sent")) {
+				t.Errorf("KILLED AT %s: THE SNAPSHOT'S WITNESS OPERATION DOES NOT STAND BESIDE THE RESTORED RECORD (%v)", dieAt, err)
+			}
+			if got := archivesIn(t, r.dir); len(got) != 1 {
+				t.Errorf("killed at %s: the restored record holds archives %v, want the snapshot's one", dieAt, got)
+			}
 			if _, err := os.Stat(filepath.Join(r.dir, continuity.RestoreJournalName)); !os.IsNotExist(err) {
 				t.Errorf("killed at %s: the journal outlived the restore it finished", dieAt)
 			}
@@ -309,10 +334,36 @@ func historicalMaintenanceNotice(t *testing.T, a *App) {
 // has been asked for and confirmed.
 func restoreAsked(t *testing.T) (r *restoreRig, at, later uint64) {
 	t.Helper()
+	return restoreAskedWith(t, nil, nil)
+}
+
+func witnessOperationAt(t *testing.T, r *restoreRig) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(r.dir, witness.OperationFileName), operationFixture(t, "sent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive(t, r.dir, operationFixture(t, "staged"))
+}
+
+func witnessOperationAfter(t *testing.T, r *restoreRig) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(r.dir, witness.OperationFileName), operationFixture(t, "head"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive(t, r.dir, operationFixture(t, "receipt"))
+}
+
+// restoreAskedWith is restoreAsked with before run as the snapshot is
+// about to be taken, and after once it is, while the identity lives on.
+func restoreAskedWith(t *testing.T, before, after func(*testing.T, *restoreRig)) (r *restoreRig, at, later uint64) {
+	t.Helper()
 	r = newRestoreRig(t)
 	a := r.boot(t)
 	live(t, a, 3)
 	appendFixtureEvent(t, a, r.keyPath, "exp_before")
+	if before != nil {
+		before(t, r)
+	}
 	maintenancePass(t, a)
 	historicalMaintenanceNotice(t, a)
 	kept := continuityDoor(a).View().Snapshots // newest first
@@ -322,6 +373,10 @@ func restoreAsked(t *testing.T) (r *restoreRig, at, later uint64) {
 	}
 	snap := kept[0].Name
 	at = a.ledger.LastSeq()
+	envelopeOf(t, a)
+	if after != nil {
+		after(t, r)
+	}
 	live(t, a, 4)
 	appendFixtureEvent(t, a, r.keyPath, "exp_after")
 	later = a.ledger.LastSeq()
@@ -399,11 +454,9 @@ func TestASourceThatDoesNotProveIsNotRestored(t *testing.T) {
 
 	// EDITED AND RE-SUMMED: the database copy cut in half, and the checksum
 	// list rewritten to match — every file "matches". What does not hold is
-	// the restore, and that is what the proof before a restore is for. (Cut,
-	// not one flipped byte: a byte can land where nothing reads it, and a
-	// database that still restores to the same record is not one this proof
-	// can tell from the original — the checksum list is as trustworthy as
-	// the snapshot and no more.)
+	// the list's signature, and the restore. (An edit that still restores to
+	// the same record only the signature can tell from the original:
+	// TestAnEditTheChecksumListHidesIsRefusedByTheSignature in continuity.)
 	db := filepath.Join(backups, snap, continuity.SnapshotDB)
 	raw, err := os.ReadFile(db)
 	if err != nil {
@@ -667,7 +720,9 @@ func TestASetKeptAsideCarriesItsSealedHistoryAndKeys(t *testing.T) {
 	maintenancePass(t, a)
 	kept := continuityDoor(a).View().Snapshots // newest first
 	snap := kept[0].Name
-	at := a.ledger.LastSeq()
+	// Maintenance may append after its captured snapshot head. Restore is
+	// held to the snapshot's own record, not the later live head.
+	at := kept[0].Record
 	appendFixtureEvent(t, a, f.keyPath, "exp_after_the_snapshot")
 	if err := a.anchorer.CheckAndAnchor(); err != nil {
 		t.Fatalf("the second anchor: %v", err)
@@ -693,9 +748,9 @@ func TestASetKeptAsideCarriesItsSealedHistoryAndKeys(t *testing.T) {
 		stopApp(t, restored)
 		t.Fatalf("the restored identity is SAFE: %s", reason)
 	}
-	if restored.ledger.LastSeq() != at {
+	if got := restored.ledger.LastSeq(); got != at {
 		stopApp(t, restored)
-		t.Fatalf("the record ends at %d, want the snapshot's %d", restored.ledger.LastSeq(), at)
+		t.Fatalf("the record ends at %d, want the snapshot's %d", got, at)
 	}
 	sets := continuityDoor(restored).View().SetAside
 	if len(sets) != 1 {
@@ -854,6 +909,18 @@ func TestARestoreBehindTheWitnessEndsInSafeNotInUnwitnessedRunning(t *testing.T)
 		if strings.Contains(said, wrong) {
 			t.Errorf("the confirm screen still promises %q: %q", wrong, said)
 		}
+	}
+
+	stopApp(t, restored)
+	again := New(f.cfg)
+	if err := again.StartEmbedded(); err != nil {
+		t.Fatal(err)
+	}
+	defer stopApp(t, again)
+	reason, safe = again.SafeMode()
+	trigger, _, _ := again.safeCause()
+	if !safe || again.live.Load() || trigger != safeWitnessSays || !strings.Contains(reason, witness.ConflictFileName) || !strings.Contains(reason, "rollback") {
+		t.Fatalf("A RESTART CLEARED THE WITNESS'S ANSWER: safe %v, live %v, trigger %d: %q", safe, again.live.Load(), trigger, reason)
 	}
 }
 
@@ -1973,7 +2040,7 @@ func TestARollbackJournalMovesWithItsDatabase(t *testing.T) {
 func TestAJournalsRequestIsHeldToTheSameNamesTheDoorIs(t *testing.T) {
 	for _, tc := range []struct{ what, source, name string }{
 		{"a set-aside name that climbs out", continuity.SourceSetAside, "../../../elsewhere"},
-		{"a set-aside name that is not one", continuity.SourceSetAside, "Vega"},
+		{"a set-aside name that is not one", continuity.SourceSetAside, "Example"},
 		{"a snapshot name that climbs out", continuity.SourceSnapshot, "../../../elsewhere"},
 		{"a source that is neither", "anywhere", "ledger-20260921T000000Z-seq1"},
 	} {

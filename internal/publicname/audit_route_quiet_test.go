@@ -83,3 +83,56 @@ func TestAuditQuietRenewalsKeepWritesAndChangedAddressNews(t *testing.T) {
 		t.Fatalf("changed address writes=%d log=%q", len(p.Replaced), b.String())
 	}
 }
+
+// A ROUTE'S FAILURE IS THE ROUTE'S TO REPORT, AND THE NEXT LOOK THAT
+// SUCCEEDS CLEARS IT. The route owner wrote its refusals into the one error
+// field issuance and renewal own, which the card prints as "the certificate
+// could not be obtained": a route failure replaced a certificate's failure
+// under that label, a recovered route left it standing, and with a
+// certificate issued it was shown nowhere. The state carries the route's
+// error as its own.
+func TestARouteFailureIsTheRoutesToReportAndIsClearedWhenTheRouteRecovers(t *testing.T) {
+	a, box, p, _ := auditQuietRoute(t)
+	const certificate = "order: the CA refused the account"
+	a.mu.Lock()
+	a.status, a.lastError = StatusFailing, certificate
+	a.mu.Unlock()
+
+	p.ReadFail = errors.New("synthetic certd outage")
+	if _, err := a.reconcileRoute(context.Background()); err == nil {
+		t.Fatal("fixture: the outage did not fail the pass")
+	}
+	st := a.State()
+	if !strings.Contains(st.RouteError, "synthetic certd outage") {
+		t.Fatalf("A ROUTE FAILURE IS NOT IN THE STATE THE CARD READS: route_error %q", st.RouteError)
+	}
+	if st.LastError != certificate {
+		t.Fatalf("A ROUTE FAILURE REPLACED THE CERTIFICATE'S OWN ERROR: last_error %q", st.LastError)
+	}
+
+	p.ReadFail = nil
+	auditQuietReconcile(t, a)
+	st = a.State()
+	if st.RouteError != "" {
+		t.Fatalf("the route recovered and its error still stands: %q", st.RouteError)
+	}
+	if st.Address != "192.0.2.6" {
+		t.Fatalf("the state does not say what the service answered the route is: %q", st.Address)
+	}
+	if st.LastError != certificate {
+		t.Fatalf("a recovered route cleared the certificate's error: %q", st.LastError)
+	}
+
+	// A route this host refuses to work out is reported the same way,
+	// with a certificate issued.
+	a.mu.Lock()
+	a.status, a.lastError = StatusIssued, ""
+	a.mu.Unlock()
+	box.set(func(s *Settings) { s.Certificate.RouteMode = "rely" })
+	if _, err := a.reconcileRoute(context.Background()); err == nil {
+		t.Fatal("fixture: an unknown route mode was not refused")
+	}
+	if st := a.State(); st.Status != StatusIssued || !strings.Contains(st.RouteError, "rely") || st.LastError != "" {
+		t.Fatalf("a refused route under an issued certificate: status %q route_error %q last_error %q", st.Status, st.RouteError, st.LastError)
+	}
+}

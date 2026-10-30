@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/vec"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -42,6 +43,36 @@ type Yielder interface {
 	MayContinue() bool
 }
 
+type Teller interface {
+	Tells() bool
+	EmbedRead(ctx context.Context, kind Kind, inputs []string) (basis string, vectors [][]float32, read []int, err error)
+}
+
+func tells(source Embedder) bool {
+	t, ok := source.(Teller)
+	return ok && t.Tells()
+}
+
+func embedFrom(ctx context.Context, source Embedder, kind Kind, inputs []string) (basis string, vectors [][]float32, read []int, err error) {
+	if !tells(source) {
+		basis, vectors, err = source.Embed(ctx, kind, inputs)
+		return basis, vectors, nil, err
+	}
+	basis, vectors, read, err = source.(Teller).EmbedRead(ctx, kind, inputs)
+	if err != nil {
+		return basis, nil, nil, err
+	}
+	if len(read) != len(inputs) {
+		return basis, nil, nil, fmt.Errorf("the source said how much it read of %d texts, and was handed %d", len(read), len(inputs))
+	}
+	for i, n := range read {
+		if chars := utf8.RuneCountInString(inputs[i]); n < 1 || n > chars {
+			return basis, nil, nil, fmt.Errorf("the source said it read %d characters of a text of %d", n, chars)
+		}
+	}
+	return basis, vectors, read, nil
+}
+
 type Worker interface {
 	PassWork() time.Duration
 }
@@ -65,6 +96,9 @@ type MeaningStatus struct {
 	Basis  string
 
 	Floor float64
+
+	CueChars int
+	CueRead  int
 }
 
 const NoSource = "no source of vectors is set up (the dashboard's Memory card: a plugin that makes them on this machine, or a provider's embeddings model)"
@@ -111,7 +145,7 @@ func (f *Facility) embedQuery(ctx context.Context, text string) (*queryVector, M
 	if source == nil {
 		return nil, MeaningStatus{Status: StatusSourceUnavailable, Detail: NoSource + "; exact words and fuzzy matches answered"}
 	}
-	basis, vectors, err := source.Embed(ctx, KindCue, []string{clipForEmbedding(text)})
+	basis, vectors, read, err := embedFrom(ctx, source, KindCue, []string{clipForEmbedding(text)})
 	if err != nil {
 		return nil, MeaningStatus{Status: StatusSourceUnavailable, Basis: basis, Detail: err.Error() + "; exact words and fuzzy matches answered"}
 	}
@@ -125,7 +159,11 @@ func (f *Facility) embedQuery(ctx context.Context, text string) (*queryVector, M
 	}
 	f.length.note(basis, len(vectors[0]))
 	q, scale := vec.Quantize(vectors[0])
-	return &queryVector{basis: basis, q: q, scale: scale, floor: floor}, MeaningStatus{Status: StatusFoundNothing, Basis: basis, Floor: floor}
+	status := MeaningStatus{Status: StatusFoundNothing, Basis: basis, Floor: floor, CueChars: utf8.RuneCountInString(text)}
+	if read != nil {
+		status.CueRead = read[0]
+	}
+	return &queryVector{basis: basis, q: q, scale: scale, floor: floor}, status
 }
 
 const staleSlack = 4
@@ -134,11 +172,11 @@ const MeaningReadBound = 1024
 
 func layerMeaning(ctx context.Context, db store.Reader, d Store, q Query, qv *queryVector, pool int) (kept []Hit, passed int, err error) {
 	where, args := predicates(d, q, true)
-	from := " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND v.dims = ?"
+	from := " FROM memory_vectors v" + store.VectorUnreadJoin + " JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND v.dims = ?"
 	if where != "" {
 		from += " AND " + where
 	}
-	query := "SELECT " + selectList(d) + ", vec_cosine_q8(v.q, v.scale, ?, ?) AS sim, v.content_sha" + from + " ORDER BY sim DESC LIMIT ?"
+	query := "SELECT " + selectList(d) + ", vec_cosine_q8(v.q, v.scale, ?, ?) AS sim, v.content_sha, " + store.VectorUnread + from + " ORDER BY sim DESC LIMIT ?"
 	qargs := append([]any{qv.q, qv.scale, d.Name, qv.basis, len(qv.q)}, args...)
 	for read := min(pool*staleSlack, MeaningReadBound); ; read = min(read*staleSlack, MeaningReadBound) {
 		candidates, err := meaningCandidates(ctx, db, d, query, append(qargs, read))
@@ -189,12 +227,13 @@ func scanHitsWithSimilarity(rows *sql.Rows, d Store) ([]Hit, error) {
 		var rowid, seq, ring int64
 		var id, when, attr, vectorOf string
 		var sim float64
+		var unread sql.NullInt64
 		texts := make([]string, len(d.Text))
 		dest := []any{&rowid, &id, &seq, &ring, &when, &attr}
 		for i := range texts {
 			dest = append(dest, &texts[i])
 		}
-		dest = append(dest, &sim, &vectorOf)
+		dest = append(dest, &sim, &vectorOf, &unread)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
@@ -204,10 +243,22 @@ func scanHitsWithSimilarity(rows *sql.Rows, d Store) ([]Hit, error) {
 		}
 		h.Time = parseTime(when)
 		h.Text = joinText(texts)
+
+		if n := int64(utf8.RuneCountInString(h.Text)); unread.Valid && unread.Int64 >= 0 && unread.Int64 < n {
+			h.MeaningRead = int(n - unread.Int64)
+		}
 		h.layerRank = len(out) + 1
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+func unreadOf(text string, read []int, i int) *int {
+	if read == nil {
+		return nil
+	}
+	n := utf8.RuneCountInString(text) - read[i]
+	return &n
 }
 
 func clipForEmbedding(text string) string {
@@ -258,6 +309,9 @@ type Coverage struct {
 
 	Beyond         int64
 	BeyondEmbedded int64
+
+	Partial int64
+	Untold  int64
 }
 
 func (f *Facility) HeldCoverage(ctx context.Context) (basis string, cov []Coverage, unavailable string, err error) {
@@ -268,8 +322,35 @@ func (f *Facility) UsableCoverage(ctx context.Context) (basis string, cov []Cove
 	return f.coverage(ctx, vectorsUsable)
 }
 
-func (f *Facility) coverage(ctx context.Context, vectors func(ctx context.Context, db store.Reader, d Store, basis, where string) (int64, error)) (basis string, cov []Coverage, unavailable string, err error) {
-	source := f.source()
+func (f *Facility) coverage(ctx context.Context, vectors func(ctx context.Context, db store.Reader, d Store, basis, where string) (held, error)) (basis string, cov []Coverage, unavailable string, err error) {
+	return f.coverageOf(ctx, f.source(), vectors)
+}
+
+type SourceChange struct {
+	Basis   string
+	Dropped int64
+	ToEmbed int64
+}
+
+func (f *Facility) ChangeTo(ctx context.Context, source Embedder) (change SourceChange, unavailable string, err error) {
+	if source == nil {
+		return change, NoSource, nil
+	}
+	basis, cov, unavailable, err := f.coverageOf(ctx, source, vectorsHeld)
+	if err != nil || unavailable != "" {
+		return change, unavailable, err
+	}
+	change.Basis = basis
+	for _, c := range cov {
+		change.ToEmbed += c.Rows - c.Embedded
+	}
+	if change.Dropped, err = f.st.CountMemoryVectorsOffBasis(ctx, basis); err != nil {
+		return SourceChange{}, "", fmt.Errorf("count vectors off basis: %w", err)
+	}
+	return change, "", nil
+}
+
+func (f *Facility) coverageOf(ctx context.Context, source Embedder, vectors func(ctx context.Context, db store.Reader, d Store, basis, where string) (held, error)) (basis string, cov []Coverage, unavailable string, err error) {
 	if source == nil {
 		return "", nil, NoSource, nil
 	}
@@ -282,33 +363,38 @@ func (f *Facility) coverage(ctx context.Context, vectors func(ctx context.Contex
 	if n := f.length.of(basis); n > 0 {
 		ofLength = fmt.Sprintf(" AND v.dims = %d", n)
 	}
+	told := tells(source)
 	err = f.st.ReadWith(ctx, func(db store.Reader) error {
 		for _, d := range stores {
 			c := Coverage{Store: d.Name}
-			count := func(window int) (rows, embedded int64, err error) {
+			count := func(window int) (rows int64, embedded held, err error) {
 				where := hasText(d)
 				if scope := vectorScope(d, window); scope != "" {
 					where += " AND " + scope
 				}
 				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+d.Name+" b WHERE "+where).Scan(&rows); err != nil {
-					return 0, 0, fmt.Errorf("%s: %w", d.Name, err)
+					return 0, held{}, fmt.Errorf("%s: %w", d.Name, err)
 				}
 				if embedded, err = vectors(ctx, db, d, basis, where+ofLength); err != nil {
-					return 0, 0, fmt.Errorf("%s: %w", d.Name, err)
+					return 0, held{}, fmt.Errorf("%s: %w", d.Name, err)
 				}
 				return rows, embedded, nil
 			}
 			window := f.windowFor(d, source)
-			var err error
-			if c.Rows, c.Embedded, err = count(window); err != nil {
+			rows, in, err := count(window)
+			if err != nil {
 				return err
+			}
+			c.Rows, c.Embedded, c.Partial = rows, in.n, in.partial
+			if told {
+				c.Untold = in.untold
 			}
 			if window > 0 {
 				whole, wholeEmbedded, err := count(0)
 				if err != nil {
 					return err
 				}
-				c.Beyond, c.BeyondEmbedded = whole-c.Rows, wholeEmbedded-c.Embedded
+				c.Beyond, c.BeyondEmbedded = whole-c.Rows, wholeEmbedded.n-c.Embedded
 			}
 			cov = append(cov, c)
 		}
@@ -317,18 +403,27 @@ func (f *Facility) coverage(ctx context.Context, vectors func(ctx context.Contex
 	return basis, cov, "", err
 }
 
-func vectorsHeld(ctx context.Context, db store.Reader, d Store, basis, where string) (n int64, err error) {
-	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memory_vectors v JOIN "+d.Name+" b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND "+where, d.Name, basis).Scan(&n)
-	return n, err
+type held struct{ n, partial, untold int64 }
+
+func vectorsHeld(ctx context.Context, db store.Reader, d Store, basis, where string) (h held, err error) {
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*), COUNT(CASE WHEN "+store.VectorUnread+" > 0 THEN 1 END), COUNT(CASE WHEN "+store.VectorUnread+" IS NULL THEN 1 END) FROM memory_vectors v"+store.VectorUnreadJoin+" JOIN "+d.Name+" b ON b.id = v.id WHERE v.store = ? AND v.basis = ? AND "+where, d.Name, basis).Scan(&h.n, &h.partial, &h.untold)
+	return h, err
 }
 
-func vectorsUsable(ctx context.Context, db store.Reader, d Store, basis, where string) (n int64, err error) {
-	err = vectorsByText(ctx, db, d, basis, where, func(_ string, speaks bool) {
-		if speaks {
-			n++
+func vectorsUsable(ctx context.Context, db store.Reader, d Store, basis, where string) (h held, err error) {
+	err = vectorsByText(ctx, db, d, basis, where, func(_ string, speaks bool, unread sql.NullInt64) {
+		if !speaks {
+			return
+		}
+		h.n++
+		switch {
+		case !unread.Valid:
+			h.untold++
+		case unread.Int64 > 0:
+			h.partial++
 		}
 	})
-	return n, err
+	return h, err
 }
 
 func RenderCoverage(basis string, cov []Coverage, unavailable string) string {
@@ -336,17 +431,34 @@ func RenderCoverage(basis string, cov []Coverage, unavailable string) string {
 		return "Meaning layer: unavailable — " + unavailable + ". Recall answers by exact words and fuzzy matches; the backfill waits."
 	}
 	var parts []string
-	var rows, embedded int64
+	var rows, embedded, partial, untold int64
 	for _, c := range cov {
 		parts = append(parts, fmt.Sprintf("%s %d/%d", c.Store, c.Embedded, c.Rows))
 		rows += c.Rows
 		embedded += c.Embedded
+		partial += c.Partial
+		untold += c.Untold
 	}
 	state := "complete"
 	if embedded < rows {
 		state = fmt.Sprintf("%d rows awaiting the backfill", rows-embedded)
 	}
-	return fmt.Sprintf("Meaning layer — basis %s, %s (vectors held / rows in scope): %s", basis, state, strings.Join(parts, ", "))
+	out := fmt.Sprintf("Meaning layer — basis %s, %s (vectors held / rows in scope): %s", basis, state, strings.Join(parts, ", "))
+
+	if partial > 0 {
+		out += fmt.Sprintf(". %d of the vectors held %s made from the beginning of their text alone, as the source said; a recalled memory among them says how much, and what lies past it is found by its words", partial, wasWere(partial))
+	}
+	if untold > 0 {
+		out += fmt.Sprintf(". %d %s made before the source said how much of a text it read, and the backfill makes them again", untold, wasWere(untold))
+	}
+	return out
+}
+
+func wasWere(n int64) string {
+	if n == 1 {
+		return "was"
+	}
+	return "were"
 }
 
 type BackfillStore struct {
@@ -456,6 +568,8 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 		batchSize = b.Batch()
 	}
 	yielder, _ := source.(Yielder)
+
+	told := tells(source)
 	var epoch any
 	if e, ok := source.(Epocher); ok {
 		epoch = e.Epoch()
@@ -497,7 +611,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 			if err := f.st.ReadWith(ctx, func(db store.Reader) error {
 				var err error
 
-				candidates, err = missingVectors(ctx, db, d, f.windowFor(d, source), began, basis, want+f.aside.in(d.Name))
+				candidates, err = missingVectors(ctx, db, d, f.windowFor(d, source), began, told, basis, want+f.aside.in(d.Name))
 				return err
 			}); err != nil {
 				return rep, fmt.Errorf("%s: candidates: %w", d.Name, err)
@@ -528,7 +642,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 					inputs[i] = clipForEmbedding(h.Text)
 				}
 				began := clock()
-				got, vectors, err := source.Embed(ctx, KindMemory, inputs)
+				got, vectors, read, err := embedFrom(ctx, source, KindMemory, inputs)
 				worked += clock().Sub(began)
 				rep.Worked = worked
 				if err != nil {
@@ -540,7 +654,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 						var last error
 						for i, h := range batch {
 							began := clock()
-							got, one, err := source.Embed(ctx, KindMemory, inputs[i:i+1])
+							got, one, read, err := embedFrom(ctx, source, KindMemory, inputs[i:i+1])
 							worked += clock().Sub(began)
 							rep.Worked = worked
 							var own TextFault
@@ -565,7 +679,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 							q, scale := vec.Quantize(one[0])
 							if err := f.st.PutMemoryVectors([]store.MemoryVector{{
 								Store: d.Name, ID: h.ID, Basis: basis, ContentSHA: textSHA(h.Text),
-								Dims: len(q), Scale: scale, Q: q, EmbeddedAt: time.Now(),
+								Dims: len(q), Scale: scale, Q: q, EmbeddedAt: time.Now(), Unread: unreadOf(h.Text, read, 0),
 							}}); err != nil {
 								rep.Stores = append(rep.Stores, bs)
 								return rep, fmt.Errorf("%s: write vectors: %w", d.Name, err)
@@ -614,7 +728,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 					q, scale := vec.Quantize(vectors[i])
 					rows = append(rows, store.MemoryVector{
 						Store: d.Name, ID: h.ID, Basis: basis, ContentSHA: textSHA(h.Text),
-						Dims: len(q), Scale: scale, Q: q, EmbeddedAt: now,
+						Dims: len(q), Scale: scale, Q: q, EmbeddedAt: now, Unread: unreadOf(h.Text, read, i),
 					})
 				}
 				if err := f.st.PutMemoryVectors(rows); err != nil {
@@ -627,7 +741,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 			}
 		}
 		if err := f.st.ReadWith(ctx, func(db store.Reader) error {
-			return db.QueryRowContext(ctx, missingCountSQL(d, f.windowFor(d, source), began), d.Name, basis).Scan(&bs.Remaining)
+			return db.QueryRowContext(ctx, missingCountSQL(d, f.windowFor(d, source), began, told), d.Name, basis).Scan(&bs.Remaining)
 		}); err != nil {
 			return rep, fmt.Errorf("%s: remaining: %w", d.Name, err)
 		}
@@ -640,7 +754,7 @@ func (f *Facility) Backfill(ctx context.Context, budget int) (BackfillReport, er
 func (f *Facility) dropStaleVectors(ctx context.Context, d Store, basis string) (int64, error) {
 	var stale []string
 	err := f.st.ReadWith(ctx, func(db store.Reader) error {
-		return vectorsByText(ctx, db, d, basis, "", func(id string, speaks bool) {
+		return vectorsByText(ctx, db, d, basis, "", func(id string, speaks bool, _ sql.NullInt64) {
 			if !speaks {
 				stale = append(stale, id)
 			}
@@ -652,8 +766,8 @@ func (f *Facility) dropStaleVectors(ctx context.Context, d Store, basis string) 
 	return f.st.DeleteMemoryVectors(d.Name, stale)
 }
 
-func vectorsByText(ctx context.Context, db store.Reader, d Store, basis, where string, see func(id string, speaks bool)) error {
-	q := "SELECT b.id, v.content_sha" + textColumns(d) + " FROM memory_vectors v JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ?"
+func vectorsByText(ctx context.Context, db store.Reader, d Store, basis, where string, see func(id string, speaks bool, unread sql.NullInt64)) error {
+	q := "SELECT b.id, v.content_sha, " + store.VectorUnread + textColumns(d) + " FROM memory_vectors v" + store.VectorUnreadJoin + " JOIN " + d.Name + " b ON b.id = v.id WHERE v.store = ? AND v.basis = ?"
 	if where != "" {
 		q += " AND " + where
 	}
@@ -665,7 +779,8 @@ func vectorsByText(ctx context.Context, db store.Reader, d Store, basis, where s
 
 	texts := make([]string, len(d.Text))
 	var id, vectorOf string
-	dest := []any{&id, &vectorOf}
+	var unread sql.NullInt64
+	dest := []any{&id, &vectorOf, &unread}
 	for i := range texts {
 		dest = append(dest, &texts[i])
 	}
@@ -673,13 +788,13 @@ func vectorsByText(ctx context.Context, db store.Reader, d Store, basis, where s
 		if err := rows.Scan(dest...); err != nil {
 			return err
 		}
-		see(id, vectorOf == textSHA(joinText(texts)))
+		see(id, vectorOf == textSHA(joinText(texts)), unread)
 	}
 	return rows.Err()
 }
 
-func missingVectors(ctx context.Context, db store.Reader, d Store, window, dims int, basis string, limit int) ([]Hit, error) {
-	q := "SELECT " + selectList(d) + missingFrom(d, window, dims) + " ORDER BY b.rowid DESC LIMIT ?"
+func missingVectors(ctx context.Context, db store.Reader, d Store, window, dims int, told bool, basis string, limit int) ([]Hit, error) {
+	q := "SELECT " + selectList(d) + missingFrom(d, window, dims, told) + " ORDER BY b.rowid DESC LIMIT ?"
 	rows, err := db.QueryContext(ctx, q, d.Name, basis, limit)
 	if err != nil {
 		return nil, err
@@ -688,14 +803,17 @@ func missingVectors(ctx context.Context, db store.Reader, d Store, window, dims 
 	return scanHits(rows, d)
 }
 
-func missingCountSQL(d Store, window, dims int) string {
-	return "SELECT COUNT(*)" + missingFrom(d, window, dims)
+func missingCountSQL(d Store, window, dims int, told bool) string {
+	return "SELECT COUNT(*)" + missingFrom(d, window, dims, told)
 }
 
-func missingFrom(d Store, window, dims int) string {
+func missingFrom(d Store, window, dims int, told bool) string {
 	ofLength := ""
 	if dims > 0 {
 		ofLength = fmt.Sprintf(" AND v.dims = %d", dims)
+	}
+	if told {
+		ofLength += " AND " + store.VectorUnreadSaid
 	}
 	from := " FROM " + d.Name + " b LEFT JOIN memory_vectors v ON v.store = ? AND v.id = b.id AND v.basis = ?" + ofLength + " WHERE v.id IS NULL AND " + hasText(d)
 	if scope := vectorScope(d, window); scope != "" {

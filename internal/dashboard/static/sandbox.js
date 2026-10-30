@@ -1,6 +1,6 @@
 
 import { S } from './state.js';
-import { $, esc } from './util.js';
+import { $, cardHead, esc } from './util.js';
 import { send } from './ws.js';
 import { pendingSlot } from './pending.js';
 
@@ -12,10 +12,10 @@ let warning = false;
 let warningOpened = false;
 let switchRefused = false;
 const render = () => { if (S.renderSandbox) S.renderSandbox(); };
-function saveRoots(roots, added = null) {
+function changeRoot(type, root, added = null) {
   if (pending.waiting()) return;
   switchRefused = false;
-  const requestID = send({ type: 'sandbox_set', roots });
+  const requestID = send({ type, root });
   notice = pending.arm({ added }, requestID) ? 'Waiting for the runtime to confirm…' : 'Not connected — roots were not changed.';
   render();
 }
@@ -26,9 +26,10 @@ function switchSandbox(off) {
   notice = pending.arm({ off }, requestID) ? 'Waiting for the runtime to confirm…' : 'Not connected. The sandbox was not changed.';
   render();
 }
-export function acceptSandbox(requestID) {
+export function acceptSandbox(requestID, said) {
   const asked = pending.claim(requestID);
   if (!asked) return false;
+  if (asked.notes) { notesSaid = said || ''; return true; }
   if ('off' in asked) {
     notice = S.sandbox && S.sandbox.off ? 'The sandbox is off.' : 'The sandbox is on.';
     return true;
@@ -40,6 +41,7 @@ export function acceptSandbox(requestID) {
 export function rejectSandbox(requestID, text) {
   const asked = pending.claim(requestID);
   if (!asked) return false;
+  if (asked.notes) { notesSaid = text; render(); return true; }
   notice = text;
   switchRefused = 'off' in asked;
   if (switchRefused) send({ type: 'query', query: 'sandbox' });
@@ -48,6 +50,7 @@ export function rejectSandbox(requestID, text) {
 export function sandboxConnectionLost() {
   const asked = pending.drop();
   if (!asked) return;
+  if (asked.notes) { notesSaid = NOTES_LOST; render(); return; }
   notice = 'off' in asked
     ? 'Connection lost. It is not known whether the sandbox was changed. The box shows what the runtime last confirmed and is read again on reconnecting; nothing is retried.'
     : 'Connection lost — completion is unknown. Review the current roots before trying again; nothing is automatically retried.';
@@ -69,6 +72,35 @@ const NOT_KEPT = 'Not kept, because a folder you listed holds it: ';
 const notKept = () => (S.sandbox.not_kept || []).length
   ? '<div data-sandbox-not-kept style="margin-top:6px">' + NOT_KEPT + '<span style="font-family:var(--mono);font-size:12px">' + S.sandbox.not_kept.map(esc).join('; ') + '</span></div>' : '';
 
+let notesSaid = '';
+const NOTES_HEADING = 'OTHER AI AGENTS\u2019 NOTES';
+const NOTES_BUTTON = 'Copy notes';
+const NOTES_COPYING = 'Copying\u2026';
+const NOTES_NOT_CONNECTED = 'Not connected. Nothing was copied.';
+const NOTES_LOST = 'Connection lost. It is not known whether the notes were copied; this card reads the home again on reconnecting. Nothing is retried.';
+const NOTES_COPIED = (folder) => 'A folder stands in their home: ' + folder + '. It is theirs to change; to copy again, delete it first.';
+const NOTES_TIP = 'Copies the notes other AI agents keep on this machine into their home, as a birth does.';
+const NOTES_ASK = 'Copy the notes other AI agents keep on this machine into their home, as a new identity\u2019s birth does: by default Claude Code\u2019s, the Claude desktop app\u2019s and Codex\u2019s, or those of the stores set in genesis.agent_memory in config.json. Only notes of the kinds the copy takes are copied, by default .md and .txt: never credentials, sessions or databases, and a note that holds what looks like a key or a token is left where it is. They read them as another agent\u2019s notes, not as their own memories, and a note they read goes to their model\u2019s provider like anything else they read. It is copied once and does not follow the originals.';
+function copyNotes() {
+  if (pending.waiting()) return;
+  notesSaid = '';
+  const requestID = send({ type: 'agent_notes_copy' });
+  notesSaid = pending.arm({ notes: true }, requestID) ? NOTES_COPYING : NOTES_NOT_CONNECTED;
+  render();
+}
+function notesCardHTML() {
+  const n = S.sandbox.agent_notes;
+  if (!n) return '';
+  let html = '<div class="card" data-agent-notes>' + cardHead(NOTES_HEADING, NOTES_TIP);
+  if (n.copied) {
+    html += '<div data-agent-notes-copied style="line-height:1.5">' + NOTES_COPIED('<span style="font-family:var(--mono);font-size:12px">' + esc(n.folder || '') + '</span>') + '</div>';
+  } else {
+    html += '<div style="line-height:1.5">' + NOTES_ASK + '</div>' +
+      '<div style="margin-top:10px"><button class="btn" id="notes-copy"' + (pending.waiting() ? ' disabled' : '') + '>' + NOTES_BUTTON + '</button></div>';
+  }
+  return html + '<div data-announce data-agent-notes-said style="margin-top:8px;line-height:1.5">' + esc(notesSaid) + '</div></div>';
+}
+
 const HELD_FIRM = ['SAFE', 'ACCESS_TOKEN_OFF'];
 
 export function sandboxCardHTML() {
@@ -78,7 +110,7 @@ export function sandboxCardHTML() {
   const firm = !off && HELD_FIRM.includes(S.sandbox.held_why);
   if (off || firm) warning = false;
   let html = '';
-  html += '<div class="card"><h3>SANDBOX — WHERE THEY MAY REACH</h3>' +
+  html += '<div class="card">' + cardHead('SANDBOX — WHERE THEY MAY REACH', 'Their home, the other folders their tools may read and change, and the switch that turns the sandbox off.') +
     '<label class="f" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="sbx-off"' + (off ? ' checked' : '') + (pending.waiting() || warning || firm ? ' disabled' : '') + '> ' + OFF_LABEL + '</label>';
   if (warning) {
     html += '<div class="config-result" data-sandbox-warning style="line-height:1.5;color:var(--txt)"><div data-announce>' + WARNING + notKept() + WARNING_END + '</div>' +
@@ -87,6 +119,7 @@ export function sandboxCardHTML() {
   }
   if (off) html += '<div class="config-result bad" data-sandbox-off style="line-height:1.5">' + OFF_LINE + notKept() + '</div>';
   if (!off && S.sandbox.held_why) html += '<div class="config-result bad" data-sandbox-held style="line-height:1.5">' + esc(S.sandbox.held) + '</div>';
+  if (S.sandbox.labelled) html += '<div data-sandbox-labelled style="font-size:12.5px;color:var(--dim);padding:6px 0;line-height:1.5">' + esc(S.sandbox.labelled) + '</div>';
   html += '<label class="f">HOME ROOT</label><div style="font-family:var(--mono);font-size:12px;color:var(--dim);padding:4px 0">' + esc(S.sandbox.root) + '</div>' +
     '<label class="f">EXTRA ROOTS</label>';
   if (off) html += '<div data-roots-idle style="color:var(--faint);font-size:12.5px;padding:6px 0;line-height:1.5">' + ROOTS_IDLE + '</div>';
@@ -103,10 +136,12 @@ export function sandboxCardHTML() {
     '<div data-announce>' + esc(notice + (switchRefused ? (off ? ' The sandbox is off.' : ' The sandbox is still on.') : '')) + '</div>' +
     '<div style="font-size:11.5px;color:var(--faint);margin-top:10px;line-height:1.5">Adding a root widens their world — e.g. letting a trusted identity work on AII OS itself — and the world of every plugin you grant files, which works here under the same wall. Their substrate (the data directory, key, database and config) stays refused inside every root — that wall is structural and server-side. The in-process wall is best-effort; a namespace wrapper (bwrap) must bind added paths too.</div>' +
     '</div>';
-  return html;
+  return html + notesCardHTML();
 }
 
 export function wireSandboxCard(st) {
+  const notes = $('notes-copy');
+  if (notes) notes.onclick = copyNotes;
   const fresh = $('sbx-add');
   if (fresh && input) fresh.replaceWith(input);
   else input = fresh;
@@ -116,15 +151,10 @@ export function wireSandboxCard(st) {
   if (grantBtn) grantBtn.onclick = () => {
     const v = ($('sbx-add').value || '').trim();
     if (!v) return;
-    const roots = (S.sandbox.extra_roots || []).concat([v]);
-    saveRoots(roots, $('sbx-add').value);
+    changeRoot('sandbox_add', v, $('sbx-add').value);
   };
   st.querySelectorAll('[data-rmroot]').forEach(btn => {
-    btn.onclick = () => {
-      const roots = (S.sandbox.extra_roots || []).slice();
-      roots.splice(parseInt(btn.dataset.rmroot, 10), 1);
-      saveRoots(roots);
-    };
+    btn.onclick = () => changeRoot('sandbox_remove', (S.sandbox.extra_roots || [])[parseInt(btn.dataset.rmroot, 10)]);
   });
   const box = $('sbx-off');
   if (box) box.onchange = () => {

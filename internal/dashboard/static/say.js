@@ -1,3 +1,4 @@
+import { signedFetch } from './pagekey.js';
 let saying = null;
 let turn = 0;
 let watcher = null;
@@ -38,7 +39,7 @@ export function spokenAudio(ask) {
 }
 
 function mint(ask) {
-  return fetch('/speech/say', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ask) })
+  return signedFetch('/speech/say', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ask) })
     .then(r => r.ok
       ? r.json().then(said => said && said.id ? said.id : Promise.reject(new Error('the host did not say which reply to play')))
       : r.json().then(
@@ -47,7 +48,7 @@ function mint(ask) {
 }
 
 function why(url) {
-  return fetch(url).then(
+  return signedFetch(url).then(
     r => r.ok
       ? 'this browser would not play the audio the service sent'
       : r.json().then(e => (e && e.error) || ('the service answered ' + r.status), () => 'the service answered ' + r.status),

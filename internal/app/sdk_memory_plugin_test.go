@@ -59,7 +59,7 @@ type memoryPluginSearch struct {
 // broker calls. It uses the SDK compatibility suite's temporary identity,
 // supervised worker, dev trust and grant doors. The stage fails on any skip.
 func TestSDKMemoryPlugin(t *testing.T) {
-	b := sdkActualPluginBuild(t, "AII_MEMORY_PLUGIN", "id.aeon.memory", "memory", "0.7.0")
+	b := sdkActualPluginBuild(t, "AII_MEMORY_PLUGIN", "memory", "0.7.0")
 	t.Run("host_floor", func(t *testing.T) {
 		_, err := pluginhost.Verify(b.t0, &pluginhost.Options{HostVersion: "0.1.18"})
 		var floor *pluginhost.HostVersionError
@@ -92,7 +92,7 @@ func TestSDKMemoryPlugin(t *testing.T) {
 		if obs.Failed || obs.Refused || obs.ReasonCode != "" {
 			t.Fatalf("%s refused: %+v", op, obs)
 		}
-		if err := json.Unmarshal([]byte(memoryPluginBody(t, obs.Text)), out); err != nil {
+		if err := json.Unmarshal([]byte(memoryPluginBody(t, b.pluginID, obs.Text)), out); err != nil {
 			t.Fatalf("%s result: %v: %s", op, err, obs.Text)
 		}
 	}
@@ -169,7 +169,7 @@ func TestSDKMemoryPlugin(t *testing.T) {
 		bad.SHA256 = strings.Repeat("0", 64)
 		obs := invoke(t, "memory-task-a", "store", map[string]any{"content": "must not be saved", "evidence": []store.MemoryEvidenceRef{bad}})
 		var got memoryPluginStored
-		if err := json.Unmarshal([]byte(memoryPluginBody(t, obs.Text)), &got); err != nil {
+		if err := json.Unmarshal([]byte(memoryPluginBody(t, b.pluginID, obs.Text)), &got); err != nil {
 			t.Fatalf("refusal result: %v: %+v", err, obs)
 		}
 		if got.Stored || got.ReasonCode != "OPERATION_ARGUMENT_INVALID" || len(h.memories(t)) != before {
@@ -185,7 +185,7 @@ func TestSDKMemoryPlugin(t *testing.T) {
 		before := len(h.memories(t))
 		obs := invoke(t, "memory-task-a", "store", map[string]any{"content": "Stale correction must refuse", "supersedes": note.ID})
 		var stale memoryPluginStored
-		if err := json.Unmarshal([]byte(memoryPluginBody(t, obs.Text)), &stale); err != nil {
+		if err := json.Unmarshal([]byte(memoryPluginBody(t, b.pluginID, obs.Text)), &stale); err != nil {
 			t.Fatalf("refusal result: %v: %+v", err, obs)
 		}
 		if stale.Stored || stale.ReasonCode != "MEMORY_NOT_FOUND" || len(h.memories(t)) != before {
@@ -227,9 +227,9 @@ func TestSDKMemoryPlugin(t *testing.T) {
 // Model dispatch correctly fences all plugin content. Inspect only the exact
 // fenced body after checking the host's source label; never infer a success
 // from prose outside it.
-func memoryPluginBody(t *testing.T, text string) string {
+func memoryPluginBody(t *testing.T, id, text string) string {
 	t.Helper()
-	const prefix = "[[[EXTERNAL_UNTRUSTED_CONTENT]]] source: plugin id.aeon.memory\n"
+	prefix := "[[[EXTERNAL_UNTRUSTED_CONTENT]]] source: plugin " + id + "\n"
 	const suffix = "\n[[[END_EXTERNAL_UNTRUSTED_CONTENT]]]"
 	if !strings.HasPrefix(text, prefix) || !strings.HasSuffix(text, suffix) {
 		t.Fatalf("not the expected host-fenced plugin result: %s", text)

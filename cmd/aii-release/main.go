@@ -13,7 +13,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr *os.File) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: aii-release payload|verify|assets|programs|archive-files|complete|licenses [flags]")
+		fmt.Fprintln(stderr, "usage: aii-release payload|verify|assets|programs|archive-files|complete|licenses|capabilities|status-payload|catalog-payload|catalog-verify|ledger-shapes [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -31,8 +31,18 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runComplete(args[1:], stdout, stderr)
 	case "licenses":
 		return runLicenses(args[1:], stdout, stderr)
+	case "capabilities":
+		return runCapabilities(args[1:], stdout, stderr)
+	case "status-payload":
+		return runStatusPayload(args[1:], stdout, stderr)
+	case "catalog-payload":
+		return runCatalogPayload(args[1:], stdout, stderr)
+	case "catalog-verify":
+		return runCatalogVerify(args[1:], stdout, stderr)
+	case "ledger-shapes":
+		return ledgerShapes(args[1:], stdout, stderr, besideLedger)
 	default:
-		fmt.Fprintf(stderr, "aii-release: unknown verb %q (payload, verify, assets, programs, archive-files, complete, licenses)\n", args[0])
+		fmt.Fprintf(stderr, "aii-release: unknown verb %q (payload, verify, assets, programs, archive-files, complete, licenses, capabilities, status-payload, catalog-payload, catalog-verify, ledger-shapes)\n", args[0])
 		return 2
 	}
 }

@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -33,6 +35,8 @@ type accessCode struct {
 	hash    [sha256.Size]byte
 	expires time.Time
 	policy  *accessPolicy
+
+	local bool
 }
 
 type AccessCodeState struct {
@@ -53,6 +57,8 @@ var (
 	ErrAccessCodeSeen = errors.New("this connection is not private, so the access code sent over it has been seen in the clear: it is ended and signed nothing in. Make another and sign in with it over HTTPS")
 
 	ErrAccessCodeStale = errors.New("the access token changed while the code was being made — sign in again, then ask for a code")
+
+	ErrAccessCodeNotLocal = errors.New("this access code signs in a browser on the AII OS machine or on its own network only, and it was offered from elsewhere: it is ended and signed nothing in. From another network, sign in with a code from Open on another device")
 )
 
 type AccessCodeShort struct{ Length, Line int }
@@ -117,7 +123,7 @@ func (s *Server) accessCodeLife() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-func (s *Server) issueAccessCode(policy *accessPolicy, own string) (AccessCodeState, error) {
+func (s *Server) issueAccessCode(policy *accessPolicy, own string, local bool) (AccessCodeState, error) {
 	if policy == nil || !policy.required || policy.hash == "" {
 		return AccessCodeState{}, ErrAccessCodeNeedsToken
 	}
@@ -147,7 +153,7 @@ func (s *Server) issueAccessCode(policy *accessPolicy, own string) (AccessCodeSt
 		return AccessCodeState{}, fmt.Errorf("access code: %w", err)
 	}
 	life := s.accessCodeLife()
-	c := &accessCode{id: hex.EncodeToString(idRaw[:]), hash: sha256.Sum256([]byte(secret)), expires: s.clock().Add(life), policy: policy}
+	c := &accessCode{id: hex.EncodeToString(idRaw[:]), hash: sha256.Sum256([]byte(secret)), expires: s.clock().Add(life), policy: policy, local: local}
 	s.accessCode.Store(c)
 
 	if s.auth.Load() != policy {
@@ -163,30 +169,64 @@ func (s *Server) cancelAccessCode(id string) {
 	}
 }
 
-func (s *Server) redeemAccessCode(offered string, r *http.Request) (granted *accessPolicy, ok, seen bool) {
+func (s *Server) redeemAccessCode(offered string, r *http.Request) (granted *accessPolicy, ok bool, ended error) {
 	p := s.auth.Load()
 	cur := s.accessCode.Load()
 	if p == nil || cur == nil || cur.policy != p {
-		return nil, false, false
+		return nil, false, nil
 	}
 	sum := sha256.Sum256([]byte(normalizeAccessCode(offered)))
 	if subtle.ConstantTimeCompare(sum[:], cur.hash[:]) != 1 {
-		return nil, false, false
+		return nil, false, nil
 	}
 	if !privateConnection(r) {
 		if s.accessCode.CompareAndSwap(cur, nil) {
-			logsink.Warn("dashboard.refusal", "an access code was offered from %s over a connection that is not private, so it has been seen in the clear: it is ended and signed nothing in", clientHost(r))
+			logsink.Warn("dashboard.refusal", "an access code was offered %s over a connection that is not private, so it has been seen in the clear: it is ended and signed nothing in", cameFrom(r))
 		}
-		return nil, false, true
+		return nil, false, ErrAccessCodeSeen
+	}
+	if cur.local && !s.onThisMachinesNetwork(r) {
+		if s.accessCode.CompareAndSwap(cur, nil) {
+			logsink.Warn("dashboard.refusal", "an access code made for this machine's own network was offered %s, outside it: it is ended and signed nothing in", cameFrom(r))
+		}
+		return nil, false, ErrAccessCodeNotLocal
 	}
 	if !s.clock().Before(cur.expires) {
 		s.accessCode.CompareAndSwap(cur, nil)
-		return nil, false, false
+		return nil, false, nil
 	}
 	if !s.accessCode.CompareAndSwap(cur, nil) {
-		return nil, false, false
+		return nil, false, nil
 	}
-	return p, true, false
+	return p, true, nil
+}
+
+func (s *Server) onThisMachinesNetwork(r *http.Request) bool {
+	if r.Context().Value(carriedKey{}) != nil {
+		return false
+	}
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.IP(peer.Addr().WithZone("").Unmap().AsSlice())
+	if ip.IsLoopback() {
+		return true
+	}
+	read := s.machineAddrs
+	if read == nil {
+		read = net.InterfaceAddrs
+	}
+	addrs, err := read()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleLauncherLink(w http.ResponseWriter, r *http.Request) {
@@ -203,11 +243,6 @@ func (s *Server) handleLauncherLink(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	wait := s.strangerBodyWait
-	if wait <= 0 {
-		wait = strangerBodyWait
-	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait))
 	body, err := io.ReadAll(io.LimitReader(r.Body, AccessTokenMaxBytes+1))
 	if err != nil || len(body) > AccessTokenMaxBytes || !tokenIsVerifier(strings.TrimSpace(string(body)), p.hash) {
 		s.credentialRefused(r)
@@ -217,7 +252,7 @@ func (s *Server) handleLauncherLink(w http.ResponseWriter, r *http.Request) {
 	if h := s.currentHandler(); h != nil && h.AccessCodeSeconds != nil {
 		s.SetAccessCodeSeconds(h.AccessCodeSeconds())
 	}
-	st, err := s.issueAccessCode(p, "")
+	st, err := s.issueAccessCode(p, "", false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

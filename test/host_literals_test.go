@@ -14,7 +14,11 @@ import (
 	"testing"
 )
 
-var hostLiteralRoots = []string{"internal/publicname", "internal/certs", "internal/relay", "internal/dashboard", "config/config.json"}
+// names and certificate.relay_endpoint chooses, dashboard.ice_servers), and
+// so is where its updates come from (updates.api_url, and the download fenced
+// to what it names: internal/updates), each with at most one default, in one
+// place. A host written anywhere else in
+var hostLiteralRoots = []string{"internal/publicname", "internal/certs", "internal/relay", "internal/dashboard", "internal/updates", "config/config.json"}
 
 // The test kits under those roots, by path: test code no product build
 // imports. Only these are passed by; any other directory is read, whatever
@@ -33,6 +37,11 @@ var hostLiteralsAllowed = map[hostLiteral]struct {
 	{"internal/dashboard/qr.go", "http://www.w3.org/2000/svg"}:                          {1, "the SVG namespace: a name, never fetched"},
 	{"internal/dashboard/static/views/settings.js", "http://localhost:8000/v1"}:         {3, "placeholder text for an operator's own model server"},
 	{"internal/dashboard/static/views/plugins.js", "192.168.1.0"}:                       {1, "an example of a range, in the words beside a plugin's network list"},
+	{"internal/updates/updates.go", "https://api.github.com"}:                           {1, "the one default of updates.api_url"},
+	{"internal/updates/updates.go", "github.com"}:                                       {1, "GitHub's asset fence, in force only while updates.api_url names the default's host"},
+	{"internal/updates/updates.go", "api.github.com"}:                                   {1, "GitHub's asset fence, in force only while updates.api_url names the default's host"},
+	{"internal/updates/updates.go", "codeload.github.com"}:                              {1, "GitHub's asset fence, in force only while updates.api_url names the default's host"},
+	{"internal/updates/updates.go", "githubusercontent.com"}:                            {1, "GitHub's asset fence, in force only while updates.api_url names the default's host"},
 	{"config/config.json", "https://witness.aiii.id"}:                                   {1, "the default of witness_server.url, a platform service this rule is not about"},
 	{"config/config.json", "https://genesis.aiii.id"}:                                   {1, "the default of genesis.server_url, a platform service this rule is not about"},
 	{"config/config.json", "https://firewall.aiii.id"}:                                  {1, "the default of genesis.firewall_url, a platform service this rule is not about"},

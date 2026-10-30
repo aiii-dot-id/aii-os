@@ -19,8 +19,8 @@ func newBudgetEnforcer(maxTokens int, turn map[string]bool) *budgetEnforcer {
 	return &budgetEnforcer{maxTokens: maxTokens, turn: turn}
 }
 
-func foldOrder() [5]string {
-	return [5]string{"brief", "turn", "ring4", "ring3", "ring2"}
+func foldOrder() [6]string {
+	return [6]string{"brief", "turn", "ring4", "ring3", "operator", "ring2"}
 }
 
 func omitOrder() [4]string {
@@ -41,13 +41,15 @@ func sectionRoute(source string) string {
 	case "ring2":
 		return "recall (source=ledger) reaches the derivation"
 	case "ring3":
-		return "recall (source=experiences) reaches what was surfaced and recorded, recall (source=ledger) reaches your beliefs"
+		return `recall source=ring3 reads this section whole`
+	case "operator":
+		return "recall (source=ledger) reaches your beliefs about the person you work with"
 	case "ring4":
 		return "work status reads your authored working state and workers; size refusals name prompt.max_tool_result_chars"
 	case "turn":
-		return "work status lists your running and delivered sub-agents, recall (source=alarms) the alarms that fired"
+		return `work status lists your running and delivered sub-agents, recall (source=alarms) the alarms that fired, recall (source=curiosity) your curiosity, recall (source=inbound, query="") what arrived`
 	case "brief":
-		return "recall (source=experiences) reaches the day"
+		return `recall source=brief reads the brief whole`
 	}
 	return ""
 }
@@ -72,7 +74,7 @@ func summarize(source, content, room string) string {
 	return SummarizeUnits(content, routeFor(source, room))
 }
 
-var ring3YieldOrder = []string{"surfacing", "operator", "working_truth"}
+var ring3YieldOrder = []string{"surfacing", "working_truth"}
 
 func summarizeRing3(content, room string) string {
 	type span struct {
@@ -129,10 +131,6 @@ func summarizeRing3(content, room string) string {
 		b.WriteString(strings.TrimSpace(content[s.start:s.end]))
 	}
 	route := routeFor("ring3", room)
-	if drop["operator"] {
-
-		route += "; the operator model is not searchable and returns with the next consolidation"
-	}
 	return fmt.Sprintf("%s\n\n%s %d of %d parts kept; %s not in view; %s]",
 		b.String(), SummaryMarker, len(spans)-len(dropped), len(spans),
 		strings.Join(dropped, " and "), route)

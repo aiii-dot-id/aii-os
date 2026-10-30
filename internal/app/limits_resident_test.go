@@ -44,7 +44,7 @@ func TestTheResidentsCallCeilingDefaultsToUnlimited(t *testing.T) {
 // loopCalls is the call ceiling the resident's loop holds for its next turn.
 func loopCalls(a *App) limits.Ceiling { return agencyHeld(a).TurnCalls }
 
-// SWITCHING TO A LOCAL MODEL LIFTS THE TURN FENCE AT THE NEXT TURN:
+// SWITCHING TO A LOCAL MODEL LIFTS THE TURN FENCE AT THE NEXT TURN (the local-model
 // the overrides of the entry the identity is switched to are put in
 // force with it, and switching away puts the main setting back.
 func TestSwitchingToALocalModelLiftsTheTurnFenceAtTheNextTurn(t *testing.T) {

@@ -87,6 +87,43 @@ func TestADownloadTheRuleEndedIsFinalUntilTryAgain(t *testing.T) {
 	until(t, "Try again to bring it up", func() bool { return f.stateOf("id.example.one") == StateActive })
 }
 
+// networkEnded is a runtime cause the network's failures ended
+// (NetworkBound).
+type networkEnded struct{ ended }
+
+func (networkEnded) WaitsOnNetwork() bool { return true }
+
+func TestADownloadTheNetworkEndedIsAskedAgainWhenTheHostCompletesAFetch(t *testing.T) {
+	for _, network := range []bool{true, false} {
+		var cause error = ended{remedy: "Nothing is at the address the package declares. Try again once it is."}
+		if network {
+			cause = networkEnded{ended{remedy: "5 attempts in a row brought nothing; check this machine's connection."}}
+		}
+		rt := &failingAcquire{sharedRuntime: newSharedRuntime(), err: cause}
+		rt.present = false
+		f := newFacility(t, rt)
+		f.Observe(obs("one.aiiospkg"), Policy{Revision: 1})
+		until(t, "the refusal", func() bool { _, ok := refusalOf(f, "id.example.one"); return ok })
+		view, _ := refusalOf(f, "id.example.one")
+		if r := view.Refusal; r.Class != ClassPermanent || r.WaitsOn(InputNetwork) != network {
+			t.Fatalf("network %v: the refusal waits on the network %v: %+v", network, r.WaitsOn(InputNetwork), r)
+		}
+		rt.mu.Lock()
+		rt.err = nil
+		rt.mu.Unlock()
+		f.Rejudge(InputNetwork, "this host completed a fetch")
+		if network {
+			until(t, "the host's completed fetch to bring it up", func() bool { return f.stateOf("id.example.one") == StateActive })
+			continue
+		}
+		time.Sleep(100 * time.Millisecond)
+		settle()
+		if n := rt.attempts(); n != 1 {
+			t.Fatalf("an answer's end was asked again on the host's completed fetch: %d attempts", n)
+		}
+	}
+}
+
 // G4: A CHILD THAT DID NOT REPORT READY IS REFUSED AT READINESS, with the
 // starting layer's remedy — never as a start that failed.
 func TestAChildThatDoesNotReportReadyIsRefusedAtReadiness(t *testing.T) {

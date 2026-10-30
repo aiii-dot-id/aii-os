@@ -46,7 +46,7 @@ func TestAtMostSoManyRefusalsAreSlowedAtOnce(t *testing.T) {
 				all.Go(func() {
 					req := httptest.NewRequest(http.MethodGet, "https://"+addr+"/auth/token", nil)
 					req.RemoteAddr = "203.0.113.7:4711"
-					req.Header.Set("Cookie", "aii_token_"+port+"=a-wrong-guess")
+					req.Header.Set("Cookie", tlsCookieName(port)+"=a-wrong-guess")
 					w := httptest.NewRecorder()
 					s.server.Handler.ServeHTTP(w, req)
 					statuses <- w.Code
@@ -72,7 +72,7 @@ func TestAtMostSoManyRefusalsAreSlowedAtOnce(t *testing.T) {
 			// The places come back: the next guess is slowed again.
 			before := asleep.Load()
 			req := httptest.NewRequest(http.MethodGet, "https://"+addr+"/auth/token", nil)
-			req.Header.Set("Cookie", "aii_token_"+port+"=a-wrong-guess")
+			req.Header.Set("Cookie", tlsCookieName(port)+"=a-wrong-guess")
 			s.server.Handler.ServeHTTP(httptest.NewRecorder(), req)
 			if asleep.Load() != before+1 {
 				t.Fatal("after the slowed refusals ended, the next refusal was not slowed: a place was not given back")
@@ -92,8 +92,8 @@ func TestAFloodOfRefusalsDoesNotFillTheLog(t *testing.T) {
 		for range flood {
 			s.credentialRefused(req)
 		}
-		if n := strings.Count(said.String(), "access token refused from 203.0.113.7"); n != refusalLinesAMinute {
-			t.Fatalf("%d refusals in one minute wrote %d lines of their own, want %d", flood, n, refusalLinesAMinute)
+		if n := strings.Count(said.String(), "access token refused from 203.0.113.7"); n != DefaultRefusalLinesPerMinute {
+			t.Fatalf("%d refusals in one minute wrote %d lines of their own, want %d", flood, n, DefaultRefusalLinesPerMinute)
 		}
 		if said.Contains("more access token(s) refused") {
 			t.Fatal("the minute's count was said before the minute ended")
@@ -168,7 +168,8 @@ func TestUnsignedRequestsThroughARelayHaveARateOfTheirOwn(t *testing.T) {
 		return func(carried, signed bool) int {
 			req := httptest.NewRequest(http.MethodGet, "https://"+addr+"/auth/token", nil)
 			if signed {
-				req.Header.Set("Cookie", "aii_token_"+port+"="+verifierOf(token))
+				req.Header.Set("Cookie", tlsCookieName(port)+"="+verifierOf(token))
+				req.Header.Set(pageKeyHeader, pageKeyFor(s))
 			}
 			if carried {
 				req = req.WithContext(context.WithValue(req.Context(), carriedKey{}, true))
@@ -232,6 +233,41 @@ func TestUnsignedRequestsThroughARelayHaveARateOfTheirOwn(t *testing.T) {
 	}
 }
 
+func TestNoCountOfWrongGuessesThroughARelayLocksTheOperatorOut(t *testing.T) {
+	const token = "the-right-token"
+	s := New("127.0.0.1", 0, &WSHandler{
+		GetConfig:        func() *ConfigState { return &ConfigState{} },
+		UnsignedRequests: func() (int, int) { return MaxUnsignedRequestsPerSecond, MaxUnsignedRequestBurst },
+	})
+	s.SetAccessToken(true, token)
+	s.refusedPause = func(time.Duration) {}
+	logsink.CaptureForTest(t)
+	addr, err := s.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	_, port, _ := net.SplitHostPort(addr)
+	ask := func(cookie string) int {
+		req := httptest.NewRequest(http.MethodGet, "https://"+addr+"/auth/token", nil)
+		req.Header.Set("Cookie", tlsCookieName(port)+"="+cookie)
+		req.Header.Set(pageKeyHeader, pageKeyFor(s))
+		req = req.WithContext(context.WithValue(req.Context(), carriedKey{}, true))
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, req)
+		return w.Code
+	}
+	const guesses = 1000
+	for i := range guesses {
+		if got := ask("a-wrong-guess"); got != http.StatusUnauthorized {
+			t.Fatalf("wrong guess %d through the relay: answered %d, want %d", i+1, got, http.StatusUnauthorized)
+		}
+	}
+	if got := ask(verifierOf(token)); got != http.StatusNoContent {
+		t.Fatalf("the right cookie through the relay after %d wrong ones: answered %d, want %d", guesses, got, http.StatusNoContent)
+	}
+}
+
 func TestRefusalsAStrangerCanCauseDoNotFillTheLog(t *testing.T) {
 	s := New("127.0.0.1", 0, &WSHandler{GetConfig: func() *ConfigState { return &ConfigState{} }})
 	s.SetAccessToken(true, "the-right-token")
@@ -241,7 +277,7 @@ func TestRefusalsAStrangerCanCauseDoNotFillTheLog(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Shutdown(context.Background()) })
 	said := logsink.CaptureForTest(t)
-	const flood = refusalLinesAMinute + 80
+	const flood = DefaultRefusalLinesPerMinute + 80
 	synctest.Test(t, func(t *testing.T) {
 		for range flood {
 			req := httptest.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
@@ -260,8 +296,8 @@ func TestRefusalsAStrangerCanCauseDoNotFillTheLog(t *testing.T) {
 			}
 		}
 		for line, what := range map[string]string{`refused request with foreign Host "elsewhere.example"`: "requests with a foreign Host", `refused: origin "https://elsewhere.example"`: "sessions from a foreign origin"} {
-			if n := strings.Count(said.String(), line); n != refusalLinesAMinute {
-				t.Fatalf("%d %s in one minute wrote %d lines of their own, want %d", flood, what, n, refusalLinesAMinute)
+			if n := strings.Count(said.String(), line); n != DefaultRefusalLinesPerMinute {
+				t.Fatalf("%d %s in one minute wrote %d lines of their own, want %d", flood, what, n, DefaultRefusalLinesPerMinute)
 			}
 		}
 		time.Sleep(refusalMinute)

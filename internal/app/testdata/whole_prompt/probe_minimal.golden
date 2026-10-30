@@ -1,0 +1,5 @@
+# probe_minimal: the minimal inference request a provider must answer before it is adopted
+
+=== message 0 (user) ===
+Reply with the single word OK.
+=== tools: none ===

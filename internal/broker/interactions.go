@@ -53,7 +53,7 @@ func (b *Binding) dispatchInteraction(ctx context.Context, p invokeParams, g Gra
 			return nil, err
 		}
 
-		if len(raw) > interaction.MaxPageBytes-8192 {
+		if len(raw) > interaction.PageBodyBytes {
 			return emit(outcome{status: statusFailed, reason: "INTERACTION_CONTENT_UNAVAILABLE", detail: "interaction response exceeds the bounded frame"})
 		}
 		return emit(outcome{status: statusSucceeded, transportOK: true, operationResult: raw})

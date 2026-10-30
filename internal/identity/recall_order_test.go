@@ -295,10 +295,6 @@ func TestARecallFitsTheToolResultBoundItIsGiven(t *testing.T) {
 	}
 }
 
-// THE TOOL'S DESCRIPTION SAYS WHAT THE ANSWER SAYS. It told a resident that
-// hits "are ranked by match and decayed by age and use", and nothing of the
-// shared cut, the score on every hit or the meaning part of a mark. It
-// carries RecallOrder, the sentence the shipped SKILLS.md carries too.
 func TestTheRecallDescriptionSaysHowAnAnswerIsOrderedAndCut(t *testing.T) {
 	var recall string
 	for _, v := range verbRegistry {
@@ -306,15 +302,10 @@ func TestTheRecallDescriptionSaysHowAnAnswerIsOrderedAndCut(t *testing.T) {
 			recall = v.Description
 		}
 	}
-	if !strings.Contains(recall, RecallOrder) {
-		t.Fatalf("the recall verb's description does not carry how an answer is ordered and cut: %q", recall)
+	if !strings.Contains(recall, "each answer says what it searched, how it ordered and cut its hits, and what each label means") {
+		t.Fatalf("the recall verb's description does not say the answer states its order and cut: %q", recall)
 	}
 	if strings.Contains(recall, "ranked by match") {
 		t.Fatalf("the description still says hits are ranked by match: %q", recall)
-	}
-	for _, said := range []string{"ordered by score", "fused rank", "strength", "graph", "not per source", "cut answer says so"} {
-		if !strings.Contains(RecallOrder, said) {
-			t.Errorf("RecallOrder does not say %q: %q", said, RecallOrder)
-		}
 	}
 }

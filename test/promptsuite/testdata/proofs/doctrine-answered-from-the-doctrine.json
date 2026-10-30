@@ -1,0 +1,45 @@
+{
+  "task": "doctrine-answered-from-the-doctrine",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "before you believe a test passes",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "test",
+                  "path": "SKILLS.md",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "Rule 5: \"Watch your tests fail before believing they pass.\""
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "D1: the doctrine is quoted from memory, never opened",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "before you believe a test passes",
+        "steps": [
+          {
+            "text": "My doctrine says to watch a test fail before believing it passes."
+          }
+        ]
+      }
+    ]
+  }
+}

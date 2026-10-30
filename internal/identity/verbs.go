@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
@@ -21,6 +22,10 @@ type ToolInfo struct {
 
 type ToolDiscoverer interface {
 	Discover(depth int) []ToolInfo
+}
+
+type HomeDocs interface {
+	HomeDocs() []string
 }
 
 type ToolPlane interface {
@@ -89,7 +94,7 @@ type storePort interface {
 
 type Engine struct {
 	safeMu               sync.RWMutex
-	safeReason           string
+	safeHold             hold.Hold
 	safeTranscript       []SafeTurn
 	transientIncarnation string
 	transientSeq         uint64
@@ -113,23 +118,29 @@ type Engine struct {
 	rings    *ring.Manager
 	toolDisc ToolDiscoverer
 
-	instruments  *memory.Facility
-	projects     ProjectPort
-	voice        VoicePort
-	heardHistory func(string, uint64, int) (string, error)
-	continuity   ContinuityPort
-	timers       TimerSetter
-	reachable    func(name string) bool
-	askProposer  func(session, text string, choices []string, connector string) error
-	workStarted  func(ctx context.Context, session, family, description string) string
-	workState    func(context.Context) (string, error)
-	workWake     func()
-	yieldGate    func() (need bool, why string)
-	routeLimits  func(role string) SpawnLimits
+	instruments   *memory.Facility
+	projects      ProjectPort
+	voice         VoicePort
+	heardHistory  func(string, uint64, int) (string, error)
+	continuity    ContinuityPort
+	timers        TimerSetter
+	reachable     func(name string) bool
+	askProposer   func(session, text string, choices []string, connector string) error
+	askFits       func(session, text string, choices []string, connector string) error
+	workStarted   func(ctx context.Context, session, family, description string) string
+	workDelivered func(ctx context.Context, session string) string
+	confirmWord   func(turn uint64) error
+	workState     func(context.Context) (string, error)
+	workWake      func()
+	yieldGate     func() (need bool, why string)
+	routeLimits   func(role string) SpawnLimits
 
 	toolResultChars int
 
 	alarmFirings func() int
+
+	workLineMaxChars func() int
+	standingMaxChars func() int
 }
 
 type Ports struct {
@@ -148,11 +159,20 @@ type Ports struct {
 
 	AlarmFirings func() int
 
+	WorkLineMaxChars func() int
+	StandingMaxChars func() int
+
 	Reachable func(name string) bool
 
 	AskProposer func(session, text string, choices []string, connector string) error
 
+	AskFits func(session, text string, choices []string, connector string) error
+
 	WorkStarted func(ctx context.Context, session, family, description string) string
+
+	WorkDelivered func(ctx context.Context, session string) string
+
+	ConfirmSpokenWord func(turn uint64) error
 
 	WorkState func(context.Context) (string, error)
 
@@ -170,26 +190,32 @@ type SpawnLimits struct {
 
 func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscoverer, p Ports) *Engine {
 	e := &Engine{
-		store:        s,
-		ledger:       l,
-		rings:        rm,
-		toolDisc:     td,
-		instruments:  memory.New(s),
-		projects:     p.Projects,
-		voice:        p.Voice,
-		heardHistory: p.HeardHistory,
-		continuity:   p.Continuity,
-		timers:       p.Timers,
-		reachable:    p.Reachable,
-		askProposer:  p.AskProposer,
-		workStarted:  p.WorkStarted,
-		workState:    p.WorkState,
-		workWake:     p.WorkWake,
-		yieldGate:    p.YieldGate,
-		routeLimits:  p.RouteLimits,
+		store:         s,
+		ledger:        l,
+		rings:         rm,
+		toolDisc:      td,
+		instruments:   memory.New(s),
+		projects:      p.Projects,
+		voice:         p.Voice,
+		heardHistory:  p.HeardHistory,
+		continuity:    p.Continuity,
+		timers:        p.Timers,
+		reachable:     p.Reachable,
+		askProposer:   p.AskProposer,
+		askFits:       p.AskFits,
+		workStarted:   p.WorkStarted,
+		workDelivered: p.WorkDelivered,
+		confirmWord:   p.ConfirmSpokenWord,
+		workState:     p.WorkState,
+		workWake:      p.WorkWake,
+		yieldGate:     p.YieldGate,
+		routeLimits:   p.RouteLimits,
 
 		toolResultChars: p.ToolResultChars,
 		alarmFirings:    p.AlarmFirings,
+
+		workLineMaxChars: p.WorkLineMaxChars,
+		standingMaxChars: p.StandingMaxChars,
 	}
 	e.instruments.SetEmbedder(p.Embedder)
 	e.instruments.SetConversationWindow(p.ConversationWindow)
@@ -201,6 +227,14 @@ func (e *Engine) ToolResultLimit() int {
 		return e.toolResultChars
 	}
 	return limits.DefaultToolResultChars
+}
+
+func (e *Engine) ResultLimit(ctx context.Context) int {
+	n := e.ToolResultLimit()
+	if c, ok := limits.CarriedToolResultChars(ctx); ok && c < n {
+		return c
+	}
+	return n
 }
 
 func (e *Engine) ExecuteAction(ctx context.Context, actionType, name string, args map[string]any) (string, error) {
@@ -306,6 +340,12 @@ func (e *Engine) executeVerb(ctx context.Context, name string, args map[string]a
 func (e *Engine) dispatchVerb(ctx context.Context, name string, args map[string]any) (string, error) {
 
 	if v := lookupVerb(name); v != nil {
+
+		if inWorkerSeat(ctx) {
+			if err := e.workerMay(ctx, name, args); err != nil {
+				return "", err
+			}
+		}
 		return v.Handler(e, ctx, args)
 	}
 	return "", fmt.Errorf("unknown verb: %s", name)

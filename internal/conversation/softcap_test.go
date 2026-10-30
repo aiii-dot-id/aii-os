@@ -245,14 +245,14 @@ func TestDeclaredBudgetCapsTheTurnAndFlagsContinuation(t *testing.T) {
 			t.Errorf("the checkpoint ask omits %q — the machine key its consumer parses", key)
 		}
 	}
-	if !strings.Contains(res.Spoken, "declared budget") || !strings.Contains(res.Spoken, "continues automatically in a fresh turn") {
-		t.Errorf("the ending does not say what happened and what happens next: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "declared budget") || !strings.Contains(res.Said(), "continues automatically in a fresh turn") {
+		t.Errorf("the ending does not say what happened and what happens next: %q", res.Said())
 	}
 	// The loop cannot know whether a fresh turn follows. A caller that
 	// scheduled none takes the reply closed on that: the model's words,
 	// then the one line, and the loop's promise nowhere.
 	const why = "no work session is active"
-	if got, want := res.NothingContinues(why), "done\n\n"+nothingContinuesLine(res.ToolCallsUsed, why); got != want {
+	if got, want := said(res, res.NothingContinues(why)), "done\n\n"+nothingContinuesLine(res.ToolCallsUsed, why); got != want {
 		t.Errorf("the reply of a capped turn nothing continues = %q, want %q", got, want)
 	}
 }
@@ -291,7 +291,7 @@ func TestNoCapWithoutTheResidentWiring(t *testing.T) {
 		t.Errorf("turn took %d requests, want 41 (natural end) — an unwired loop was capped", got)
 	}
 	// A turn no budget ended has no promise to take back.
-	if got := res.NothingContinues("no work session is active"); got != res.Spoken {
+	if got := said(res, res.NothingContinues("no work session is active")); got != res.Said() {
 		t.Errorf("a turn that ended naturally was given a budget's closing line: %q", got)
 	}
 	if got := checkpointCount(client); got != 0 {
@@ -313,10 +313,8 @@ func TestNaturalFinishInsideGraceDoesNotFlag(t *testing.T) {
 	}
 }
 
-// When the hard cap is nearer than cap+grace, the soft cap stands down:
-// the hard ending owns the boundary and keeps its ask-again shape.
 func TestSoftCapYieldsToTheHardCap(t *testing.T) {
-	client, res := runCapTurn(t, 8, 8, func() int { return 3 })
+	client, res := runCapTurn(t, 5, 5, func() int { return 3 })
 
 	if res.ContinuedAtCap {
 		t.Fatal("a hard-capped turn flagged ContinuedAtCap")
@@ -324,8 +322,8 @@ func TestSoftCapYieldsToTheHardCap(t *testing.T) {
 	if got := checkpointCount(client); got != 0 {
 		t.Errorf("checkpoint ask appeared %d times beside the hard cap, want 0", got)
 	}
-	if !strings.Contains(res.Spoken, "reached its limit") {
-		t.Errorf("the hard cap lost its ask-again ending: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "reached its limit") {
+		t.Errorf("the hard cap lost its ask-again ending: %q", res.Said())
 	}
 }
 
@@ -366,4 +364,10 @@ func budgetAtStart(predicted func() int) func() (remaining, ordinal int) {
 		return nil
 	}
 	return func() (int, int) { return predicted(), 0 }
+}
+
+// said is a turn's reply with the notes given in place of its own, as one
+// text: what the tests of a turn's ending read.
+func said(r Result, notes []string) string {
+	return Result{Spoken: r.Spoken, Notes: notes}.Said()
 }

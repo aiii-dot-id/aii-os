@@ -47,6 +47,7 @@ func main() {
 		*configPath = install.ConfigPathIn("")
 	}
 
+	app.PutBackConfigIfProgramWentBack(*configPath)
 	cfg, err := app.LoadConfig(*configPath)
 	if err != nil {
 
@@ -92,6 +93,9 @@ func dispatch(args []string, stdout, stderr io.Writer) (code int, ok bool) {
 	case "ledger":
 
 		return runLedger(rest, stdout, stderr), true
+	case "work":
+
+		return runWork(rest, stdout, stderr), true
 	case "snapshot":
 
 		return runSnapshot(rest, stdout, stderr), true

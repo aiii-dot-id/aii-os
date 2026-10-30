@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"github.com/aiii-dot-id/aii-os/internal/plugincatalog"
+	"github.com/aiii-dot-id/aii-os/internal/pluginfacility"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"io"
 	"io/fs"
@@ -45,8 +46,29 @@ func (a *App) catalogState() (url, fetchedAt, refusal string) {
 }
 
 func (a *App) catalogChanged() {
+	if a.dashboard == nil {
+		return
+	}
 	a.dashboard.BroadcastStatus()
 	a.dashboard.BroadcastConfig()
+}
+
+func (a *App) catalogRefreshEvery() time.Duration {
+	return time.Duration(plugincatalog.HeldRefreshMinutes(a.configSnapshot().Plugins.CatalogRefreshMinutes)) * time.Minute
+}
+
+func (a *App) catalogLimits() plugincatalog.LimitsConfig {
+	p := a.configSnapshot().Plugins
+	return plugincatalog.LimitsConfig{MaxIndexBytes: p.CatalogMaxIndexBytes, MaxSignatureBytes: p.CatalogMaxSignatureBytes,
+		FetchTimeoutSeconds: p.CatalogFetchTimeoutSeconds, RefreshTimeoutSeconds: p.CatalogRefreshTimeoutSeconds,
+		FirstRefreshSeconds: p.CatalogFirstRefreshSeconds}
+}
+
+func (a *App) catalogRefreshed(err error) {
+	a.catalogChanged()
+	if err == nil {
+		a.resumeDownloads("the plugin catalog was fetched")
+	}
 }
 
 func (a *App) pluginsState(c *Config) dashboard.PluginsState {
@@ -55,12 +77,17 @@ func (a *App) pluginsState(c *Config) dashboard.PluginsState {
 	state := dashboard.PluginsState{
 		Autoload: c.Plugins.Autoload, Skips: a.pluginSkipViews(), Pending: a.pluginPendingViews(), Installed: a.pluginViews(c), Catalog: views,
 		CatalogURL: url, CatalogDir: c.Plugins.CatalogDir, CatalogFetchedAt: at, CatalogError: refusal,
-		CatalogUpdates: countUpdates(views),
+		CatalogRefreshMinutes: plugincatalog.HeldRefreshMinutes(c.Plugins.CatalogRefreshMinutes),
+		CatalogUpdates:        countUpdates(views),
+		ContextProviders:      c.Plugins.ContextProviders,
+		ContextTimeoutMs:      c.Plugins.ContextTimeoutMs,
 		Runtime: &dashboard.RuntimeLimitsView{
 			MaxInstalledBytes: c.Plugins.Runtime.MaxInstalledBytes, MaxFiles: c.Plugins.Runtime.MaxFiles,
 			MaxFileBytes: c.Plugins.Runtime.MaxFileBytes, MaxCompressedBytes: c.Plugins.Runtime.MaxCompressedBytes,
 			MaxDepth: c.Plugins.Runtime.MaxDepth, RootsKept: c.Plugins.Runtime.RootsKept,
 			MaxStartupMS: c.Plugins.Runtime.MaxStartupMS,
+			StopMS:       c.Plugins.Runtime.StopMS, HandOverMS: c.Plugins.Runtime.HandOverMS,
+			SessionControlMS: c.Plugins.Runtime.SessionControlMS, RestartAttempts: c.Plugins.Runtime.RestartAttempts,
 		},
 		AuthProfiles: a.authProfileViews(c), Providers: a.providerViews(),
 		Machine: a.machineView(),
@@ -203,7 +230,8 @@ func (a *App) catalogViews() []dashboard.CatalogEntryView {
 		return nil
 	}
 	needs := map[string]string{}
-	for _, v := range a.pluginFacility().Snapshot().Instances {
+	instances := a.pluginFacility().Snapshot().Instances
+	for _, v := range instances {
 		if s := latestSelection(v); s != nil {
 			needs[v.ID] = s.Needs
 		}
@@ -214,7 +242,27 @@ func (a *App) catalogViews() []dashboard.CatalogEntryView {
 		installed[p.ID] = installedRelease{version: p.Version, tier: p.Tier.String(), needs: needs[p.ID]}
 	}
 	a.pluginMu.Unlock()
-	return catalogViewsFor(cat, installed, a.pendingSummaries())
+	pending := a.pendingSummaries()
+
+	for id, mark := range a.safeBootHeld() {
+		if _, known := pending[id]; !known {
+			if _, runs := installed[id]; !runs {
+				pending[id] = mark
+			}
+		}
+	}
+	views := catalogViewsFor(cat, installed, pending)
+
+	if a.engine != nil {
+		for id, r := range a.updateRemakes(a.engine.Instruments(), pending, newestBasis(instances)) {
+			for i := range views {
+				if views[i].ID == id {
+					views[i].Remakes, views[i].RemakeSeconds = r.vectors, int64(r.about/time.Second)
+				}
+			}
+		}
+	}
+	return views
 }
 
 func catalogViewsFor(cat *plugincatalog.Index, installed map[string]installedRelease, pending map[string]pendingMark) []dashboard.CatalogEntryView {
@@ -226,6 +274,11 @@ func catalogViewsFor(cat *plugincatalog.Index, installed map[string]installedRel
 			Title: e.Title, Category: e.Category, Keywords: e.Keywords, Updated: e.Updated}
 		if pkg != nil {
 			v.Size = pkg.Size
+
+			v.Build = "system"
+			if pkg.Portable() {
+				v.Build = "portable"
+			}
 		}
 		if ir, ok := installed[e.ID]; ok {
 			v.Installed, v.Needs = true, ir.needs
@@ -304,24 +357,70 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	got, refused := a.readFetched(ctx, id, tmp)
+	if refused != nil {
+		return refused
+	}
+	return a.placeAndStart(id, entry.Version, pkg.URL, tmp, got)
+}
+
+func (a *App) placeAndStart(id, version, url, tmp string, got pluginfacility.Evidence) error {
+
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
 	slot := filepath.Join("plugins", id)
-	final := filepath.Join(slot, id+"-"+entry.Version+".aiiospkg")
-	err = os.Mkdir(slot, 0o750)
+	final := filepath.Join(slot, id+"-"+version+".aiiospkg")
+	err := os.Mkdir(slot, 0o750)
 	made := err == nil
 	if made {
 		err = atomicfile.SyncDir("plugins")
 	} else if errors.Is(err, fs.ErrExist) {
 		err = nil
 	}
-	published := false
+	held := err == nil && got.Native && !a.alreadyServes(got)
+	marked := false
+	if held {
+		marked, err = writeHeldMark(slot)
+	}
+
+	serving := ""
+	if err == nil && !made {
+		serving = a.servingPackage(slot)
+	}
+	published, kept := false, ""
+	var stale error
+	a.slotsMu.Lock()
+	if err == nil && serving != "" {
+		kept, err = setAside(id, slot, serving)
+	}
+	if kept != "" && a.slotChangeHeld != nil {
+		a.slotChangeHeld()
+	}
 	if err == nil {
 		published, err = atomicfile.Replace(tmp, final)
 	}
+	if !published && kept != "" {
+		if rerr := atomicfile.Rename(kept, serving); rerr != nil {
+
+			err = errors.Join(err, rerr)
+		} else {
+			kept = ""
+		}
+	}
+	if published {
+		stale = keepOnly(slot, final)
+	}
+	a.slotsMu.Unlock()
 	if !published {
 		r := &CatalogInstallRefusal{ID: id, Reason: "place", Cause: err}
 		var left []error
 		if rerr := os.Remove(tmp); rerr != nil {
 			left = append(left, rerr)
+		}
+		if marked {
+			if rerr := os.Remove(filepath.Join(slot, heldFile)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				left = append(left, rerr)
+			}
 		}
 		if made {
 			if rerr := os.Remove(slot); rerr != nil {
@@ -336,8 +435,11 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 	if err != nil {
 		after = fmt.Errorf("its directory sync failed, so it may not survive a power loss: %w", err)
 	}
-	if err := keepOnly(slot, final); err != nil {
-		after = errors.Join(after, err)
+	if stale != nil {
+		after = errors.Join(after, stale)
+	}
+	if kept != "" {
+		logsink.Info("catalog.end", keptAtInstallWords, id, filepath.Base(serving))
 	}
 
 	if acq := a.acquirer(); acq != nil {
@@ -350,13 +452,17 @@ func (a *App) InstallFromCatalog(ctx context.Context, id string) error {
 	}
 	a.pokePluginSweep()
 	if after != nil {
-		return fmt.Errorf("plugins: %s %s is in place, but: %w", id, entry.Version, after)
+		return fmt.Errorf("plugins: %s %s is in place, but: %w", id, version, after)
 	}
+	installed := fmt.Sprintf("installed %s %s from the catalog (%s)", id, version, url)
 	if len(granted) > 0 {
-		logsink.Info("catalog.end", "installed %s %s from the catalog (%s), granted %s by the install; the sweep will verify and activate it", id, entry.Version, pkg.URL, strings.Join(granted, ", "))
+		installed += ", granted " + strings.Join(granted, ", ") + " by the install"
+	}
+	if held || heldMark(slot) {
+		logsink.Info("catalog.end", "%s; its slot carries the mark that holds a native program until the operator's Start", installed)
 		return nil
 	}
-	logsink.Info("catalog.end", "installed %s %s from the catalog (%s); the sweep will verify and activate it", id, entry.Version, pkg.URL)
+	logsink.Info("catalog.end", "%s; the sweep will verify and activate it", installed)
 	return nil
 }
 
@@ -388,6 +494,23 @@ func (a *App) grantAtInstall(id, pkgPath string, newSlot bool) ([]string, error)
 		return nil, err
 	}
 	return granted, nil
+}
+
+func (a *App) readFetched(ctx context.Context, id, pkg string) (pluginfacility.Evidence, *CatalogInstallRefusal) {
+	ev, err := newPluginRuntime(a).Verify(ctx, pkg)
+	r := &CatalogInstallRefusal{ID: id}
+	switch {
+	case err != nil:
+		r.Reason, r.Cause = "unverified", fmt.Errorf("the package does not verify on this host, so what it is and what it runs as cannot be read: %w", err)
+	case ev.ID != id:
+		r.Reason, r.Cause = "identity", fmt.Errorf("the package verifies as %q, not as the catalog entry %q it was fetched for", ev.ID, id)
+	default:
+		return ev, nil
+	}
+	if rerr := os.Remove(pkg); rerr != nil {
+		r.Cleanup = rerr
+	}
+	return pluginfacility.Evidence{}, r
 }
 
 func (a *App) fetchVerified(ctx context.Context, id string, pkg *plugincatalog.CatalogPackage) (string, error) {
@@ -463,11 +586,18 @@ func (a *App) UninstallPlugin(id string) error {
 		return fmt.Errorf("plugins: refusing to uninstall %q — not a plain plugin id", id)
 	}
 	dir := filepath.Join("plugins", id)
+
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("plugins: %s is not installed", id)
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return err
+	}
+
+	if err := removeKept(id, ""); err != nil {
+		logsink.Warn("plugins.error", keptFailedWords, id, keptPrefix+id, err)
 	}
 	a.pokePluginSweep()
 	logsink.Info("catalog.end", "uninstalled %s; the sweep will deactivate it", id)
@@ -508,10 +638,14 @@ func (a *App) wirePluginHooks(h *dashboard.WSHandler) {
 			return a.UninstallPlugin(req.ID)
 		case "retry":
 			return a.RetryPlugin(req.ID)
+		case "start":
+			return a.StartPlugin(req.ID)
 		case "confirm", "deny":
 			return a.decideAct(a.lifetime(), req.ID, req.Act, req.Action == "confirm")
 		case "always":
 			return a.alwaysAct(a.lifetime(), req.ID, req.Act)
+		case "revoke":
+			return a.revokeAutoConfirm(req.ID, req.Act)
 		case "machine_update":
 			return a.forceMachineUpdate()
 		case "remove_stored":
@@ -525,7 +659,7 @@ func (a *App) wirePluginHooks(h *dashboard.WSHandler) {
 		defer cancel()
 
 		err := a.catalog.Refresh(ctx)
-		a.catalogChanged()
+		a.catalogRefreshed(err)
 		return err
 	}
 }

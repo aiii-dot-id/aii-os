@@ -1,0 +1,12 @@
+# What a scripted session of resident turns sends on each wire dialect the host speaks
+# (prompt_cache_conformance_test.go): its requests; those that carried a provider's reasoning
+# from an earlier round of their turn; and the times the host dropped that reasoning (each
+# declared to the identity). Regenerate with -update-prompt-cache and review the diff.
+dialect                      requests  carried  resets
+anthropic                          23       11       0
+anthropic-subscription             23       11       0
+openai-chat                        23       11       0
+openai-chat-explicit-cache         23        0       0
+responses                          23       11       0
+responses-api-key                  23       11       0
+gemini                             23       11       0

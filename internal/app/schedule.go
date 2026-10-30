@@ -97,10 +97,17 @@ func (a *App) runSchedule(ctx context.Context, pluginID string, d pluginhost.Sch
 	}
 }
 
+const scheduleUndescribedLog = "%s: %s not called: the plugin is a channel adapter whose channel is not described yet; the next interval asks again"
+
 func (a *App) scheduledCall(ctx context.Context, pluginID string, d pluginhost.ScheduleDecl) {
 	ctx, cancel := context.WithTimeout(ctx, scheduleTimeout)
 	defer cancel()
-	route := a.webhookRoute(ctx, pluginID)
+	route, routed := a.webhookRoute(ctx, pluginID)
+	if !routed {
+
+		logsink.Warn("schedule.refusal", scheduleUndescribedLog, pluginID, d.Operation)
+		return
+	}
 	args := map[string]any{}
 	if route.Acknowledges {
 		args["recorded"] = a.heldFor(pluginID)

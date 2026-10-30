@@ -385,10 +385,7 @@ func TestChildContinuationSendsItsOwnWholeContractUnderPressure(t *testing.T) {
 	}
 }
 
-// A reload can publish a pending restart-only setting in config, but it must
-// not give a new child a different result window from the shared engine that
-// fits its reads. Inspect the real request after the child's work tool call.
-func TestChildWorkReadUsesTheEffectiveBootResultLimit(t *testing.T) {
+func TestChildWorkReadIsFittedToTheSmallerResultLimit(t *testing.T) {
 	for _, bounds := range [][2]int{{8000, 1200}, {1200, 8000}, {1, 8000}} {
 		t.Run(fmt.Sprintf("boot%d_pending%d", bounds[0], bounds[1]), func(t *testing.T) {
 			var calls atomic.Int32
@@ -463,21 +460,15 @@ func TestChildWorkReadUsesTheEffectiveBootResultLimit(t *testing.T) {
 					result += msg.Content
 				}
 			}
-			if bounds[0] == 8000 {
-				if !strings.Contains(result, contract) || !strings.Contains(result, sessionNotesTarget(child)) || strings.Contains(result, "truncated") {
-					t.Fatalf("pending smaller cap clipped a successful child read: %q", result)
-				}
-			} else if !strings.Contains(result, "status.size") || !strings.Contains(result, "prompt.max_tool_result_chars") || strings.Contains(result, "CHILD_CRITERION_TAIL") {
-				t.Fatalf("pending larger cap bypassed the effective bound or clipped a success: %q", result)
+			if !strings.Contains(result, "status.size") || !strings.Contains(result, "prompt.max_tool_result_chars") || strings.Contains(result, "CHILD_CRITERION_TAIL") {
+				t.Fatalf("a read over the smaller bound was not refused whole: %q", result)
 			}
-			if bounds[0] < 8000 {
-				var recorded, outcome string
-				if err := st.DB().QueryRow(`SELECT content,outcome FROM conversations WHERE kind='tool_result' AND json_extract(details,'$.tool')='work' ORDER BY turn_seq DESC LIMIT 1`).Scan(&recorded, &outcome); err != nil {
-					t.Fatal(err)
-				}
-				if outcome != "refused" || !strings.Contains(recorded, "status.size") || !strings.Contains(recorded, "prompt.max_tool_result_chars") {
-					t.Fatalf("size refusal lost durable outcome or actionable evidence: %q, %q", outcome, recorded)
-				}
+			var recorded, outcome string
+			if err := st.DB().QueryRow(`SELECT content,outcome FROM conversations WHERE kind='tool_result' AND json_extract(details,'$.tool')='work' ORDER BY turn_seq DESC LIMIT 1`).Scan(&recorded, &outcome); err != nil {
+				t.Fatal(err)
+			}
+			if outcome != "refused" || !strings.Contains(recorded, "status.size") || !strings.Contains(recorded, "prompt.max_tool_result_chars") {
+				t.Fatalf("size refusal lost durable outcome or actionable evidence: %q, %q", outcome, recorded)
 			}
 		})
 	}

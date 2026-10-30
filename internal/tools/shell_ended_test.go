@@ -75,22 +75,23 @@ func TestAShellRunThatWasEndedFailedAndSaysWhatEndedIt(t *testing.T) {
 	}
 }
 
-// A run that finished was not ended: a non-zero exit is an answer, and so
-// is a clean exit whose child still holds the output.
 func TestAShellRunThatFinishedIsNotCalledEnded(t *testing.T) {
 	st := &ShellTool{timeout: 20 * time.Second, sandbox: t.TempDir()}
-	for _, c := range []struct{ name, command, want string }{
-		{"a non-zero exit", "echo begun; exit 3", "begun\n[exit status 3]"},
-		{"a silent success", "true", ""},
-		{"a clean exit with a child still holding the output", "sleep 4 & echo begun; exit 0", "still held its output"},
+	for _, c := range []struct {
+		name, command, want, code string
+		failed                    bool
+	}{
+		{"a non-zero exit", "echo begun; exit 3", "begun\n[exit status 3]", ReasonShellExit, true},
+		{"a silent success", "true", "", "", false},
+		{"a clean exit with a child still holding the output", "sleep 4 & echo begun; exit 0", "still held its output", "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res, err := st.Execute(context.Background(), map[string]any{"command": c.command})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.Interrupted || res.Failed() || res.ReasonCode != "" {
-				t.Fatalf("a run that finished is not a failed call: %+v", res)
+			if res.Interrupted || res.Error != "" || res.Failed() != c.failed || res.ReasonCode != c.code {
+				t.Fatalf("a run that finished: failed %v, reason %q, want %v and %q: %+v", res.Failed(), res.ReasonCode, c.failed, c.code, res)
 			}
 			if res.Output != c.want && (c.want == "" || !strings.Contains(res.Output, c.want)) {
 				t.Fatalf("got %q, want %q", res.Output, c.want)

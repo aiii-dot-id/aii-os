@@ -1,3 +1,5 @@
+import { signedFetch } from '../pagekey.js';
+
 export const RECORD_WORDS = {
   title: 'Record',
   heading: dir => ['The identity\'s record, newest first, as the database\'s copy holds it. The signed file itself is read with ',
@@ -66,13 +68,13 @@ const view = { type: '', words: '', types: null, older: '', target: '', loading:
 let parts = null;
 
 async function readJSON(url) {
-  const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
+  const res = await signedFetch(url, { cache: 'no-store', credentials: 'same-origin' });
   if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
   return res.json();
 }
 
 async function readRange(path, params) {
-  const res = await fetch(path + '?' + new URLSearchParams(params), { cache: 'no-store', credentials: 'same-origin' });
+  const res = await signedFetch(path + '?' + new URLSearchParams(params), { cache: 'no-store', credentials: 'same-origin' });
   if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
   return { bytes: new Uint8Array(await res.arrayBuffer()), total: Number(res.headers.get('X-Total-Bytes')) };
 }
@@ -347,7 +349,7 @@ export function drawSent(pre, text) {
 const sent = { loading: 0 };
 
 async function sentPart(id, part) {
-  const res = await fetch('/sent/body?' + new URLSearchParams({ id, part, head: '1' }), { cache: 'no-store', credentials: 'same-origin' });
+  const res = await signedFetch('/sent/body?' + new URLSearchParams({ id, part, head: '1' }), { cache: 'no-store', credentials: 'same-origin' });
   if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
   return { head: await res.text(), total: Number(res.headers.get('X-Total-Bytes')) };
 }

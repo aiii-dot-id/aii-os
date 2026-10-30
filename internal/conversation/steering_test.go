@@ -126,7 +126,7 @@ func TestSteeringAndTheToolLimitShareOneMessage(t *testing.T) {
 	if !strings.Contains(last.Content, "answer with what you have") {
 		t.Fatalf("the operator's words were lost at the limit boundary: %q", last.Content)
 	}
-	if !strings.Contains(last.Content, "round limit") {
+	if !strings.Contains(last.Content, roundLimitAsk) {
 		t.Fatalf("the loop stopped owing the model its limit notice: %q", last.Content)
 	}
 }

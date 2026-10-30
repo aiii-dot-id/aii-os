@@ -27,16 +27,20 @@ run(() => {
   assert(bar.hidden, 'the bar shows before an identity is born, where it has nothing to reveal');
 
   S.identityExists = true;
-  status({ name: 'Vega', expert: false, notices: { on: false, lines: [] } });
+  status({ name: 'Example', expert: false, notices: { on: false, lines: [] } });
   assert(shown(q('[data-expert]')) && !q('[data-expert]').checked, 'Expert is not an unchecked box at the top');
+  // The label says what the box does, and so does resting the pointer on it.
+  const label = q('[data-expert]').closest('label');
+  assert(label.textContent.trim() === 'Show technical controls', 'the checkbox is not labelled by what it does: ' + label.textContent);
+  assert(/notices/.test(label.title) && /route/.test(label.title) && /changes nothing else/.test(label.title), 'resting the pointer on the checkbox does not say what it shows: ' + label.title);
   assert(!shown(q('[data-expert-panel]')) && q('[data-expert-panel]').children.length === 0, 'Expert off still shows its controls');
   assert(!shown(q('[data-route-line]')), 'a route that is off is said');
 
-  status({ name: 'Vega', expert: false, notices: { on: true, lines: [quinn('telegram', true), quinn('sms', true)] } });
+  status({ name: 'Example', expert: false, notices: { on: true, lines: [quinn('telegram', true), quinn('sms', true)] } });
   assert(shown(q('[data-route-line]')) && q('[data-route-line]').textContent === 'Your notices also go to Quinn on telegram, then sms when no page is open.',
     'an active route is not said with Expert off: ' + q('[data-route-line]').textContent);
   assert(!shown(q('[data-expert-panel]')), 'the route being on opened the panel');
-  status({ name: 'Vega', expert: false, notices: { on: true, lines: [quinn('telegram', false)], held: 'no installed channel carries a line marked as you' } });
+  status({ name: 'Example', expert: false, notices: { on: true, lines: [quinn('telegram', false)], held: 'no installed channel carries a line marked as you' } });
   assert(q('[data-route-line]').textContent.includes('nothing can carry them now: no installed channel carries a line marked as you'), 'a route nothing can carry is not said: ' + q('[data-route-line]').textContent);
   assert(routeLine({ on: true, lines: [], held: 'no contact line is marked as you' }).includes('no contact line is marked as you'), 'a route with no line is not said');
 
@@ -45,7 +49,7 @@ run(() => {
   assert(q('[data-expert]').checked && q('[data-expert]').disabled, 'the box does not hold the asked value while the host answers');
   assert(acceptExpertConfig(sets()[0].request_id), 'the door’s answer to Expert was not taken');
   assert(q('[data-expert]').checked && !q('[data-expert]').disabled, 'an acknowledged save flickered back before its status');
-  status({ name: 'Vega', expert: true, notices: { on: false, lines: [quinn('telegram', true)] } });
+  status({ name: 'Example', expert: true, notices: { on: false, lines: [quinn('telegram', true)] } });
   assert(shown(q('[data-expert-panel]')), 'Expert on does not show its controls');
   const route = () => q('[data-notice-route]');
   assert(route() && !route().checked, 'the route control does not read the host’s route');
@@ -60,17 +64,17 @@ run(() => {
   assert(!route().checked, 'a refused route shows as on');
   route().click();
   assert(acceptExpertConfig(sets()[2].request_id), 'the door’s answer to the route was not taken');
-  status({ name: 'Vega', expert: true, notices: { on: true, lines: [quinn('telegram', true)] } });
+  status({ name: 'Example', expert: true, notices: { on: true, lines: [quinn('telegram', true)] } });
   assert(route().checked && !shown(q('[data-notice-said]')), 'a kept route does not show as on');
 
   q('[data-expert]').click();
   assert(JSON.stringify(sets().at(-1).config) === '{"dashboard.expert":false}', 'Expert off sent more than itself: ' + JSON.stringify(sets().at(-1)));
   acceptExpertConfig(sets().at(-1).request_id);
-  status({ name: 'Vega', expert: false, notices: { on: true, lines: [quinn('telegram', true)] } });
+  status({ name: 'Example', expert: false, notices: { on: true, lines: [quinn('telegram', true)] } });
   assert(!shown(q('[data-expert-panel]')) && shown(q('[data-route-line]')), 'Expert off hid the route line or kept the controls');
   assert(frames.every(f => f.type !== 'config_set' || !('dashboard.notices_off_dashboard' in f.config) || f === sets()[1] || f === sets()[2]), 'Expert moved the route');
 
-  status({ name: 'Vega', expert: true, notices: { on: true, lines: [{ name: '<img src=x onerror="window.__owned=1">', channel: 'telegram', carried: true }] } });
+  status({ name: 'Example', expert: true, notices: { on: true, lines: [{ name: '<img src=x onerror="window.__owned=1">', channel: 'telegram', carried: true }] } });
   assert(!bar.querySelector('img') && window.__owned === undefined && q('[data-notice-lines]').textContent.includes('<img src=x'), 'a contact name became markup');
   assert(q('[data-route-line]').textContent.includes('<img src=x'), 'the route line lost the name as text');
 

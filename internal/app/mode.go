@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type modeState struct {
 	reason              string
 	trigger             safeTrigger
 	detail              string
+	cleared             string
 	witnessFails        int
 	witnessSince        time.Time
 	witnessWhy          string
@@ -77,9 +79,15 @@ func (a *App) enterSafeFor(t safeTrigger, detail string) {
 	}
 
 	if a.ledger != nil {
-		a.ledger.SetFrozen(reason)
+		a.ledger.SetHold(hold.Hold{Reason: reason, Waiting: safePostures[t].degraded})
 	}
-	logsink.Error("safe.start", "entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
+
+	degraded := safePostures[t].degraded
+	if degraded {
+		logsink.Warn("safe.decision", "DEGRADED — %s. This start holds the read-only posture until it completes, which it does by itself when Ring 5 is fetched and verified.", reason)
+	} else {
+		logsink.Error("safe.start", "entering — %s. All ledger writes frozen; conversation continues read-only; operator intervention required.", reason)
+	}
 	a.applySafeState(reason)
 
 	if reg := a.toolReg; reg != nil {
@@ -93,18 +101,24 @@ func (a *App) enterSafeFor(t safeTrigger, detail string) {
 		f.Hold(safeHoldSentence(reason))
 	}
 	a.pokePluginSweep()
-	a.startSafeBeacon()
+	if !degraded {
+		a.startSafeBeacon()
+	}
 }
 
 func (a *App) integrityLost(t safeTrigger, err error) { a.enterSafeFor(t, err.Error()) }
 
 func (a *App) applySafeState(reason string) {
+	h := hold.Safe(reason)
+	if held, ok := a.Hold(); ok && held.Reason == reason {
+		h = held
+	}
 	if a.store != nil {
 
-		a.store.SetFrozen(true, reason)
+		a.store.SetHold(true, h)
 	}
 	if a.engine != nil {
-		a.engine.SetSafeMode(reason)
+		a.engine.SetHold(h)
 	}
 
 	a.holdSandboxInSafe()
@@ -188,6 +202,43 @@ func (a *App) safeCause() (safeTrigger, string, bool) {
 	a.mode.mu.RLock()
 	defer a.mode.mu.RUnlock()
 	return a.mode.trigger, a.mode.detail, a.mode.mode == ModeSafe
+}
+
+func (a *App) sayHeldCauseCleared(words string) {
+	a.mode.mu.Lock()
+	safe := a.mode.mode == ModeSafe
+	if safe {
+		a.mode.cleared = words
+	}
+	a.mode.mu.Unlock()
+	if safe && a.dashboard != nil {
+		a.dashboard.BroadcastContinuity()
+	}
+}
+
+func (a *App) heldCauseCleared() string {
+	a.mode.mu.RLock()
+	defer a.mode.mu.RUnlock()
+	if a.mode.mode != ModeSafe {
+		return ""
+	}
+	return a.mode.cleared
+}
+
+func (a *App) Hold() (hold.Hold, bool) {
+	a.mode.mu.RLock()
+	defer a.mode.mu.RUnlock()
+	if a.mode.mode != ModeSafe {
+		return hold.Hold{}, false
+	}
+	return hold.Hold{Reason: a.mode.reason, Waiting: safePostures[a.mode.trigger].degraded}, true
+}
+
+func (a *App) whileHeld() string {
+	if h, _ := a.Hold(); h.Waiting {
+		return hold.While
+	}
+	return "while the identity is in SAFE"
 }
 
 func (a *App) SafeMode() (string, bool) {

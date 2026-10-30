@@ -75,6 +75,8 @@ type DownloadError struct {
 	Cause    error
 }
 
+func (e *DownloadError) WaitsOnNetwork() bool { return transientDownload(e.Cause) }
+
 func (e *DownloadError) Error() string {
 	if transientDownload(e.Cause) {
 		return fmt.Sprintf("the download stopped after %d attempts in a row brought nothing: %s", e.Attempts, shortCause(e.Cause))
@@ -90,7 +92,7 @@ func (e *DownloadError) Final() string {
 	var mm *ModelsMissingError
 	switch {
 	case transientDownload(cause):
-		return fmt.Sprintf("%d attempts in a row brought nothing; check this machine's connection to the address it names, then Try again.", e.Attempts)
+		return fmt.Sprintf("%d attempts in a row brought nothing; check this machine's connection to the address it names. It is tried again by itself when the plugin catalog is next fetched, or Try again now.", e.Attempts)
 	case errors.As(cause, &se) && (se.Status == 404 || se.Status == 410):
 		return "Nothing is at the address the package declares; its publisher must correct the release. Try again once they have, or install a corrected release."
 	case errors.As(cause, &se) && (se.Status == 401 || se.Status == 403):
@@ -112,4 +114,9 @@ func (e *DownloadError) Final() string {
 func parked(err error) bool {
 	var final *DownloadError
 	return materialWaitsOnPackage(err) || errors.As(err, &final)
+}
+
+func waitsOnNetwork(err error) bool {
+	var bound interface{ WaitsOnNetwork() bool }
+	return errors.As(err, &bound) && bound.WaitsOnNetwork()
 }

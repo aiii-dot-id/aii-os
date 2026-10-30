@@ -137,6 +137,10 @@ func TestTheFrameRevalidatesOnTheBytesItServes(t *testing.T) {
 	get := func(urlPath, etag string) (*http.Response, []byte) {
 		t.Helper()
 		r, _ := http.NewRequest(http.MethodGet, "https://"+addr+urlPath, nil)
+		// The bytes as themselves: the client would otherwise ask for gzip
+		// and hand back decompressed bytes under the gzip form's tag
+		// (frame_gzip_test.go holds the gzip form to its own tag).
+		r.Header.Set("Accept-Encoding", "identity")
 		if etag != "" {
 			r.Header.Set("If-None-Match", etag)
 		}
@@ -201,11 +205,6 @@ func TestTheFrameRevalidatesOnTheBytesItServes(t *testing.T) {
 	}
 }
 
-// BenchmarkFrameLoad serves every frame file once, the way a page load asks
-// for them: fresh, and revalidating with whatever validator each response
-// carried, as a reload does. "handler" calls the real mux in process (the
-// server's own cost); "tls" is the same load over the loopback listener, as
-// a browser on this machine sees it. body-B/op is what crosses the wire.
 func BenchmarkFrameLoad(b *testing.B) {
 	s := New("127.0.0.1", 0, &WSHandler{})
 	addr, err := s.Start(b.TempDir())
@@ -222,6 +221,7 @@ func BenchmarkFrameLoad(b *testing.B) {
 	})
 	handler := func(p, etag string) (string, int) {
 		r := httptest.NewRequest(http.MethodGet, "https://"+addr+p, nil)
+		r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 		if etag != "" {
 			r.Header.Set("If-None-Match", etag)
 		}
@@ -231,6 +231,7 @@ func BenchmarkFrameLoad(b *testing.B) {
 	}
 	wire := func(p, etag string) (string, int) {
 		r, _ := http.NewRequest(http.MethodGet, "https://"+addr+p, nil)
+		r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 		if etag != "" {
 			r.Header.Set("If-None-Match", etag)
 		}

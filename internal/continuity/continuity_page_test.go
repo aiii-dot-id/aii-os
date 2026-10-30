@@ -1,10 +1,13 @@
 package continuity
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/escrow"
@@ -185,4 +188,48 @@ func dirListing(t *testing.T, root string) string {
 		return nil
 	})
 	return strings.Join(names, "|")
+}
+
+func TestOnlyAnEncryptedKeptSnapshotIsHandedOverForDownload(t *testing.T) {
+	a, _, keyPath := maintApp(t)
+	dir := a.backupsDir(a.configSnapshot())
+	live(t, a, 1)
+	appendFixtureEvent(t, a, keyPath, "exp_download")
+	a.continuity.runMaintenance(t.Context())
+	kept, _ := keptSnapshots(dir)
+	if len(kept) != 1 || kept[0].Encrypted {
+		t.Fatalf("rig: one plaintext snapshot: %v", kept)
+	}
+	if rc, _, err := a.continuity.downloadSnapshot(kept[0].Name); err == nil {
+		rc.Close()
+		t.Fatal("A SNAPSHOT IN THE CLEAR WAS HANDED OVER FOR DOWNLOAD")
+	} else if !strings.Contains(err.Error(), "not encrypted") || !strings.Contains(err.Error(), "escrow file") {
+		t.Errorf("the refusal does not say why or what to do: %v", err)
+	}
+
+	_, recipient := hostSnapshotKey(t, a)
+	checkedEscrow(t, a, a.door.kp, recipient)
+	made, err := a.continuity.takeOnDemand(t.Context(), false, time.Now())
+	if err != nil || !made.Encrypted {
+		t.Fatalf("rig: an encrypted snapshot: %+v %v", made, err)
+	}
+	for _, name := range []string{"", "../" + made.Name, made.Name + "x", filepath.Join(dir, made.Name)} {
+		if rc, _, err := a.continuity.downloadSnapshot(name); err == nil {
+			rc.Close()
+			t.Errorf("%q, which is not a kept snapshot's name, was handed over", name)
+		}
+	}
+	rc, size, err := a.continuity.downloadSnapshot(made.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	want, _ := os.ReadFile(filepath.Join(dir, made.Name))
+	if err != nil || int64(len(got)) != size || !bytes.Equal(got, want) {
+		t.Fatalf("the download is not the kept file: %d of %d bytes, %v", len(got), size, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, SnapshotWorkPrefix+"*")); len(left) != 0 {
+		t.Errorf("a download made files beside the snapshots: %v", left)
+	}
 }

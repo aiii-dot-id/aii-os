@@ -226,7 +226,8 @@ func (c *Client) idleVerdict(err error) error {
 }
 
 type streamChunk struct {
-	ID      string `json:"id"`
+	ID      string       `json:"id"`
+	Model   reportedName `json:"model"`
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
@@ -259,7 +260,8 @@ func readChatStream(r io.Reader) (*Response, error) {
 	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
 	var content, reasoning, account strings.Builder
-	var role, finish, id, provider string
+	var role, finish, id, provider, model string
+	generated := false
 	var calls []ToolCall
 
 	var args []*strings.Builder
@@ -284,11 +286,18 @@ func readChatStream(r io.Reader) (*Response, error) {
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
 		if ch.Error != nil && ch.Error.Message != "" {
+			if provider == "" {
+				generated = content.Len() > 0 || reasoning.Len() > 0 || account.Len() > 0 || len(calls) > 0
+			}
 			provider = ch.Error.Message
 			continue
 		}
 		if ch.ID != "" {
 			id = ch.ID
+		}
+
+		if ch.Model != "" && finish == "" {
+			model = string(ch.Model)
 		}
 		if ch.Usage != nil {
 			usage = *ch.Usage
@@ -352,7 +361,7 @@ func readChatStream(r io.Reader) (*Response, error) {
 		return nil, fmt.Errorf("API response exceeds %d bytes", maxResponseBytes)
 	}
 	if provider != "" {
-		return nil, fmt.Errorf("provider reported: %.400s", provider)
+		return nil, &StreamFailure{Text: provider, Generated: generated}
 	}
 	if !done && finish == "" {
 		return nil, fmt.Errorf("response stream ended without [DONE] or a finish reason after %d bytes of content and %d tool call(s) — truncated, not complete", content.Len(), len(calls))
@@ -370,8 +379,9 @@ func readChatStream(r io.Reader) (*Response, error) {
 		role = "assistant"
 	}
 	return &Response{
-		ID:    id,
-		Usage: usage,
+		ID:      id,
+		ModelID: model,
+		Usage:   usage,
 		Choices: []Choice{{Message: Message{Role: role, Content: content.String(), ToolCalls: calls}, FinishReason: finish,
 			Reasoning: reasoning.String(), ReasoningAccount: accountBeside(reasoning.String(), account.String())}},
 	}, nil
@@ -407,6 +417,11 @@ func decodeCompletion(r io.Reader) (*Response, error) {
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		return nil, fmt.Errorf("decode response: %w\nbody: %s", err, string(respBody[:min(2000, len(respBody))]))
 	}
+	var named struct {
+		Model reportedName `json:"model"`
+	}
+	_ = json.Unmarshal(respBody, &named)
+	response.ModelID = string(named.Model)
 
 	var withReasoning struct {
 		Choices []struct {

@@ -28,6 +28,7 @@ func signedIndex(t *testing.T, plat *packagetest.Role, version string) (md, sig 
 	md = []byte("# Catalog\n\n```json\n" + string(block) + "\n```\n")
 	sig, err := plat.Sign(ArtifactKindPluginCatalog, map[string]any{
 		"catalog_version": 1, "generated": "2026-09-09T00:00:00Z", "catalog_sha256": sigenvelope.SHA256Prefixed(md),
+		"host_line": OwnLine(), // this build's line, so the fixture holds across a bump of VERSION
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,10 +120,10 @@ func TestTheIndexIsFetchedThroughTheEgressGuard(t *testing.T) {
 	}
 	checkout := t.TempDir()
 	md, sig := signedIndex(t, plat, "2.0.0")
-	if err := os.WriteFile(filepath.Join(checkout, CatalogFile), md, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(checkout, CatalogFileFor(OwnLine())), md, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(checkout, CatalogSigFile), sig, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(checkout, CatalogFileFor(OwnLine())+".sig"), sig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var hits atomic.Int32
@@ -238,7 +239,7 @@ func TestOverlappingRefreshesHoldTheIndexTheyKeep(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != CatalogFile && e.Name() != CatalogSigFile {
+		if e.Name() != CatalogFileFor(OwnLine()) && e.Name() != CatalogFileFor(OwnLine())+".sig" {
 			t.Errorf("left behind in the kept catalog: %s", e.Name())
 		}
 	}

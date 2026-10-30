@@ -114,6 +114,9 @@ type executor struct {
 	activeGen   Generation
 	activeLease *Lease
 
+	kept    Evidence
+	keptGen Generation
+
 	retiring []*Lease
 
 	left []string
@@ -365,10 +368,7 @@ func (e *executor) releaseGuarded(ctx context.Context, lease *Lease) (err error)
 }
 
 func (e *executor) retireTimeout() time.Duration {
-	if e.deps.RetireTimeout > 0 {
-		return e.deps.RetireTimeout
-	}
-	return DefaultRetireTimeout
+	return retireBound(e.deps.RetireTimeout, e.deps.Runtime)
 }
 
 func (e *executor) run(parent context.Context, c *command) {
@@ -545,6 +545,10 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command, bes
 		if errors.As(cause, &final) {
 			ref.Class, ref.WakeOn = ClassPermanent, []Input{InputPackage, InputConfig}
 			ref.Remedy = final.Final()
+			var network NetworkBound
+			if errors.As(cause, &network) && network.WaitsOnNetwork() {
+				ref.WakeOn = append(ref.WakeOn, InputNetwork)
+			}
 		}
 
 		rctx, rcancel := context.WithTimeout(context.Background(), e.retireTimeout())
@@ -752,6 +756,7 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command, bes
 	}
 
 	act.Role = RoleActive
+	e.kept, e.keptGen = ev, gen
 	if e.running != nil && e.running.gen == gen {
 		e.running.committed = true
 	}
@@ -782,12 +787,20 @@ func (e *executor) deactivate(ctx context.Context, gen Generation, c *command) {
 func (e *executor) readmit(ctx context.Context, c *command) {
 	e.mu.Lock()
 	running, activeGen := e.active, e.activeGen
+	kept, have := e.kept, e.keptGen == activeGen
 	e.mu.Unlock()
 	if running == nil {
 		c.settle("nothing serves")
 		return
 	}
-	ev, err := e.deps.Runtime.Verify(ctx, c.pkg)
+
+	var ev Evidence
+	var err error
+	if rc, ok := e.deps.Runtime.(Rechecker); ok && have {
+		ev, err = kept, rc.Recheck(ctx, kept)
+	} else {
+		ev, err = e.deps.Runtime.Verify(ctx, c.pkg)
+	}
 
 	if ctx.Err() != nil {
 

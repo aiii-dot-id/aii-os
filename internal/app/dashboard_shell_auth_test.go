@@ -44,7 +44,7 @@ func TestShellAuthenticationUsesTheRunningOwnerAcrossRotation(t *testing.T) {
 		}
 	}
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	client := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: keyedTransport()}
 	status := func(want int) {
 		t.Helper()
 		r, err := client.Get(base + "auth/token")

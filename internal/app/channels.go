@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"regexp"
 	"runtime/debug"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
-	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/store"
@@ -55,6 +55,8 @@ type channelState struct {
 	routes         atomic.Pointer[map[string]channelRoute]
 	routesSet      []*pluginhost.ActivePlugin
 	routesComplete bool
+
+	lastGood map[*pluginhost.ActivePlugin]describeReply
 
 	held map[string][]string
 }
@@ -119,18 +121,31 @@ func (a *App) describeRoutes(ctx context.Context, installed []*pluginhost.Active
 	routes := map[string]channelRoute{}
 	contested := map[string]bool{}
 	complete := true
+	a.channels.mu.Lock()
+	prior := a.channels.lastGood
+	a.channels.mu.Unlock()
+	fresh := map[*pluginhost.ActivePlugin]describeReply{}
 	for _, p := range installed {
 		res, err := a.toolReg.Execute(ctx, p.Channel.Describe, map[string]any{})
-		if err != nil || res.Error != "" {
-			logsink.Warn("channel.refusal", "%s: describe() failed (%v %s) — installed but carrying nothing", p.ID, err, res.Error)
-			complete = false
-			continue
-		}
 		var reply describeReply
-		if uerr := json.Unmarshal([]byte(res.Output), &reply); uerr != nil || reply.Channel == "" {
-			logsink.Warn("channel.refusal", "%s: describe() did not name a channel (%v) — installed but carrying nothing", p.ID, uerr)
+		var failed string
+		if err != nil || res.Error != "" {
+			failed = fmt.Sprintf("failed (%v %s)", err, res.Error)
+		} else if uerr := json.Unmarshal([]byte(res.Output), &reply); uerr != nil || reply.Channel == "" {
+			failed = fmt.Sprintf("did not name a channel (%v)", uerr)
+		}
+		if failed != "" {
 			complete = false
-			continue
+			last, known := prior[p]
+			if !known {
+				logsink.Warn("channel.refusal", describeFailedNothing, p.ID, failed)
+				continue
+			}
+
+			logsink.Warn("channel.refusal", describeFailedLastGood, p.ID, failed, last.Channel)
+			reply = last
+		} else {
+			fresh[p] = reply
 		}
 		if !channelNameRe.MatchString(reply.Channel) {
 			logsink.Warn("channel.refusal", "%s: describe() named %q, which is not a channel name (lowercase letters, digits, . _ -, at most 32) — installed but carrying nothing", p.ID, reply.Channel)
@@ -156,8 +171,25 @@ func (a *App) describeRoutes(ctx context.Context, installed []*pluginhost.Active
 			Acknowledges: reply.Acknowledges,
 		}
 	}
+
+	kept := map[*pluginhost.ActivePlugin]describeReply{}
+	for _, p := range installed {
+		if r, ok := fresh[p]; ok {
+			kept[p] = r
+		} else if r, ok := prior[p]; ok {
+			kept[p] = r
+		}
+	}
+	a.channels.mu.Lock()
+	a.channels.lastGood = kept
+	a.channels.mu.Unlock()
 	return routes, complete
 }
+
+const (
+	describeFailedNothing  = "%s: describe() %s — installed but carrying nothing"
+	describeFailedLastGood = "%s: describe() %s — still carrying %q, the channel it last described, until it answers again"
+)
 
 func copyRoutes(in map[string]channelRoute) map[string]channelRoute {
 	out := make(map[string]channelRoute, len(in))
@@ -424,13 +456,16 @@ type waitReason int
 const (
 	waitNotTried waitReason = iota
 	waitSafe
+	waitStart
 	waitAddressing
 	waitNoContact
 	waitNoChannel
 )
 
 func (a *App) waitingFor(m store.OutboxMessage) waitReason {
-	if _, safe := a.SafeMode(); safe {
+	if h, safe := a.Hold(); safe && h.Waiting {
+		return waitStart
+	} else if safe {
 		return waitSafe
 	}
 	if m.RecipientError != "" {
@@ -455,6 +490,8 @@ func (a *App) waitingLine(m store.OutboxMessage) string {
 	switch a.waitingFor(m) {
 	case waitSafe:
 		status = "not sent — nothing leaves in safe mode; it stays queued until safe mode ends"
+	case waitStart:
+		status = "not sent — nothing leaves " + hold.While + "; it stays queued until the start completes"
 	case waitAddressing:
 		status = "not sent — its addressing from an earlier version is unresolved; it is held until your operator repairs it"
 	case waitNoContact:
@@ -585,6 +622,12 @@ func (a *App) carryArrivals(r channelRoute, arrivals []arrival) (fresh int, held
 		}
 		rowID := "in_" + r.Channel + "_" + in.ID
 		isNew, err := a.recordInbound(rowID, r.Channel, in.From, in.Body)
+		if refusal := (*store.ArrivalIDRefusal)(nil); errors.As(err, &refusal) {
+
+			logsink.Warn("channel.refusal", "%s: dropping an arrival: %v", r.Channel, err)
+			held = append(held, in.ID)
+			continue
+		}
 		if err != nil {
 			logsink.Warn("channel.error", "%s: could not record an arrival: %v", r.Channel, err)
 			unrecorded++
@@ -611,16 +654,8 @@ func (a *App) recordInbound(rowID, channel, from, body string) (bool, error) {
 }
 
 func frameArrival(r channelRoute, who, from, body string) string {
-	wrapped := untrusted.Wrap(r.Channel+":"+from, body)
-	if r.Hook {
-		return "[event] " + r.Plugin + " relayed an arrival on " + r.Channel +
-			". This is data a plugin reported, not a person writing to you.\n\n" + wrapped
-	}
-	if who == "" {
-		who = "someone not in your address book"
-	}
 	return "[messages] " + who + " wrote on " + r.Channel +
-		". Answer if it deserves an answer — reply with send — or decline, or wait.\n\n" + wrapped
+		". Answer if it deserves an answer — reply with send — or decline, or wait.\n\n" + untrusted.Wrap(r.Channel+":"+from, body)
 }
 
 func routeForStored(channel string) channelRoute {
@@ -645,17 +680,11 @@ func (a *App) frameStoredArrival(m store.Inbound) string {
 
 func (a *App) carryInbound(rowID string, r channelRoute, in arrival) {
 	who, mayWake := a.whoIs(r.Channel, in.From)
-	if r.Hook {
-		who, mayWake = "", false
+	if r.Hook || !mayWake {
+		return
 	}
 	framed := frameArrival(r, who, in.From, in.Body)
 	recordCtx := context.WithValue(a.lifetime(), inboundRecordKey{}, rowID)
-	if !mayWake {
-		if _, err := a.steer(string(interaction.Participant), framed, nil, recordCtx); err != nil && !errors.Is(err, dashboard.ErrBusyInternal) {
-			logsink.Info("channel.refusal", "%s: %s not steered (%v) — the next turn carries it", r.Channel, rowID, err)
-		}
-		return
-	}
 
 	steered, err := a.admit(string(interaction.Participant), framed, nil, recordCtx)
 	if err != nil {

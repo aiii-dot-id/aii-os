@@ -120,7 +120,7 @@ run_crossvet_wrapped() { AII_GO=$GO ./test/run_crossvet.sh; }
 run_deadcode_wrapped() { AII_GO=$GO ./test/run_deadcode.sh; }
 run_staticcheck_wrapped() { AII_GO=$GO ./test/run_staticcheck.sh; }
 
-together_stages="sdkcompat matrix staticcheck crossvet deadcode"
+together_stages="sdkcompat matrix staticcheck crossvet deadcode android"
 together_pids=
 selftest_beside() {
   : > "$AII_GATE_SELFTEST_DIR/$1"; n=0
@@ -137,6 +137,10 @@ together_stage() {
     staticcheck) run_staticcheck_wrapped ;;
     crossvet) run_crossvet_wrapped ;;
     deadcode) run_deadcode_wrapped ;;
+    # The Android shell built against this tree's binding, and its unit
+    # tests (test/run_android_shell.sh): in a temporary directory, never in
+    # the checkout.
+    android) AII_GO=$GO ./test/run_android_shell.sh ;;
     selftest-left) selftest_beside left right ;;
     selftest-right) selftest_beside right left ;;
     *) echo "no stage $1 runs together with the others" >&2; return 1 ;;

@@ -13,11 +13,15 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"github.com/aiii-dot-id/aii-os/internal/updates"
+	"github.com/aiii-dot-id/aii-os/internal/witness"
 )
 
 // before is a configuration as a previous version left it: nothing in it
 // that version did not declare.
 const before = `{"prompt":{"recent_turns":20}}`
+
+// keptHere is the suffix of the copy a boot of this version keeps.
+var keptHere = configKeptUnder + Current()
 
 func writeConfigFile(t *testing.T) string {
 	t.Helper()
@@ -51,8 +55,8 @@ func readText(t *testing.T, path string) string {
 // bytes the previous version left, and keeps the newer file beside them.
 func TestARollbackPutsBackTheConfigurationThePreviousVersionRanWith(t *testing.T) {
 	path := writeConfigFile(t)
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	if got := readText(t, path+configBeforeUpdate); got != before {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	if got := readText(t, path+keptHere); got != before {
 		t.Fatalf("the update's first boot must keep the file as it found it: %q", got)
 	}
 
@@ -69,12 +73,12 @@ func TestARollbackPutsBackTheConfigurationThePreviousVersionRanWith(t *testing.T
 		t.Fatalf("the host recorded its choice and the file does not hold the key, so this proves nothing: %s", newer)
 	}
 
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	if got := readText(t, path+configBeforeUpdate); got != before {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	if got := readText(t, path+keptHere); got != before {
 		t.Fatalf("a second boot of the update took the newer version's file for the previous one's: %q", got)
 	}
 
-	if err := restoreConfigBeforeUpdate(path); err != nil {
+	if err := putBackConfigKept(path, Current(), true); err != nil {
 		t.Fatal(err)
 	}
 	if got := readText(t, path); got != before {
@@ -83,7 +87,7 @@ func TestARollbackPutsBackTheConfigurationThePreviousVersionRanWith(t *testing.T
 	if got := readText(t, path+configRolledBack); got != newer {
 		t.Fatalf("what the newer version left must be kept beside the file: %q", got)
 	}
-	if _, err := os.Stat(path + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(path + keptHere); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the copy was put back and still stands: %v", err)
 	}
 }
@@ -94,17 +98,17 @@ func TestARollbackPutsBackTheConfigurationThePreviousVersionRanWith(t *testing.T
 // not settled it, and the next start rolls back: the copy stays for it.
 func TestTheCopyIsKeptOnlyWhileAnUpdateIsNotSettled(t *testing.T) {
 	path := writeConfigFile(t)
-	keepConfigBeforeUpdate(path, nil)
-	if _, err := os.Stat(path + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+	keepConfigUnderUpdate(path, Current(), nil)
+	if _, err := os.Stat(path + keptHere); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("with no update in flight there is nothing to roll back to, and a copy was made: %v", err)
 	}
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	dropConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	if got := readText(t, path+configBeforeUpdate); got != before {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	dropConfigKeptUnderSettled(path, Current(), updates.ErrBootRecoveryPending)
+	if got := readText(t, path+keptHere); got != before {
 		t.Fatalf("an update that is not settled still needs its copy: %q", got)
 	}
-	dropConfigBeforeUpdate(path, nil)
-	if _, err := os.Stat(path + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+	dropConfigKeptUnderSettled(path, Current(), nil)
+	if _, err := os.Stat(path + keptHere); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the update is settled and its copy still stands: %v", err)
 	}
 	if got := readText(t, path); got != before {
@@ -116,11 +120,11 @@ func TestTheCopyIsKeptOnlyWhileAnUpdateIsNotSettled(t *testing.T) {
 // changed sets nothing aside.
 func TestARollbackWithNoCopyLeavesTheFileAndAnUnchangedFileIsNotSetAside(t *testing.T) {
 	path := writeConfigFile(t)
-	if err := restoreConfigBeforeUpdate(path); err != nil || readText(t, path) != before {
+	if err := putBackConfigKept(path, Current(), true); err != nil || readText(t, path) != before {
 		t.Fatalf("with no copy the file is left as it is: %v", err)
 	}
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	if err := restoreConfigBeforeUpdate(path); err != nil || readText(t, path) != before {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	if err := putBackConfigKept(path, Current(), true); err != nil || readText(t, path) != before {
 		t.Fatalf("an unchanged file is put back as itself: %v", err)
 	}
 	if _, err := os.Stat(path + configRolledBack); !errors.Is(err, os.ErrNotExist) {
@@ -183,7 +187,7 @@ func TestAHealthyBootOfAnUpdateLeavesNoCopyBehind(t *testing.T) {
 			t.Fatal(err)
 		}
 		if standing {
-			if err := os.WriteFile(cfg.SourcePath+configBeforeUpdate, []byte(before), 0o600); err != nil {
+			if err := os.WriteFile(cfg.SourcePath+keptHere, []byte(before), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -196,7 +200,7 @@ func TestAHealthyBootOfAnUpdateLeavesNoCopyBehind(t *testing.T) {
 			stopApp(t, a)
 			t.Fatal("the fixture booted SAFE, so this is not a healthy boot")
 		}
-		_, err := os.Stat(cfg.SourcePath + configBeforeUpdate)
+		_, err := os.Stat(cfg.SourcePath + keptHere)
 		got := readText(t, cfg.SourcePath)
 		stopApp(t, a)
 		if !errors.Is(err, os.ErrNotExist) {
@@ -226,7 +230,7 @@ func TestABootThatLeavesTheRollbackArmedHasKeptTheConfiguration(t *testing.T) {
 	if _, safe := a.SafeMode(); !safe || !updates.RollbackArmed(dir) {
 		t.Fatalf("the fixture must boot SAFE with its rollback armed (safe %v, armed %v)", safe, updates.RollbackArmed(dir))
 	}
-	if got := readText(t, cfg.SourcePath+configBeforeUpdate); got != before {
+	if got := readText(t, cfg.SourcePath+keptHere); got != before {
 		t.Fatalf("the boot that leaves a rollback armed must have kept the configuration for it: %q", got)
 	}
 }
@@ -249,15 +253,13 @@ func undeclaredColumn(t *testing.T, dbPath string) {
 	}
 }
 
-// A SAFE BOOT THAT COUNTS AS A BOOT SETTLES THE UPDATE TOO. A record that
-// does not verify is not the program's fault: the boot is SAFE, the
-// marker is written, the rollback is retired, and the copy goes with it.
 func TestASafeBootThatSettlesTheUpdateDropsTheCopy(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, ledgerPath, dbPath := birthFixture(t, dir, "Update")
 	buildPriorProjection(t, ledgerPath, dbPath)
-	tamperChain(t, keyPath, ledgerPath)
+	keepWitnessAnswer(t, ledgerPath, witness.KeptConflict{WitnessURL: "http://127.0.0.1:1", Answer: "witness conflict (witness 409): witness bookmark rollback or fork", Record: 3, KeptAt: "2026-10-20T12:00:00Z"})
 	cfg := safebootConfig(t, dir, "Update", keyPath, ledgerPath, dbPath)
+	cfg.Witness.URL = "http://127.0.0.1:1"
 	if err := os.WriteFile(cfg.SourcePath, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +272,7 @@ func TestASafeBootThatSettlesTheUpdateDropsTheCopy(t *testing.T) {
 	if _, safe := a.SafeMode(); !safe || updates.RollbackArmed(dir) {
 		t.Fatalf("the fixture must boot SAFE with its rollback retired (safe %v, armed %v)", safe, updates.RollbackArmed(dir))
 	}
-	if _, err := os.Stat(cfg.SourcePath + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(cfg.SourcePath + keptHere); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the update is settled by a SAFE boot and its copy still stands: %v", err)
 	}
 }
@@ -290,8 +292,8 @@ func TestARollbackPutsBackTheProvidersFileThePreviousVersionRanWith(t *testing.T
 	if err := os.WriteFile(providers, []byte(previous), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	if got := readText(t, providers+configBeforeUpdate); got != previous {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	if got := readText(t, providers+keptHere); got != previous {
 		t.Fatalf("the update's first boot did not keep providers.json as it found it: %q", got)
 	}
 	// The newer version writes a field the previous one does not know.
@@ -307,7 +309,7 @@ func TestARollbackPutsBackTheProvidersFileThePreviousVersionRanWith(t *testing.T
 	if !strings.Contains(newer, `"context_length"`) {
 		t.Fatalf("the newer file holds no field the previous version refuses, so this proves nothing: %s", newer)
 	}
-	if err := restoreConfigBeforeUpdate(path); err != nil {
+	if err := putBackConfigKept(path, Current(), true); err != nil {
 		t.Fatal(err)
 	}
 	if got := readText(t, providers); got != previous {
@@ -316,9 +318,28 @@ func TestARollbackPutsBackTheProvidersFileThePreviousVersionRanWith(t *testing.T
 	if got := readText(t, providers+configRolledBack); got != newer {
 		t.Fatalf("what the newer version left must be kept beside the providers file: %q", got)
 	}
-	keepConfigBeforeUpdate(path, updates.ErrBootRecoveryPending)
-	dropConfigBeforeUpdate(path, nil)
-	if _, err := os.Stat(providers + configBeforeUpdate); !errors.Is(err, os.ErrNotExist) {
+	keepConfigUnderUpdate(path, Current(), updates.ErrBootRecoveryPending)
+	dropConfigKeptUnderSettled(path, Current(), nil)
+	if _, err := os.Stat(providers + keptHere); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a settled update left its copy of providers.json: %v", err)
+	}
+}
+
+// A COPY OF PROVIDERS.JSON STANDING ALONE IS DROPPED TOO. The drop asks
+// first whether any copy stands, and passes over a configuration with none:
+// a copy of providers.json alone, with no copy of config.json beside it,
+// must still be found and go once the update is settled.
+func TestASettledUpdateDropsACopyOfProvidersJSONStandingAlone(t *testing.T) {
+	path := writeConfigFile(t)
+	copyPath := providerFilePath(path) + keptHere
+	if err := os.WriteFile(copyPath, []byte(`{"providers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.SourcePath = path
+	cfg.Identity.LedgerPath = filepath.Join(filepath.Dir(path), "data", "ledger.jsonl")
+	New(cfg).dropSettledConfigCopies(path)
+	if _, err := os.Stat(copyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("A SETTLED UPDATE LEFT A COPY OF PROVIDERS.JSON THAT STOOD WITHOUT ONE OF THE CONFIGURATION: %v", err)
 	}
 }

@@ -56,6 +56,7 @@ type WitnessReceipt struct {
 	LedgerHash                     string         `json:"ledger_hash"`
 	WitnessedAt                    string         `json:"witnessed_at"`
 	WitnessSignature               SignatureEntry `json:"witness_signature"`
+	ContextSHA256                  string         `json:"context_sha256,omitempty"`
 }
 
 type WitnessStatus struct {
@@ -71,13 +72,17 @@ func RequestSignatureInput(req WitnessRequest, canonicalPublicKey []byte) []byte
 }
 
 func ReceiptSignatureInput(receipt WitnessReceipt) []byte {
-	return []byte(fmt.Sprintf("AIII-WITNESS-RECEIPT\nidentity_id:%s\nprevious_witnessed_ledger_ordinal:%d\nprevious_witnessed_ledger_hash:%s\nledger_ordinal:%d\nledger_hash:%s\nwitnessed_at:%s\n",
+	input := fmt.Sprintf("AIII-WITNESS-RECEIPT\nidentity_id:%s\nprevious_witnessed_ledger_ordinal:%d\nprevious_witnessed_ledger_hash:%s\nledger_ordinal:%d\nledger_hash:%s\nwitnessed_at:%s\n",
 		receipt.IdentityID,
 		receipt.PreviousWitnessedLedgerOrdinal,
 		receipt.PreviousWitnessedLedgerHash,
 		receipt.LedgerOrdinal,
 		receipt.LedgerHash,
-		receipt.WitnessedAt))
+		receipt.WitnessedAt)
+	if receipt.ContextSHA256 != "" {
+		input += "context_sha256:" + receipt.ContextSHA256 + "\n"
+	}
+	return []byte(input)
 }
 
 func IdentityIDMaterial(mlDsaFingerprint, canonicalKeyHash string) string {

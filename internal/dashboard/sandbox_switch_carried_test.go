@@ -49,12 +49,13 @@ func carriedSwitchServer(t *testing.T, required, onChannel bool) (*Server, *hear
 	const name = "ui.x.example.test"
 	wait := 300
 	if onChannel {
-		wait = 8000
+		wait = MaxDirectWaitMS
 	}
 	heard := &heardSwitch{}
+	servers := carriedServers(t)
 	s := New("127.0.0.1", 0, &WSHandler{
 		Channels: func() ChannelSettings {
-			return ChannelSettings{WaitMS: wait, ReadyAllowanceMS: 100, ICEServersNamed: true, Sessions: 4}
+			return ChannelSettings{WaitMS: wait, ReadyAllowanceMS: 100, ICEServers: servers, ICEServersNamed: true, Sessions: 4}
 		},
 		SetSandboxOff: func(_, signedIn bool) error {
 			heard.mu.Lock()
@@ -85,7 +86,7 @@ func openCarriedPage(t *testing.T, s *Server, name string, roots *x509.CertPool,
 	t.Helper()
 	conn := carriedSocket(t, s, name, roots, "&transport=1", cookie...)
 	if onChannel {
-		dc := channelPage(t, conn)
+		dc, _ := channelPage(t, conn)
 		return func() {
 			if err := dc.Send(append([]byte{pieceLast}, switchOff...)); err != nil {
 				t.Fatal(err)
@@ -139,7 +140,9 @@ func waitHeldOn(t *testing.T, s *Server, onChannel bool) {
 	}
 }
 
-func channelPage(t *testing.T, conn *websocket.Conn) *webrtc.DataChannel {
+// socket and returns the data channel once the identity says it is ready on it,
+// with the pieces the identity sends on it after its ready.
+func channelPage(t *testing.T, conn *websocket.Conn) (*webrtc.DataChannel, <-chan []byte) {
 	t.Helper()
 	return channelPageSetup(t, conn, false)
 }
@@ -149,9 +152,9 @@ type pageSetupSocket interface {
 	Write(context.Context, websocket.MessageType, []byte) error
 }
 
-func channelPageSetup(t *testing.T, conn pageSetupSocket, gatherBeforeOffer bool) *webrtc.DataChannel {
+func channelPageSetup(t *testing.T, conn pageSetupSocket, gatherBeforeOffer bool) (*webrtc.DataChannel, <-chan []byte) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), channelReadyWait+10*time.Second)
 	t.Cleanup(cancel)
 	var channelOpen atomic.Bool
 	var wmu sync.Mutex
@@ -182,9 +185,9 @@ func channelPageSetup(t *testing.T, conn pageSetupSocket, gatherBeforeOffer bool
 		t.Fatalf("first message %q, want transport_setup", first.Type)
 	}
 	var engine webrtc.SettingEngine
-
-	engine.SetIPFilter(gatheredForChannel)
-
+	// wait or changing the identity's peer. Its private addresses it keeps,
+	// as a browser does.
+	engine.SetIPFilter(func(ip net.IP) bool { return ip.To4() != nil || !ip.IsLinkLocalUnicast() })
 	engine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(engine)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
@@ -291,13 +294,21 @@ func channelPageSetup(t *testing.T, conn pageSetupSocket, gatherBeforeOffer bool
 		if len(first) < 2 || first[0]&pieceLast == 0 || !strings.Contains(string(first[1:]), `"channel"`) {
 			t.Fatalf("first piece on the channel %q", first)
 		}
+		if err := dc.Send(append([]byte{pieceLast}, `{"type":"transport_ready","carrier":"channel"}`...)); err != nil {
+			t.Fatal(err)
+		}
 	case err := <-setupErr:
 		t.Fatal(err)
-	case <-time.After(15 * time.Second):
+	case <-time.After(channelReadyWait):
 		t.Fatal("the channel never said ready")
 	}
-	return dc
+	return dc, ready
 }
+
+// channelReadyWait is how long the page waits for the identity's ready on the
+// channel: past the identity's own wait for the channel (MaxDirectWaitMS), so
+// the identity always decides first and its choice is what the page reports.
+const channelReadyWait = time.Duration(MaxDirectWaitMS)*time.Millisecond + 90*time.Second
 
 func TestACarriedPageIsSignedInForTheSwitchOnlyWithTheTokenInForce(t *testing.T) {
 	for _, carrier := range []struct {
@@ -350,7 +361,7 @@ func TestACarriedPageIsSignedInForTheSwitchOnlyWithTheTokenInForce(t *testing.T)
 
 func TestADeviceSignedInByAnAccessCodeIsSignedInForTheSwitch(t *testing.T) {
 	s, heard, name, roots := carriedSwitchServer(t, true, false)
-	st, err := s.issueAccessCode(s.auth.Load(), "")
+	st, err := s.issueAccessCode(s.auth.Load(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

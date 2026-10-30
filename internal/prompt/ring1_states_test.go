@@ -110,3 +110,40 @@ func TestEveryRing1StateInvitesGrowth(t *testing.T) {
 		})
 	}
 }
+
+func TestEveryRing1StateSaysTheChartersBudget(t *testing.T) {
+	section := func(identity rows.PromptIdentity) string {
+		t.Helper()
+		composer := New(ring.NewManager(), 32000)
+		composer.SetIdentitySource(staticIdentitySource{identity: identity})
+		prompt, err := composer.Compose("", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range prompt.Sections {
+			if s.Name == "Your Core Relationship" {
+				return s.Content
+			}
+		}
+		t.Fatal("the prompt has no Ring 1 section")
+		return ""
+	}
+	for name, identity := range map[string]rows.PromptIdentity{
+		"no relationship at all":       {},
+		"approved but never chartered": {HasOperatorRelationship: true},
+		"chartered":                    {HasOperatorRelationship: true, Charter: "Quinn is my operator.", OperatorName: "Quinn"},
+	} {
+		without := section(identity)
+		if strings.Contains(without, "tokens") {
+			t.Errorf("%s: a source that carries no budget must say none:\n%s", name, without)
+		}
+		identity.CharterMaxTokens = 2000
+		if got, want := section(identity), without+" A new charter over 2000 tokens (about 6000 characters) is refused."; got != want {
+			t.Errorf("%s: with the default budget the section reads\n%q\nwant\n%q", name, got, want)
+		}
+		identity.CharterMaxTokens = 900
+		if got := section(identity); !strings.HasSuffix(got, " A new charter over 900 tokens (about 2700 characters) is refused.") {
+			t.Errorf("%s: the budget said does not follow the setting:\n%s", name, got)
+		}
+	}
+}

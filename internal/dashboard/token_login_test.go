@@ -59,7 +59,7 @@ func TestTokenQueryIsScrubbedWithoutAuthenticating(t *testing.T) {
 func TestAccessTokenLoginUsesCookieSafeVerifier(t *testing.T) {
 	const token = "right;token"
 	// Through the server's own handler, as the browser reaches the login
-	// route: its private headers are the route's (privateRoute).
+	// route: its private headers are the route's (the route table's wall).
 	s := New("example.test", 8443, nil)
 	s.AllowHost("example.test:8443")
 	s.SetAccessToken(true, token)
@@ -85,17 +85,22 @@ func TestAccessTokenLoginUsesCookieSafeVerifier(t *testing.T) {
 		t.Fatalf("correct login status = %d, want 204", w.Code)
 	}
 	want := sha256.Sum256([]byte(token))
-	cookie := findCookie(w.Result().Cookies(), "aii_token_8443")
+	cookie := findCookie(w.Result().Cookies(), tlsCookieName("8443"))
 	if cookie == nil || cookie.Value != hex.EncodeToString(want[:]) || !cookie.HttpOnly || !cookie.Secure || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("login did not install the fixed server verifier: %+v", cookie)
 	}
 	if strings.Contains(cookie.Value, ";") || cookie.Value == token {
 		t.Fatalf("configured token bytes reached the cookie: %q", cookie.Value)
 	}
+	key := w.Header().Get(pageKeyHeader)
+	if !pageKeyValid(s.auth.Load(), key) {
+		t.Fatalf("login did not answer the page key: %q", key)
+	}
 
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodGet, "https://example.test:8443/auth/token", nil)
 	r.AddCookie(cookie)
+	r.Header.Set(pageKeyHeader, key)
 	s.server.Handler.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("authenticated status = %d, want 204", w.Code)
@@ -105,7 +110,7 @@ func TestAccessTokenLoginUsesCookieSafeVerifier(t *testing.T) {
 	}
 }
 
-func TestExistingRawTokenCookiesUpgradeOnStatusCheck(t *testing.T) {
+func TestExistingRawTokenCookiesNoLongerAdmit(t *testing.T) {
 	const token = "right-token"
 	for _, tc := range []struct {
 		name       string
@@ -122,27 +127,22 @@ func TestExistingRawTokenCookiesUpgradeOnStatusCheck(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "https://example.test:8443/auth/token", nil)
 			r.AddCookie(&http.Cookie{Name: tc.cookieName, Value: token})
 			s.handleAccessToken(w, r)
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("upgrade status = %d, want 204", w.Code)
+			if w.Code != http.StatusUnauthorized || w.Header().Get(pageKeyHeader) != "" {
+				t.Fatalf("an older cookie: status %d, key %q; want 401 and none", w.Code, w.Header().Get(pageKeyHeader))
 			}
-			cookies := w.Result().Cookies()
-			replacement := findCookie(cookies, "aii_token_8443")
-			if replacement == nil || replacement.Value != s.accessHash() {
-				t.Fatalf("raw cookie was not replaced by the verifier: %+v", cookies)
+			if cookies := w.Result().Cookies(); len(cookies) != 0 {
+				t.Fatalf("an older cookie was replaced in place: %+v", cookies)
 			}
-			if tc.expiresOld {
-				old := findCookie(cookies, legacyDashboardCookieName)
-				if old == nil || old.MaxAge >= 0 {
-					t.Fatalf("legacy cookie was not expired: %+v", cookies)
-				}
-			}
-
 			w = httptest.NewRecorder()
-			r = httptest.NewRequest(http.MethodGet, "https://example.test:8443/auth/token", nil)
-			r.AddCookie(replacement)
+			r = httptest.NewRequest(http.MethodPost, "https://example.test:8443/auth/token", strings.NewReader(token))
+			r.AddCookie(&http.Cookie{Name: tc.cookieName, Value: token})
 			s.handleAccessToken(w, r)
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("replacement cookie was not accepted: %d", w.Code)
+			cookies := w.Result().Cookies()
+			if fresh := findCookie(cookies, tlsCookieName("8443")); w.Code != http.StatusNoContent || fresh == nil || fresh.Value != s.accessHash() {
+				t.Fatalf("the sign-in that follows: %d %+v", w.Code, cookies)
+			}
+			if old := findCookie(cookies, legacyDashboardCookieName); tc.expiresOld != (old != nil && old.MaxAge < 0) {
+				t.Fatalf("the unscoped cookie's clearing: %+v", cookies)
 			}
 		})
 	}

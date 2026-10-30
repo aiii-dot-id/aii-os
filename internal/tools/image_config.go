@@ -8,6 +8,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"strings"
 )
 
 var PictureMediaTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -60,3 +61,23 @@ func webpSize(head []byte) (width, height int, ok bool) {
 	}
 	return width, height, width > 0 && height > 0
 }
+
+func MediaOf(r io.ReaderAt) (mediaType, kind string) {
+	head := make([]byte, 512)
+	n, _ := r.ReadAt(head, 0)
+	mediaType, _, _ = strings.Cut(http.DetectContentType(head[:n]), ";")
+	if named, ok := sniffedTypes[mediaType]; ok {
+		mediaType = named
+	}
+	switch {
+	case mediaType == "application/pdf":
+		return mediaType, "pdf"
+	case strings.HasPrefix(mediaType, "audio/"):
+		return mediaType, "audio"
+	case strings.HasPrefix(mediaType, "video/"):
+		return mediaType, "video"
+	}
+	return "", ""
+}
+
+var sniffedTypes = map[string]string{"audio/wave": "audio/wav", "application/ogg": "audio/ogg"}

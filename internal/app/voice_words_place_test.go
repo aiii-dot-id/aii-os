@@ -105,7 +105,7 @@ func wordsKeepTheirPlace(t *testing.T, restricted bool) {
 	a.releaseTurn()
 	select {
 	case text := <-entered:
-		if text != voiceMarker+"first words" {
+		if text != heardFromSomeone("", "first words") {
 			t.Fatalf("the later words took the turn ahead of the earlier: %q", text)
 		}
 	case <-time.After(5 * time.Second):
@@ -131,6 +131,7 @@ func TestFinishIsNotHeldBehindAPassPastTheBoundThroughTheObserver(t *testing.T) 
 	a := newVoiceApp(t)
 	logs := logsink.CaptureForTest(t)
 	h, f := newTrackedSession(a, "vs-finish-pass", true)
+	identifyTheOperator(t, a, h.id, 4)
 	saved := voicePassWait
 	voicePassWait = 50 * time.Millisecond
 	t.Cleanup(func() { voicePassWait = saved })
@@ -263,9 +264,8 @@ func TestWordsInTheSessionsOrderAreRecordedWhenACloseComesBeforeTheirTurn(t *tes
 	case <-time.After(5 * time.Second):
 		t.Fatal("the words in the session's order never settled after the earlier words were admitted")
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"said before the close" {
-		t.Fatalf("a close before their turn dropped the words: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("said before the close") {
+		t.Fatalf("a close before their turn dropped the words: %s %q", role, content)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -153,7 +154,7 @@ func TestAlwaysRunsTheActAndStandsUntilRevoked(t *testing.T) {
 	}
 
 	// The next call runs at once, stamped auto, nothing proposed.
-	res, err = app.toolReg.Execute(ctx, enroll, map[string]any{"label": "Jim"})
+	res, err = app.toolReg.Execute(ctx, enroll, map[string]any{"label": "Guest"})
 	// The guest answers (the auto stamp itself is proven at the seam,
 	// pluginhost/acts_test.go); nothing is proposed.
 	if err != nil || res.Error != "" || strings.Contains(res.Output, "proposed") || !strings.Contains(res.Output, `"echoed":true`) {
@@ -163,8 +164,8 @@ func TestAlwaysRunsTheActAndStandsUntilRevoked(t *testing.T) {
 		t.Fatalf("nothing proposed under a standing word: %v", ids)
 	}
 
-	// Revoked on the card (the list without it), the call proposes again.
-	if _, err := app.applyConfigChange(map[string]any{"plugins.grants." + id + ".auto_confirm": []any{}}); err != nil {
+	// Revoked on the card (the one operation, by name), the call proposes again.
+	if err := app.revokeAutoConfirm(id, "enroll"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := app.configSnapshot().Plugins.Grants[id]; ok {
@@ -235,43 +236,45 @@ func TestReadOnlyAndStandingConfirmationGrants(t *testing.T) {
 	const id = "org.example.uid"
 	cfg := defaultConfig()
 	cfg.SourcePath = filepath.Join(t.TempDir(), "config.json")
-	cfg.Plugins.Grants = map[string]broker.Grant{id: {KV: true, Local: []string{"192.168.1.0/24:*"}}}
+	cfg.Plugins.Grants = map[string]broker.Grant{id: {KV: true, Local: []string{"192.168.1.0/24:*"}, AutoConfirm: []string{"enroll"}}}
 	if _, err := saveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 	a := New(cfg)
-	for _, v := range []any{"enroll", true, []any{"enroll", 3}} {
-		if _, err := a.applyConfigChange(map[string]any{"plugins.grants." + id + ".auto_confirm": v}); err == nil {
-			t.Fatalf("auto_confirm=%v must be refused", v)
+	// A PAGE LEFT OPEN ACROSS THE UPGRADE SENDS THE LIST: refused, named,
+	// and nothing is changed.
+	for _, v := range []any{[]any{"enroll", "list"}, []any{}, []string{}, nil, "enroll", true} {
+		_, err := a.applyConfigChange(map[string]any{"plugins.grants." + id + ".auto_confirm": v})
+		if err == nil || !strings.Contains(err.Error(), "taken back by revoke on the plugin's card") || !strings.Contains(err.Error(), "Reload the page.") {
+			t.Fatalf("A WHOLE LIST OF STANDING CONFIRMATIONS WAS TAKEN AT THE SETTINGS DOOR: auto_confirm=%v: %v", v, err)
 		}
 	}
-	if _, err := a.applyConfigChange(map[string]any{
-		"plugins.grants." + id + ".auto_confirm": []any{" enroll ", "enroll", "", "list"},
-		"plugins.grants." + id + ".read_only":    true,
-	}); err != nil {
+	if g := a.configSnapshot().Plugins.Grants[id]; !slices.Equal(g.AutoConfirm, []string{"enroll"}) {
+		t.Fatalf("a refused list changed the standing confirmations: %+v", g)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"plugins.grants." + id + ".read_only": true}); err != nil {
 		t.Fatal(err)
 	}
 	g := a.configSnapshot().Plugins.Grants[id]
-	if !g.ReadOnly || len(g.AutoConfirm) != 2 || g.AutoConfirm[0] != "enroll" || g.AutoConfirm[1] != "list" || !g.KV || len(g.Local) != 1 {
+	if !g.ReadOnly || !slices.Equal(g.AutoConfirm, []string{"enroll"}) || !g.KV || len(g.Local) != 1 {
 		t.Fatalf("live grant = %+v", g)
 	}
 	onDisk, err := LoadConfig(cfg.SourcePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := onDisk.Plugins.Grants[id]; !d.ReadOnly || len(d.AutoConfirm) != 2 || len(d.Local) != 1 {
+	if d := onDisk.Plugins.Grants[id]; !d.ReadOnly || len(d.AutoConfirm) != 1 || len(d.Local) != 1 {
 		t.Fatalf("published grant = %+v", d)
 	}
 	// Withdrawing the booleans keeps an entry that still carries a list …
 	if _, err := a.applyConfigChange(map[string]any{
-		"plugins.grants." + id + ".kv":           false,
-		"plugins.grants." + id + ".read_only":    false,
-		"plugins.grants." + id + ".auto_confirm": []string{},
+		"plugins.grants." + id + ".kv":        false,
+		"plugins.grants." + id + ".read_only": false,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if g, ok := a.configSnapshot().Plugins.Grants[id]; !ok || len(g.Local) != 1 || g.ReadOnly || len(g.AutoConfirm) != 0 {
-		t.Fatalf("a grant with a local list stays listed: %+v (%v)", g, ok)
+	if g, ok := a.configSnapshot().Plugins.Grants[id]; !ok || len(g.Local) != 1 || g.ReadOnly || len(g.AutoConfirm) != 1 {
+		t.Fatalf("a grant with a list stays listed: %+v (%v)", g, ok)
 	}
 	// … and one that carries only read_only stays too.
 	const other = "org.example.other"

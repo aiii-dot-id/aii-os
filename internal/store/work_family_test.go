@@ -48,3 +48,23 @@ func TestAWorkSessionKeepsItsFamilyStartAndCallCount(t *testing.T) {
 		t.Fatal("a delivered session's family changed")
 	}
 }
+
+func TestFamilyCountsInterruptedChildApart(t *testing.T) {
+	s := testStore(t)
+	if err := s.StartWorkSession(t.Context(), "ws_child_restart", SubagentDescription("a bounded child")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWorkSessionFamily(t.Context(), "ws_child_restart", "restart-probe"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeliverWorkSession(t.Context(), "ws_child_restart", InterruptedLeg(" — leg 1 of 4 had begun"), EvidenceExternalUnknown, ""); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.FamilyAttempts("restart-probe", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Tally(); got.Restarted != 1 || got.Unserved != 0 {
+		t.Fatalf("host restart counted as the identity's failure: %+v", got)
+	}
+}

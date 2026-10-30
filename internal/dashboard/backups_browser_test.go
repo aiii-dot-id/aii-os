@@ -195,7 +195,7 @@ run(() => {
   assert(last().backups.action === 'restore_plan' && last().backups.source === 'snapshot' && last().backups.name === 'ledger-20260918T080005Z-seq1300', 'the plan is asked for: ' + JSON.stringify(last()));
   applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'ledger-20260918T080005Z-seq1300', at: '2026-09-18T08:00:05Z',
     restored_to: 1300, live_through: 1402, set_aside: 102, witnessed: 1368, witnessed_set_aside: 68, witness_hash: 'abc123', witness_url: 'https://witness.example',
-    identity: '501265c6', confirm_text: 'Vega', aside_under: '/home/vega/data/set-aside' } });
+    identity: '501265c6', confirm_text: 'Example', aside_under: '/home/example/data/set-aside' } });
 
   assert(/record 1300/.test(text('[data-plan-to]')), 'where the record will end');
   assert(/102 records/.test(text('[data-plan-aside]')) && /through 1402/.test(text('[data-plan-aside]')), 'how many records are set aside, exactly: ' + text('[data-plan-aside]'));
@@ -206,16 +206,16 @@ run(() => {
   assert(/Settings . Witness/.test(anchoring) || /off the witness/.test(anchoring), 'and it says what a person can actually do today');
   const facts = text('[data-witness-facts]');
   assert(/https:\/\/witness.example/.test(facts) && /501265c6/.test(facts) && /record 1368 abc123/.test(facts) && /ends at: 1300/.test(facts), 'the facts to hand over: ' + facts);
-  assert(/\/home\/vega\/data\/set-aside/.test(text('[data-plan]')) && /Nothing is deleted/.test(text('[data-plan]')), 'where what is live will go is said before it goes');
+  assert(/\/home\/example\/data\/set-aside/.test(text('[data-plan]')) && /Nothing is deleted/.test(text('[data-plan]')), 'where what is live will go is said before it goes');
 
   const box = document.getElementById('bk-confirm'), go = document.getElementById('bk-restore');
   assert(go.disabled, 'the button starts unarmed');
-  box.value = 'vega'; box.dispatchEvent(new Event('input'));
+  box.value = 'example'; box.dispatchEvent(new Event('input'));
   assert(go.disabled, 'a near miss does not arm it');
-  box.value = 'Vega'; box.dispatchEvent(new Event('input'));
+  box.value = 'Example'; box.dispatchEvent(new Event('input'));
   assert(!go.disabled, 'the exact name arms it');
   go.click();
-  assert(last().backups.action === 'restore' && last().backups.confirm === 'Vega' && last().backups.name === 'ledger-20260918T080005Z-seq1300' && last().backups.source === 'snapshot', 'the restore is asked for with what was typed: ' + JSON.stringify(last()));
+  assert(last().backups.action === 'restore' && last().backups.confirm === 'Example' && last().backups.name === 'ledger-20260918T080005Z-seq1300' && last().backups.source === 'snapshot', 'the restore is asked for with what was typed: ' + JSON.stringify(last()));
 
   applyBackups({ action: 'restore', restarting: true });
   assert(st.querySelector('[data-restarting]') && /before the record is opened/.test(text('[data-restarting]')), 'the page says what is happening while it restarts');
@@ -224,30 +224,30 @@ run(() => {
   assert(frames.length === before + 1 && last().backups.action === 'status', 'back on the socket, the page asks for the view again');
 
   applyBackups({ action: 'status', view: view({ set_aside: [
-    { name: 'Vega-20260920T220000Z-before-restore-to-seq1300', path: '/home/vega/data/set-aside/Vega-20260920T220000Z-before-restore-to-seq1300', bytes: 214000000, set_aside_at: '2026-09-20T22:00:00Z', was_through: 1402, restored_to: 1300 },
-    { name: 'Vega-20260901T090000Z-before-restore-to-seq900', path: '/home/vega/data/set-aside/Vega-20260901T090000Z-before-restore-to-seq900', bytes: 180000000, set_aside_at: '2026-09-01T09:00:00Z', was_through: 950, restored_to: 900, put_back_at: '2026-09-02T10:00:00Z' } ] }) });
+    { name: 'Example-20260920T220000Z-before-restore-to-seq1300', path: '/home/example/data/set-aside/Example-20260920T220000Z-before-restore-to-seq1300', bytes: 214000000, set_aside_at: '2026-09-20T22:00:00Z', was_through: 1402, restored_to: 1300 },
+    { name: 'Example-20260901T090000Z-before-restore-to-seq900', path: '/home/example/data/set-aside/Example-20260901T090000Z-before-restore-to-seq900', bytes: 180000000, set_aside_at: '2026-09-01T09:00:00Z', was_through: 950, restored_to: 900, put_back_at: '2026-09-02T10:00:00Z' } ] }) });
   assert(!st.querySelector('[data-restarting]'), 'the restarting notice is gone once the identity is back');
   const rows = st.querySelectorAll('[data-set]');
   assert(rows.length === 2, 'both sets are listed');
-  assert(rows[0].querySelector('[data-set-path]').textContent === '/home/vega/data/set-aside/Vega-20260920T220000Z-before-restore-to-seq1300', 'NEVER DELETED MUST NOT BECOME NEVER FOUND: the full path is on the page');
+  assert(rows[0].querySelector('[data-set-path]').textContent === '/home/example/data/set-aside/Example-20260920T220000Z-before-restore-to-seq1300', 'NEVER DELETED MUST NOT BECOME NEVER FOUND: the full path is on the page');
   assert(/through record 1402/.test(rows[0].textContent) && /204 MB/.test(rows[0].textContent), 'what it holds and how big it is: ' + rows[0].textContent);
   assert(rows[1].querySelector('[data-putback]') && !rows[0].querySelector('[data-putback]'), 'a set that was put back says so');
   rows[0].querySelector('[data-restore]').click();
-  assert(last().backups.action === 'restore_plan' && last().backups.source === 'set-aside' && last().backups.name === 'Vega-20260920T220000Z-before-restore-to-seq1300', 'Put this back is the same restore, from the set: ' + JSON.stringify(last()));
+  assert(last().backups.action === 'restore_plan' && last().backups.source === 'set-aside' && last().backups.name === 'Example-20260920T220000Z-before-restore-to-seq1300', 'Put this back is the same restore, from the set: ' + JSON.stringify(last()));
 
-  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: 1302, set_aside: 2, witnessed: 1200, witnessed_set_aside: 0, confirm_text: 'Vega', aside_under: '/x' } });
+  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: 1302, set_aside: 2, witnessed: 1200, witnessed_set_aside: 0, confirm_text: 'Example', aside_under: '/x' } });
   assert(/will notice nothing/.test(text('[data-plan-witness]')) && !st.querySelector('[data-witness-facts]'), 'a restore the witness will not notice says so and hands over nothing');
 
   const askPlan = () => {
     applyBackups({ action: 'status', view: view({ set_aside: [
-      { name: 'Vega-set', path: '/x/Vega-set', bytes: 1000, set_aside_at: '2026-09-20T22:00:00Z', was_through: 1402, restored_to: 1300 } ] }) });
+      { name: 'Example-set', path: '/x/Example-set', bytes: 1000, set_aside_at: '2026-09-20T22:00:00Z', was_through: 1402, restored_to: 1300 } ] }) });
     st.querySelector('[data-set] [data-restore]').click();
   };
   askPlan();
-  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: -1, no_live_record: true, set_aside: 0, witnessed: -1, witnessed_set_aside: 0, confirm_text: 'Vega', aside_under: '/x' } });
+  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: -1, no_live_record: true, set_aside: 0, witnessed: -1, witnessed_set_aside: 0, confirm_text: 'Example', aside_under: '/x' } });
   assert(text('[data-plan-aside]') === 'no records: there is no live record here', 'A HOME WITH NO RECORD IS TOLD ITS LIVE RECORD DOES NOT READ: ' + text('[data-plan-aside]'));
   askPlan();
-  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: -1, set_aside: -1, witnessed: -1, witnessed_set_aside: 0, confirm_text: 'Vega', aside_under: '/x' } });
+  applyBackups({ action: 'restore_plan', view: view(), plan: { source: 'snapshot', name: 'n', at: '2026-09-18T08:00:05Z', restored_to: 1300, live_through: -1, set_aside: -1, witnessed: -1, witnessed_set_aside: 0, confirm_text: 'Example', aside_under: '/x' } });
   assert(/does not read/.test(text('[data-plan-aside]')), 'a live record that does not read is still said so: ' + text('[data-plan-aside]'));
 
   applyBackups({ action: 'status', view: view({ restore_failed: 'A restore from n was asked for and NOT performed: the source does not prove. Nothing was touched.' }) });
@@ -384,4 +384,50 @@ run(async () => {
 	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');`)
 	modules["/ws.js"] = []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-1'; }`)
 	runPageInEngines(t, page, modules)
+}
+
+func TestAPersonDownloadsAnEncryptedSnapshotFromThePage(t *testing.T) {
+	// The probe is a module of its own: the shipped policy admits no inline
+	// script, and it is the policy the form is held to.
+	page := `<!doctype html>
+<div id="settings-stack"></div>
+<script type="module" src="/probe.js"></script>`
+	probe := `
+import { S } from '/state.js';
+import { backupsHTML, wireBackups, applyBackups } from '/views/backups.js';
+import { assert, run } from '/__harness.js';
+const st = document.getElementById('settings-stack');
+S.renderBackups = () => { st.innerHTML = backupsHTML(); wireBackups(st); };
+const view = snapshots => ({ enabled: true, backup_keep: 8, snapshots, last_pass: { at: '2026-10-20T04:00:10Z', outcome: 'ok' },
+  encrypting: true, escrow_covers: true, secrets_ok: true, export_ok: true });
+const sealed = 'ledger-20261020T040005Z-seq1402.tar.age', plain = 'ledger-20261019T040005Z-seq1390';
+run(async () => {
+  applyBackups({ action: 'status', view: view([{ name: sealed, at: '2026-10-20T04:00:05Z', record: 1402, encrypted: true }, { name: plain, at: '2026-10-19T04:00:05Z', record: 1390 }]) });
+  const form = st.querySelector('[data-snapshot="' + sealed + '"] form[action="/backups/download"]');
+  assert(form && form.method === 'post', 'an encrypted snapshot has no download form, or it is not a POST: ' + st.innerHTML);
+  const button = form.querySelector('button[type="submit"][data-download]');
+  assert(button && button.name === 'name' && button.value === sealed && !form.querySelector('input'), 'the form\'s button names the snapshot, and no input the page keeps across renders does');
+  assert(!st.querySelector('[data-snapshot="' + plain + '"] [data-download]'), 'A SNAPSHOT IN THE CLEAR IS OFFERED FOR DOWNLOAD');
+  assert(/escrow file, its passphrase and a snapshot kept somewhere else/.test(st.querySelector('[data-offsite]').textContent), 'the page does not say what the way back is: ' + st.querySelector('[data-offsite]').textContent);
+  assert(!/only way back/.test(st.textContent), 'the page still says the escrow alone is the way back');
+  const sent = new FormData(form, button);
+  assert(sent.get('name') === sealed, 'pressing Download does not send the snapshot\'s name: ' + sent.get('name'));
+  const response = await fetch(form.action, { method: 'POST', body: sent });
+  assert(await response.text() === 'snapshot-fixture', 'the shipped policy blocks the page\'s own download POST');
+  applyBackups({ action: 'status', view: view([{ name: plain, at: '2026-10-19T04:00:05Z', record: 1390 }]) });
+  assert(!st.querySelector('[data-download]') && /make or check an escrow file/.test(st.querySelector('[data-offsite]').textContent), 'with nothing encrypted, the page does not say how to get a snapshot that can leave: ' + st.querySelector('[data-offsite]').textContent);
+});`
+	data, err := staticFS.ReadFile("static/views/backups.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := map[string][]byte{
+		"/views/backups.js": data,
+		"/state.js":         []byte(`export const S = { view: 'settings' };`),
+		"/util.js":          utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');`),
+		"/ws.js":            []byte(`export const frames = []; export function send(f) { f.request_id=String(frames.length+1); frames.push(f); return f.request_id; }`),
+		"/backups/download": []byte("snapshot-fixture"),
+		"/probe.js":         []byte(probe),
+	}
+	runPageInEnginesWithHeaders(t, page, modules, map[string]string{"Content-Security-Policy": uiCSP})
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
+	"github.com/aiii-dot-id/aii-os/internal/store/rows"
 )
 
 const (
@@ -308,6 +309,7 @@ const (
 
 func originsOf(q standingReader, claim string, sources map[string]bool) (origins int, unopened int, err error) {
 	found := map[string]bool{}
+	notes := map[string][]string{}
 	seen := map[string]bool{claim: true}
 	turnedAway := map[string]bool{}
 	queue := make([]string, 0, len(sources))
@@ -328,46 +330,151 @@ func originsOf(q standingReader, claim string, sources map[string]bool) (origins
 		}
 		seen[id] = true
 		opened++
-		rests, origin, err := openSource(q, id)
+		rests, origin, read, err := openSource(q, id)
 		if err != nil {
 			return 0, 0, err
 		}
-		if origin {
+		switch {
+		case origin && len(read) > 0:
+			notes[id] = read
+		case origin:
 			found[id] = true
 		}
 		queue = append(queue, rests...)
 	}
-	return len(found), len(turnedAway), nil
+
+	var reads []string
+	for _, read := range notes {
+		reads = append(reads, read...)
+	}
+	sort.Strings(reads)
+	for len(reads) > 0 {
+		id := reads[0]
+		reads = reads[1:]
+		if seen[id] {
+			continue
+		}
+		if opened >= standingOriginBound {
+			turnedAway[id] = true
+			continue
+		}
+		seen[id] = true
+		opened++
+		_, _, read, err := openSource(q, id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if len(read) > 0 {
+			notes[id] = read
+			reads = append(reads, read...)
+		}
+	}
+	return len(found) - toolObservationsJoined(found) + notesCounted(found, notes, turnedAway), len(turnedAway), nil
 }
 
-func openSource(q standingReader, id string) (rests []string, origin bool, err error) {
+func toolObservationsJoined(found map[string]bool) int {
+	group := map[string]string{}
+	var top func(string) string
+	top = func(id string) string {
+		g, ok := group[id]
+		if !ok || g == id {
+			group[id] = id
+			return id
+		}
+		g = top(g)
+		group[id] = g
+		return g
+	}
+	join := func(a, b string) { group[top(a)] = top(b) }
+	var ids []string
+	many := false
+	for id := range found {
+		o, ok := rows.ParseToolObservationID(id)
+		if !ok {
+			continue
+		}
+		ids = append(ids, id)
+		top(id)
+		for _, p := range o.Pairs {
+			join("\x00pair:"+p, id)
+		}
+		many = many || o.Many
+	}
+	if len(ids) == 0 {
+		return 0
+	}
+	if many {
+		return len(ids) - 1
+	}
+	groups := map[string]bool{}
+	for _, id := range ids {
+		groups[top(id)] = true
+	}
+	return len(ids) - len(groups)
+}
+
+func notesCounted(found map[string]bool, notes map[string][]string, unopened map[string]bool) int {
+	group := map[string]string{}
+	var top func(string) string
+	top = func(id string) string {
+		g, ok := group[id]
+		if !ok || g == id {
+			group[id] = id
+			return id
+		}
+		g = top(g)
+		group[id] = g
+		return g
+	}
+	join := func(a, b string) { group[top(a)] = top(b) }
+	for note, read := range notes {
+		for _, e := range read {
+			join(e, note)
+		}
+	}
+	const notOpened = "\x00"
+	for id := range unopened {
+		join(id, notOpened)
+	}
+	held := map[string]bool{}
+	for id := range found {
+		held[top(id)] = true
+	}
+	alone := map[string]bool{}
+	for note := range notes {
+		if g := top(note); !held[g] {
+			alone[g] = true
+		}
+	}
+	return len(alone)
+}
+
+func openSource(q standingReader, id string) (rests []string, origin bool, read []string, err error) {
 	kind, err := evidenceOriginKindRead(q, id)
 	if errors.Is(err, ErrNoEvidenceSource) {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 	if kind == "experience" {
 		var provenance string
 		var created int64
 		if err := q.QueryRow(standingExperienceOriginSQL, id).Scan(&provenance, &created); err != nil {
-			return nil, false, fmt.Errorf("origin of %s: %w", id, err)
+			return nil, false, nil, fmt.Errorf("origin of %s: %w", id, err)
 		}
 		if provenance == "dream" {
 			inputs, err := dreamInputsOf(q, created)
 			if err != nil {
-				return nil, false, fmt.Errorf("origin of %s: %w", id, err)
+				return nil, false, nil, fmt.Errorf("origin of %s: %w", id, err)
 			}
-			if len(inputs) > 0 {
-				return inputs, false, nil
-			}
+			return nil, true, inputs, nil
 		}
-		return nil, true, nil
+		return nil, true, nil, nil
 	}
 	edges, err := edgesRead(q, standingIncomingEdgesSQL, id)
 	if err != nil {
-		return nil, false, fmt.Errorf("origin of %s: edges: %w", id, err)
+		return nil, false, nil, fmt.Errorf("origin of %s: edges: %w", id, err)
 	}
 	for _, e := range edges {
 		if e.FromID == id || (e.EdgeType != "SUPPORTS" && e.EdgeType != "REINFORCED_BY" && e.EdgeType != "DERIVED_FROM") {
@@ -376,11 +483,11 @@ func openSource(q standingReader, id string) (rests []string, origin bool, err e
 		if _, err := evidenceOriginKindRead(q, e.FromID); errors.Is(err, ErrNoEvidenceSource) {
 			continue
 		} else if err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		rests = append(rests, e.FromID)
 	}
-	return rests, len(rests) == 0, nil
+	return rests, len(rests) == 0, nil, nil
 }
 
 func dreamInputsOf(q standingReader, seq int64) ([]string, error) {

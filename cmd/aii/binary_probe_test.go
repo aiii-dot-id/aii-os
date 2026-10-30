@@ -58,6 +58,11 @@ func probeBinary(t *testing.T) string {
 }
 
 func TestMain(m *testing.M) {
+	// Run again by a test's fake service manager, this binary is a slot's
+	// process (serving_child_test.go), and nothing else.
+	if mode := os.Getenv(slotChildEnv); mode != "" {
+		os.Exit(runSlotChild(mode))
+	}
 	code := m.Run()
 	if probe.dir != "" {
 		if err := os.RemoveAll(probe.dir); err != nil {

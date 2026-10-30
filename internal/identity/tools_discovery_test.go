@@ -42,3 +42,41 @@ func TestNoteAdvertisesTheProvenanceAndEdgesItsHandlerReads(t *testing.T) {
 		}
 	}
 }
+
+// homeDocs is a discoverer that also knows what this identity's home holds.
+type homeDocs struct {
+	discovererAdapter
+	docs []string
+}
+
+func (h homeDocs) HomeDocs() []string { return h.docs }
+
+// WHAT ONLY THIS IDENTITY'S HOME HOLDS IS SAID WHILE IT IS THERE, AND NOT
+// OTHERWISE. A discoverer that names a document has it listed under the
+// seeded docs, at every depth; one that names none adds no heading: a
+// heading over nothing is machinery the identity learns to read past.
+func TestToolsVerbNamesWhatThisHomeHoldsOnlyWhileItIsThere(t *testing.T) {
+	engine, _, _, _, _ := setupEngine(t)
+	inner := engine.toolDisc.(discovererAdapter)
+	line := "other-agents/README.md — notes other AI agents kept on this machine"
+	for _, depth := range []int{1, 2, 3} {
+		engine.toolDisc = homeDocs{inner, []string{line}}
+		res, err := engine.ExecuteAction(context.Background(), "verb", "tools", map[string]any{"depth": depth})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(res, "\nAlso at your root:\n  "+line) || strings.Index(res, "METHOD.md") > strings.Index(res, "Also at your root") {
+			t.Fatalf("depth %d: the home's own document is not listed after the seeded docs:\n%s", depth, res)
+		}
+		for _, d := range []ToolDiscoverer{homeDocs{inner, nil}, inner} {
+			engine.toolDisc = d
+			res, err = engine.ExecuteAction(context.Background(), "verb", "tools", map[string]any{"depth": depth})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(res, "Also at your root") {
+				t.Fatalf("depth %d: a heading stands over nothing:\n%s", depth, res)
+			}
+		}
+	}
+}

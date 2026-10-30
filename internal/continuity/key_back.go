@@ -114,7 +114,7 @@ func (r *Runtime) publishKeyBack(cfg Settings, c escrow.Contents, kp *crypto.Key
 		r.afterKeyPublished(keyPath)
 	}
 
-	here, err := os.ReadFile(keyPath)
+	here, err := crypto.ReadKeyFile(keyPath)
 	if r.KeyBackHolds != nil {
 		r.KeyBackHolds(here)
 	}

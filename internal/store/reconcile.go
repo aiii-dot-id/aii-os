@@ -21,7 +21,11 @@ type ReconcileReport struct {
 	Sidecars  []string
 	Retired   []string
 	Dropped   []string
-	Unneeded  bool
+
+	SuccessorColumns []string
+	SuccessorTables  []string
+	SuccessorViews   []string
+	Unneeded         bool
 
 	RebuildSidecars []string
 }
@@ -29,7 +33,8 @@ type ReconcileReport struct {
 func (r ReconcileReport) empty() bool {
 	return len(r.Renamed) == 0 && len(r.Rebuilt) == 0 && len(r.Recreated) == 0 && len(r.Created) == 0 &&
 		len(r.Indexes) == 0 && len(r.Triggers) == 0 && len(r.Views) == 0 && len(r.Sidecars) == 0 &&
-		len(r.Retired) == 0 && len(r.Dropped) == 0
+		len(r.Retired) == 0 && len(r.Dropped) == 0 &&
+		len(r.SuccessorColumns) == 0 && len(r.SuccessorTables) == 0 && len(r.SuccessorViews) == 0
 }
 
 func (r ReconcileReport) Lines() []string {
@@ -41,6 +46,9 @@ func (r ReconcileReport) Lines() []string {
 	}
 	add("renamed column", r.Renamed)
 	add("retired table", r.Retired)
+	add("dropped successor table", r.SuccessorTables)
+	add("dropped successor column", r.SuccessorColumns)
+	add("dropped view over a successor's column or table", r.SuccessorViews)
 	add("rebuilt table", r.Rebuilt)
 	add("recreated derived table", r.Recreated)
 	add("created table", r.Created)
@@ -118,7 +126,13 @@ func (s *Store) reconcileSchema(schemaText string) (rep ReconcileReport, err err
 	if err := s.reconcileRetired(schemaText, &rep); err != nil {
 		return rep, err
 	}
+	if err := s.reconcileSuccessorTables(schemaText, &rep); err != nil {
+		return rep, err
+	}
 	if err := s.reconcileTables(schemaText, &rep); err != nil {
+		return rep, err
+	}
+	if err := s.reconcileSuccessorViews(schemaText, &rep); err != nil {
 		return rep, err
 	}
 	if err := s.reconcileIndexes(schemaText, &rep); err != nil {
@@ -325,14 +339,14 @@ func describeRebuild(table string, live, want map[string]bool, carried int64) st
 	return fmt.Sprintf("%s (%s, %d row(s) carried)", table, strings.Join(parts, " "), carried)
 }
 
-func (s *Store) populatedDroppedColumns(table string, live, want, retired map[string]bool) ([]string, error) {
+func (s *Store) populatedDroppedColumns(table string, live, want, droppable map[string]bool) ([]string, error) {
 	shape, err := s.liveShape(table)
 	if err != nil {
 		return nil, err
 	}
 	var candidates []string
 	for c := range live {
-		if !want[c] && !retired[c] && shape[c].Hidden != 2 && shape[c].Hidden != 3 {
+		if !want[c] && !droppable[c] && shape[c].Hidden != 2 && shape[c].Hidden != 3 {
 			candidates = append(candidates, c)
 		}
 	}
@@ -340,9 +354,8 @@ func (s *Store) populatedDroppedColumns(table string, live, want, retired map[st
 
 	var populated []string
 	for _, c := range candidates {
-		var n int
-		q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IS NOT NULL AND %s != ''", quoteIdentifier(table), quoteIdentifier(c), quoteIdentifier(c))
-		if err := s.h().QueryRow(q).Scan(&n); err != nil {
+		n, err := s.valuesHeld(table, c)
+		if err != nil {
 
 			populated = append(populated, c)
 			continue
@@ -352,6 +365,67 @@ func (s *Store) populatedDroppedColumns(table string, live, want, retired map[st
 		}
 	}
 	return populated, nil
+}
+
+func (s *Store) valuesHeld(table, column string) (int, error) {
+	var n int
+	q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s IS NOT NULL AND %s != ''", quoteIdentifier(table), quoteIdentifier(column), quoteIdentifier(column))
+	err := s.h().QueryRow(q).Scan(&n)
+	return n, err
+}
+
+func (s *Store) reconcileSuccessorTables(schemaText string, rep *ReconcileReport) error {
+	declared := declaredTableSQL(schemaText)
+	live, err := s.liveObjects("table")
+	if err != nil {
+		return err
+	}
+	for _, name := range sortedKeys(live) {
+		if _, ours := declared[name]; ours {
+			continue
+		}
+		version, marked := successorTable(live[name])
+		if !marked || s.marksUnread {
+			continue
+		}
+		var n int64
+		if err := s.h().QueryRow("SELECT COUNT(*) FROM " + quoteIdentifier(name)).Scan(&n); err != nil {
+			return fmt.Errorf("count %s before dropping it: %w", name, err)
+		}
+		if _, err := s.h().Exec("DROP TABLE " + quoteIdentifier(name)); err != nil {
+			return fmt.Errorf("drop %s, a later version's table: %w", name, err)
+		}
+		rep.SuccessorTables = append(rep.SuccessorTables, fmt.Sprintf("%s (%d row(s); marked droppable by %s, which added it)", name, n, version))
+	}
+	return nil
+}
+
+func (s *Store) reconcileSuccessorViews(schemaText string, rep *ReconcileReport) error {
+	if len(rep.SuccessorColumns) == 0 && len(rep.SuccessorTables) == 0 {
+		return nil
+	}
+	declared := declaredViewSQL(schemaText)
+	live, err := s.liveObjects("view")
+	if err != nil {
+		return err
+	}
+	for _, name := range sortedKeys(live) {
+		if _, ours := declared[name]; ours {
+			continue
+		}
+		probe, err := s.h().Query("SELECT * FROM " + quoteIdentifier(name) + " LIMIT 0")
+		if err == nil {
+			if err := probe.Close(); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := s.h().Exec("DROP VIEW " + quoteIdentifier(name)); err != nil {
+			return fmt.Errorf("drop view %s, which read what a later version marked: %w", name, err)
+		}
+		rep.SuccessorViews = append(rep.SuccessorViews, name)
+	}
+	return nil
 }
 
 func (s *Store) liveObjects(kind string) (map[string]string, error) {
@@ -458,10 +532,31 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 			return &MirrorReadError{Cause: fmt.Errorf("refusing blind ledger mirror rebuild: no readable seq column")}
 		}
 
-		lost, err := s.populatedDroppedColumns(table, live, want, retired[table])
+		droppable := map[string]bool{}
+		for c := range retired[table] {
+			droppable[c] = true
+		}
+		var successors []string
+		marks := successorColumns(liveSQL)
+		if s.marksUnread {
+			marks = nil
+		}
+		for _, c := range sortedKeys(marks) {
+			if !live[c] || want[c] {
+				continue
+			}
+			held, err := s.valuesHeld(table, c)
+			if err != nil {
+				return err
+			}
+			droppable[c] = true
+			successors = append(successors, fmt.Sprintf("%s.%s (%d row(s) held values; marked droppable by %s, which added it)", table, c, held, marks[c]))
+		}
+		lost, err := s.populatedDroppedColumns(table, live, want, droppable)
 		if err != nil {
 			return err
 		}
+		rep.SuccessorColumns = append(rep.SuccessorColumns, successors...)
 
 		if len(lost) > 0 && !derived && s.schemaStartup && live["temp"] && (table == "plugin_kv" || table == "plugin_memories") {
 			if table == "plugin_kv" {
@@ -473,7 +568,7 @@ func (s *Store) reconcileTables(schemaText string, rep *ReconcileReport) error {
 				return &SchemaError{Phase: "expired plugin state", Cause: err}
 			}
 
-			lost, err = s.populatedDroppedColumns(table, live, want, retired[table])
+			lost, err = s.populatedDroppedColumns(table, live, want, droppable)
 			if err != nil {
 				return err
 			}

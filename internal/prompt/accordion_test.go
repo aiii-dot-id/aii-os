@@ -265,7 +265,7 @@ func TestComposeFoldedKeepsIdentityWholeFoldsWorkingTruth(t *testing.T) {
 	// Its recovery route, and the way to carry it whole: the spawn's own
 	// context=full. No pressure folded it, so no word asks the operator for
 	// room (row 9.3).
-	if !strings.Contains(folded.Text, "reaches what was surfaced and recorded") || !strings.Contains(folded.Text, "; "+subagentRoom+"]") {
+	if !strings.Contains(folded.Text, `recall source=ring3 reads this section whole`) || !strings.Contains(folded.Text, "; "+subagentRoom+"]") {
 		t.Fatalf("folded working truth must carry its recovery route and close on the sub-agent's way to carry it whole:\n%s", folded.Text)
 	}
 	if strings.Contains(folded.Text, budgetRoute) {

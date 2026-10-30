@@ -15,6 +15,7 @@ import { assert, run } from './__harness.js';
 import { S } from './state.js';
 import { renderPlugins } from './views/plugins.js';
 import { saved, sent } from './views/settings.js';
+import { frames } from './ws.js';
 
 run(() => {
   S.config = {
@@ -105,15 +106,17 @@ run(() => {
   assert(url !== null && url.value === 'https://plugins.example.test/aiios-plugins.md', 'the catalog URL is not editable here');
   assert(st.querySelector('[data-catalog-refresh]') !== null, 'the index cannot be refreshed by hand');
 
+  //     Always to is listed by name and revoked by name, the one operation
+  //     and never the page's list.
   const ro = st.querySelector('[data-grant-plugin="org.example.bar"][data-grant-field="read_only"]');
   assert(ro !== null && !ro.checked, 'the read-only box is missing or wrong');
   assert(text.includes('always confirmed, without asking: enroll'), 'the standing confirmation is not listed: ' + text.slice(0, 300));
   const rv = st.querySelector('[data-revoke-auto="org.example.bar"][data-op="enroll"]');
   assert(rv !== null, 'the standing confirmation cannot be revoked');
   rv.click();
-  const revoke = sent.find(ch => Object.keys(ch).includes('plugins.grants.org.example.bar.auto_confirm'));
-  assert(revoke && revoke['plugins.grants.org.example.bar.auto_confirm'].length === 0, 'the revoke did not send the list without it: ' + JSON.stringify(sent));
-  assert(saved.includes('grants:org.example.bar'), 'the revoke is not tagged as the grants section');
+  const revoke = frames.find(f => f.type === 'plugin' && f.plugin && f.plugin.action === 'revoke');
+  assert(revoke && revoke.plugin.id === 'org.example.bar' && revoke.plugin.act === 'enroll', 'the revoke did not name its one operation: ' + JSON.stringify(frames));
+  assert(!sent.some(ch => Object.keys(ch).some(k => k.endsWith('.auto_confirm'))), 'the revoke sent a list through the settings door: ' + JSON.stringify(sent));
   const upd = st.querySelector('[data-plugin="install:org.example.bar"]');
   assert(upd !== null && upd.textContent.trim() === 'Update', 'an installed release the index outranks is not offered its Update');
   assert(st.querySelector('[data-plugin="uninstall:org.example.bar"]') !== null, 'an installed release keeps its Uninstall beside the Update');
@@ -163,7 +166,9 @@ export function savebarHTML(section, note) { return '<div class="savebar"><butto
 export const sent = [];
 export function sendConfigChanges(section, ch) { saved.push(section); sent.push(ch); }
 export function configFeedbackHTML() { return ''; }`),
-		"/ws.js": []byte(`export function send() {}`),
+		// fire install/uninstall and a revoke. Stubbed here so the import
+		// resolves and the seam is observable without a live connection.
+		"/ws.js": []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-' + frames.length; }`),
 	})
 }
 

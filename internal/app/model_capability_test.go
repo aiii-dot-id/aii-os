@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -105,7 +107,7 @@ func TestTheShippedCapabilityTableMatchesTheDocumentedFacts(t *testing.T) {
 	}
 }
 
-func TestTheShippedImageCapabilitiesMatchTheVerifiedSeedModels(t *testing.T) {
+func TestTheShippedBaselineCoversEverySeededModel(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "providers.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +159,7 @@ func TestTheShippedImageCapabilitiesMatchTheVerifiedSeedModels(t *testing.T) {
 				continue // newly discovered models need evidence, not a guess
 			}
 			seen[model] = true
-			got := reg.ModelCapabilities[model].Images
+			got := reg.ModelCapabilities[model].takes("image")
 			if got == nil {
 				t.Errorf("%s has a verified image capability but the shipped row leaves it unknown", model)
 			} else if *got != want {
@@ -170,9 +172,25 @@ func TestTheShippedImageCapabilitiesMatchTheVerifiedSeedModels(t *testing.T) {
 			t.Errorf("image evidence for %s no longer corresponds to a seeded model; review its baseline", model)
 		}
 	}
-	for _, model := range []string{"gpt-5.4-codex", "gpt-5.4-codex-spark"} {
-		if got := reg.ModelCapabilities[model].Images; got != nil {
+	uncatalogued := []string{"gpt-5.4-codex", "gpt-5.4-codex-spark", "qwen/qwen3.8-max"}
+	for _, model := range uncatalogued[:2] {
+		if got := reg.ModelCapabilities[model].takes("image"); got != nil {
 			t.Errorf("%s returned no catalogue answer; images must stay unknown, got %t", model, *got)
+		}
+	}
+	for _, entry := range reg.Providers {
+		if entry.Local {
+			continue
+		}
+		for _, model := range entry.Models {
+			row := reg.ModelCapabilities[model]
+			dated := row.Source != "" && regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(row.AsOf)
+			if dated == slices.Contains(uncatalogued, model) {
+				t.Errorf("%s (%s): source %q, as_of %q; every seeded model has a dated row or is named uncatalogued here", model, entry.Name, row.Source, row.AsOf)
+			}
+			if dated && (len(row.Input) != len(inputKinds) || len(row.Output) != len(outputKinds) || row.Tools == nil) {
+				t.Errorf("%s: a generated row answers every kind and tools: %+v", model, row)
+			}
 		}
 	}
 }

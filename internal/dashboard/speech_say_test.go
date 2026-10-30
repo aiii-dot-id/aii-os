@@ -362,51 +362,6 @@ func TestTheStatusNamesTheVoiceThatSpeaks(t *testing.T) {
 	}
 }
 
-// THE CREDENTIAL IS ASKED FOR, NEVER HANDED OUT: the config frame carries
-// no token, the question is answered to the socket that asked, and only
-// while a token is what admits screens at all.
-func TestTheDashboardTokenIsAnsweredOnlyToTheScreenThatAsks(t *testing.T) {
-	h := &WSHandler{
-		DashboardToken: func() string { return "the-running-token" },
-		GetConfig:      func() *ConfigState { return &ConfigState{Dashboard: DashboardState{RequireToken: true}} },
-	}
-	s := New("127.0.0.1", 0, h)
-	s.SetAccessToken(true, "the-running-token")
-	addr, err := s.Start(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Shutdown(context.Background())
-	conn, err := dialWSToken(addr, s.accessHash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.CloseNow()
-	sendMsg(t, conn, ClientMessage{RequestID: "cfg-1", Type: "query", Query: "config"})
-	m := drainUntil(t, conn, "config")
-	if raw, _ := json.Marshal(m); strings.Contains(string(raw), "the-running-token") {
-		t.Fatalf("the token rides in the configuration frame: %s", raw)
-	}
-	sendMsg(t, conn, ClientMessage{RequestID: "tok-1", Type: "query", Query: "dashboard_token"})
-	m = drainUntil(t, conn, "dashboard_token")
-	if m.RequestID != "tok-1" || m.DashboardToken != "the-running-token" {
-		t.Fatalf("the token was not answered to the screen that asked: %+v", m)
-	}
-
-	open := New("127.0.0.1", 0, h)
-	openAddr, err := open.Start(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer open.Shutdown(context.Background())
-	c2 := dialWS(t, openAddr)
-	defer c2.CloseNow()
-	sendMsg(t, c2, ClientMessage{RequestID: "tok-2", Type: "query", Query: "dashboard_token"})
-	if m := drainUntil(t, c2, "error"); m.RequestID != "tok-2" {
-		t.Fatalf("an open dashboard handed out a token: %+v", m)
-	}
-}
-
 // A ROTATION CUTS OFF EVERY COOKIE MINTED UNDER THE OLD TOKEN, at the next
 // request, with the server still serving.
 func TestARotatedTokenEndsTheOldCookies(t *testing.T) {
@@ -427,7 +382,7 @@ func TestARotatedTokenEndsTheOldCookies(t *testing.T) {
 	if _, err := dialWSToken(addr, old); err == nil {
 		t.Fatal("a cookie minted under the old token still admits after the rotation")
 	}
-	if c, err := dialWSToken(addr, s.accessHash()); err != nil {
+	if c, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s)); err != nil {
 		t.Fatalf("the new token does not admit: %v", err)
 	} else {
 		c.CloseNow()

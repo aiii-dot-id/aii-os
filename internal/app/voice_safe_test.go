@@ -161,6 +161,9 @@ func (f *fakeEngineSession) InputClosed() <-chan struct{} {
 	defer f.mu.Unlock()
 	return f.inputClosed
 }
+func (f *fakeEngineSession) ControlBound() time.Duration {
+	return pluginhost.DefaultSessionControlBound
+}
 func (f *fakeEngineSession) InputCompletionReason() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

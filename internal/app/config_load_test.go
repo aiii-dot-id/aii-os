@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/continuity"
+	"github.com/aiii-dot-id/aii-os/internal/install"
 	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -89,6 +90,39 @@ func TestLoadConfigRefusesZeroRequiredAgencyBound(t *testing.T) {
 func TestShippedConfigLoads(t *testing.T) {
 	if _, err := LoadConfig(filepath.Join("..", "..", "config", "config.json")); err != nil {
 		t.Fatalf("shipped config.json is invalid: %v", err)
+	}
+}
+
+// The dashboard port has one default: the shipped config's, the one the
+// identity's defaults hold and the one install reads for a config that
+// names none (install.DefaultPort). The defaults said 8080 — the shipped
+// "Local server" model provider's port — while everything else said 8180.
+func TestTheDashboardPortHasOneDefault(t *testing.T) {
+	shipped, err := LoadConfig(filepath.Join("..", "..", "config", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shipped.Dashboard.Port != install.DefaultPort {
+		t.Fatalf("the shipped config's port is %d, install.DefaultPort %d", shipped.Dashboard.Port, install.DefaultPort)
+	}
+	if got := defaultConfig().Dashboard.Port; got != install.DefaultPort {
+		t.Fatalf("the identity's default config binds %d, want install.DefaultPort %d", got, install.DefaultPort)
+	}
+	bare := &Config{}
+	applyDefaults(bare)
+	if bare.Dashboard.Port != install.DefaultPort {
+		t.Fatalf("the defaults give a config built in code port %d, want install.DefaultPort %d", bare.Dashboard.Port, install.DefaultPort)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"dashboard":{"host":"127.0.0.1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dashboard.Port != install.DefaultPort {
+		t.Fatalf("a config naming no port binds %d, want install.DefaultPort %d", cfg.Dashboard.Port, install.DefaultPort)
 	}
 }
 
@@ -374,5 +408,80 @@ func TestLoadConfigHoldsTheOnDemandSpacingToItsBounds(t *testing.T) {
 	}
 	if cfg, err = LoadConfig(set); err != nil || continuity.OnDemandSpacing(cfg.Maintenance) != 90*time.Second {
 		t.Fatalf("set to 90: %v %v", cfg, err)
+	}
+}
+
+// prompt.ring2_evidence_max_chars reaches the store at each boot that opens
+// a record for writing, which hands it to every prompt with Ring 2's
+// material; with nothing in the file the store carries none, and the
+// renderer prints to its default.
+func TestABootHandsTheStoreRing2sEvidenceBound(t *testing.T) {
+	for _, want := range []int{120, 0} {
+		dir := t.TempDir()
+		keyPath, ledgerPath, dbPath := birthFixture(t, dir, "Evidence")
+		boot := safebootConfig(t, dir, "Evidence", keyPath, ledgerPath, dbPath)
+		boot.Prompt.Ring2EvidenceMaxChars = want
+		a := New(boot)
+		t.Cleanup(func() { stopApp(t, a) })
+		if err := startLiveForTest(a); err != nil {
+			t.Fatalf("boot: %v", err)
+		}
+		if identity, err := a.store.PromptIdentity(); err != nil || identity.Ring2EvidenceChars != want {
+			t.Fatalf("with prompt.ring2_evidence_max_chars %d the next prompt prints %d characters of each Ring 2 source (%v)", want, identity.Ring2EvidenceChars, err)
+		}
+	}
+}
+
+// prompt.charter_max_tokens reaches the store at each boot that opens a
+// record for writing, which holds a new charter to it and says it in Ring
+// 1; with nothing in the file the store holds the default.
+func TestABootHandsTheStoreTheChartersBudget(t *testing.T) {
+	for _, want := range []int{900, 0} {
+		dir := t.TempDir()
+		keyPath, ledgerPath, dbPath := birthFixture(t, dir, "Charter")
+		boot := safebootConfig(t, dir, "Charter", keyPath, ledgerPath, dbPath)
+		boot.Prompt.CharterMaxTokens = want
+		a := New(boot)
+		t.Cleanup(func() { stopApp(t, a) })
+		if err := startLiveForTest(a); err != nil {
+			t.Fatalf("boot: %v", err)
+		}
+		expect := want
+		if expect == 0 {
+			expect = store.CharterDefaultMaxTokens
+		}
+		if got := a.store.CharterMaxTokens(); got != expect {
+			t.Fatalf("with prompt.charter_max_tokens %d the store holds a new charter to %d; want %d", want, got, expect)
+		}
+	}
+}
+
+// THE RESTORE DOOR'S WAIT FOR AN UPLOAD IS A NUMBER IN CONFIG, held at the
+// boundary as the spacing is: negative, or longer than a day, is refused;
+// unset takes the default (two minutes); a set one is the wait.
+func TestLoadConfigHoldsTheRestoreUploadIdleToItsBounds(t *testing.T) {
+	for _, bad := range []string{`-1`, `86401`} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"prompt":{"recent_turns":20},"maintenance":{"restore_upload_idle_seconds":`+bad+`}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "maintenance.restore_upload_idle_seconds") {
+			t.Errorf("%s: got %v, want a refusal naming the key", bad, err)
+		}
+	}
+	unset := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(unset, []byte(`{"prompt":{"recent_turns":20}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(unset)
+	if err != nil || continuity.RestoreUploadIdle(cfg.Maintenance) != 2*time.Minute {
+		t.Fatalf("unset: %v %v, want the default of two minutes", cfg, err)
+	}
+	set := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(set, []byte(`{"prompt":{"recent_turns":20},"maintenance":{"restore_upload_idle_seconds":600}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = LoadConfig(set); err != nil || continuity.RestoreUploadIdle(cfg.Maintenance) != 600*time.Second {
+		t.Fatalf("set to 600: %v %v", cfg, err)
 	}
 }

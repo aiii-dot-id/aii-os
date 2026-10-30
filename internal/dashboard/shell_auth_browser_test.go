@@ -14,11 +14,11 @@ try {
   window.prompt = () => { asks++; throw new Error('phone was asked for a CLI token'); };
   window.fetch = async (url, options = {}) => {
     if (url !== '/auth/token') return realFetch(url, options);
-    if (options.method !== 'POST') return {status: authorized ? 204 : 401};
+    if (options.method !== 'POST') return new Response(null, {status: authorized ? 204 : 401});
     posts++;
     assert(options.credentials === 'same-origin', 'login dropped cookie credentials');
     assert(options.body === expected, 'stale or wrong token submitted');
-    authorized = true; return {status: 204, ok: true};
+    authorized = true; return new Response(null, {status: 204, headers: {'Aii-Page-Key': 'pk1.' + expected}});
   };
   class Socket { constructor() { this.readyState = 3; } send() {} }
   window.WebSocket = Socket;
@@ -62,6 +62,8 @@ try {
   window.setTimeout = oldTimeout; window.clearTimeout = oldClear;
   assert(timedOut && window.aiiDashboardAuth.onmessage === null, 'missing reply did not release the bridge');
   assert(asks === 0, 'mobile used a manual token prompt');
+  const {pageKey} = await import('/pagekey.js');
+  assert(pageKey() === 'pk1.' + expected, 'the shell\'s sign-in left the page without its page key: ' + pageKey());
   assert(!document.cookie.includes('aii_token'), 'page manufactured a cookie');
   report('OK');
 } catch (e) { report('FAIL: ' + (e.message || String(e))); }
@@ -73,7 +75,7 @@ func TestManualSignInRemainsVisibleOutsideChat(t *testing.T) {
 import {report} from '/__harness.js';
 try {
  const realFetch=window.fetch.bind(window);
- window.fetch=async(u,o)=>u==='/auth/token'?{status:401}:realFetch(u,o);
+ window.fetch=async(u,o)=>u==='/auth/token'?new Response(null,{status:401}):realFetch(u,o);
  window.WebSocket=class{constructor(){this.readyState=3;}send(){}};
  const composer=document.createElement('div');composer.id='composer-wrap';composer.style.display='none';document.body.appendChild(composer);
  const host=document.createElement('div');host.id='dashboard-auth';document.body.appendChild(host);

@@ -110,6 +110,7 @@ func workerRig(t *testing.T, s *Server, open bool, driver string) {
 				}
 				if r.URL.Path == "/" && r.Header.Get("Service-Worker") == "" {
 					rec := httptest.NewRecorder()
+					r.Header.Del("Accept-Encoding")
 					s.server.Handler.ServeHTTP(rec, r)
 					for k, v := range rec.Header() {
 						if k != "Content-Length" && k != "Etag" {
@@ -235,12 +236,14 @@ func approveThroughTheRoute(t *testing.T, s *Server, token, rel string) {
 			cookie = c
 		}
 	}
-	if cookie == nil {
-		t.Fatalf("signing in set no cookie (%d)", w.Code)
+	key := w.Header().Get(pageKeyHeader)
+	if cookie == nil || key == "" {
+		t.Fatalf("signing in set no cookie, or answered no page key (%d)", w.Code)
 	}
 	w = httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, site+"/overlay/scripts/file?path="+rel, nil)
 	r.AddCookie(cookie)
+	r.Header.Set(pageKeyHeader, key)
 	s.server.Handler.ServeHTTP(w, r)
 	digest := w.Header().Get("X-Script-SHA256")
 	if w.Code != http.StatusOK || digest == "" {
@@ -252,6 +255,7 @@ func approveThroughTheRoute(t *testing.T, s *Server, token, rel string) {
 	r.Header.Set("Origin", site)
 	r.Header.Set("Content-Type", "application/json")
 	r.AddCookie(cookie)
+	r.Header.Set(pageKeyHeader, key)
 	s.server.Handler.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("the approval was refused: %d %q", w.Code, w.Body)
@@ -280,7 +284,6 @@ func TestInABrowserTheOperatorApprovesAScriptOnTheCard(t *testing.T) {
 func approveOnTheCard(t *testing.T, token, v1 string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ui")
-	writeOverlay(t, dir, "card.html", "<!doctype html><html><head><meta charset=\"utf-8\"></head><body><div id=\"card\"></div></body></html>\n")
 	writeOverlay(t, dir, "custom.js", v1)
 	digest := digestOf(t, filepath.Join(dir, "custom.js"))
 	var s *Server
@@ -291,8 +294,9 @@ func approveOnTheCard(t *testing.T, token, v1 string) {
 	s.SetUIOverlay(dir)
 	s.SetAccessToken(true, token)
 
-	runDashboardInEngines(t, s, "/card.html", `
+	runDashboardInEngines(t, s, blankStart, `
 import { scriptsCardHTML, wireScriptsCard } from '/scripts.js';
+import { signIn } from '/pagekey.js';
 const report = text => fetch('/__result', { method: 'POST', body: text, keepalive: true });
 const fail = m => report('FAIL: ' + m);
 const until = async (ok, what) => {
@@ -300,7 +304,7 @@ const until = async (ok, what) => {
   throw new Error('waited for ' + what);
 };
 (async () => {
-  const signed = await fetch('/auth/token', { method: 'POST', body: '`+token+`', credentials: 'same-origin' });
+  const signed = await signIn('`+token+`');
   if (signed.status !== 204) return fail('sign-in answered ' + signed.status);
   window.confirm = () => true;
   const root = document.getElementById('card');

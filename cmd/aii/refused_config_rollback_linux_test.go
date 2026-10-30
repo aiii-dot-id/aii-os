@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/app"
 	"github.com/aiii-dot-id/aii-os/internal/filelock"
 )
 
@@ -309,7 +310,7 @@ func TestARefusedStartWithNoUpdateChangesNothing(t *testing.T) {
 
 // THE ROLLBACK PUTS PROVIDERS.JSON BACK WITH THE PROGRAM. The update's first
 // boot left providers.json as the previous version ran with it beside the
-// file, and the newer version then wrote a field the previous one refuses.
+// file, kept under this version, and the newer version then wrote a field the previous one refuses.
 // The second refused start hands over to the previous program with that
 // file back in place, and the newer one set aside beside it.
 func TestARefusedStartsRollbackPutsTheProvidersFileBack(t *testing.T) {
@@ -317,7 +318,7 @@ func TestARefusedStartsRollbackPutsTheProvidersFileBack(t *testing.T) {
 	providers := filepath.Join(filepath.Dir(r.config), "providers.json")
 	const previous = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}]}`
 	const newer = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}],"model_capabilities":{"m":{"context_length":64000}}}`
-	r.write(providers+".before-update", []byte(previous), 0o600)
+	r.write(providers+".before-"+app.Current(), []byte(previous), 0o600)
 	r.write(providers, []byte(newer), 0o600)
 
 	out, exit := r.start()
@@ -331,5 +332,74 @@ func TestARefusedStartsRollbackPutsTheProvidersFileBack(t *testing.T) {
 	}
 	if got, err := os.ReadFile(providers + ".rolled-back"); err != nil || string(got) != newer {
 		t.Fatalf("the newer version's providers.json was not set aside: %q (%v)", got, err)
+	}
+}
+
+// THE PROGRAM WENT BACK UNDER AN IDENTITY THAT SHARES IT. Its file holds a key
+// the newer version wrote, and beside it stands the copy that identity kept
+// when it booted the newer version under another identity's update. The
+// start puts the copy back before it reads the file, under the identity's
+// claim: with the claim held by a running process it changes nothing.
+func TestAStartOfAnOlderProgramReadsTheConfigurationKeptBeforeTheNewerOne(t *testing.T) {
+	const kept = `{"a_key_only_the_copy_holds":true}` // still refused, so the start ends and says which file it read
+	r := newRefusedStartRig(t, refusedConfig, false)
+	copyPath := r.config + ".before-99.0.0"
+	r.write(copyPath, []byte(kept), 0o600)
+	read := func(p string) string {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return "(none)"
+		}
+		return string(raw)
+	}
+
+	// Held: a process is running this identity.
+	claim, err := os.OpenFile(filepath.Join(r.data, ".identity.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := filelock.Lock(claim); err != nil {
+		t.Fatal(err)
+	}
+	out, exit := r.start()
+	if exit != 1 || !strings.Contains(out, "no_such_key") || read(r.config) != refusedConfig || read(copyPath) != kept {
+		t.Fatalf("A SECOND START SWAPPED THE CONFIGURATION OF A RUNNING IDENTITY: exit=%d file=%s copy=%s\n%s", exit, read(r.config), read(copyPath), out)
+	}
+	claim.Close()
+
+	// Free: the copy is the file the start reads, and what the newer
+	// version wrote is set aside.
+	out, exit = r.start()
+	if exit != 1 || !strings.Contains(out, "a_key_only_the_copy_holds") || strings.Contains(out, "no_such_key") {
+		t.Fatalf("THE OLDER PROGRAM READ THE FILE THE NEWER ONE WROTE: exit=%d\n%s", exit, out)
+	}
+	if read(r.config) != kept || read(r.config+".rolled-back") != refusedConfig || read(copyPath) != "(none)" {
+		t.Fatalf("after the put-back: file=%s aside=%s copy=%s", read(r.config), read(r.config+".rolled-back"), read(copyPath))
+	}
+}
+
+// PROVIDERS.JSON GOES BACK AT THE START TOO. Only a copy of providers.json
+// stands, kept when the identity booted the newer version under another
+// identity's update; the configuration has none. The start still finds it,
+// puts it back before anything reads the file, and sets aside what the
+// newer version wrote.
+func TestAStartOfAnOlderProgramPutsBackTheProvidersFileKeptBeforeTheNewerOne(t *testing.T) {
+	r := newRefusedStartRig(t, refusedConfig, false)
+	providers := filepath.Join(filepath.Dir(r.config), "providers.json")
+	const previous = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}]}`
+	const newer = `{"providers":[{"name":"Hosted","api_type":"openai","url":"https://hosted.example/v1","default_model":"m","default":true}],"model_capabilities":{"m":{"context_length":64000}}}`
+	r.write(providers+".before-99.0.0", []byte(previous), 0o600)
+	r.write(providers, []byte(newer), 0o600)
+
+	out, exit := r.start()
+	mustRefuse(t, out, exit)
+	if got, err := os.ReadFile(providers); err != nil || string(got) != previous {
+		t.Fatalf("THE OLDER PROGRAM WAS HANDED A PROVIDERS FILE THE NEWER ONE WROTE: %q (%v)\n%s", got, err, out)
+	}
+	if got, err := os.ReadFile(providers + ".rolled-back"); err != nil || string(got) != newer {
+		t.Fatalf("the newer version's providers.json was not set aside: %q (%v)\n%s", got, err, out)
+	}
+	if _, err := os.Stat(providers + ".before-99.0.0"); err == nil {
+		t.Fatal("the copy stands after it was put back, to be put back again")
 	}
 }

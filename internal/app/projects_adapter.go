@@ -16,11 +16,7 @@ import (
 )
 
 func (a *App) wireProjects(cfg Config) {
-	root := cfg.Projects.Root
-	if root == "" {
-		root = filepath.Join(cfg.Tools.CWD, "projects")
-	}
-	a.projects = project.NewManager(root)
+	a.projects = project.NewManager(projectsRoot(cfg))
 	a.wireProjectInteractionRecorder()
 }
 

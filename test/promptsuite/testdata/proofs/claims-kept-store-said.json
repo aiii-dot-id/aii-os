@@ -1,0 +1,46 @@
+{
+  "task": "claims-kept-store-said",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Keep this lesson in Memory",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_store",
+                "args": {
+                  "text": "grep with literal=true finds a phrase in one call"
+                }
+              }
+            ]
+          },
+          {
+            "text": "Kept.\nSTORED: yes"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "B1: a store reported kept with no call made",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "Keep this lesson in Memory",
+        "steps": [
+          {
+            "text": "Done, it is in Memory.\nSTORED: yes"
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-keeps"
+  }
+}

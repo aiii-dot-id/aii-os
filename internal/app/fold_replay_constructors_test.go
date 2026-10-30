@@ -126,7 +126,7 @@ func TestASubagentsFoldedReadMayBeRepeatedAndItsFoldedActMayNot(t *testing.T) {
 			probe, srv := newFoldProbeLLM(t, goal, tc.tool, "")
 			a, st, _ := legFixtureBudget(t, srv.URL, AgencyConfig{
 				MaxToolRounds: limits.Of(4), SubagentMaxToolRounds: limits.Of(4), SubagentMaxToolCalls: limits.Of(16), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 20,
-			}, 13000)
+			}, 14000)
 			root, _ := a.toolReg.Roots()
 			probe.mu.Lock()
 			probe.args = tc.args(root)
@@ -155,9 +155,7 @@ func TestSafeBootsFoldedReadMayBeRepeated(t *testing.T) {
 	probe, srv := newFoldProbeLLM(t, ask, "read", `{"file_path":`+jsonString(bigFile(t, dir))+`}`)
 	cfg := safebootConfig(t, dir, "SafeFold", keyPath, ledgerPath, dbPath)
 	cfg.LLM = withTestProvider(t, dir, "test", srv.URL, "m", "sk-x")
-	// Leave room for the protected prompt and the current offered tools;
-	// the much larger diagnostic read must still fold, asserted on the wire.
-	cfg.Prompt.MaxTokens = 16000
+	cfg.Prompt.MaxTokens = 14750
 
 	app := New(cfg)
 	if err := startLiveForTest(app); err != nil {

@@ -50,6 +50,21 @@ type Anchorer struct {
 
 	onUnrecognised   func(*ConflictError)
 	toldUnrecognised map[ReplyKind]bool
+
+	files FileGuard
+
+	onKeyKept   func(error)
+	toldKeyKept bool
+
+	onParked   func(error)
+	toldParked bool
+
+	askOnly bool
+
+	standing *ConflictError
+
+	onStanding func(ce *ConflictError, why string)
+	onAdopted  func(registeredID string)
 }
 
 type Sealer interface {
@@ -64,6 +79,82 @@ func (a *Anchorer) SetAppendPause(p AppendPause) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.pause = p
+}
+
+func (a *Anchorer) SetFileGuard(g FileGuard) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.files = g
+}
+
+func (a *Anchorer) guard() FileGuard {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.files
+}
+
+func (a *Anchorer) SetOnWitnessKeyKept(fn func(error)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onKeyKept = fn
+}
+
+func (a *Anchorer) SetOnWitnessParked(fn func(error)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onParked = fn
+}
+
+func (a *Anchorer) parked(dir string) error {
+	err := WitnessBarrier(dir)
+	if err == nil {
+		return nil
+	}
+	a.mu.Lock()
+	again := a.toldParked
+	a.toldParked = true
+	fn := a.onParked
+	a.mu.Unlock()
+	logsink.Warn("witness.refusal", "witness work is parked — no bookmark, no mint, nothing retired or rewritten beside the ledger — until a version that can carry out the operation beside the ledger does; the identity runs: %v", err)
+	if !again && fn != nil {
+		fn(err)
+	}
+	return err
+}
+
+func (a *Anchorer) SetOnStandingRefusal(fn func(ce *ConflictError, why string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onStanding = fn
+}
+
+func (a *Anchorer) SetOnEnrolmentAdopted(fn func(registeredID string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onAdopted = fn
+}
+
+func (a *Anchorer) StandingRefusal() *ConflictError {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.standing
+}
+
+func (a *Anchorer) stand(ce *ConflictError, why string) {
+	a.mu.Lock()
+	already := a.standing != nil
+	if !already {
+		a.standing = ce
+	}
+	fn := a.onStanding
+	a.mu.Unlock()
+	if already {
+		return
+	}
+	logsink.Error("witness.refusal", "the witness's refusal stands — no pass of this run asks the witness again, nothing is latched, and the identity runs: %s: %v", why, ce)
+	if fn != nil {
+		fn(ce, why)
+	}
 }
 
 func (a *Anchorer) SetSealer(s Sealer) {
@@ -86,6 +177,7 @@ func NewAnchorer(client *Client, lg LedgerSource, key IdentityKey, envelopes Env
 		minter:             minter,
 		intervalEvents:     intervalEvents,
 		platformPubkeyPath: platformPubkeyPath,
+		files:              Unguarded{},
 	}
 	if receipts != nil {
 		if seq, js, err := receipts.LastWitnessReceipt(); err == nil && seq > 0 {
@@ -147,6 +239,17 @@ func (a *Anchorer) refuseUnrecognised(ce *ConflictError) {
 	}
 }
 
+func (a *Anchorer) tellKeyKept(err error) {
+	a.mu.Lock()
+	again := a.toldKeyKept
+	a.toldKeyKept = true
+	fn := a.onKeyKept
+	a.mu.Unlock()
+	if !again && fn != nil {
+		fn(err)
+	}
+}
+
 func (a *Anchorer) IntegrityConflict() *ConflictError {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -168,6 +271,12 @@ func (a *Anchorer) recordIntegrityConflict(ce *ConflictError) {
 		logsink.Error("witness.refusal", "THE WITNESS'S ROW DOES NOT CONTINUE THIS RECORD — no head is minted and anchoring is off until the witness's side is put right; the record is intact and the identity runs: %v", ce)
 	} else {
 		logsink.Error("witness.refusal", "INTEGRITY CONFLICT (ROLLBACK/FORK) — anchoring latched off until operator review: %v", ce)
+
+		dir := filepath.Dir(a.ledger.Path())
+		kept := keptConflictOf(a.client.baseURL, ce, a.ledger.LastSeq(), time.Now())
+		if err := a.guard().WitnessFiles(func() error { return keepConflict(dir, kept) }); err != nil {
+			logsink.Error("witness.error", "the witness's answer could NOT be kept beside the ledger — a restart will not find it, and runs until the next anchor pass meets it again: %v", err)
+		}
 	}
 	if fn != nil {
 		fn(ce)
@@ -207,7 +316,7 @@ func (a *Anchorer) CheckAndAnchor() error {
 func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 
 	a.mu.Lock()
-	latched := a.conflict
+	latched, askOnly := a.conflict, a.askOnly
 	a.mu.Unlock()
 	if latched != nil {
 		if latched.WitnessSide {
@@ -216,6 +325,15 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 			logsink.Warn("witness.refusal", "anchoring remains latched off by an unresolved ROLLBACK/FORK conflict: %v", latched)
 		}
 		return fmt.Errorf("anchoring latched off: %w", latched)
+	}
+	if standing := a.StandingRefusal(); standing != nil {
+		logsink.Warn("witness.refusal", "anchoring is off for this run: the witness's refusal stands and asking again would be refused again: %v", standing)
+		return fmt.Errorf("anchoring off for this run: %w", standing)
+	}
+
+	ledgerDir := filepath.Dir(a.ledger.Path())
+	if err := a.parked(ledgerDir); err != nil {
+		return err
 	}
 
 	if err := a.SettlePending(); err != nil {
@@ -227,7 +345,6 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 		return err
 	}
 
-	ledgerDir := filepath.Dir(a.ledger.Path())
 	resend := a.requestToSendAgain(ledgerDir)
 
 	current := a.ledger.LastSeq()
@@ -251,7 +368,7 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 	a.mu.Lock()
 	anchored, last := a.lastAnchoredSeq, a.lastReceipt
 	a.mu.Unlock()
-	if resend == nil && (current == 0 || int64(current-anchored) < needed) {
+	if resend == nil && !askOnly && (current == 0 || int64(current-anchored) < needed) {
 		return nil
 	}
 
@@ -272,7 +389,22 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 		if err != nil {
 			return fmt.Errorf("witness key: %w", err)
 		}
-		if err := persistWitnessKey(filepath.Dir(a.ledger.Path()), witnessKey.KeyID, manifestRaw, keyCanonical); err != nil {
+		platform, err := LoadPlatformEnvelope(a.platformPubkeyPath)
+		if err != nil {
+			return fmt.Errorf("witness manifest: %w", err)
+		}
+		if err := a.parked(ledgerDir); err != nil {
+			return err
+		}
+		if err := a.guard().WitnessFiles(func() error {
+			return persistWitnessKey(filepath.Dir(a.ledger.Path()), witnessKey.KeyID, manifestRaw, keyCanonical, platform)
+		}); err != nil {
+			if errors.Is(err, ErrWitnessKeyKept) {
+
+				logsink.Error("witness.refusal", "the witness key kept beside the ledger was not replaced by the manifest the witness serves — anchoring refused this pass, the kept file stands: %v", err)
+				a.tellKeyKept(err)
+				return fmt.Errorf("persist witness key: %w", err)
+			}
 			logsink.Warn("witness.error", "could not persist the verified witness key beside the ledger — anchoring refused this pass: %v", err)
 			return fmt.Errorf("persist witness key: %w", err)
 		}
@@ -282,7 +414,7 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 		logsink.Warn("witness.refusal", "NO platform key source — witness key is SELF-vouched (no manifest verification possible)")
 	}
 
-	canonicalEnvelope, env, err := EnsureIdentityEnvelope(a.key, a.envelopes, filepath.Dir(a.ledger.Path()))
+	canonicalEnvelope, env, err := EnsureIdentityEnvelopeUnder(a.guard(), a.key, a.envelopes, filepath.Dir(a.ledger.Path()))
 	if err != nil {
 		return fmt.Errorf("identity envelope: %w", err)
 	}
@@ -297,7 +429,7 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 	}
 
 	var heads *HeadVerifier
-	if a.minter != nil {
+	if a.minter != nil || askOnly {
 		heads, err = a.headRule(filepath.Dir(a.ledger.Path()), last)
 		if err != nil {
 			logsink.Error("witness.refusal", "the rule the next boot holds a head to did not load — anchoring refused this pass, the witness was not asked: %v", err)
@@ -317,6 +449,9 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 	a.mu.Unlock()
 	defer release()
 
+	if err := a.parked(ledgerDir); err != nil {
+		return err
+	}
 	if resend != nil && resend.IdentityID != identityID {
 
 		logsink.Error("witness.refusal", "the bookmark kept beside the ledger names %s and the envelope names %s: it is not sent again", resend.IdentityID, identityID)
@@ -333,7 +468,8 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 			return err
 		}
 
-		if werr := writePendingRequest(ledgerDir, req, time.Now()); werr != nil {
+		now := time.Now()
+		if werr := a.guard().WitnessFiles(func() error { return writePendingRequest(ledgerDir, req, now) }); werr != nil {
 			logsink.Warn("witness.error", "the bookmark for record %d could not be kept beside the ledger before it left (%v): if its answer is lost, the next pass cannot send it again", req.LedgerOrdinal, werr)
 		}
 	}
@@ -349,6 +485,22 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 
 				a.retireRequest(ledgerDir)
 				return fmt.Errorf("anchor refused by cadence gate: %w", ce)
+			}
+			if ce.IsContextRequired() {
+
+				a.retireRequest(ledgerDir)
+				a.stand(ce, "the witness enrols a new identity only from a request that carries a context, which this version does not send")
+				return fmt.Errorf("anchor refused: the witness requires a context this version does not send: %w", ce)
+			}
+			if ce.IsKeyAlreadyEnrolled() {
+
+				a.retireRequest(ledgerDir)
+				if askOnly {
+
+					a.stand(ce, "the witness holds this identity's signing key under another enrolment; asked while the start is held, nothing is adopted")
+					return fmt.Errorf("anchor refused while held: the witness holds this identity's key under another enrolment: %w", ce)
+				}
+				return a.adoptRegistered(ledgerDir, ce, witnessKey, last, heads, release)
 			}
 			if ce.Unrecognised() {
 
@@ -409,25 +561,29 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 			}
 
 			kept := "kept beside the ledger; the next pass settles it first"
-			if werr := writePendingReceipt(filepath.Dir(a.ledger.Path()), result.Receipt, time.Now()); werr != nil {
+			if werr := a.keepReceipt(ledgerDir, result.Receipt); werr != nil {
 				kept = fmt.Sprintf("NOT kept beside the ledger: %v", werr)
-			} else {
-				a.retireRequest(ledgerDir)
 			}
 			logsink.Error("witness.error", "the receipt for record %d could not be held to the head rule and is not minted (%s): %v", result.Receipt.LedgerOrdinal, kept, err)
 			return fmt.Errorf("receipt for record %d not minted (%s): %w", result.Receipt.LedgerOrdinal, kept, err)
 		}
 	}
 
+	if askOnly {
+		if err := a.keepReceipt(ledgerDir, result.Receipt); err != nil {
+			return fmt.Errorf("the witness's receipt for record %d could not be kept beside the ledger, and a receipt the record never carries forks the next pass: %w", result.Receipt.LedgerOrdinal, err)
+		}
+		logsink.Info("witness.decision", "asked again while held, the witness answered record %d with a receipt that stands as the record's next head (first=%v): kept beside the ledger for the running identity to mint", result.Receipt.LedgerOrdinal, result.First)
+		return nil
+	}
+
 	if a.minter != nil {
 
 		dir := filepath.Dir(a.ledger.Path())
 		kept := "kept beside the ledger; the next pass settles it first"
-		if err := writePendingReceipt(dir, result.Receipt, time.Now()); err != nil {
+		if err := a.keepReceipt(dir, result.Receipt); err != nil {
 			kept = "NOT kept beside the ledger"
 			logsink.Error("witness.error", "the receipt for record %d could not be kept beside the ledger before its mint — minting it anyway: %v", result.Receipt.LedgerOrdinal, err)
-		} else {
-			a.retireRequest(ledgerDir)
 		}
 		head, err := a.minter.MintWitnessed(result.Receipt, witnessKey.KeyID)
 		release()
@@ -435,7 +591,7 @@ func (a *Anchorer) AnchorPass(ctx context.Context, st *WitnessStatus) error {
 			logsink.Error("witness.error", "system.witnessed mint failed — receipt verified but NOT in the chain (%s), anchor point not advanced: %v", kept, err)
 			return fmt.Errorf("mint system.witnessed: %w", err)
 		}
-		if err := retirePendingReceipt(dir); err != nil {
+		if err := a.retireReceipt(dir, result.Receipt); err != nil {
 			logsink.Warn("witness.error", "the receipt for record %d is in the record and its copy beside the ledger could not be retired — the next pass retires it: %v", result.Receipt.LedgerOrdinal, err)
 		}
 
@@ -463,14 +619,16 @@ func (a *Anchorer) anchored(r WitnessReceipt) {
 	a.lastAnchoredSeq = uint64(r.LedgerOrdinal)
 	a.lastReceipt = &r
 	a.toldUnrecognised = nil
+	a.toldKeyKept = false
 	a.mu.Unlock()
-	if err := writeLocalTail(filepath.Dir(a.ledger.Path()), LocalTail{
+	tail := LocalTail{
 		LedgerOrdinal: r.LedgerOrdinal,
 
 		LedgerHash:            r.LedgerHash,
 		WitnessedAt:           r.WitnessedAt,
 		WitnessKeyFingerprint: r.WitnessSignature.PublicKeyFingerprint,
-	}); err != nil {
+	}
+	if err := a.guard().WitnessFiles(func() error { return writeLocalTail(filepath.Dir(a.ledger.Path()), tail) }); err != nil {
 		logsink.Warn("witness.error", "witness-tail.json write failed (boot truncation check will lag one anchor): %v", err)
 	}
 }

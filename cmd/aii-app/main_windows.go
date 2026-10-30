@@ -3,13 +3,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/consolewin"
@@ -78,6 +78,11 @@ func run(startup bool, slotDir string) error {
 			initCmd := exec.Command(aii, "init")
 			consolewin.Hide(initCmd)
 			if out, err := initCmd.CombinedOutput(); err != nil {
+
+				var exit *exec.ExitError
+				if errors.As(err, &exit) && exit.ExitCode() == install.ExitNotServing {
+					return errors.New(strings.TrimSpace(string(out)))
+				}
 				return fmt.Errorf("create the first identity slot: %v: %s", err, out)
 			}
 			return nil
@@ -102,7 +107,7 @@ func run(startup bool, slotDir string) error {
 	}
 
 	linked := false
-	return runSlot(aii, slotDir, n, startup, signedInOpener(aii, slotDir, open, &linked), serving)
+	return runSlot(aii, slotDir, n, startup, signedInOpener(aii, slotDir, open, &linked), install.Serving)
 }
 
 func runSlot(aii, slotDir string, n int, startup bool, openURL func(string) error, portInUse func(int) bool) error {
@@ -154,22 +159,24 @@ func runSlot(aii, slotDir string, n int, startup bool, openURL func(string) erro
 
 func openWhenServing(slotDir string, port int, startup bool, openURL func(string) error) error {
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		if serving(port) {
-			if startup {
-				return nil
-			}
-			return openURL(url)
+
+	err := install.WaitServing(port, slotDir, install.ConfiguredStartWait(slotDir))
+	var ns *install.NotServingError
+	if errors.As(err, &ns) {
+		raw, _ := os.ReadFile(filepath.Join(slotDir, "log", "boot.log"))
+		msg := strings.TrimSpace(lastLines(string(raw), 12))
+		if msg == "" {
+			msg = "see " + filepath.Join(slotDir, "log", "aii.log")
 		}
-		time.Sleep(250 * time.Millisecond)
+		return fmt.Errorf("%v:\n\n%s", err, msg)
 	}
-	raw, _ := os.ReadFile(filepath.Join(slotDir, "log", "boot.log"))
-	msg := strings.TrimSpace(lastLines(string(raw), 12))
-	if msg == "" {
-		msg = "see " + filepath.Join(slotDir, "log", "aii.log")
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("the identity did not start serving on port %d within 60s:\n\n%s", port, msg)
+	if startup {
+		return nil
+	}
+	return openURL(url)
 }
 
 func open(url string) error {

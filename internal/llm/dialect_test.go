@@ -15,12 +15,13 @@ func TestTheClientResolvesItsDialectOnce(t *testing.T) {
 		{"", DialectOpenAI, "openai-compatible"},
 		{"openai", DialectOpenAI, "openai-compatible"},
 		{"chatgpt", DialectResponses, "chatgpt"},
+		{"responses", DialectResponses, "responses"},
 		{"anthropic", DialectAnthropic, "anthropic"},
 		{"gemini", DialectGemini, "gemini"},
 	} {
 		c := New(&ClientConfig{Provider: tc.provider})
-		if c.dialect != tc.dialect || providerLabel(c.dialect) != tc.label {
-			t.Errorf("provider %q -> dialect %q labelled %q, want %q labelled %q", tc.provider, c.dialect, providerLabel(c.dialect), tc.dialect, tc.label)
+		if c.dialect != tc.dialect || c.providerLabel() != tc.label {
+			t.Errorf("provider %q -> dialect %q labelled %q, want %q labelled %q", tc.provider, c.dialect, c.providerLabel(), tc.dialect, tc.label)
 		}
 	}
 }

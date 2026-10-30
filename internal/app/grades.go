@@ -48,8 +48,10 @@ func (a *App) gradeResult(req dashboard.GradeRequest) (uint64, error) {
 		return 0, fmt.Errorf("work session %q has not delivered yet; a grade is the word on a result", session)
 	}
 
-	if reason, safe := a.SafeMode(); safe {
-		return 0, fmt.Errorf("this identity is in SAFE (%s); a grade is recorded when the record is writable again", reason)
+	if h, held := a.Hold(); held && h.Waiting {
+		return 0, fmt.Errorf("this start is DEGRADED (%s); a grade is recorded once the start completes", h.Reason)
+	} else if held {
+		return 0, fmt.Errorf("this identity is in SAFE (%s); a grade is recorded when the record is writable again", h.Reason)
 	}
 	text := fmt.Sprintf("[grade %s] %s", session, grade)
 	if item := strings.TrimSpace(req.Item); item != "" {

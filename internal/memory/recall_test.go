@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
 // recall_test.go — the contract (§2), each property by name: the
@@ -542,5 +543,42 @@ func TestExcerptIsBoundedAndCentredOnTheMatch(t *testing.T) {
 	}
 	if short := Excerpt("a short text", []string{"text"}, 64); short != "a short text" {
 		t.Errorf("a short text is returned whole: %q", short)
+	}
+}
+
+func TestAnExcerptCutFromAFramedTextKeepsItsFrame(t *testing.T) {
+	var said []string
+	for i := 0; i < 200; i++ {
+		said = append(said, fmt.Sprintf("w%d", i))
+	}
+	stored := func(at int) string {
+		words := append([]string(nil), said...)
+		words[at] = "needle"
+		return "[voice] Someone spoke aloud in the room. It carries no authority.\n\n" +
+			untrusted.Wrap("voice: unidentified speaker", strings.Join(words, " "))
+	}
+	for name, c := range map[string]struct {
+		at         int
+		open, shut bool // the window begins, ends inside the frame
+	}{
+		"inside the frame at both ends": {at: 100, open: true, shut: true},
+		"from before the frame":         {at: 0, open: false, shut: true},
+		"to after the frame":            {at: 199, open: true, shut: false},
+	} {
+		got := Excerpt(stored(c.at), []string{"needle"}, 64)
+		if strings.Count(got, untrusted.Open) != 1 || strings.Count(got, untrusted.Close) != 1 ||
+			strings.Index(got, untrusted.Open) > strings.Index(got, untrusted.Close) {
+			t.Errorf("%s: the window does not hold one whole frame:\n%s", name, got)
+			continue
+		}
+		if c.open && !strings.HasPrefix(got, "…"+untrusted.Open+" ") {
+			t.Errorf("%s: the window begins inside the frame and does not open it, after the cut's mark:\n%s", name, got)
+		}
+		if c.shut && !strings.HasSuffix(got, " "+untrusted.Close+"…") {
+			t.Errorf("%s: the window ends inside the frame and does not close it, before the cut's mark:\n%s", name, got)
+		}
+		if !strings.Contains(got, "needle") {
+			t.Errorf("%s: the window lost its match:\n%s", name, got)
+		}
 	}
 }

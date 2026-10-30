@@ -67,7 +67,7 @@ func TestPolicyCheck(t *testing.T) {
 		"work/output.md",
 
 		"my-aii-os-notes.md",
-		"/home/operator/aii-os-example/note.md",
+		"/home/guest/aii-os-guest/note.md",
 		"/work/aii-os/README.md",
 	}
 	for _, path := range allowed {
@@ -141,18 +141,18 @@ func TestRegistryMatchesPolicy(t *testing.T) {
 // opens exactly that file. The rest of the place stays the host's.
 func TestAPlaceRuleLeavesADirectoryOpenWhole(t *testing.T) {
 	p := DefaultPolicy()
-	data := "/home/vega/data"
+	data := "/home/example/data"
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data,
 		Except: []string{data + "/ui", data + "/theme.json", data + "/ui-layout.json/"},
 		Reason: "The host keeps this directory.", Enforced: true}})
 	for _, path := range []string{
-		data + "/ui", data + "/ui/name", data + "/ui/deeper/still/app.js", "/HOME/Vega/Data/UI/custom.css",
+		data + "/ui", data + "/ui/name", data + "/ui/deeper/still/app.js", "/HOME/Example/Data/UI/custom.css",
 		data + "/theme.json", data + "/ui-layout.json",
 	} {
 		if v := p.Check("write", path); !v.Allowed {
 			t.Fatalf("%s must be open, refused by %s", path, v.Rule.ID)
 		}
-		if p.Covered(path) != nil {
+		if holds(p.Covered(path)) {
 			t.Fatalf("%s must not be covered", path)
 		}
 	}
@@ -170,13 +170,13 @@ func TestAPlaceRuleLeavesADirectoryOpenWhole(t *testing.T) {
 // place and everything beneath it, in any case, and not a sibling that
 // merely shares its prefix.
 func TestARuleCoversItsOwnPlaceAsTheFloorDoes(t *testing.T) {
-	r := &Rule{ID: "sub.ui", Kind: KindSubstrate, Path: "/home/vega/data/ui", Enforced: true}
-	for _, path := range []string{"/home/vega/data/ui", "/home/vega/data/ui/name", "/HOME/Vega/Data/UI/deeper/x.js"} {
+	r := &Rule{ID: "sub.ui", Kind: KindSubstrate, Path: "/home/example/data/ui", Enforced: true}
+	for _, path := range []string{"/home/example/data/ui", "/home/example/data/ui/name", "/HOME/Example/Data/UI/deeper/x.js"} {
 		if !r.Covers(path) {
 			t.Errorf("%s lies in the place", path)
 		}
 	}
-	for _, path := range []string{"/home/vega/data", "/home/vega/data/ui2/x", "/home/vega/data/uifoo", "/home/vega/data2/ui/x"} {
+	for _, path := range []string{"/home/example/data", "/home/example/data/ui2/x", "/home/example/data/uifoo", "/home/example/data2/ui/x"} {
 		if r.Covers(path) {
 			t.Errorf("%s does not lie in the place", path)
 		}
@@ -190,26 +190,26 @@ func TestARuleCoversItsOwnPlaceAsTheFloorDoes(t *testing.T) {
 // no empty entry for the boundary.
 func TestAPlaceRuleCoversAPathWhole(t *testing.T) {
 	p := DefaultPolicy()
-	data := "/home/vega/data"
+	data := "/home/example/data"
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data, Except: []string{data + "/ui-layout.json"},
 		Reason: "The host keeps this directory.", Enforced: true}})
-	for _, path := range []string{data, data + "/credentials/profiles/x.key", "/HOME/Vega/Data/tls/key.pem", data + "/segment-1-2.jsonl.gz"} {
+	for _, path := range []string{data, data + "/credentials/profiles/x.key", "/HOME/Example/Data/tls/key.pem", data + "/segment-1-2.jsonl.gz"} {
 		if v := p.Check("read", path); v.Allowed || v.Rule.ID != "sub.data" {
 			t.Fatalf("%s must be refused by the place rule, got %+v", path, v)
 		}
-		if p.Covered(path) == nil {
+		if !holds(p.Covered(path)) {
 			t.Fatalf("%s must be covered", path)
 		}
 	}
-	for _, path := range []string{data + "/ui-layout.json", "/home/vega/data2/x", "/home/vega/work/data.txt", "/home/vega"} {
+	for _, path := range []string{data + "/ui-layout.json", "/home/example/data2/x", "/home/example/work/data.txt", "/home/example"} {
 		if v := p.Check("read", path); !v.Allowed {
 			t.Fatalf("%s must be open, refused by %s", path, v.Rule.ID)
 		}
 	}
-	if v := p.Check("read", "/home/vega/work/ledger.jsonl"); v.Allowed {
+	if v := p.Check("read", "/home/example/work/ledger.jsonl"); v.Allowed {
 		t.Fatal("the names still hold beside the places")
 	}
-	if p.Covered("/home/vega/work/ledger.jsonl") != nil {
+	if holds(p.Covered("/home/example/work/ledger.jsonl")) {
 		t.Fatal("Covered is the places only")
 	}
 	floor := p.LocalFloor()
@@ -217,15 +217,15 @@ func TestAPlaceRuleCoversAPathWhole(t *testing.T) {
 		t.Fatalf("the floor names the place once and nothing empty:\n%s", floor)
 	}
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data, Reason: "The host keeps this directory.", Enforced: true},
-		{ID: "sub.config", Kind: KindSubstrate, Path: "/home/vega/config/config.json", Reason: DefaultPolicy().Rule("sub.config").Reason, Enforced: true},
+		{ID: "sub.config", Kind: KindSubstrate, Path: "/home/example/config/config.json", Reason: DefaultPolicy().Rule("sub.config").Reason, Enforced: true},
 		{ID: "sub.db", Kind: KindSubstrate, Path: "/srv/db/aii.db", Reason: DefaultPolicy().Rule("sub.db").Reason, Enforced: true},
 		{ID: "sub.db", Kind: KindSubstrate, Path: "/srv/db/aii.db-wal", Reason: DefaultPolicy().Rule("sub.db").Reason, Enforced: true}})
 	floor = p.LocalFloor()
 	if strings.Count(floor, "config.json") != 1 || !strings.Contains(floor, "- **aii.db**, **aii.db-wal** — ") || strings.Count(floor, "The host keeps this directory.") != 1 {
 		t.Fatalf("a reason is said once, with every name and place it covers:\n%s", floor)
 	}
-	p.SetPlaces([]*Rule{{ID: "sub.plugins", Kind: KindSubstrate, Path: "/home/vega/plugins", Reason: "r", Enforced: true}})
-	if got := p.Places(); len(got) != 1 || got[0] != ResolvePath("/home/vega/plugins") {
+	p.SetPlaces([]*Rule{{ID: "sub.plugins", Kind: KindSubstrate, Path: "/home/example/plugins", Reason: "r", Enforced: true}})
+	if got := p.Places(); len(got) != 1 || got[0] != ResolvePath("/home/example/plugins") {
 		t.Fatalf("SetPlaces replaces the places: %v", got)
 	}
 	if v := p.Check("read", data+"/x"); !v.Allowed {

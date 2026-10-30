@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
@@ -64,14 +65,19 @@ func (e *EmbedCallError) Error() string {
 
 func (e *EmbedCallError) Unwrap() error { return e.Err }
 
-func (e *Embeddings) Ask(ctx context.Context, reg *tools.Registry, owner *ActivePlugin, kind, text string) ([]float32, error) {
-	res, err := reg.Execute(tools.WithDispatchOwner(ctx, owner), e.Embed, map[string]any{"kind": kind, "text": text})
-	return e.answer(ctx, res, err)
+type Embedded struct {
+	Vector []float32
+	Read   int
 }
 
-func (e *Embeddings) answer(ctx context.Context, res tools.Result, err error) ([]float32, error) {
-	fail := func(kind, code, said string, err error) ([]float32, error) {
-		return nil, &EmbedCallError{PluginID: e.PluginID, Kind: kind, Code: code, Said: said, Err: err}
+func (e *Embeddings) Ask(ctx context.Context, reg *tools.Registry, owner *ActivePlugin, kind, text string) (Embedded, error) {
+	res, err := reg.Execute(tools.WithDispatchOwner(ctx, owner), e.Embed, map[string]any{"kind": kind, "text": text})
+	return e.answer(ctx, res, err, utf8.RuneCountInString(text))
+}
+
+func (e *Embeddings) answer(ctx context.Context, res tools.Result, err error, chars int) (Embedded, error) {
+	fail := func(kind, code, said string, err error) (Embedded, error) {
+		return Embedded{}, &EmbedCallError{PluginID: e.PluginID, Kind: kind, Code: code, Said: said, Err: err}
 	}
 	if err != nil {
 		var timeout *supervisor.InvokeTimeoutError
@@ -102,7 +108,7 @@ func (e *Embeddings) answer(ctx context.Context, res tools.Result, err error) ([
 		}
 		return fail(EmbedRefused, res.ReasonCode, res.Error, nil)
 	}
-	return e.ReadReply(res.Output)
+	return e.ReadReply(res.Output, chars)
 }
 
 type EmbedReplyError struct {
@@ -116,16 +122,30 @@ func (e *EmbedReplyError) Error() string {
 
 type embedReply struct {
 	Vector ProbeVector `json:"vector"`
+	Read   *int        `json:"read"`
 }
 
-func (e *Embeddings) ReadReply(output string) ([]float32, error) {
-	refuse := func(format string, args ...any) ([]float32, error) {
-		return nil, &EmbedReplyError{PluginID: e.PluginID, Detail: fmt.Sprintf(format, args...)}
+func (e *Embeddings) ReadReply(output string, chars int) (Embedded, error) {
+	refuse := func(format string, args ...any) (Embedded, error) {
+		return Embedded{}, &EmbedReplyError{PluginID: e.PluginID, Detail: fmt.Sprintf(format, args...)}
+	}
+	shape := `an object whose one member is "vector", a list of numbers`
+	if e.Tells() {
+		shape = `an object of two members, "vector", a list of numbers, and "read", a whole number`
 	}
 	var reply embedReply
 
 	if err := canonicaljson.DecodeStrict([]byte(output), &reply); err != nil {
-		return refuse(`the reply is not an object whose one member is "vector", a list of numbers`)
+		return refuse("the reply is not %s", shape)
+	}
+
+	switch {
+	case e.Tells() && reply.Read == nil:
+		return refuse(`the reply does not say how much of the text it read ("read"), which %s@%d answers with`, EmbeddingsInterfaceID, e.Version)
+	case !e.Tells() && reply.Read != nil:
+		return refuse("the reply is not %s", shape)
+	case reply.Read != nil && (*reply.Read < 1 || *reply.Read > chars):
+		return refuse("the reply says %d characters were read, of a text of %d", *reply.Read, chars)
 	}
 	if len(reply.Vector) != e.Decl.Dimension {
 		return refuse("the reply holds %d numbers, the signed dimension is %d", len(reply.Vector), e.Decl.Dimension)
@@ -144,7 +164,11 @@ func (e *Embeddings) ReadReply(output string) ([]float32, error) {
 	if norm == 0 {
 		return refuse("the reply is all zeros, which no cosine can be taken against")
 	}
-	return out, nil
+	got := Embedded{Vector: out}
+	if reply.Read != nil {
+		got.Read = *reply.Read
+	}
+	return got, nil
 }
 
 type ProbeError struct {

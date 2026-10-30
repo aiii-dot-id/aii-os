@@ -49,7 +49,7 @@ func (t *Teller) room() string {
 
 func logSubsystem(facility string) string {
 	switch facility {
-	case "outcomes":
+	case "outcomes", "tools":
 		return "consolidate"
 	case "self_model":
 		return "selfmodel"

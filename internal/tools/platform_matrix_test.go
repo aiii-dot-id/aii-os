@@ -29,7 +29,7 @@ import (
 func TestEveryPlatformDefinesItsSharedPredicates(t *testing.T) {
 	// The predicates shared code calls unconditionally. A symbol added
 	// here without a definition in every partition fails immediately.
-	predicates := []string{"isRooted", "normalizeShellOutput"}
+	predicates := []string{"isRooted", "normalizeShellOutput", "spelledRoot"}
 
 	// The mandated matrix. Mobile leaves BETA QUALIFICATION scope, never
 	// the build matrix (BETA1_CONTRACT support matrix).

@@ -126,21 +126,35 @@ func main() {
 		block()
 	}
 
-	if mode == "ready-real" || mode == "ready-unreal" || mode == "ready-sdk" {
-		// A native engine's readiness report that the host keeps
-		// (ready-real), the same report naming the kit that built it as
-		// the kit writes it (ready-sdk), or one carrying the mark without
-		// the fields a profile requires (ready-unreal); each then serves.
+	if mode == "ready-real" || mode == "ready-unreal" || mode == "ready-sdk" || mode == "ready-vulkan" {
 		line := "child-ready event=ready accelerator=cpu"
 		switch mode {
 		case "ready-real":
 			line = "child-ready event=ready models_loaded=1 accelerator=cpu probe_ms=3"
+		case "ready-vulkan":
+			line = "child-ready event=ready models_loaded=1 accelerator=vulkan probe_ms=3"
 		case "ready-sdk":
 			line = "child-ready event=ready models_loaded=1 accelerator=cpu probe_ms=3 sdk=" + readySDK
 		}
 		fmt.Fprintln(os.Stderr, line)
 		serveRespond()
 		return
+	}
+
+	if mode == "ready-ignore-term" {
+		// Ready as a worker reports it, then deaf to the end of its input
+		// and to SIGTERM: what a stop gives it is all it has before the kill.
+		signal.Ignore(syscall.SIGTERM)
+		fmt.Fprintln(os.Stderr, "child-ready event=ready")
+		block()
+	}
+
+	if mode == "ready-crash" {
+		// Ready as a worker reports it, then dies: the restart ceiling's
+		// driver on a lane that waits for a worker's readiness mark.
+		fmt.Fprintln(os.Stderr, "child-ready event=ready")
+		time.Sleep(150 * time.Millisecond)
+		os.Exit(7)
 	}
 
 	if mode == "worker-args" {
@@ -171,6 +185,38 @@ func main() {
 	if mode == "reach" {
 		reachProbe(os.Args[2:])
 		return
+	}
+
+	if mode == "stray" {
+		// A worker that outlives its parent: it holds none of the parent's
+		// streams and nothing ends it but a signal. Bounded, so a run that
+		// fails leaves nothing behind for long.
+		time.Sleep(2 * time.Minute)
+		return
+	}
+
+	if mode == "strays" {
+		// A carrier with two such workers, one in the carrier's process
+		// group and one in a group of its own (as a carrier that ends its
+		// worker by its group starts it), and then the mode named next, or
+		// respond.
+		self, err := os.Executable()
+		if err != nil {
+			panic(err)
+		}
+		for _, own := range []bool{false, true} {
+			stray := exec.Command(self, "stray")
+			if own {
+				ownGroup(stray)
+			}
+			if err := stray.Start(); err != nil {
+				panic(err)
+			}
+		}
+		mode = "respond"
+		if len(os.Args) > 2 {
+			mode = os.Args[2]
+		}
 	}
 
 	if mode == "carrier" {

@@ -33,6 +33,8 @@ func TestRing1CitesTheOperatorsOwnWordAndNotTheRoomsAGradeOrTheHosts(t *testing.
 		record("[voice] (heard in the room, not addressed to you) shall we order lunch", interaction.Details{Channel: "voice", Reason: "room speech"})
 		record("👍", interaction.Details{Grade: &interaction.Grade{Session: "s", Grade: "up"}})
 		record("the act was approved", interaction.Details{Channel: "plugin", Actor: "operator"})
+		record("[ask ask_1] no — the answer is no; decide without it", interaction.Details{Said: interaction.SaidAnswer})
+		record("a line some host feature writes under their role", interaction.Details{})
 	}
 
 	// Nothing on record but rows that are not their word: refused, naming them.
@@ -43,7 +45,7 @@ func TestRing1CitesTheOperatorsOwnWordAndNotTheRoomsAGradeOrTheHosts(t *testing.
 
 	// A typed affirmation, and the same three rows after it: the typed one
 	// is the latest word and is cited, by its turn and verbatim.
-	typed := record("Yes, record it as our charter.", interaction.Details{})
+	typed := record("Yes, record it as our charter.", interaction.Details{Said: interaction.SaidTyped})
 	notTheirWord()
 	out, err := engine.ExecuteAction(ctx, "verb", "commit", ring1Args("rel_word_test1"))
 	if err != nil {
@@ -56,7 +58,7 @@ func TestRing1CitesTheOperatorsOwnWordAndNotTheRoomsAGradeOrTheHosts(t *testing.
 
 	// Spoken to the identity on the operator's own microphone (the host's
 	// marker, no room note): their word, cited over the room's speech after it.
-	spoken := record("[voice] Yes, and add that we work in the mornings.", interaction.Details{})
+	spoken := record("[voice] Yes, and add that we work in the mornings.", interaction.Details{Said: interaction.SaidSpoken})
 	record("[voice] (heard in the room, not addressed to you) the coffee is ready", interaction.Details{Channel: "voice", Reason: "room speech"})
 	args := ring1Args("rel_word_test2")
 	args["supersedes"] = "rel_word_test1"
@@ -67,6 +69,21 @@ func TestRing1CitesTheOperatorsOwnWordAndNotTheRoomsAGradeOrTheHosts(t *testing.
 	}
 	st.SetOperatorVoices([]string{"6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f"})
 	if err := st.AnnotateTurn(spoken, store.AnnotationSpeaker, "vs-1/3", `{"decision":"known","speaker":"Quinn","speaker_id":"quinn-desk","speaker_uuid":"6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f","continuity":"matched"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.ExecuteAction(ctx, "verb", "commit", args); err == nil || !strings.Contains(err.Error(), "confirm in their page") || !strings.Contains(err.Error(), "no page can ask them here") || !strings.Contains(err.Error(), "Ask them to type their affirmation") {
+		t.Fatalf("an identified spoken word, with no page to confirm it on, must be refused and the operator asked to type it: %v", err)
+	}
+	var carded []uint64
+	engine.confirmWord = func(turn uint64) error { carded = append(carded, turn); return nil }
+	if _, err := engine.ExecuteAction(ctx, "verb", "commit", args); err == nil || !strings.Contains(err.Error(), "a card on their page now shows them those words") || len(carded) != 1 || carded[0] != spoken {
+		t.Fatalf("an identified spoken word not yet confirmed must be refused, with the card for its turn put on the page: %v (cards %v)", err, carded)
+	}
+	engine.confirmWord = func(uint64) error { return errors.New("the page is closed") }
+	if _, err := engine.ExecuteAction(ctx, "verb", "commit", args); err == nil || !strings.Contains(err.Error(), "could not be put on their page (the page is closed)") {
+		t.Fatalf("a card that could not be put must be said, and the operator asked to type: %v", err)
+	}
+	if err := st.AnnotateTurn(spoken, store.AnnotationConfirmed, "ask-1", `{"ask":"ask-1"}`); err != nil {
 		t.Fatal(err)
 	}
 	out, err = engine.ExecuteAction(ctx, "verb", "commit", args)
@@ -100,7 +117,7 @@ func TestRing1CitesTheOperatorsOwnWordAndNotTheRoomsAGradeOrTheHosts(t *testing.
 }
 
 func TestTheRing1NoticeSaysWhoseRelationshipWasRecordedAndWhatWasWritten(t *testing.T) {
-	engine, st, lg, _, _ := setupEngine(t)
+	engine, st, _, _, _ := setupEngine(t)
 	ctx := context.Background()
 	if err := engine.RecordConversationTurn("operator", "ok thanks"); err != nil {
 		t.Fatal(err)
@@ -163,21 +180,21 @@ func TestTheRing1NoticeSaysWhoseRelationshipWasRecordedAndWhatWasWritten(t *test
 		"counterpart_role": "peer", "relationship_type": "peer", "charter_text": text,
 	})
 	says(peer, `a relationship with "Rue" (role "peer"; rel_notice_rue1)`, `as your affirmation: "ok thanks".`,
-		fmt.Sprintf(`What they recorded begins: "Rue and I trade drafts." (the first line of 3, %d characters in all; the whole is record `, len([]rune(text))),
-		" of the signed record).", "the relationship stands on your word alone")
+		fmt.Sprintf(`What they recorded begins: "Rue and I trade drafts." (the first line of 3, %d characters in all; the whole is on the Identity page, under OTHER RELATIONSHIPS — RING 1).`, len([]rune(text))),
+		"the relationship stands on your word alone")
 	if strings.Contains(peer, "charter with you") {
 		t.Errorf("a relationship with a peer was told to the operator as their own charter: %s", peer)
 	}
-	whole("a peer's relationship", peer, fmt.Sprintf(`[ring 1] The identity recorded a relationship with "Rue" (role "peer"; rel_notice_rue1), citing your words at turn %d as your affirmation: "ok thanks". What they recorded begins: "Rue and I trade drafts." (the first line of 3, %d characters in all; the whole is record %d of the signed record).`+closing, word.TurnSeq, len([]rune(text)), lg.LastSeq(), "the relationship"))
+	whole("a peer's relationship", peer, fmt.Sprintf(`[ring 1] The identity recorded a relationship with "Rue" (role "peer"; rel_notice_rue1), citing your words at turn %d as your affirmation: "ok thanks". What they recorded begins: "Rue and I trade drafts." (the first line of 3, %d characters in all; the whole is on the Identity page, under OTHER RELATIONSHIPS — RING 1).`+closing, word.TurnSeq, len([]rune(text)), "the relationship"))
 
 	// A relationship recorded with no text: said, with what stands.
 	bare := mint(map[string]any{
-		"variant": "relationship.upsert", "id": "rel_notice_bare1", "counterpart_name": "Sol",
+		"variant": "relationship.upsert", "id": "rel_notice_bare1", "counterpart_name": "Tam",
 		"counterpart_role": "peer", "relationship_type": "peer",
 	})
-	says(bare, `a relationship with "Sol" (role "peer"; rel_notice_bare1)`,
+	says(bare, `a relationship with "Tam" (role "peer"; rel_notice_bare1)`,
 		"They recorded no text with it: any text this relationship already had stands.")
-	whole("a relationship recorded with no text", bare, fmt.Sprintf(`[ring 1] The identity recorded a relationship with "Sol" (role "peer"; rel_notice_bare1), citing your words at turn %d as your affirmation: "ok thanks". They recorded no text with it: any text this relationship already had stands.`+closing, word.TurnSeq, "the relationship"))
+	whole("a relationship recorded with no text", bare, fmt.Sprintf(`[ring 1] The identity recorded a relationship with "Tam" (role "peer"; rel_notice_bare1), citing your words at turn %d as your affirmation: "ok thanks". They recorded no text with it: any text this relationship already had stands.`+closing, word.TurnSeq, "the relationship"))
 
 	// One long line is cut by runes, marked, and said to be a part.
 	long := strings.Repeat("é", 300)
@@ -186,23 +203,23 @@ func TestTheRing1NoticeSaysWhoseRelationshipWasRecordedAndWhatWasWritten(t *test
 		t.Errorf("a long single line:\n got %s\nwant %s", got, want)
 	}
 	// A counterpart given no name is said so, in both forms.
-	if n := ring1Notice(false, "peer", "", "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, `a relationship with a counterpart they gave no name (role "peer"; rel_x)`) {
+	if n := ring1Notice(false, true, "peer", "", "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, `a relationship with a counterpart they gave no name (role "peer"; rel_x)`) {
 		t.Errorf("an unnamed peer: %s", n)
 	}
-	if n := ring1Notice(true, "operator", "", "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, `their charter with you (no name given, role "operator"; rel_x)`) {
+	if n := ring1Notice(true, false, "operator", "", "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, `their charter with you (no name given, role "operator"; rel_x)`) {
 		t.Errorf("an unnamed operator: %s", n)
 	}
 	// The operator's own charter of more than one line: the first, said to
 	// be the first of how many, and the page the whole is on.
-	whole("the operator's charter of two lines", ring1Notice(true, "operator", "Quinn", "rel_x", 7, 3, "yes", "", "Quinn decides.\nI say what I see."),
+	whole("the operator's charter of two lines", ring1Notice(true, false, "operator", "Quinn", "rel_x", 7, 3, "yes", "", "Quinn decides.\nI say what I see."),
 		fmt.Sprintf(`[ring 1] The identity recorded their charter with you (name "Quinn", role "operator"; rel_x), citing your words at turn 3 as your affirmation: "yes". What they recorded begins: "Quinn decides." (the first line of 2, 32 characters in all; the whole is on the Identity page, under CHARTER — RING 1).`+closing, "the charter"))
 	// A name is the identity's to write and is bounded as the cited words
 	// are, the cut marked, in both forms.
 	longName, cut := strings.Repeat("n", 300), strings.Repeat("n", ring1ExcerptRunes)+"…"
-	if n := ring1Notice(false, "peer", longName, "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, fmt.Sprintf(`a relationship with %q (role "peer"; rel_x)`, cut)) {
+	if n := ring1Notice(false, true, "peer", longName, "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, fmt.Sprintf(`a relationship with %q (role "peer"; rel_x)`, cut)) {
 		t.Errorf("a peer's name of 300 characters is not cut at %d and marked: %s", ring1ExcerptRunes, n)
 	}
-	if n := ring1Notice(true, "operator", longName, "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, fmt.Sprintf(`their charter with you (name %q, role "operator"; rel_x)`, cut)) {
+	if n := ring1Notice(true, false, "operator", longName, "rel_x", 7, 3, "yes", "", "t"); !strings.Contains(n, fmt.Sprintf(`their charter with you (name %q, role "operator"; rel_x)`, cut)) {
 		t.Errorf("the operator's name of 300 characters is not cut at %d and marked: %s", ring1ExcerptRunes, n)
 	}
 	// Text that is only spaces and line ends is still what was written, and

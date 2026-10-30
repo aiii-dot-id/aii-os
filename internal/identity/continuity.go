@@ -31,9 +31,6 @@ func (e *Engine) verbContinuity(ctx context.Context, args map[string]any) (strin
 		return e.continuity.Read(ctx, strings.TrimSpace(query))
 	case continuityTake, continuityVerify:
 
-		if d, ok := ctx.Value(SubagentDepth{}).(int); ok && d > 0 {
-			return "", fmt.Errorf("a snapshot of you is yours to take, not a worker's: say in your result that one is wanted, and the main seat takes it (recall source=continuity reads the state from any seat)")
-		}
 		if action == continuityTake {
 			return e.continuity.Take(ctx)
 		}

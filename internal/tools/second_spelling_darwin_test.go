@@ -401,8 +401,8 @@ func TestAKeptPlaceAddressedByItsVolumeAndFileNumber(t *testing.T) {
 			if !res.Refused || !strings.Contains(res.Error, unplaced) || opened(res) {
 				t.Errorf("%s must be refused as what it is: %+v", name, res)
 			}
-			if rule := s.policy.Covered(path); rule == nil || rule.Kind != firewall.KindUnplaced {
-				t.Errorf("%s: the wall alone must refuse it, got %+v", name, rule)
+			if rule, err := s.policy.Covered(path); err != nil || rule == nil || rule.Kind != firewall.KindUnplaced {
+				t.Errorf("%s: the wall alone must refuse it, got %+v (%v)", name, rule, err)
 			}
 			if res := shellIn(t, s.r, nil, `/bin/cat "`+path+`"`); !res.Refused || opened(res) {
 				t.Errorf("the shell, %s, must be refused: %+v", name, res)

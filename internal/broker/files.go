@@ -333,7 +333,8 @@ func (b *Binding) heldIn(root resolvedRoot, op, rel string) func(fs.FileInfo, *o
 
 func isHeld(err error) bool {
 	var kept *tools.SubstrateError
-	return errors.As(err, &kept) || errors.Is(err, tools.ErrOutsideSandbox)
+	var unchecked *firewall.UncheckedError
+	return errors.As(err, &kept) || errors.As(err, &unchecked) || errors.Is(err, tools.ErrOutsideSandbox)
 }
 
 func stillAt(osRoot *os.Root, rel string, made fs.FileInfo) bool {

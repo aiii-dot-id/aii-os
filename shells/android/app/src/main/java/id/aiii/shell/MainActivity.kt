@@ -10,6 +10,7 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private lateinit var web: WebView
     private var attachedOrigin: String? = null
+    private var files: PageFiles? = null
     private val changed: (AppRuntime.State) -> Unit = { state -> show(state) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,10 +30,12 @@ class MainActivity : Activity() {
             val origin = "${url.scheme}://${url.encodedAuthority}"
             if (attachedOrigin != origin) {
                 DashboardAuth.detach(web)
+                files?.detach()
                 if (!DashboardAuth.attach(web, runtime) { AppRuntime.rt }) {
                     notice("Update Android System WebView to open AII OS securely.", false)
                     return
                 }
+                files = PageFiles(this, web, origin).also { it.attach() }
                 attachedOrigin = origin
                 web.loadUrl(runtime.dashboardURL())
             }
@@ -70,11 +73,17 @@ class MainActivity : Activity() {
         box.requestApplyInsets()
     }
 
+    @Deprecated("Activity's own result path; this shell has no AndroidX activity.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        if (files?.onResult(requestCode, resultCode, data) != true) super.onActivityResult(requestCode, resultCode, data)
+    }
+
     override fun onResume() { super.onResume(); AppRuntime.setForeground(true) }
     override fun onPause() { super.onPause(); AppRuntime.setForeground(false) }
     override fun onDestroy() {
         AppRuntime.detach(changed)
         DashboardAuth.detach(web)
+        files?.detach()
         web.destroy()
         super.onDestroy()
     }

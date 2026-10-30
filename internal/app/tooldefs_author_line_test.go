@@ -10,6 +10,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
@@ -192,5 +193,34 @@ func TestTheOperatorIsGivenAnAuthorsSummaryWhole(t *testing.T) {
 	}
 	if builtin == nil || builtin.Plugin != "" {
 		t.Fatalf("a builtin's row names a plugin: %+v", builtin)
+	}
+}
+
+func TestThePluginsCardSaysWhichCallsWaitForTheOperator(t *testing.T) {
+	a := &App{toolReg: tools.NewRegistry(t.TempDir(), nil, tools.Timeouts{})}
+	const id = "org.example.mcp"
+	why := "it keeps a copy in the plugin's own store"
+	for _, op := range []summaryOp{
+		{name: "pl_org_example_mcp_send", disc: tools.Discovery{Plugin: id, Operation: "send", Summary: "Send", OperatorConfirms: true}},
+		{name: "pl_org_example_mcp_dyn_server_write", disc: tools.Discovery{Plugin: id, Operation: "server.write", Summary: "Write", OperatorConfirms: true, Published: true}},
+		{name: "pl_org_example_mcp_dyn_server_cache", disc: tools.Discovery{Plugin: id, Operation: "server.cache", Summary: "Cache", Published: true, UnconfirmedByDesign: why}},
+	} {
+		if err := a.toolReg.RegisterDynamic(op, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops := pluginOperationViews(a.toolReg, []string{"pl_org_example_mcp_send", "pl_org_example_mcp_dyn_server_write", "pl_org_example_mcp_dyn_server_cache"})
+	want := []dashboard.PluginOperationView{
+		{Tool: "pl_org_example_mcp_send", Operation: "send", Summary: "Send", Confirms: true},
+		{Tool: "pl_org_example_mcp_dyn_server_write", Operation: "server.write", Summary: "Write", Confirms: true, Published: true},
+		{Tool: "pl_org_example_mcp_dyn_server_cache", Operation: "server.cache", Summary: "Cache", Published: true, UnconfirmedByDesign: why},
+	}
+	if len(ops) != len(want) {
+		t.Fatalf("the card is given %+v", ops)
+	}
+	for i := range want {
+		if ops[i] != want[i] {
+			t.Fatalf("operation %d reads %+v, want %+v", i, ops[i], want[i])
+		}
 	}
 }

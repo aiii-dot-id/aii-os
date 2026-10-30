@@ -43,7 +43,8 @@ var overlayShippedSeeds = []string{
 	"1c4ed9afcfd5bf233b688ada05828c584cf50a77374d63c49a1659c5ee79df9b",
 	"b6665114b1afb827380241ff257c211e8d902a6004b1e6eb483b9b542e92f355",
 	"9c720f5a25d657148b3db2b05104b5c4d1cdd1404d56d96511a5d29a88403cc4",
-	"b6665114b1afb827380241ff257c211e8d902a6004b1e6eb483b9b542e92f355",
+	"ca61864fe72b82719ae7119806ec9643cc5483a38fcf5a5a9b8adb39ce59cdde",
+	"0e519bfe61b213122cdfb3bb6c7f0373d5eff28d67b6b6b1ecfa015ccbb04b4c",
 }
 
 func (a *App) seedOverlayREADME() {
@@ -59,6 +60,8 @@ type dashState struct {
 	mu sync.Mutex
 
 	dashboardAccessToken string
+
+	servingUnkept string
 
 	uiLayoutRaw []byte
 

@@ -2,17 +2,23 @@ package identity
 
 import (
 	"context"
+	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/hold"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 func (e *Engine) RecordConversationTurn(role, content string) error {
-	_, err := e.RecordConversationRef(context.Background(), role, content, interaction.Details{})
+	_, err := e.RecordConversationTurnSeq(role, content)
 	return err
 }
 
 func (e *Engine) RecordConversationTurnSeq(role, content string) (uint64, error) {
-	ref, err := e.RecordConversationRef(context.Background(), role, content, interaction.Details{})
+	var details interaction.Details
+	if role == string(interaction.Operator) {
+		details.Said = interaction.SaidTyped
+	}
+	ref, err := e.RecordConversationRef(context.Background(), role, content, details)
 	return ref.Sequence, err
 }
 
@@ -58,18 +64,30 @@ func (e *Engine) hasRecentFetch(url string) bool {
 	return e.fetchedURLs[url]
 }
 
-func (e *Engine) SetSafeMode(reason string) {
+func (e *Engine) SetSafeMode(reason string) { e.SetHold(hold.Safe(reason)) }
+
+func (e *Engine) SetHold(h hold.Hold) {
 	e.safeMu.Lock()
-	e.safeReason = reason
+	e.safeHold = h
 	e.safeMu.Unlock()
 }
 
 func (e *Engine) inSafeMode() bool { return e.safeModeReason() != "" }
 
-func (e *Engine) safeModeReason() string {
+func (e *Engine) safeModeReason() string { return e.heldBy().Reason }
+
+func (e *Engine) heldBy() hold.Hold {
 	e.safeMu.RLock()
 	defer e.safeMu.RUnlock()
-	return e.safeReason
+	return e.safeHold
+}
+
+func (e *Engine) refusedHeld(verb string) error {
+	h := e.heldBy()
+	if h.Waiting {
+		return fmt.Errorf("%s refused: this start is DEGRADED — %s. Nothing is written to my record %s.", verb, h.Reason, hold.While)
+	}
+	return fmt.Errorf("%s refused: I am in safe mode — %s. Nothing is written to my record while SAFE holds.", verb, h.Reason)
 }
 
 type hostStore interface {

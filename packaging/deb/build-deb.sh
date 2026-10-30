@@ -84,7 +84,7 @@ Section: misc
 Priority: optional
 Architecture: $ARCH
 Maintainer: AI Identity Incorporated <james@aiii.id>
-Depends: libc6, init-system-helpers (>= 1.66~)
+Depends: libc6, init-system-helpers (>= 1.66~), bubblewrap
 Recommends: systemd
 Installed-Size: $installed
 Description: AII OS identity runtime

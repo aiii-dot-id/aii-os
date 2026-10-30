@@ -37,11 +37,11 @@ try {
   createPending.arm({}, '7');
 
   deliver({ type: 'projects', projects: [{ id: 'p1', name: 'One', state: 'open' }, { id: 'p9', name: 'Nine', state: 'open' }] });
-  if (!createPending.waiting() || createPending.waiting().requestID !== '7') fail('an unrelated broadcast disarmed the pending create (D72)');
-  else if (S.viewedProject !== null) fail('an unrelated broadcast moved the view to ' + S.viewedProject + ' (D72)');
+  if (!createPending.waiting() || createPending.waiting().requestID !== '7') fail('an unrelated broadcast disarmed the pending create');
+  else if (S.viewedProject !== null) fail('an unrelated broadcast moved the view to ' + S.viewedProject);
   else {
     deliver({ type: 'error', message: 'name refused', request_id: '7' });
-    if (createPending.waiting()) fail('the correlated refusal did not disarm the create (D72)');
+    if (createPending.waiting()) fail('the correlated refusal did not disarm the create');
     else {
       createPending.arm({}, '8');
       deliver({ type: 'projects', request_id: '8', projects: [{ id: 'p1', name: 'One', state: 'open' }, { id: 'p9', name: 'Nine', state: 'open' }, { id: 'p2', name: 'Two', state: 'open' }] });
@@ -53,8 +53,8 @@ try {
         deliver({ type: 'projects', projects: [{ id: 'p9', name: 'Nine', state: 'closed', focus: '', dir: '/x', description: '' }] });
         const reopen = document.getElementById('proj-reopen');
         const work = document.getElementById('proj-work');
-        if (!reopen) fail('a closed project offers no Reopen button (D73)');
-        else if (work) fail('a closed project still offers "Work in this project" (D73)');
+        if (!reopen) fail('a closed project offers no Reopen button');
+        else if (work) fail('a closed project still offers "Work in this project"');
         else {
           reopen.click();
           const last = JSON.parse(sock.sent[sock.sent.length - 1]);

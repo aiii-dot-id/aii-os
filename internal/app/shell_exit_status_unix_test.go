@@ -21,11 +21,12 @@ func TestAShellCallsExitStatusReachesItsRecord(t *testing.T) {
 		ceiling       int
 		want          sql.NullInt64
 		endsWith      string
+		outcome, code string
 	}{
-		{"a clean exit", "true", 0, sql.NullInt64{Int64: 0, Valid: true}, ""},
-		{"a non-zero exit", "echo begun; exit 3", 0, sql.NullInt64{Int64: 3, Valid: true}, "[exit status 3]"},
-		{"a non-zero exit after more output than the record keeps", "seq 1 2000; exit 3", 0, sql.NullInt64{Int64: 3, Valid: true}, "[exit status 3]"},
-		{"ended by the ceiling: no status", "echo begun; sleep 30", 1, sql.NullInt64{}, "partial]"},
+		{"a clean exit", "true", 0, sql.NullInt64{Int64: 0, Valid: true}, "", "succeeded", ""},
+		{"a non-zero exit", "echo begun; exit 3", 0, sql.NullInt64{Int64: 3, Valid: true}, "[exit status 3]", "failed", "SHELL_EXIT"},
+		{"a non-zero exit after more output than the record keeps", "seq 1 2000; exit 3", 0, sql.NullInt64{Int64: 3, Valid: true}, "[exit status 3]", "failed", "SHELL_EXIT"},
+		{"ended by the ceiling: no status", "echo begun; sleep 30", 1, sql.NullInt64{}, "partial]", "failed", "SHELL_TIMEOUT"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newVoiceApp(t)
@@ -41,9 +42,12 @@ func TestAShellCallsExitStatusReachesItsRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			var status sql.NullInt64
-			var content string
-			if err := a.store.DB().QueryRow(`SELECT json_extract(details, '$.exit_status'), content FROM conversations WHERE kind='tool_result' AND json_extract(details, '$.tool')='shell'`).Scan(&status, &content); err != nil {
+			var content, outcome, code string
+			if err := a.store.DB().QueryRow(`SELECT json_extract(details, '$.exit_status'), content, outcome, COALESCE(json_extract(details, '$.reason_code'),'') FROM conversations WHERE kind='tool_result' AND json_extract(details, '$.tool')='shell'`).Scan(&status, &content, &outcome, &code); err != nil {
 				t.Fatalf("the shell's result: %v", err)
+			}
+			if outcome != c.outcome || code != c.code {
+				t.Fatalf("recorded %s (%q), want %s (%q)", outcome, code, c.outcome, c.code)
 			}
 			if status != c.want {
 				t.Fatalf("recorded exit status %+v, want %+v", status, c.want)

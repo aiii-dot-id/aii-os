@@ -72,9 +72,9 @@ surfaces, reply with exactly ` + nothingSurfaced + ` and nothing else — no sen
 it, no explanation. An honest empty pass is a valid pass, and that reply is how you
 make one. Do not restate a prior finding in new words. Do not fabricate novelty.
 
-The identity reads working truth as one document with three parts. You author its
-surfacing; the operator model and the working truth have their own authors and are
-shown to you — do not restate them. Write what is new so the whole reads as one.
+The identity reads working truth as one document with two parts. You author its
+surfacing; the working truth has its own author and is shown to you — do not restate
+it. Write what is new so the whole reads as one.
 Do not begin with a heading or a title: the frame over your part is already written.
 
 Output %s of second-person reflection, and only the reflection: not your
@@ -142,9 +142,6 @@ Present:
   live evidence: [new], [confirmed], [trusted], [CONTESTED])
 - Recent experiences that have been processed (not raw)
 - Active intentions
-- The person you work with: who they are, how they communicate, what they value,
-  how the two of you work together — as the experiences show them, never as a
-  manner for you to perform
 
 Prefer compression over proliferation. Merge duplicates. Supersede the outdated.
 If nothing has changed since the last pass, output the current state without
@@ -159,10 +156,10 @@ settle: do not supersede a contested belief and do not merge it away to make the
 record agree with itself. It is resolved by the identity's own deliberate act, and
 until then it is part of what is true of them.
 
-The identity reads working truth as one document with three parts: the surfacing
-DREAM wrote, the person they work with, and the working truth. You author the last
-two; the surfacing is shown to you — do not restate it. Write yours to fit the whole.
-Do not begin with a heading or a title: the frame over each part is already written.`
+The identity reads working truth as one document with two parts: the surfacing DREAM
+wrote, and the working truth. You author the second; the surfacing is shown to you —
+do not restate it. Write yours to fit the whole. Do not begin with a heading or a
+title: the frame over your part is already written.`
 
 func consolidatePrompt(ring3MaxChars, maxOps int) string {
 	return fmt.Sprintf(consolidatePromptText, lengthAsked(100, 400, ring3MaxChars), ring3MaxChars, maxOps)
@@ -175,11 +172,10 @@ nothing else — no prose before or after it:
 
 {
   "operations": [
-    {"op": "upsert", "id": "<belief id>", "statement": "<one clear sentence>", "confidence": <0.0-1.0>, "evidence": ["<id of an experience on the table it comes from, or of a belief it derives from>", "..."], "distinct_from": ["<similar belief id, only when genuinely different>"], "distinction": "<what differs, only with distinct_from>"},
+    {"op": "upsert", "id": "<belief id>", "statement": "<one clear sentence>", "confidence": <0.0-1.0>, "evidence": ["<id of an experience on the table it comes from, or of a belief it derives from>", "..."], "distinct_from": ["<similar belief id, only when genuinely different>"], "distinction": "<what differs, only with distinct_from>", "about_operator": <true only when it is about the person the identity works with>},
     {"op": "supersede", "old_id": "<existing belief id>", "new_id": "<replacing belief id>", "reason": "<why>"}
   ],
-  "ring3_view": "<the clean, current view of working truth, %s and at most %d characters — what the identity reads as what it's working with>",
-  "operator": "<the person the identity works with, written to the identity, 50-150 words — how they communicate, what they value, how the two of them work together, revised from the current model where one is supplied; omit the key when these experiences show nothing new about them>"
+  "ring3_view": "<the clean, current view of working truth, %s and at most %d characters — what the identity reads as what it's working with>"
 }
 
 - upsert with an existing belief id may add evidence only while keeping its
@@ -196,12 +192,16 @@ nothing else — no prose before or after it:
   beliefs, never from nowhere: an upsert that cites nothing is refused, and a
   reply whose upserts all cite nothing mints nothing — the experiences wait.
 - Rings are never yours to choose — the system places beliefs.
-- operator is a model of a person, grounded in what they did and said here,
-  written to the identity like the view: "you" is always the identity. The
-  operator is named in the third person — by their name where these experiences
-  give it, else "your operator" ("<name> values …", "you and <name> …") — and is
-  never addressed ("You are <name> …"). It is never a manner for the identity to
-  adopt, and it is kept only when this reply also mints.
+- What these experiences show of the person the identity works with — how they
+  communicate, what they value, how the two of them work together — is a belief
+  like any other: an upsert with its evidence, marked about_operator. The identity
+  reads those beliefs after their charter, under "Who You Work With". The current
+  beliefs you are shown mark the ones about them ("about <name>"); revise one as
+  any belief is revised, and mark the belief that replaces it. Write it to the
+  identity like the view: "you" is always the identity. The operator is named in
+  the third person — by their name where these experiences give it, else "your
+  operator" ("<name> values …", "you and <name> …") — and is never addressed
+  ("You are <name> …"). It is never a manner for the identity to adopt.
 - At most %d operations. With more than one experience on the table, a reply with more
   mints nothing and consumes nothing, and the next pass is given fewer experiences; with
   one, the operations past that number are not minted. A view over its bound is not kept,

@@ -82,8 +82,8 @@ func TestAFailedClosingCallIsCountedAndNamedAtEverySite(t *testing.T) {
 			if res.Usage.Calls != 2 || res.Usage.Silent != 1 {
 				t.Fatalf("usage = %+v, want 2 calls with the failed one silent", res.Usage)
 			}
-			if res.Spoken != "looking" || res.Interrupted != "the substrate failed mid-turn" {
-				t.Fatalf("spoken %q, interrupted %q", res.Spoken, res.Interrupted)
+			if res.Said() != "looking" || res.Interrupted != "the substrate failed mid-turn" {
+				t.Fatalf("spoken %q, interrupted %q", res.Said(), res.Interrupted)
 			}
 			if res.ModelID != "model-a" || res.RoundsUsed != s.rounds || res.ToolCallsUsed != 1 {
 				t.Fatalf("result = %+v", res)
@@ -114,8 +114,8 @@ func TestAClosingReplyThatAsksForToolsIsRefusedAtEverySite(t *testing.T) {
 			if len(res.Reasoning) != 1 || res.Reasoning[0].Call != 2 || res.Reasoning[0].Text != "closing thoughts" || res.Reasoning[0].Model != "model-b" {
 				t.Fatalf("reasoning = %+v, want the closing call's, as call 2", res.Reasoning)
 			}
-			if res.Spoken != "looking" {
-				t.Fatalf("spoken = %q", res.Spoken)
+			if res.Said() != "looking" {
+				t.Fatalf("spoken = %q", res.Said())
 			}
 		})
 	}
@@ -130,7 +130,7 @@ func TestAnEmptyClosingReplyIsRefusedAtEverySite(t *testing.T) {
 			if err == nil || err.Error() != "LLM final response "+s.circ+" has no text" {
 				t.Fatalf("err = %v", err)
 			}
-			if res.Usage.Calls != 2 || res.Spoken != "looking" {
+			if res.Usage.Calls != 2 || res.Said() != "looking" {
 				t.Fatalf("result = %+v", res)
 			}
 		})
@@ -145,8 +145,8 @@ func TestAClosingReplyOfCallsAndNoTextIsNotCalledEmptyAtEverySite(t *testing.T) 
 			if err == nil || err.Error() != "LLM final response "+s.circ+" requested tools that were disabled" {
 				t.Fatalf("err = %v", err)
 			}
-			if res.Spoken != "looking" || res.Interrupted != "the substrate failed mid-turn" {
-				t.Fatalf("A REPLY OF CALLS IS TOLD AS %q (spoken %q)", res.Interrupted, res.Spoken)
+			if res.Said() != "looking" || res.Interrupted != "the substrate failed mid-turn" {
+				t.Fatalf("A REPLY OF CALLS IS TOLD AS %q (spoken %q)", res.Interrupted, res.Said())
 			}
 			// The control: a closing reply with neither is the empty one,
 			// and so is a closing response with no choices at all.
@@ -188,8 +188,8 @@ func TestAClosingRequestThatCannotFitMakesNoCallAtEverySite(t *testing.T) {
 			if len(res.Unanswered) != 1 || res.Unanswered[0] != hugeSteer().words[0] {
 				t.Fatalf("the unanswered words were lost: %.200q", res.Unanswered)
 			}
-			if strings.Contains(res.Spoken, "read this") {
-				t.Fatalf("the unanswered words rode the identity's reply: %.200q", res.Spoken)
+			if strings.Contains(res.Said(), "read this") {
+				t.Fatalf("the unanswered words rode the identity's reply: %.200q", res.Said())
 			}
 		})
 	}
@@ -228,7 +228,7 @@ func TestTheBoundaryCarriesTheOperatorBeforeTheLoop(t *testing.T) {
 	}
 	final := client.requests[len(client.requests)-1]
 	last := final[len(final)-1].Content
-	if want := steeringNote([]string{"answer with what you have"}) + "\n\nYou've reached this turn's round limit."; !strings.HasPrefix(last, want) {
+	if want := steeringNote([]string{"answer with what you have"}) + "\n\n" + roundLimitAsk; !strings.HasPrefix(last, want) {
 		t.Fatalf("the boundary message = %q, want it to begin %q", last, want)
 	}
 }
@@ -246,11 +246,11 @@ func TestAYieldOnTheLastRoundIsAYield(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	want := "standing by\n\nBest current answer: X holds\n\n" + declare("Turn yielded after %d tool calls — the gate is free; a delivery or message wakes the next turn.", 1)
-	if res.Spoken != want {
-		t.Fatalf("spoken = %q, want %q", res.Spoken, want)
+	if res.Said() != want {
+		t.Fatalf("spoken = %q, want %q", res.Said(), want)
 	}
 	last := joined(client.seen[1])
-	if !strings.Contains(last, "round limit") || strings.Contains(last, "You yielded this turn") {
+	if !strings.Contains(last, roundLimitAsk) || strings.Contains(last, "You yielded this turn") {
 		t.Fatalf("on the last round the limit's ask is the one sent: %q", last[len(last)-200:])
 	}
 }

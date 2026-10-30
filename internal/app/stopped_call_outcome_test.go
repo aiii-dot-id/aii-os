@@ -220,7 +220,7 @@ func TestARefusedCallIsRecordedRefusedAndAFailedOneFailed(t *testing.T) {
 		{"refused by the sandbox", "read", string(outsideArgs), "refused", tools.ReasonPathRefused},
 		{"a write with no content", "write", `{"file_path":"keep.txt"}`, "refused", tools.ReasonArgumentsRequired},
 		{"a copy with no destination", "write", `{"file_path":"keep.txt","action":"copy"}`, "refused", tools.ReasonArgumentsRequired},
-		{"ran and failed", "read", `{"file_path":"missing.txt"}`, "failed", ""},
+		{"ran and failed, with its reason", "read", `{"file_path":"missing.txt"}`, "failed", tools.ReasonNotFound},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newVoiceApp(t)

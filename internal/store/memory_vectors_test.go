@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -106,5 +108,88 @@ func TestTheVectorFunctionsAreRegisteredAndProbed(t *testing.T) {
 	}
 	if err := probeMemoryFunctions(s.DB()); err != nil {
 		t.Fatalf("the probe must cover the vector functions: %v", err)
+	}
+}
+
+func TestAVectorKeepsHowMuchOfItsTextItWasMadeFrom(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.DB().Exec(`INSERT INTO inbound (id, channel, address, body, received_ms) VALUES ('in1', 'sms', 'x', 'the tide tables', 1), ('in2', 'sms', 'x', 'a quiet day', 2), ('in3', 'sms', 'x', 'a long letter', 3)`); err != nil {
+		t.Fatal(err)
+	}
+	none, some := 0, 791
+	if err := s.PutMemoryVectors([]MemoryVector{
+		{Store: "inbound", ID: "in1", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}, Unread: &none},
+		{Store: "inbound", ID: "in2", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}},
+		{Store: "inbound", ID: "in3", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}, Unread: &some},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	said := func(id string) string {
+		t.Helper()
+		var unread sql.NullInt64
+		if err := s.DB().QueryRow(`SELECT `+VectorUnread+` FROM memory_vectors v`+VectorUnreadJoin+` WHERE v.store = 'inbound' AND v.id = ?`, id).Scan(&unread); err != nil {
+			t.Fatal(err)
+		}
+		if !unread.Valid {
+			return "untold"
+		}
+		return strconv.FormatInt(unread.Int64, 10)
+	}
+	for id, want := range map[string]string{"in1": "0", "in2": "untold", "in3": "791"} {
+		if got := said(id); got != want {
+			t.Fatalf("%s: %s characters past what was read, want %s", id, got, want)
+		}
+	}
+	under := -1
+	if err := s.PutMemoryVectors([]MemoryVector{{Store: "inbound", ID: "in1", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}, Unread: &under}}); err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("fewer than no characters past what was read must be refused: %v", err)
+	}
+
+	// THE TABLE IS 0.1.23'S: its columns, with data in them, are the eight
+	// it declares and no other.
+	cols, err := s.DB().Query(`SELECT name FROM pragma_table_info('memory_vectors') ORDER BY cid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for cols.Next() {
+		var n string
+		if err := cols.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+	}
+	cols.Close()
+	if got, want := strings.Join(names, ","), "store,id,basis,content_sha,dims,scale,q,embedded_at"; got != want {
+		t.Fatalf("MEMORY_VECTORS IS NOT AS 0.1.23 DECLARES IT, so 0.1.23 refuses this database once a count is held: columns %s, want %s", got, want)
+	}
+	var tables int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE '%unread%'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("a table of its own for the count is one 0.1.23 refuses: %d %v", tables, err)
+	}
+
+	// Made again with nothing said, written over by another program (a
+	// vector of its own, another embedded_at), deleted: none says a count.
+	if err := s.PutMemoryVectors([]MemoryVector{{Store: "inbound", ID: "in3", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := said("in3"); got != "untold" {
+		t.Fatalf("a vector made again without a count says %s", got)
+	}
+	if _, err := s.DB().Exec(`INSERT OR REPLACE INTO memory_vectors (store, id, basis, content_sha, dims, scale, q, embedded_at) VALUES ('inbound', 'in1', 'p/m', 'sha', 1, 0.01, x'01', '2026-10-21T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if got := said("in1"); got != "untold" {
+		t.Fatalf("A VECTOR ANOTHER PROGRAM WROTE OVER SAYS THE COUNT OF THE ONE BEFORE IT: %s", got)
+	}
+	if err := s.PutMemoryVectors([]MemoryVector{{Store: "inbound", ID: "in1", Basis: "p/m", ContentSHA: "sha", Dims: 1, Scale: 0.01, Q: []byte{1}, Unread: &some}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteMemoryVectors("inbound", []string{"in1"}); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM runtime_meta WHERE key = ?`, VectorUnreadPrefix+"inbound/in1").Scan(&left); err != nil || left != 0 {
+		t.Fatalf("a deleted vector left its count behind: %d %v", left, err)
 	}
 }

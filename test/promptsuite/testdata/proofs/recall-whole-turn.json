@@ -1,0 +1,118 @@
+{
+  "task": "recall-whole-turn",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "house list for the month",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "what was item 13",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "house list"
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "source": "conversation",
+                  "query": "turn:2"
+                }
+              }
+            ]
+          },
+          {
+            "text": "ITEM: Replace the hallway bulb with a warm one"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "E3: the first 200 characters of the turn are taken for the whole",
+    "fails": [
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "house list for the month",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "what was item 13",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "house list"
+                }
+              }
+            ]
+          },
+          {
+            "text": "ITEM: Water the ferns on the north windowsill"
+          }
+        ]
+      }
+    ]
+  },
+  "absent": {
+    "on": "what was item 13",
+    "texts": [
+      "hallway bulb"
+    ]
+  }
+}

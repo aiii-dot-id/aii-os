@@ -15,7 +15,7 @@ func TestSearchTextWithASlashIsSearched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home := filepath.Join(base, "vega")
+	home := filepath.Join(base, "example")
 	granted := filepath.Join(base, "grants", "proj")
 	outside := filepath.Join(base, "outside")
 	for p, body := range map[string]string{

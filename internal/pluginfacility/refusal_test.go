@@ -33,7 +33,7 @@ func TestARefusalSaysWhetherWaitingWillHelp(t *testing.T) {
 	// A transient one is reconsidered by anything at all, the timer
 	// included.
 	readiness := NewRefusal("id.example.p", "1.0.0", 4, StageReadiness, errors.New("no readiness mark within 30s"))
-	for _, in := range []Input{InputPackage, InputTrust, InputPolicy, InputConfig, InputHost} {
+	for _, in := range []Input{InputPackage, InputTrust, InputPolicy, InputConfig, InputHost, InputNetwork} {
 		if !readiness.WaitsOn(in) {
 			t.Fatalf("a transient refusal waits on everything, missed %s", in)
 		}

@@ -17,7 +17,9 @@ type ThinkingBlock struct {
 
 type Image struct {
 	MediaType string
-	Data      []byte
+
+	Name string
+	Data []byte
 
 	Tokens int
 }
@@ -83,11 +85,12 @@ type Choice struct {
 }
 
 type Response struct {
-	Choices   []Choice `json:"choices"`
-	Usage     Usage    `json:"usage"`
-	ModelID   string   `json:"-"`
-	ID        string   `json:"id,omitempty"`
-	RequestID string   `json:"-"`
+	Choices []Choice `json:"choices"`
+	Usage   Usage    `json:"usage"`
+
+	ModelID   string `json:"-"`
+	ID        string `json:"id,omitempty"`
+	RequestID string `json:"-"`
 
 	CallID      string          `json:"-"`
 	Diagnostics json.RawMessage `json:"-"`

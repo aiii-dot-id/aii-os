@@ -244,8 +244,16 @@ func TestAnOperatorsOwnImpossiblePairIsStillRefused(t *testing.T) {
 // seedDiscovered puts one model's published numbers where a finished probe
 // would have left them.
 func seedDiscovered(a *App, provider, model string, m modelMeta) {
+	// As a probe records it: for the endpoint it asked, since what a
+	// provider publishes belongs to that endpoint (modelCapabilitiesFor).
+	key := ""
+	if reg, err := a.loadProviders(); err == nil {
+		if e := entryNamed(reg, provider); e != nil {
+			key = probeKey(*e)
+		}
+	}
 	a.providers.runtime.provStatus = map[string]providerProbe{provider: {
 		state: "ok", models: []string{model}, meta: map[string]modelMeta{model: m},
-		checkedAt: time.Now(),
+		checkedAt: time.Now(), key: key,
 	}}
 }

@@ -19,7 +19,7 @@ func signedBlock(t *testing.T, block string) ([]byte, []byte, *packagetest.Role)
 	}
 	md := []byte("# AII OS Plugin Catalog\n\nProse the parser ignores.\n\n```json\n" + block + "\n```\n")
 	sig, err := plat.Sign(ArtifactKindPluginCatalog, catalogSig{
-		CatalogVersion: 1, Generated: "2026-09-17T00:00:00Z", CatalogSHA256: sigenvelope.SHA256Prefixed(md),
+		CatalogVersion: 1, Generated: "2026-09-17T00:00:00Z", CatalogSHA256: sigenvelope.SHA256Prefixed(md), HostLine: OwnLine(),
 	})
 	if err != nil {
 		t.Fatal(err)

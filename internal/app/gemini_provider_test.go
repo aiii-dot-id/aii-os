@@ -210,7 +210,7 @@ func TestGeminiModelDiscovery(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(models, []string{"gemini-3.8-flash", "gemini-3.1-pro-preview"}) {
 		t.Fatalf("models = %v, %v", models, err)
 	}
-	if want := (modelMeta{Context: 1048576, MaxOut: 65536}); meta["gemini-3.8-flash"] != want || meta["gemini-3.1-pro-preview"] != want {
+	if want := (modelMeta{Context: 1048576, MaxOut: 65536}); !reflect.DeepEqual(meta["gemini-3.8-flash"], want) || !reflect.DeepEqual(meta["gemini-3.1-pro-preview"], want) {
 		t.Errorf("limits = %+v", meta)
 	}
 	if uri != "/v1beta/models?pageSize=1000" || header.Get("x-goog-api-key") != "the-key" || header.Get("Authorization") != "" {
@@ -276,7 +276,7 @@ func TestProviderAPITypeAdmitsGemini(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.APIType = "vertex"
-	if err := normalizeProviderAPIType(&e); err == nil || !strings.Contains(err.Error(), "openai, anthropic or gemini") {
+	if err := normalizeProviderAPIType(&e); err == nil || !strings.Contains(err.Error(), "openai, anthropic, gemini or responses") {
 		t.Fatalf("an unknown api_type: %v", err)
 	}
 }

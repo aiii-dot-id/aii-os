@@ -243,8 +243,9 @@ func (a *App) settingViews(c *Config, ap *pluginhost.ActivePlugin, contracts fun
 func pluginOperationViews(reg *tools.Registry, names []string) []dashboard.PluginOperationView {
 	var out []dashboard.PluginOperationView
 	for _, name := range names {
-		if operation, summary, ok := reg.Declared(name); ok {
-			out = append(out, dashboard.PluginOperationView{Tool: name, Operation: operation, Summary: summary})
+		if d, ok := reg.Declared(name); ok {
+			out = append(out, dashboard.PluginOperationView{Tool: name, Operation: d.Operation, Summary: d.Summary,
+				Confirms: d.OperatorConfirms, Published: d.Published, UnconfirmedByDesign: d.UnconfirmedByDesign})
 		}
 	}
 	return out

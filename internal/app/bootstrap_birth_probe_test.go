@@ -21,6 +21,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/genesis"
 	"github.com/aiii-dot-id/aii-os/internal/genesis/genesistest"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
@@ -148,7 +149,7 @@ func testBirthLiveDashboard(t *testing.T, existingDashboard bool) {
 				return
 			}
 			prompt <- request.Messages[0].Content
-			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"Hello, I am Mira."},"finish_reason":"stop"}]}`)
+			fmt.Fprint(w, `{"model":"birth-model-2026-10-01","choices":[{"message":{"role":"assistant","content":"Hello, I am Mira."},"finish_reason":"stop"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -180,6 +181,18 @@ func testBirthLiveDashboard(t *testing.T, existingDashboard bool) {
 	}
 	if a.ledger.LastSeq() != 1 {
 		t.Fatalf("birth minted %d events, want only ring0.genesis", a.ledger.LastSeq())
+	}
+	// The birth record names the model that gave the founding reply, as
+	// the provider named it, not the alias the operator chose.
+	events, err := ledger.ReadAll(a.configSnapshot().Identity.LedgerPath)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("birth record = %d events, %v", len(events), err)
+	}
+	var stamped struct {
+		ModelID string `json:"model_id"`
+	}
+	if err := json.Unmarshal(events[0].Payload, &stamped); err != nil || stamped.ModelID != "birth-model-2026-10-01" {
+		t.Fatalf("the birth record names %q (%v), want the model that answered the founding prompt", stamped.ModelID, err)
 	}
 	identity, err := a.store.PromptIdentity()
 	if err != nil {

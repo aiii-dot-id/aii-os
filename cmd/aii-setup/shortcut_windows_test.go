@@ -27,11 +27,11 @@ func TestAShortcutIsWrittenAsNamedWhateverQuotesItsPathsHold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", lnk, err)
 	}
-	// The shell resolves a short (8.3) name to the long one when it reads a
-	// shortcut back, and an account whose TEMP is a short path would
-	// compare two spellings of one file; the expectation is spelled long,
-	// as the shell spells it.
-	if got, want := strings.TrimPrefix(string(out), "\uFEFF"), longPath(t, target)+"\n"+longPath(t, filepath.Dir(target)); got != want {
+	// An account whose TEMP is a short (8.3) path has two spellings of one
+	// file, and the shell reads a shortcut's target back long and its
+	// working folder as written: both sides are compared spelled long.
+	got, wd, _ := strings.Cut(strings.TrimPrefix(string(out), "\uFEFF"), "\n")
+	if got, want := longPath(t, got)+"\n"+longPath(t, wd), longPath(t, target)+"\n"+longPath(t, filepath.Dir(target)); got != want {
 		t.Fatalf("the shortcut points at\n%q\nwant\n%q", got, want)
 	}
 	if _, err := os.Stat("aii-probe.txt"); err == nil {

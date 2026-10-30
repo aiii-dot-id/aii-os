@@ -12,8 +12,10 @@ const (
 	Version      = 1
 	MaxPageRows  = 50
 	MaxPageBytes = 32768
-	MaxReadBytes = 16 << 10
-	TimeLayout   = "2006-01-02T15:04:05.000000000Z"
+
+	PageBodyBytes = MaxPageBytes - 8192
+	MaxReadBytes  = 16 << 10
+	TimeLayout    = "2006-01-02T15:04:05.000000000Z"
 )
 
 type Kind string
@@ -112,6 +114,8 @@ type Details struct {
 	Annotation     *AnnotationData `json:"annotation,omitempty"`
 	Grade          *Grade          `json:"grade,omitempty"`
 
+	Said string `json:"-"`
+
 	ExitStatus *int `json:"exit_status,omitempty"`
 }
 type Input struct {
@@ -204,6 +208,10 @@ func Validate(in Input) error {
 	}
 	if in.Details.ExitStatus != nil && (in.Kind != ToolResult || *in.Details.ExitStatus < 0) {
 		return Invalid("an exit status belongs to a tool result and is not negative")
+	}
+	if in.Details.Said != "" && (in.Kind != Message || in.Role != Operator ||
+		(in.Details.Said != SaidTyped && in.Details.Said != SaidSpoken && in.Details.Said != SaidAnswer)) {
+		return Invalid("said belongs to an operator's message and is typed, spoken or answer")
 	}
 	if in.Details.LegacySource != "" || in.Details.OrderBasis != "" || in.Details.Origin != "" {
 		return Invalid("origin fields belong to migration/transient owner")

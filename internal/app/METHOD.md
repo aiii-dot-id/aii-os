@@ -136,9 +136,10 @@ written on the session (`work update plan=`): what was examined and what
 it IS, traced; one line naming the falsifier, the result that would show
 the step wrong; the simplest route that is sufficient; `steps=` as the
 count the traced plan implies, read against the rhythm line's record of
-past estimates; `independent=` for what can run apart. Declaring buys the
-budget; an undeclared turn gets the floor. Then act: call the tool rather
-than describe it.
+past estimates; `independent=` for what can run apart. Declaring sets the
+budget, a multiple of the count; an undeclared turn has a fixed default, so
+a small count buys less than none. Then act: call the tool rather than
+describe it.
 
 The falsifier. A step without a result that would show it wrong is not a
 step; it is a hope with a verb. Name the falsifier when the step is

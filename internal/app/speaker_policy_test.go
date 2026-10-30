@@ -289,6 +289,44 @@ func TestPartialsAreWithheldUnderARestriction(t *testing.T) {
 	}
 }
 
+// A PARTIAL THAT DECLARES A TRACK IS HELD TO IT, as a final is: with a
+// valid segment its words reach the page with their track; with a track
+// and no valid segment they reach nothing and are counted, never shown as
+// unsegmented speech; and a partial that declares none flows as before.
+func TestAPartialThatDeclaresATrackIsHeldToIt(t *testing.T) {
+	a := newVoiceApp(t)
+	h, _ := newTrackedSession(a, "vs-partial-track", true)
+	page := &pageLog{}
+	partial := func(seq int64, more map[string]any) pluginhost.Event {
+		fields := map[string]any{"type": "transcript_partial", "session_id": h.id, "sequence": seq, "text": "hello"}
+		for k, v := range more {
+			fields[k] = v
+		}
+		raw, _ := json.Marshal(fields)
+		return pluginhost.Event{Type: "transcript_partial", SessionID: h.id, Sequence: seq, Raw: raw}
+	}
+	a.voiceEngineEvent(nil, partial(1, map[string]any{"track_id": "utterance-1.track-0", "start_sample": 0, "end_sample": 4800}), page.enqueue)
+	if ev := page.find("transcript_partial", 1); ev == nil || ev.TrackID != "utterance-1.track-0" || ev.Text != "hello" {
+		t.Fatalf("a partial with a valid track must reach the page with it: %+v", ev)
+	}
+	for seq, more := range map[int64]map[string]any{
+		2: {"track_id": "utterance-1.track-0"},
+		3: {"track_id": "", "start_sample": 0, "end_sample": 4800},
+		4: {"track_id": nil},
+		5: {"track_id": "utterance-1.track-0", "start_sample": 4800, "end_sample": 4800},
+	} {
+		before := a.speakerWithheldPartials.Load()
+		a.voiceEngineEvent(nil, partial(seq, more), page.enqueue)
+		if page.find("transcript_partial", seq) != nil || a.speakerWithheldPartials.Load() != before+1 {
+			t.Errorf("a partial that declares a track that is not valid (%v) must be withheld and counted: %v", more, page.types())
+		}
+	}
+	a.voiceEngineEvent(nil, partial(6, nil), page.enqueue)
+	if ev := page.find("transcript_partial", 6); ev == nil || ev.TrackID != "" {
+		t.Fatalf("a partial that declares no track flows as before: %+v", ev)
+	}
+}
+
 // THE SESSION'S END WITHHOLDS WHAT IS STILL HELD: nothing is delivered
 // late, and the work the hold raised is given back.
 func TestASessionsEndWithholdsWhatIsHeld(t *testing.T) {

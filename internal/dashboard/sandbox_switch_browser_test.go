@@ -98,6 +98,11 @@ run(() => {
  assert(one('[data-sandbox-off] [data-sandbox-not-kept]').textContent===names,'while off the card must name what a listed folder leaves unkept');
  host(false);
  assert(!one('[data-sandbox-not-kept]'),'a state that names nothing shows nothing');
+ // Where the wall labels the home and the listed folders (Windows), the card says so, in the host's words, as text.
+ assert(!one('[data-sandbox-labelled]'),'no label line where the host sends none');
+ socket.recv({type:'sandbox',sandbox:{root:'C:\\home',extra_roots:['D:\\project'],off:false,labelled:'fixture <b>label</b> line'}});
+ assert(one('[data-sandbox-labelled]') && one('[data-sandbox-labelled]').textContent==='fixture <b>label</b> line','the card must show the host\'s label line as text');
+ host(false);
 
  tick();el('sbx-off-allow').click();
  const before=socket.frames.length;

@@ -60,14 +60,13 @@ func TestAskingForATokenJourneyInARealBrowser(t *testing.T) {
 		t.Fatal("config.json and the running server do not hold the requirement and one token")
 	}
 
-	if _, err := asker.eval(`document.querySelector('[data-token-reveal]').click(); 'eye'`, false, 10*time.Second); err != nil {
-		t.Fatalf("eye: %v", err)
-	}
-	if shown := awaitOnPage(t, asker, "the eye shows the token", `
-    const f = document.getElementById('cfg-dtoken');
-    last = 'field: ' + (f ? f.value.length + ' chars' : 'absent');
-    return f && f.value ? f.value : null;`); shown != token {
-		t.Fatalf("the eye showed %d chars, not the token asked for", len(shown))
+	// The page shows no token: it says where the token is read, and the
+	// other page signs in with what aii dashboard-token prints.
+	if shown := awaitOnPage(t, asker, "the page says where the token is read", `
+    const where = document.querySelector('[data-token-where]');
+    last = 'where: ' + !!where;
+    return where ? (document.documentElement.outerHTML.includes('`+token+`') ? 'SHOWN' : 'none') : null;`); shown != "none" {
+		t.Fatal("the page that asked for the token shows it")
 	}
 
 	if _, err := other.eval(`const f = document.querySelector('#dashboard-signin form');

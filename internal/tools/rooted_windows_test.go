@@ -20,7 +20,6 @@ func TestIsRootedCoversDriveRootedPaths(t *testing.T) {
 		{`\aii-escape-probe\secret.txt`, true}, // IsAbs says false
 		{"/aii-escape-probe/secret.txt", true}, // IsAbs says false
 		{`C:\Windows`, true},
-
 		{`C:foo`, true},
 		{`C:foo\bar.txt`, true},
 		{`d:x`, true},

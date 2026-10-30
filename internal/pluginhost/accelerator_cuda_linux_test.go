@@ -67,10 +67,13 @@ func TestLinuxCUDAProfileKeepsTheWall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The profile has a Vulkan part, so NVIDIA's display node holds the null
+	// device (nvidiaDisplayStandIn); the display device itself stays out.
 	script := `import ctypes,os,sys
 assert os.path.exists('/dev/nvidia-uvm')
-for path in ['/dev/nvidia-uvm-tools','/dev/nvidia-modeset','/dev/dri/card0','/dev/input','/dev/snd']:
+for path in ['/dev/nvidia-uvm-tools','/dev/dri/card0','/dev/input','/dev/snd']:
  assert not os.path.exists(path),path
+assert os.stat('/dev/nvidia-modeset').st_rdev==os.stat('/dev/null').st_rdev,'NVIDIA display device admitted'
 assert os.readlink('/proc/self/ns/net')!=sys.argv[2]
 assert os.path.exists('/proc/self/task/'+str(os.getpid())+'/comm')
 try:

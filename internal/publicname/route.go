@@ -130,6 +130,7 @@ func (r *Runtime) startRouteOwner() bool {
 			if next <= 0 {
 				next = routeIdle
 			}
+			r.lookUpName(ctx)
 			deadline := time.Now().Add(next)
 			if floor := r.routeFloor(); floor.After(deadline) {
 				deadline = floor
@@ -165,6 +166,42 @@ func (r *Runtime) lookAtRoute(ctx context.Context) (time.Duration, error) {
 		return next, nil
 	}
 	return r.reconcileRoute(ctx)
+}
+
+func (r *Runtime) lookUpName(ctx context.Context) {
+	r.mu.Lock()
+	name := ""
+	if r.name != nil && r.status != StatusPrepared {
+		name = r.name.Name
+	}
+	r.mu.Unlock()
+	if name == "" {
+		return
+	}
+	lookup := r.LookupHost
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupHost
+	}
+	addrs, err := lookup(ctx, name)
+	if ctx.Err() != nil {
+		return
+	}
+	sort.Strings(addrs)
+	resolves, failed := strings.Join(addrs, ", "), ""
+	if err != nil {
+		resolves, failed = "", err.Error()
+	}
+	r.mu.Lock()
+	changed := r.resolvesTo != resolves || r.resolveError != failed
+	r.resolvesTo, r.resolveError = resolves, failed
+	r.mu.Unlock()
+	switch {
+	case !changed:
+	case failed != "":
+		logsink.Warn("route.pass", "%s does not resolve from this machine: %s", name, failed)
+	default:
+		logsink.Info("route.pass", "%s resolves from this machine to %s", name, resolves)
+	}
 }
 
 func (r *Runtime) serviceDelay(err error, fallback time.Duration) time.Duration {
@@ -383,7 +420,7 @@ func wantsNothing(cfg Settings, mode string) bool {
 	case RouteDisabled:
 		return true
 	case RouteDirect:
-		records, err := directRoute(cfg)
+		records, _, err := directRoute(cfg)
 		return err == nil && len(records) == 0
 	}
 	return false
@@ -523,7 +560,7 @@ func (r *Runtime) desiredRoute(cfg Settings, mode string, st certs.ServiceStatus
 		}
 		return []certs.Record{{Type: certs.RecordCNAME, Value: endpoint.Name}}, nil
 	default:
-		records, err := directRoute(cfg)
+		records, _, err := directRoute(cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -632,11 +669,11 @@ func (r *Runtime) applyNameURLFor(cfg Settings) string {
 	return origin
 }
 
-func directRoute(cfg Settings) ([]certs.Record, error) {
+func directRoute(cfg Settings) ([]certs.Record, []dashboard.HeldFamily, error) {
 	if explicit := cfg.Certificate.DirectAddresses; explicit != nil {
 
 		if err := CheckDirectAddresses(*explicit); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out := make([]certs.Record, 0, len(*explicit))
 		for _, s := range *explicit {
@@ -647,27 +684,27 @@ func directRoute(cfg Settings) ([]certs.Record, error) {
 			}
 			out = append(out, certs.Record{Type: kind, Value: ip.String()})
 		}
-		return out, nil
+		return out, nil, nil
 	}
 	host := cfg.Host
 	if dashboard.IsLoopback(host) {
 
-		return []certs.Record{}, nil
+		return []certs.Record{}, nil, nil
 	}
 	if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
-		return []certs.Record{addressRecord(ip)}, nil
+		return []certs.Record{addressRecord(ip)}, nil, nil
 	}
 	if cfg.Origin != "" {
 		if u, err := url.Parse(cfg.Origin); err == nil {
 			if ip := net.ParseIP(u.Hostname()); ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
-				return []certs.Record{addressRecord(ip)}, nil
+				return []certs.Record{addressRecord(ip)}, nil, nil
 			}
 		}
 	}
 	addrs, err := interfaceAddrs()
 	if err != nil {
 
-		return nil, fmt.Errorf("this machine's addresses could not be read: %w", err)
+		return nil, nil, fmt.Errorf("this machine's addresses could not be read: %w", err)
 	}
 	var v4, v6 []certs.Record
 	for _, a := range addrs {
@@ -688,21 +725,30 @@ func directRoute(cfg Settings) ([]certs.Record, error) {
 	}
 
 	out := []certs.Record{}
-	for family, found := range map[string][]certs.Record{"IPv4": v4, "IPv6": v6} {
-		switch len(found) {
+	var held []dashboard.HeldFamily
+	var asked []string
+	for _, f := range []struct {
+		name  string
+		found []certs.Record
+	}{{"IPv4", v4}, {"IPv6", v6}} {
+		switch len(f.found) {
 		case 0:
 		case 1:
-			out = append(out, found[0])
+			out = append(out, f.found[0])
 		default:
-			values := make([]string, 0, len(found))
-			for _, r := range found {
+			values := make([]string, 0, len(f.found))
+			for _, r := range f.found {
 				values = append(values, r.Value)
 			}
 			sort.Strings(values)
-			return nil, fmt.Errorf("this machine has more than one %s address (%s) and the dashboard binds every interface; name the ones to publish in certificate.direct_addresses", family, strings.Join(values, ", "))
+			held = append(held, dashboard.HeldFamily{Family: f.name, Addresses: values})
+			asked = append(asked, fmt.Sprintf("more than one %s address (%s)", f.name, strings.Join(values, ", ")))
 		}
 	}
-	return out, nil
+	if len(out) == 0 && len(held) > 0 {
+		return nil, held, fmt.Errorf("this machine has %s and the dashboard binds every interface; name the ones to publish in certificate.direct_addresses", strings.Join(asked, " and "))
+	}
+	return out, held, nil
 }
 
 func CheckDirectAddresses(list []string) error {
@@ -718,7 +764,7 @@ func (r *Runtime) DirectChoiceRefusal(now Settings) error {
 	if mode, err := RouteMode(now.Certificate); err != nil || mode != RouteDirect {
 		return nil
 	}
-	if _, err := directRoute(now); err != nil {
+	if _, _, err := directRoute(now); err != nil {
 		return fmt.Errorf("certificate.direct_addresses: %w", err)
 	}
 	return nil
@@ -820,7 +866,6 @@ func (r *Runtime) setRouteError(msg string) {
 	r.route.LastError = msg
 
 	r.routeTold = ""
-	r.lastError = "route: " + msg
 	r.mu.Unlock()
 }
 

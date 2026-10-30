@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
@@ -62,10 +64,10 @@ func (s *Server) AllowHost(hostPort string) {
 func (s *Server) hostGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.hostAllowed(r.Host) {
-			if s.foreignHosts.own(refusalLinesAMinute, func(n uint64) {
+			if s.foreignHosts.own(s.refusalLines(), func(n uint64) {
 				logsink.Warn("dashboard.refusal", "%d more request(s) with a foreign Host refused in the last minute", n)
 			}) {
-				logsink.Warn("dashboard.refusal", "refused request with foreign Host %q", r.Host)
+				logsink.Warn("dashboard.refusal", "refused request with foreign Host %q", peerSaid(r.Host, refusalPeerTextBytes))
 			}
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
@@ -101,50 +103,64 @@ func (s *Server) handleAccessToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		if s.tokenAuthorized(r) {
-			w.WriteHeader(http.StatusNoContent)
+		if missing := s.signInLacks(r, false); missing != signedInBoth {
+			refuseSignIn(w, r, missing)
 			return
 		}
-		if s.upgradeAccessCookie(w, r) {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		http.Error(w, "dashboard access token required", http.StatusUnauthorized)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	wait := s.strangerBodyWait
-	if wait <= 0 {
-		wait = strangerBodyWait
-	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait))
 	body, err := io.ReadAll(io.LimitReader(r.Body, AccessTokenMaxBytes+1))
 	offered := strings.TrimSpace(string(body))
-	status, refusal := http.StatusUnauthorized, "dashboard access token refused"
-	if err == nil && len(body) <= AccessTokenMaxBytes && !s.validAccessToken(offered) {
 
-		p, ok, seen := s.redeemAccessCode(offered, r)
+	p := s.auth.Load()
+	status, refusal := http.StatusUnauthorized, "dashboard access token refused"
+	if err == nil && len(body) <= AccessTokenMaxBytes && !tokenIsVerifier(offered, p.hash) {
+
+		granted, ok, ended := s.redeemAccessCode(offered, r)
 		if ok {
 			if s.accessCodeSpent != nil {
 				s.accessCodeSpent()
 			}
-			logsink.Info("dashboard.decision", "an access code signed a device in from %s", clientHost(r))
-			s.setAccessCookieFor(w, r, p.hash)
-			w.WriteHeader(http.StatusNoContent)
+			logsink.Info("dashboard.decision", "an access code signed a device in %s", cameFrom(r))
+			s.signIn(w, r, granted)
 			return
 		}
-		if seen {
+		if ended != nil {
 
-			status, refusal = http.StatusForbidden, ErrAccessCodeSeen.Error()
+			status, refusal = http.StatusForbidden, ended.Error()
 		}
 	}
-	if err != nil || len(body) > AccessTokenMaxBytes || !s.validAccessToken(offered) {
+	if err != nil || len(body) > AccessTokenMaxBytes || !tokenIsVerifier(offered, p.hash) {
 		s.credentialRefused(r)
 		http.Error(w, refusal, status)
 		return
 	}
-	s.setAccessCookie(w, r)
+	s.signIn(w, r, p)
+}
+
+func (s *Server) signIn(w http.ResponseWriter, r *http.Request, p *accessPolicy) {
+	s.setAccessCookieFor(w, r, p.hash)
+	givePageKey(w, p)
+	if s.overlayServesThePage() {
+		w.Header().Set(overlayHeader, overlayReload)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	overlayHeader = "Aii-Overlay"
+	overlayReload = "reload"
+)
+
+func (s *Server) overlayServesThePage() bool {
+	files, err := s.overlayReplacements()
+	if err != nil || len(files) > 0 {
+		return err == nil
+	}
+	added, err := s.overlayAdditions()
+	return err == nil && len(added) > 0
 }
 
 func (s *Server) handleRotateAccessToken(w http.ResponseWriter, r *http.Request) {
@@ -198,8 +214,9 @@ func (s *Server) handleTokenAct(w http.ResponseWriter, r *http.Request, require 
 	before := s.accessHash()
 	err := act()
 
-	if s.accessRequired() && s.accessHash() != before {
-		s.setAccessCookie(w, r)
+	if p := s.auth.Load(); p != nil && p.required && p.hash != before {
+		s.setAccessCookieFor(w, r, p.hash)
+		givePageKey(w, p)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -208,7 +225,18 @@ func (s *Server) handleTokenAct(w http.ResponseWriter, r *http.Request, require 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-const strangerBodyWait = 10 * time.Second
+const DefaultStrangerBodySeconds, MinStrangerBodySeconds, MaxStrangerBodySeconds = 10, 1, 600
+
+func (s *Server) strangerBodyTime() time.Duration {
+	if s.strangerBodyWait > 0 {
+		return s.strangerBodyWait
+	}
+	n := 0
+	if h := s.currentHandler(); h != nil && h.StrangerBodySeconds != nil {
+		n = h.StrangerBodySeconds()
+	}
+	return time.Duration(within(n, DefaultStrangerBodySeconds, MinStrangerBodySeconds, MaxStrangerBodySeconds)) * time.Second
+}
 
 const refusedLoginDelay = 400 * time.Millisecond
 
@@ -218,10 +246,10 @@ func (s *Server) credentialRefused(r *http.Request) {
 		limit = h.RefusedPauses()
 	}
 	limit = within(limit, DefaultRefusedPauses, MinRefusedPauses, MaxRefusedPauses)
-	if s.refused.lines.own(refusalLinesAMinute, func(n uint64) {
+	if s.refused.lines.own(s.refusalLines(), func(n uint64) {
 		logsink.Warn("dashboard.refusal", "%d more access token(s) refused in the last minute, each answered and none written down one by one", n)
 	}) {
-		logsink.Warn("dashboard.refusal", "access token refused from %s", clientHost(r))
+		logsink.Warn("dashboard.refusal", "access token refused %s", cameFrom(r))
 	}
 	g := &s.refused
 	g.mu.Lock()
@@ -245,9 +273,32 @@ func (s *Server) credentialRefused(r *http.Request) {
 
 const (
 	DefaultRefusedPauses, MinRefusedPauses, MaxRefusedPauses = 32, 1, 1024
-	refusalLinesAMinute                                      = 120
 	refusalMinute                                            = time.Minute
 )
+
+const (
+	DefaultRefusalLinesPerMinute, MinRefusalLinesPerMinute, MaxRefusalLinesPerMinute = 120, 1, 600
+	refusalPeerTextBytes                                                             = 300
+)
+
+func (s *Server) refusalLines() int {
+	linesPerMinute := 0
+	if h := s.currentHandler(); h != nil && h.RefusalLinesPerMinute != nil {
+		linesPerMinute = h.RefusalLinesPerMinute()
+	}
+	return within(linesPerMinute, DefaultRefusalLinesPerMinute, MinRefusalLinesPerMinute, MaxRefusalLinesPerMinute)
+}
+
+func peerSaid(text string, most int) string {
+	if len(text) <= most {
+		return text
+	}
+	cut := most
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s… (%d bytes more)", text[:cut], len(text)-cut)
+}
 
 type refusalGate struct {
 	mu      sync.Mutex
@@ -344,7 +395,7 @@ func (s *Server) guessed(r *http.Request) bool {
 		return false
 	}
 	guess := false
-	for _, name := range [...]string{dashboardCookieName(r), legacyDashboardCookieName} {
+	for _, name := range [...]string{dashboardCookieName(r), plainCookieName(r), legacyDashboardCookieName} {
 		c, err := r.Cookie(name)
 		if err != nil {
 			continue
@@ -364,37 +415,30 @@ func clientHost(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func (s *Server) upgradeAccessCookie(w http.ResponseWriter, r *http.Request) bool {
-	if s.accessHash() == "" {
-		return false
+func clearLegacyCookie(w http.ResponseWriter, r *http.Request) {
+	names := []string{legacyDashboardCookieName}
+	if r.TLS != nil {
+		names = append(names, plainCookieName(r))
 	}
-	if current, err := r.Cookie(dashboardCookieName(r)); err == nil && s.validAccessToken(current.Value) {
-		s.setAccessCookie(w, r)
-		return true
+	for _, name := range names {
+		if _, err := r.Cookie(name); err != nil {
+			continue
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
+			MaxAge:   -1,
+			Expires:  time.Unix(1, 0),
+		})
 	}
-	legacy, err := r.Cookie(legacyDashboardCookieName)
-	if err != nil || !s.validAccessToken(legacy.Value) {
-		return false
-	}
-	s.setAccessCookie(w, r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     legacyDashboardCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
-		MaxAge:   -1,
-		Expires:  time.Unix(1, 0),
-	})
-	return true
-}
-
-func (s *Server) setAccessCookie(w http.ResponseWriter, r *http.Request) {
-	s.setAccessCookieFor(w, r, s.accessHash())
 }
 
 func (s *Server) setAccessCookieFor(w http.ResponseWriter, r *http.Request, hash string) {
+	clearLegacyCookie(w, r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     dashboardCookieName(r),
 		Value:    hash,
@@ -408,6 +452,15 @@ func (s *Server) setAccessCookieFor(w http.ResponseWriter, r *http.Request, hash
 }
 
 func dashboardCookieName(r *http.Request) string {
+	if r.TLS != nil {
+		return hostCookiePrefix + plainCookieName(r)
+	}
+	return plainCookieName(r)
+}
+
+const hostCookiePrefix = "__Host-"
+
+func plainCookieName(r *http.Request) string {
 	_, port, err := net.SplitHostPort(r.Host)
 	if err != nil || port == "" {
 		if r.TLS != nil {
@@ -438,6 +491,33 @@ func (s *Server) wsOriginAllowed(r *http.Request) bool {
 	}
 	u, err := url.Parse(origin)
 	return err == nil && u.Scheme == requestScheme(r) && s.hostAllowed(u.Host) && sameSiteAs(origin, r.Host)
+}
+
+type sessionLack string
+
+const (
+	lackOrigin      sessionLack = "it carried no Origin"
+	lackOwnOrigin   sessionLack = "its Origin is not a page this dashboard served"
+	lackToken       sessionLack = "no access token is in force, so no sign-in is good"
+	lackCookie      sessionLack = "it carried no sign-in cookie for this address"
+	lackCurrentForm sessionLack = "its sign-in cookie is in the form an earlier release wrote, which signs nothing in now: the device signs in again"
+)
+
+func (s *Server) sessionLacks(p *accessPolicy, r *http.Request) sessionLack {
+	switch {
+	case r.Header.Get("Origin") == "":
+		return lackOrigin
+	case !s.wsOriginAllowed(r):
+		return lackOwnOrigin
+	case p == nil || p.hash == "":
+		return lackToken
+	}
+	for _, name := range [...]string{dashboardCookieName(r), plainCookieName(r), legacyDashboardCookieName} {
+		if _, err := r.Cookie(name); err == nil {
+			return lackCurrentForm
+		}
+	}
+	return lackCookie
 }
 
 func (s *Server) tokenAuthorized(r *http.Request) bool {
@@ -474,6 +554,8 @@ type accessPolicy struct {
 	required bool
 	hash     string
 	length   int
+
+	secret []byte
 }
 
 func (s *Server) accessPolicy() (required bool, hash string) {
@@ -488,7 +570,7 @@ func (s *Server) accessRequired() bool { required, _ := s.accessPolicy(); return
 func (s *Server) accessHash() string   { _, hash := s.accessPolicy(); return hash }
 
 func (s *Server) SetAccessToken(required bool, token string) {
-	p := &accessPolicy{required: required, length: len(token)}
+	p := &accessPolicy{required: required, length: len(token), secret: pageSecret(token)}
 	if token != "" {
 		sum := sha256.Sum256([]byte(token))
 		p.hash = hex.EncodeToString(sum[:])

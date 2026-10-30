@@ -123,6 +123,13 @@ func TestAnchorerLatchesIntegrityConflict(t *testing.T) {
 	if bookmarks.Load() != 1 {
 		t.Fatalf("server saw %d bookmarks, want 1", bookmarks.Load())
 	}
+	kept, kerr := ReadKeptConflict(filepath.Dir(lg.Path()))
+	if kerr != nil || kept == nil || !kept.Of(srv.URL+"/") || kept.Local || !strings.Contains(kept.Answer, conflictMsgRollbackFork) || kept.Record != lg.LastSeq() {
+		t.Fatalf("THE WITNESS'S ANSWER WAS NOT KEPT BESIDE THE LEDGER: a restart forgets it: %+v (%v)", kept, kerr)
+	}
+	if kept.Of("") || kept.Of("https://another.witness.example") {
+		t.Fatal("a kept answer is read as another witness's, or as no witness's")
+	}
 
 	// The latch holds: the next pass refuses LOUDLY without resubmitting
 	// the same anchor point, and the seam does not re-fire.
@@ -244,6 +251,9 @@ func TestLocalForkLatches(t *testing.T) {
 	}
 	if a2.IntegrityConflict() == nil {
 		t.Fatal("local fork must latch")
+	}
+	if kept, kerr := ReadKeptConflict(filepath.Dir(lg.Path())); kerr != nil || kept == nil || !kept.Local || !kept.Of(fw.server.URL) {
+		t.Fatalf("a local fork was not kept beside the ledger as one: %+v (%v)", kept, kerr)
 	}
 }
 

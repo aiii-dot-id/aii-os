@@ -72,6 +72,7 @@ func askRecord(s *Server, path string, signedIn bool, headers ...string) *httpte
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8180"+path, nil)
 	if signedIn {
 		r.Header.Set("Cookie", "aii_token_8180="+s.accessHash())
+		r.Header.Set(pageKeyHeader, pageKeyFor(s))
 	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		r.Header.Set(headers[i], headers[i+1])

@@ -120,6 +120,8 @@ type VoiceSession struct {
 	c      *supervisor.SessionClient
 	exited <-chan struct{}
 
+	controlBound time.Duration
+
 	mu         sync.Mutex
 	inst       uint64
 	sessionID  string
@@ -195,6 +197,10 @@ func NewVoiceSession(c *supervisor.SessionClient) *VoiceSession {
 		reconciled: make(chan [][]byte, 4)}
 	go v.consume()
 	return v
+}
+
+func (v *VoiceSession) ControlBound() time.Duration {
+	return orDefault(v.controlBound, DefaultSessionControlBound)
 }
 
 func (v *VoiceSession) markTerminalLocked() {
@@ -1265,6 +1271,7 @@ func (ap *ActivePlugin) voiceForConnection(conn supervisor.SessionConnection, su
 	client := supervisor.NewSessionClientFrames(conn.Frames, conn.Stdin, sup.Dispatcher(), 256)
 	v := NewVoiceSession(client)
 	v.exited = conn.Exited
+	v.controlBound = ap.bounds.SessionControlBound()
 	if conn.AudioIn != nil {
 		v.pair = newAudioPair(conn.AudioIn, conn.AudioOut)
 	}

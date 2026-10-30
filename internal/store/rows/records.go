@@ -153,6 +153,7 @@ type Relationship struct {
 	CharterText      string
 	CreatedSeq       uint64
 	UpdatedSeq       uint64
+	SupersededBy     string
 }
 
 type Outcome struct {
@@ -163,6 +164,7 @@ type Outcome struct {
 	State     string
 	Said      string
 	Was       string
+	At        string
 }
 
 type FacilityRunPayload struct {

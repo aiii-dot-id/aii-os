@@ -1,5 +1,7 @@
 package packagefmt
 
+// the C package_bundle.c tar_build_header) — so the reader and the test
+
 import (
 	"bytes"
 	"compress/gzip"

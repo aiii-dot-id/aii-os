@@ -23,7 +23,7 @@ var effortField = map[Dialect]string{
 
 func DialectFor(provider string) Dialect {
 	switch provider {
-	case "chatgpt":
+	case "chatgpt", "responses":
 		return DialectResponses
 	case "anthropic":
 		return DialectAnthropic

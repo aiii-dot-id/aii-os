@@ -39,11 +39,11 @@ func TestVerbSchemasMatchAdvertisedCapabilities(t *testing.T) {
 		if p, _ := params["properties"].(map[string]any); len(p) == 0 {
 			t.Errorf("function-calling verb %q has an EMPTY schema — the model cannot use what it cannot see", v.Name)
 		}
-		if v.Name == "work" && !strings.Contains(v.Description, "spawn") {
+		if v.Name == "work" && !strings.Contains(v.Description, "Spawn") {
 			t.Error("work registry description must advertise spawn")
 		}
 		if v.Name == "work" &&
-			(!strings.Contains(v.Description, "independent bounded work") ||
+			(!strings.Contains(v.Description, "independent work that can run concurrently") ||
 				!strings.Contains(v.Description, "tightly coupled loop")) {
 			t.Error("work description must state the spawn decision boundary")
 		}
@@ -59,12 +59,12 @@ func TestRecallProviderContractStatesLiteralQuery(t *testing.T) {
 		description := def.Function.Description
 		if !strings.Contains(description, "every word must appear") ||
 			!strings.Contains(description, "fuzzy") ||
-			!strings.Contains(description, "exact=true forces the verbatim phrase") ||
-			!strings.Contains(description, "separate recall calls") {
+			!strings.Contains(description, "separate concepts take separate calls") {
 			t.Fatalf("recall provider contract does not explain how queries match: %q", description)
 		}
 		query := def.Function.Parameters["properties"].(map[string]any)["query"].(map[string]any)["description"].(string)
-		if !strings.Contains(query, "Every word must appear") || !strings.Contains(query, "exact=true") {
+		exact := def.Function.Parameters["properties"].(map[string]any)["exact"].(map[string]any)["description"].(string)
+		if !strings.Contains(query, "every word must appear unless exact=true") || !strings.Contains(exact, "verbatim phrase") {
 			t.Fatalf("recall query parameter does not explain how it matches: %q", query)
 		}
 		return

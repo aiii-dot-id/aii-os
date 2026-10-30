@@ -34,9 +34,9 @@ run(async (assert) => {
   assert(text().includes('No identity lives here yet'), 'unborn says so and points at Chat');
   assert(root.querySelectorAll('.home-intent:disabled').length === 4, 'unborn disables the four intents');
 
-  S.identityExists = true; S.stats = { name: 'Vega', version: '0.1.0', build: 'abc1234' };
+  S.identityExists = true; S.stats = { name: 'Example', version: '0.1.0', build: 'abc1234' };
   renderHome();
-  assert(text().includes('Vega is here'), 'born greets by name');
+  assert(text().includes('Example is here'), 'born greets by name');
   const waiting = [...root.querySelectorAll('.ring-right')].map(e => e.textContent);
   assert(waiting[2] === '…' && waiting[3] === '…', 'unloaded counts read as waiting, not as 0: ' + waiting.join('|'));
 
@@ -47,7 +47,7 @@ run(async (assert) => {
   assert(!hint.querySelector('code') && !hint.textContent.includes('/') && hint.textContent.includes('theirs to record') && hint.textContent.includes('greeting follows on the next turn'),
     'the naming hint names a file or lost its meaning: ' + hint.textContent);
   assert(!text().includes('Unnamed is here'), 'the greeting does not call them Unnamed: ' + text().slice(0, 120));
-  S.stats = { name: 'Vega', version: '0.1.0', build: 'abc1234' };
+  S.stats = { name: 'Example', version: '0.1.0', build: 'abc1234' };
   renderHome();
   assert(root.querySelector('[data-name-hint]') === null, 'a named identity earns no hint');
 
@@ -116,6 +116,39 @@ run(async (assert) => {
   const refused = continuityLine({ mode: 'degraded_witness', degraded_why: 'the server witness.example presented a certificate that expired on 2026-10-13T21:08:42Z (this machine\'s clock reads 2026-10-13T23:00:00Z) and names <b>mail.example</b> and not witness.example: if witness.example is the server\'s own name, it must present a certificate that names it and that this machine accepts; if not, the address configured for it is wrong' }, null)[0].text;
   assert(refused.startsWith('degraded — witness certificate refused: the server witness.example presented a certificate that expired on') && !refused.includes('dark'), 'the strip does not say the witness\'s certificate was refused: ' + refused);
   assert(!refused.includes('<b>') && refused.includes('&lt;b&gt;'), 'the names a server chose reach the strip as markup: ' + refused);
+  // A held start whose cause has cleared says so beside SAFE, which holds
+  // until a restart; the identity card says it under the mode.
+  const cleared = 'The witness at https://<b>w</b>.example, asked again at 2026-10-21T12:00:00Z, no longer shows that this record moved back or split; its earlier answer is set aside beside the record as witness-conflict.cleared-20261021T120000Z.json. This start stays in SAFE: restart the identity, and the start takes the record through its checks.';
+  const held = continuityLine({ mode: 'safe', safe_reason: 'The witness says this record moved backward or split', safe_cleared: cleared }, null);
+  assert(held[0].text.startsWith('SAFE — record frozen: The witness says') && held[1].cls === 'good' && held[1].text.includes('no longer shows that this record moved back or split') && held[1].text.includes('restart the identity'), 'the cleared word is not beside SAFE: ' + JSON.stringify(held));
+  assert(!held[1].text.includes('<b>'), 'the cleared word reaches the strip as markup: ' + held[1].text);
+  assert(continuityLine({ mode: 'normal', safe_cleared: cleared }, null).every(i => !i.text.includes('no longer shows')), 'a cleared word outside SAFE is shown');
+  // A page whose proof could not be written in the identity's home serves,
+  // and says beside its mode that the proof was not kept.
+  const unkept = 'This page\'s proof that it is this identity\'s was not kept (open /home/<b>x</b>/.serving.key.tmp: permission denied): the page serves with a proof held in this process alone';
+  for (const mode of ['safe', 'degraded_ring5']) {
+    const line = continuityLine({ mode, safe_reason: 'The signed record did not pass its checks at boot', degraded_why: 'no server answered', serving_unkept: unkept }, null);
+    assert(line[1].cls === 'warn' && line[1].text.includes('was not kept') && !line[1].text.includes('<b>'), mode + ': the unkept proof is not said beside the mode, or reaches the strip as markup: ' + JSON.stringify(line));
+  }
+  assert(continuityLine({ mode: 'safe', safe_reason: 'x' }, null).every(i => !i.text.includes('was not kept')), 'a kept proof is said as unkept');
+  S.cont = { mode: 'safe', safe_reason: 'The witness says this record moved backward or split', safe_cleared: cleared, ledger_seq: 3, lifetime_ticks: 0 };
+  renderIdentity();
+  const note = document.querySelector('#identity-stack [data-safe-cleared]');
+  assert(note && note.textContent.includes('restart the identity') && !note.querySelector('b'), 'the identity card does not say what cleared under SAFE');
+  // A START THAT WAITS FOR RING 5 IS DEGRADED, NOT SAFE, and
+  // the page says which: the strip and the identity card name the wait,
+  // never SAFE, and offer no restore of a record that verified.
+  const waitsWhy = 'DEGRADED: this start is waiting for the required Ring 5 security posture, which it has not been able to fetch: security_posture.verify_fail: required Ring 5 unavailable or unverifiable: returned 503. Nothing needs doing if the server comes back: this start asks again by itself and completes.';
+  const degraded = continuityLine({ mode: 'degraded_ring5', degraded_why: waitsWhy, ledger_seq: 3 }, null);
+  assert(degraded[0].cls === 'warn' && degraded[0].text.startsWith('degraded — waiting for Ring 5: DEGRADED: this start is waiting'), 'the strip does not say a start that waits for Ring 5 is DEGRADED: ' + JSON.stringify(degraded));
+  assert(degraded.every(i => !i.text.includes('SAFE') && !i.text.includes('frozen')), 'a start that waits for Ring 5 is said as SAFE on the strip: ' + JSON.stringify(degraded));
+  S.cont = { mode: 'degraded_ring5', degraded_why: waitsWhy, ledger_seq: 3, lifetime_ticks: 0 };
+  renderIdentity();
+  const identityCard = document.getElementById('identity-stack').textContent;
+  assert(identityCard.includes('degraded_ring5 — DEGRADED: this start is waiting') && !identityCard.includes('SAFE') && !document.querySelector('#identity-stack [data-safe-restore]'), 'the identity card says a start that waits for Ring 5 is SAFE, or offers a restore: ' + identityCard);
+  S.cont = { mode: 'degraded_ring5', degraded_why: waitsWhy, ledger_seq: 3, lifetime_ticks: 0 };
+  renderHome();
+  assert(!root.querySelector('.home-strip').textContent.includes('SAFE') && root.querySelector('.home-strip').textContent.includes('degraded — waiting for Ring 5'), 'the home page says a start that waits for Ring 5 is SAFE: ' + root.querySelector('.home-strip').textContent);
 });
 </script></body></html>`
 	modules := map[string][]byte{}

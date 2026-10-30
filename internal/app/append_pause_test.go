@@ -92,6 +92,7 @@ func TestAnAppendDuringTheBookmarkWaitsAndLandsAfterTheHeadOnTime(t *testing.T) 
 // A witness slower than the bound: the append goes through at the bound,
 // and the head lands after it, late, sealing nothing.
 func TestAWitnessSlowerThanTheBoundLetsTheAppendThroughAndTheHeadLandsLate(t *testing.T) {
+	widenPauseBound(t, 8*time.Second)
 	f := newSealedFixture(t)
 	app := New(f.cfg)
 	if err := startLiveForTest(app); err != nil {

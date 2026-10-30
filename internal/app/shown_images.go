@@ -1,11 +1,13 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -28,17 +30,21 @@ const (
 	defaultImageMaxSide = 8000
 
 	defaultImagesMaxCount = 20
+
+	defaultFileTokens = 8000
 )
 
 type imagePolicy struct {
 	takes capState
+	kinds map[string]capState
 
-	unwritten bool
-	tokens    int
-	maxBytes  int64
-	maxTotal  int64
-	maxSide   int
-	maxCount  int
+	dialect    llm.Dialect
+	tokens     int
+	fileTokens int
+	maxBytes   int64
+	maxTotal   int64
+	maxSide    int
+	maxCount   int
 }
 
 func (a *App) imagePolicy(ctx context.Context) imagePolicy {
@@ -66,63 +72,43 @@ func (a *App) imagePolicyFor(provider, model string) imagePolicy {
 }
 
 func (a *App) imagePolicyForRegistry(reg *providerRegistry, provider, model string) imagePolicy {
-	p := imagePolicy{tokens: defaultImageTokens, maxBytes: defaultImageMaxBytes, maxTotal: defaultImagesMaxBytes,
+	p := imagePolicy{tokens: defaultImageTokens, fileTokens: defaultFileTokens, maxBytes: defaultImageMaxBytes, maxTotal: defaultImagesMaxBytes,
 		maxSide: defaultImageMaxSide, maxCount: defaultImagesMaxCount}
 	if model == "" || reg == nil {
 		return p
 	}
-	var entry *providerEntry
-	for i := range reg.Providers {
-		if reg.Providers[i].Name == provider {
-			entry = &reg.Providers[i]
-			break
-		}
-	}
+	entry := entryNamed(reg, provider)
 	if entry == nil {
 		return p
 	}
-
-	if !llm.WritesImages(entryDialect(*entry)) {
-		p.takes, p.unwritten = capNo, true
-		return p
-	}
 	row, _ := reg.effective().capabilityFor(model)
-	if row.ImageTokens > 0 {
-		p.tokens = row.ImageTokens
+	p.tokens = cmp.Or(row.ImageTokens, p.tokens)
+	p.fileTokens = cmp.Or(row.FileTokens, p.fileTokens)
+	p.maxBytes = cmp.Or(row.ImageMaxBytes, p.maxBytes)
+	p.maxTotal = cmp.Or(row.ImagesMaxBytes, p.maxTotal)
+	p.maxSide = cmp.Or(row.ImageMaxSide, p.maxSide)
+	p.maxCount = cmp.Or(row.ImagesMaxCount, p.maxCount)
+	caps := a.modelCapabilitiesFor(reg, *entry, model)
+	p.kinds = make(map[string]capState, len(inputKinds))
+	for _, kind := range inputKinds {
+		p.kinds[kind] = caps.input[kind].state
 	}
-	if row.ImageMaxBytes > 0 {
-		p.maxBytes = row.ImageMaxBytes
-	}
-	if row.ImagesMaxBytes > 0 {
-		p.maxTotal = row.ImagesMaxBytes
-	}
-	if row.ImageMaxSide > 0 {
-		p.maxSide = row.ImageMaxSide
-	}
-	if row.ImagesMaxCount > 0 {
-		p.maxCount = row.ImagesMaxCount
-	}
-	images := reg.ModelCapabilities[model].Images
-	if images == nil {
-		images = a.discoveredImageSupport(*entry, model)
-	}
-	if images == nil {
-		mods := a.modalities.last(modelModalitiesURL(*entry, model, reg.modelCatalogueURL()))
-		if mods.in != nil {
-			value := slices.Contains(mods.in, "image")
-			images = &value
-		}
-	}
-	if images == nil {
-		images = row.Images
-	}
-	if images != nil {
-		p.takes = capNo
-		if *images {
-			p.takes = capYes
-		}
-	}
+	p.takes, p.dialect = p.kinds["image"], entryDialect(*entry)
 	return p
+}
+
+var kindNouns = map[string]string{"image": "images", "pdf": "PDFs", "audio": "audio", "video": "video"}
+
+func (p imagePolicy) withheld(kind, mediaType string) string {
+	switch {
+	case p.dialect != "" && mediaType != "" && !llm.Writes(p.dialect, mediaType):
+		return "this host does not send " + mediaType + " in this provider's dialect"
+	case p.kinds[kind] == capNo:
+		return "this model does not take " + kindNouns[kind]
+	case p.kinds[kind] != capYes:
+		return "nobody has said this model takes " + kindNouns[kind]
+	}
+	return ""
 }
 
 type turnImages struct {
@@ -132,6 +118,8 @@ type turnImages struct {
 	bytes   int64
 	count   int
 	refused bool
+
+	held string
 
 	unanswered bool
 
@@ -159,7 +147,7 @@ func (t *turnImages) admit(size int64, p imagePolicy) string {
 	defer t.mu.Unlock()
 	switch {
 	case t.refused:
-		return "this model's provider refused a request that carried pictures earlier in this turn"
+		return "a request that carried pictures or files earlier in this turn " + t.held
 	case t.count >= p.maxCount:
 		return fmt.Sprintf("this turn already carries %d pictures, the most one request takes; a later turn can read it", p.maxCount)
 	case t.bytes+size > p.maxTotal:
@@ -188,21 +176,19 @@ func (a *App) picturesWith(ctx context.Context, t *store.ConversationTurn) ([]ll
 		return nil, nil
 	}
 	policy := a.imagePolicy(ctx)
-	if policy.takes != capYes {
-		return nil, nil
-	}
 	decided := len(t.Shown)+len(t.NotShown) > 0
 	var images []llm.Image
 	for _, path := range t.Attached {
 		if decided && !slices.Contains(t.Shown, path) {
 			continue
 		}
-		picture, why, isPicture := a.pictureAt(ctx, path, policy)
+		file, _, why := a.fileAt(ctx, path, policy)
 		switch {
-		case !isPicture:
-		case picture == nil && decided:
-			logsink.Info("turn.decision", "the image %s, sent once in this turn, is not sent again: %s", path, why)
-		case picture == nil:
+		case file == nil && why == "":
+
+		case file == nil && decided:
+			logsink.Info("turn.decision", "the file %s, sent once in this turn, is not sent again: %s", path, why)
+		case file == nil:
 			if err := a.notePicture(ctx, t.ID, store.ReasonNotShown, path+", "+why); err != nil {
 				return nil, err
 			}
@@ -213,7 +199,7 @@ func (a *App) picturesWith(ctx context.Context, t *store.ConversationTurn) ([]ll
 				state.sent = append(state.sent, sentPicture{message: t.ID, path: path})
 				state.mu.Unlock()
 			}
-			images = append(images, *picture)
+			images = append(images, *file)
 		}
 	}
 	return images, nil
@@ -225,7 +211,7 @@ func (a *App) settlePictures(ctx context.Context, result conversation.Result, tu
 		return
 	}
 	t.mu.Lock()
-	sent, unanswered := t.sent, t.unanswered
+	sent, unanswered, held := t.sent, t.unanswered, t.held
 	t.sent = nil
 	t.mu.Unlock()
 	answered := turnErr == nil || result.ToolCallsUsed > 0 || result.Spoken != ""
@@ -233,7 +219,7 @@ func (a *App) settlePictures(ctx context.Context, result conversation.Result, tu
 		reason, content := store.ReasonShown, s.path
 		switch {
 		case unanswered:
-			reason, content = store.ReasonNotShown, s.path+", the model's provider refused the request that carried it; read the file to see it"
+			reason, content = store.ReasonNotShown, s.path+", the request that carried it "+held+"; read the file to see it"
 		case !answered:
 			reason, content = store.ReasonNotShown, s.path+", the request that carried it was not answered; read the file to see it"
 		}
@@ -266,15 +252,21 @@ func notShownLines(notes []string) string {
 }
 
 func (a *App) steeredPictures(ctx context.Context, messageID string, paths []string) string {
-	if len(paths) == 0 || a.toolReg == nil || a.imagePolicy(ctx).takes != capYes {
+	if len(paths) == 0 || a.toolReg == nil {
 		return ""
 	}
+	policy := a.imagePolicy(ctx)
 	var notes []string
 	for _, path := range paths {
-		if !a.holdsPicture(path) {
+		kind, mediaType := a.carriedKind(path)
+		if kind == "" {
 			continue
 		}
+
 		note := path + ", it came while a turn was running, which is told of a file and not shown it; read the file to see it"
+		if why := policy.withheld(kind, mediaType); why != "" {
+			note = path + ", " + why
+		}
 		if err := a.notePicture(ctx, messageID, store.ReasonNotShown, note); err != nil {
 			logsink.Warn("steering.error", "%v", err)
 		}
@@ -283,90 +275,134 @@ func (a *App) steeredPictures(ctx context.Context, messageID string, paths []str
 	return notShownLines(notes)
 }
 
-func (a *App) holdsPicture(path string) bool {
+func (a *App) openShown(path string) (*os.File, string) {
 	root, rel, err := a.toolReg.Admit("show", path)
 	if err != nil {
-		return false
+		return nil, ""
 	}
 	rz, err := os.OpenRoot(root)
 	if err != nil {
-		return false
+		return nil, ""
 	}
 	defer rz.Close()
 	if st, err := rz.Stat(rel); err != nil || !st.Mode().IsRegular() {
-		return false
+		return nil, ""
 	}
 	f, err := rz.Open(rel)
 	if err != nil {
-		return false
+		return nil, ""
 	}
-	defer f.Close()
-	_, _, _, ok := tools.ImageConfig(f)
-	return ok
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return nil, ""
+	}
+	return f, filepath.Base(rel)
 }
 
-func (a *App) pictureAt(ctx context.Context, path string, policy imagePolicy) (picture *llm.Image, why string, isPicture bool) {
-	root, rel, err := a.toolReg.Admit("show", path)
-	if err != nil {
-		return nil, "", false
+func kindOf(f *os.File) (kind, mediaType string, width, height int) {
+	if mediaType, width, height, ok := tools.ImageConfig(f); ok {
+		return "image", mediaType, width, height
 	}
-	rz, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, "", false
+	mediaType, kind = tools.MediaOf(f)
+	return kind, mediaType, 0, 0
+}
+
+func kindOfType(mediaType string) string {
+	if strings.HasPrefix(mediaType, "image/") {
+		return "image"
 	}
-	defer rz.Close()
-	if st, err := rz.Stat(rel); err != nil || !st.Mode().IsRegular() {
-		return nil, "", false
+	for kind, types := range kindTypes {
+		if slices.Contains(types, mediaType) {
+			return kind
+		}
 	}
-	f, err := rz.Open(rel)
-	if err != nil {
-		return nil, "", false
+	return ""
+}
+
+func (a *App) carriedKind(path string) (kind, mediaType string) {
+	f, _ := a.openShown(path)
+	if f == nil {
+		return "", ""
 	}
 	defer f.Close()
+	kind, mediaType, _, _ = kindOf(f)
+	return kind, mediaType
+}
+
+func (a *App) fileAt(ctx context.Context, path string, policy imagePolicy) (file *llm.Image, kind, why string) {
+	f, name := a.openShown(path)
+	if f == nil {
+		return nil, "", ""
+	}
+	defer f.Close()
+	kind, mediaType, width, height := kindOf(f)
+	if kind == "" {
+		return nil, "", ""
+	}
+	if why := policy.withheld(kind, mediaType); why != "" {
+		return nil, kind, why
+	}
 	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		return nil, "", false
+	if err != nil {
+		return nil, kind, "it could not be read: " + err.Error()
 	}
-	mediaType, width, height, ok := tools.ImageConfig(f)
-	if !ok {
-		return nil, "", false
-	}
+	limit, tokens := policy.maxTotal, policy.fileTokens
 	switch {
-	case st.Size() > policy.maxBytes:
-		return nil, fmt.Sprintf("its %d bytes are past this model's bound of %d for one picture", st.Size(), policy.maxBytes), true
-	case max(width, height) > policy.maxSide:
-		return nil, fmt.Sprintf("%d by %d pixels is past this model's bound of %d a side", width, height, policy.maxSide), true
+	case kind == "image" && st.Size() > policy.maxBytes:
+		return nil, kind, fmt.Sprintf("its %d bytes are past this model's bound of %d for one picture", st.Size(), policy.maxBytes)
+	case kind == "image" && max(width, height) > policy.maxSide:
+		return nil, kind, fmt.Sprintf("%d by %d pixels is past this model's bound of %d a side", width, height, policy.maxSide)
+	case kind == "image":
+		limit, tokens = policy.maxBytes, policy.tokens
+	case st.Size() > policy.maxTotal:
+		return nil, kind, fmt.Sprintf("its %d bytes are past the %d one request carries to this model", st.Size(), policy.maxTotal)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, "it could not be read: " + err.Error(), true
+		return nil, kind, "it could not be read: " + err.Error()
 	}
-	data, err := io.ReadAll(io.LimitReader(f, policy.maxBytes+1))
-	if err != nil || int64(len(data)) > policy.maxBytes {
-		return nil, "it changed while it was read", true
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, kind, "it changed while it was read"
 	}
 	if why := turnImagesOf(ctx).admit(int64(len(data)), policy); why != "" {
-		return nil, why, true
+		return nil, kind, why
 	}
-	return &llm.Image{MediaType: mediaType, Data: data, Tokens: policy.tokens}, "", true
+	return &llm.Image{MediaType: mediaType, Name: name, Data: data, Tokens: tokens}, kind, ""
 }
 
 func (a *App) imagesRefused(ctx context.Context, refusal error, answered bool) {
+	var refused *llm.HTTPError
+	var tooBig *llm.ContextLimitError
+	tooLarge := errors.As(refusal, &tooBig)
 	if t := turnImagesOf(ctx); t != nil {
 		t.mu.Lock()
 		t.refused = true
 		t.unanswered = t.unanswered || !answered
+		t.held = "was refused by the model's provider"
+		if tooLarge {
+			t.held = "did not fit the model's window"
+		}
 		t.mu.Unlock()
 	}
 	status, said := 0, ""
-	var refused *llm.HTTPError
+	if tooLarge {
+		note := fmt.Sprintf("this turn's picture(s) or file(s) did not fit the model's window with the rest of the request (about %d tokens, where it takes %d); it was sent without them, and the model was not shown them. A row's image_tokens and file_tokens in the providers registry say what one is priced at",
+			tooBig.Required, tooBig.Limit)
+		a.recordImagesRefused(ctx, note)
+		return
+	}
 	if errors.As(refusal, &refused) {
 		status, said = refused.StatusCode, strings.Join(strings.Fields(refused.Body), " ")
 		if len(said) > picturesRefusedExcerpt {
 			said = strings.ToValidUTF8(said[:picturesRefusedExcerpt], "") + "…"
 		}
 	}
-	note := fmt.Sprintf("the model's provider refused the request that carried this turn's picture(s) (HTTP %d); it was sent again without them, and the model was not shown them. The provider said: %s. If this model does not take images, write images: false in its row of the providers registry",
+	note := fmt.Sprintf("the model's provider refused the request that carried this turn's picture(s) or file(s) (HTTP %d); it was sent again without them, and the model was not shown them. The provider said: %s. If this model does not take one of their kinds, write so in its row of the providers registry, as \"input\": {\"image\": false} for pictures",
 		status, said)
+	a.recordImagesRefused(ctx, note)
+}
+
+func (a *App) recordImagesRefused(ctx context.Context, note string) {
 	logsink.Warn("llm.refusal", "%s", note)
 	if a.engine == nil {
 		return
@@ -384,26 +420,29 @@ const (
 
 const pictureSent = "[the picture is sent to you once, after the results of the round that read it; to see it in a later turn, read the file again]"
 
+const fileSent = "[the file is sent to you once, after the results of the round that read it; to see it in a later turn, read the file again]"
+
 func (a *App) readPicture(ctx context.Context, result tools.Result) (string, *llm.Image) {
 	text := result.Text()
 	if result.Image == nil || result.Failed() {
 		return text, nil
 	}
 	policy := a.imagePolicy(ctx)
-	switch {
-	case policy.unwritten:
-		return text + "\n[it is not shown to you: this host does not send pictures in this provider's dialect]", nil
-	case policy.takes == capNo:
-		return text + "\n[it is not shown to you: this model does not take images]", nil
-	case policy.takes == capUnknown:
-		return text + "\n[it is not shown to you: nobody has said this model takes images]", nil
-	}
-	picture, why, isPicture := a.pictureAt(ctx, result.Image.Path, policy)
-	switch {
-	case !isPicture:
-		return text + "\n[it is not shown to you: the file is gone or holds no picture now]", nil
-	case picture == nil:
+
+	read := cmp.Or(kindOfType(result.Image.MediaType), "image")
+	if why := policy.withheld(read, result.Image.MediaType); why != "" {
 		return text + "\n[it is not shown to you: " + why + "]", nil
 	}
-	return text + "\n" + pictureSent, picture
+	file, kind, why := a.fileAt(ctx, result.Image.Path, policy)
+	switch {
+	case kind != read && read == "image":
+		return text + "\n[it is not shown to you: the file is gone or holds no picture now]", nil
+	case kind != read:
+		return text + "\n[it is not shown to you: the file is gone or no longer holds what it held]", nil
+	case file == nil:
+		return text + "\n[it is not shown to you: " + why + "]", nil
+	case read != "image":
+		return text + "\n" + fileSent, file
+	}
+	return text + "\n" + pictureSent, file
 }

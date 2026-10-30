@@ -8,8 +8,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
 // carriedSession hands the dashboard one end of a pipe, as a relay client
@@ -18,7 +21,7 @@ func carriedSession(t *testing.T, s *Server) net.Conn {
 	t.Helper()
 	browser, carried := net.Pipe()
 	t.Cleanup(func() { browser.Close() })
-	if !s.Carry(carried) {
+	if !s.Carry(carried, "relay.example.test") {
 		carried.Close()
 		t.Fatal("the dashboard did not take the carried session")
 	}
@@ -106,7 +109,7 @@ func TestCarriedSessionsNeedARunningDashboardAndAPublicName(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	if s.Carry(b) {
+	if s.Carry(b, "relay.example.test") {
 		t.Fatal("a dashboard that never started took a carried session")
 	}
 	if _, err := s.Start(""); err != nil {
@@ -133,7 +136,7 @@ func TestCarriedSessionsNeedARunningDashboardAndAPublicName(t *testing.T) {
 	c, d := net.Pipe()
 	defer c.Close()
 	defer d.Close()
-	if s.Carry(d) {
+	if s.Carry(d, "relay.example.test") {
 		t.Fatal("a stopped dashboard took a carried session")
 	}
 }
@@ -209,5 +212,120 @@ func TestAnIdleCarriedConnectionIsClosedAtItsOwnLimit(t *testing.T) {
 	}
 	if got := New("127.0.0.1", 0, &WSHandler{}).carriedIdle(); got != DefaultCarriedIdleSeconds*time.Second {
 		t.Errorf("never set, an idle carried connection is kept %v, want the default", got)
+	}
+}
+
+func TestTheCarriedServersLinesAreBoundedAndNameTheRelay(t *testing.T) {
+	const name = "ui.x.example.test"
+	said := logsink.CaptureForTest(t)
+	s := New("127.0.0.1", 0, &WSHandler{RefusalLinesPerMinute: func() int { return 3 }})
+	s.refusedPause = func(time.Duration) {}
+	s.SetAccessToken(true, "the-right-token-long-enough")
+	if _, err := s.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	cert := selfSigned(t, name)
+	s.SetPublicCertificate(name, func() *tls.Certificate { return cert })
+	s.AllowHost(name)
+	roots := x509.NewCertPool()
+	roots.AddCert(cert.Leaf)
+
+	h2 := tls.Client(carriedSession(t, s), &tls.Config{ServerName: name, RootCAs: roots, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2"}})
+	_ = h2.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := h2.Handshake(); err != nil || h2.ConnectionState().NegotiatedProtocol != "h2" {
+		t.Fatalf("an HTTP/2 connection was not made through the relay: %v, %q", err, h2.ConnectionState().NegotiatedProtocol)
+	}
+	_, _ = h2.Write([]byte("this is not the HTTP/2 preface at all\r\n\r\n"))
+	const preface = "dashboard.refusal: a connection carried through a relay: http2: server: error reading preface"
+	for deadline := time.Now().Add(10 * time.Second); !said.Contains(preface); {
+		if time.Now().After(deadline) {
+			t.Fatalf("a connection that sent no preface was not written as a refusal line:\n%s", said.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = h2.Close()
+
+	for range 4 {
+		bc := tls.Client(carriedSession(t, s), &tls.Config{ServerName: "stranger.example.test", InsecureSkipVerify: true})
+		_ = bc.SetDeadline(time.Now().Add(10 * time.Second))
+		if err := bc.Handshake(); err == nil {
+			t.Fatal("a handshake for another name was completed")
+		}
+	}
+	const own = "dashboard.refusal: a connection carried through a relay: http: TLS handshake error"
+	for deadline := time.Now().Add(10 * time.Second); len(refusalLines(said.String(), own)) < 2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the refused handshakes were not written as refusal lines:\n%s", said.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // the other two, had they a line of their own
+	if strings.Contains(said.String(), "dashboard.error") {
+		t.Fatalf("a line a stranger caused was written as a fault:\n%s", said.String())
+	}
+	for _, line := range refusalLines(said.String(), "TLS handshake error") {
+		if !strings.Contains(line, own) {
+			t.Fatalf("the carried server wrote a line of its own: %q", line)
+		}
+	}
+	if n := len(refusalLines(said.String(), own)); n != 2 {
+		t.Fatalf("four refused handshakes had %d lines of their own, want the two the minute had left", n)
+	}
+
+	bc := tls.Client(carriedSession(t, s), &tls.Config{ServerName: name, RootCAs: roots, MinVersion: tls.VersionTLS12})
+	_ = bc.SetDeadline(time.Now().Add(10 * time.Second))
+	req, _ := http.NewRequest(http.MethodPost, "https://"+name+"/auth/token", strings.NewReader("a-wrong-token"))
+	if err := req.Write(bc); err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.ReadResponse(bufio.NewReader(bc), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized || !said.Contains("access token refused through relay.example.test") {
+		t.Fatalf("a wrong token through the relay: %d, and the line does not name the relay:\n%s", res.StatusCode, said.String())
+	}
+}
+
+func TestACarriedRequestsPanicIsWrittenWholeAsAFault(t *testing.T) {
+	const name = "ui.x.example.test"
+	said := logsink.CaptureForTest(t)
+	s := New("127.0.0.1", 0, &WSHandler{})
+	s.server.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("the handler's own fault") })
+	if _, err := s.Start(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	cert := selfSigned(t, name)
+	s.SetPublicCertificate(name, func() *tls.Certificate { return cert })
+	s.AllowHost(name)
+	roots := x509.NewCertPool()
+	roots.AddCert(cert.Leaf)
+	bc := tls.Client(carriedSession(t, s), &tls.Config{ServerName: name, RootCAs: roots, MinVersion: tls.VersionTLS12})
+	_ = bc.SetDeadline(time.Now().Add(10 * time.Second))
+	req, _ := http.NewRequest(http.MethodGet, "https://"+name+"/", nil)
+	if err := req.Write(bc); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := http.ReadResponse(bufio.NewReader(bc), req); err == nil {
+		res.Body.Close()
+		t.Fatalf("a request whose handler panicked was answered %d", res.StatusCode)
+	}
+	const fault = "dashboard.error: a request carried through relay.example.test for / panicked: the handler's own fault"
+	for deadline := time.Now().Add(10 * time.Second); !said.Contains(fault); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the panic was not written as a fault:\n%s", said.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // a line of the server's own, had it one
+	logged := said.String()
+	if !strings.Contains(logged, "runtime/debug.Stack") || !strings.Contains(logged, "carriedRecover") {
+		t.Fatalf("the fault's line does not carry its stack:\n%s", logged)
+	}
+	if strings.Count(logged, "the handler's own fault") != 1 || strings.Contains(logged, "dashboard.refusal") {
+		t.Fatalf("the panic was written more than once, or as a refusal:\n%s", logged)
 	}
 }

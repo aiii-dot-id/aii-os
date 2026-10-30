@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strconv"
+	"slices"
 	"strings"
 	"unicode/utf8"
 	"uuid"
@@ -52,29 +52,138 @@ func (r SubagentRequest) Validate() error {
 }
 
 type workStore interface {
-	EnqueueWorkWithSessionBelowLimit(item *store.WorkItem, limit int, sessionID, description string) (int, bool, error)
+	EnqueueWorkOfKind(item *store.WorkItem, limit int, sessionID, description, family string) (int, bool, error)
 	LiveSubagentSessions() ([]store.WorkSession, error)
 	UnharvestedDeliveries(limit int) ([]store.WorkSession, error)
 	WorkSessionByID(id string) (*store.WorkSession, error)
-	StartWorkSession(ctx context.Context, id, description string) error
+	StartWorkSessionWith(ctx context.Context, id, description string, w store.WorkStart) error
 	SetWorkSessionFamily(ctx context.Context, id, family string) error
+	SetWorkCheck(ctx context.Context, id, command string) error
 	SetStandingState(text string) error
 	UpdateWorkState(ctx context.Context, sessionID, state string) error
 	UpdateWorkPlan(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error
-	ListCommitments(activeOnly bool) ([]store.Commitment, error)
 	DeliverWorkSession(ctx context.Context, id, result, evidence, readback string) error
 	ActiveWorkSession() (*store.WorkSession, error)
 }
 
-func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, error) {
+const workCheckParam = "(update) a command that exits 0 only if this work holds, written before the work; at deliver the host runs it once under the shell's rules and keeps its exit status beside your result"
 
-	if _, present := args["command"]; present {
-		return "", fmt.Errorf("rejected_before_effect (work.arguments): command is a shell argument, but this call was sent to work. No command was executed and no work state was changed. Use shell with command and optional cwd to run a command; use work with its documented action and fields to manage work")
+const workFamilyParam = "(start, update, spawn) the kind of work as a short slug, such as deploy-preview; reuse a kind you have done (start lists them) so attempts compare; a spawn takes yours unless given; (measure) that kind's attempts, outcomes and shortest served path"
+
+const startFieldsWords = "rejected_before_effect (start.fields): no effect — start takes description, family and update's fields, not %s; no session was started"
+
+const (
+	startOlderActive = "\nSession %s (%s) is still active; calls are counted to this new one until it is delivered."
+	startOlderUnread = "work start: the active session could not be read: %w; no session was started"
+)
+
+var startReads = map[string]bool{"action": true, "description": true, "family": true, "state": true, "focus": true, "next_move": true,
+	"plan": true, "expected_evidence": true, "falsifier": true, "decision_needed": true, "choices": true, "connector": true,
+	"standing": true, "steps": true, "independent": true, "check": true}
+
+func startExtras(args map[string]any) []string {
+	var extra []string
+	for k, v := range args {
+		if startReads[k] {
+			continue
+		}
+		if strings.HasPrefix(k, "_") || isEmptyArg(v) {
+			continue
+		}
+		extra = append(extra, k)
 	}
+	slices.Sort(extra)
+	return extra
+}
+
+func startGiven(args map[string]any) map[string]any {
+	given := make(map[string]any, len(args))
+	for k, v := range args {
+		if !isEmptyArg(v) {
+			given[k] = v
+		}
+	}
+	return given
+}
+
+type StartedSession struct{}
+
+const startedButWords = "Started %s, but its decision was stored and could not be put to your operator: %v. Resume this session; do not start another"
+
+func isEmptyArg(v any) bool {
+	switch v := v.(type) {
+	case nil:
+		return true
+	case string:
+		return v == ""
+	case bool:
+		return !v
+	case float64:
+		return v == 0
+	case int:
+		return v == 0
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	}
+	return false
+}
+
+func workFields(args map[string]any) store.WorkStart {
+	var f store.WorkStart
+	for key, into := range map[string]**string{"state": &f.State, "focus": &f.Focus, "next_move": &f.NextMove, "plan": &f.Plan,
+		"expected_evidence": &f.ExpectedEvidence, "falsifier": &f.Falsifier, "decision_needed": &f.DecisionNeeded} {
+		if v, ok := args[key].(string); ok {
+			*into = &v
+		}
+	}
+	return f
+}
+
+func (e *Engine) putDecision(wsID string, decisionNeeded *string, args map[string]any) error {
+	if decisionNeeded == nil || e.askProposer == nil {
+		return nil
+	}
+	choices, connector := decisionCard(args)
+	if err := e.askProposer(wsID, *decisionNeeded, choices, connector); err != nil {
+		return fmt.Errorf("the decision was stored but could not be put to your operator: %w", err)
+	}
+	return nil
+}
+
+func decisionCard(args map[string]any) (choices []string, connector string) {
+	if raw, ok := args["choices"].([]any); ok {
+		for _, c := range raw {
+			if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+				choices = append(choices, strings.TrimSpace(s))
+			}
+		}
+	}
+	connector, _ = args["connector"].(string)
+	return choices, strings.TrimSpace(connector)
+}
+
+const decisionUnfit = "rejected_before_effect (work.decision): no effect — your operator's card cannot carry this decision: %v; nothing was written"
+
+func (e *Engine) decisionFits(session string, args map[string]any) error {
+	text, ok := args["decision_needed"].(string)
+	if !ok || e.askFits == nil {
+		return nil
+	}
+	choices, connector := decisionCard(args)
+	if err := e.askFits(session, text, choices, connector); err != nil {
+		return withCode("work.decision", fmt.Errorf(decisionUnfit, err))
+	}
+	return nil
+}
+
+func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, error) {
 	action, _ := args["action"].(string)
 	if action == "" {
 		action = "start"
 	}
+	var startedID string
 
 	if out, handled, err := e.workAbsorbed(ctx, action, args); handled {
 		return out, err
@@ -88,7 +197,12 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			goal, _ = args["_positional"].(string)
 		}
 		if goal == "" {
-			return "", fmt.Errorf("spawn requires a goal")
+			return "", withCode("spawn.goal", fmt.Errorf("spawn requires a goal"))
+		}
+		family, _ := args["family"].(string)
+		family = strings.TrimSpace(family)
+		if family != "" && !store.FamilySlug(family) {
+			return "", rejectf("spawn.family", "no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters; nothing was spawned", family)
 		}
 		depth := 0
 		if d, ok := args["_subagent_depth"].(int); ok {
@@ -102,10 +216,10 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			bound = maxParallel * 2
 		}
 		if maxDepth <= 0 {
-			return "", fmt.Errorf("spawn refused: sub-agents are disabled (agency.max_subagent_depth = 0) — ask your operator to enable them")
+			return "", withCode("spawn.disabled", fmt.Errorf("spawn refused: sub-agents are disabled (agency.max_subagent_depth = 0) — ask your operator to enable them"))
 		}
 		if depth+1 > maxDepth {
-			return "", fmt.Errorf("spawn refused: depth %d would exceed agency.max_subagent_depth %d — finish this level's goal or ask your operator to raise the ceiling", depth+1, maxDepth)
+			return "", withCode("spawn.depth", fmt.Errorf("spawn refused: depth %d would exceed agency.max_subagent_depth %d — finish this level's goal or ask your operator to raise the ceiling", depth+1, maxDepth))
 		}
 		parentSession, _ := ctx.Value(SubagentWorkSession{}).(string)
 		if parentSession == "" {
@@ -148,18 +262,19 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		}
 
 		leaseMs := int64(wallSeconds+60) * 1000
-		live, enqueued, err := e.store.EnqueueWorkWithSessionBelowLimit(&store.WorkItem{
+
+		live, enqueued, err := e.store.EnqueueWorkOfKind(&store.WorkItem{
 			Kind: SubagentWorkKind, Payload: string(payload), DedupKey: wsID, Source: "identity",
 			LeaseMs: leaseMs,
-		}, bound, wsID, store.SubagentDescription(goal))
+		}, bound, wsID, store.SubagentDescription(goal), family)
 		if err != nil {
 			return "", fmt.Errorf("spawn enqueue: %w", err)
 		}
 		if !enqueued {
 			if queueOn {
-				return "", fmt.Errorf("spawn refused: %d sub-agents queued or running — the queue holds at most %d, twice agency.max_parallel_subagents (%d); harvest what is delivered or wait for a slot", live, bound, maxParallel)
+				return "", withCode("spawn.full", fmt.Errorf("spawn refused: %d sub-agents queued or running — the queue holds at most %d, twice agency.max_parallel_subagents (%d); harvest what is delivered or wait for a slot", live, bound, maxParallel))
 			}
-			return "", fmt.Errorf("spawn refused: %d sub-agents already live — agency.max_parallel_subagents is %d; wait for one to finish or ask your operator to raise it", live, maxParallel)
+			return "", withCode("spawn.full", fmt.Errorf("spawn refused: %d sub-agents already live — agency.max_parallel_subagents is %d; wait for one to finish or ask your operator to raise it", live, maxParallel))
 		}
 		if e.workWake != nil {
 			e.workWake()
@@ -171,10 +286,6 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		return fmt.Sprintf("Spawned sub-agent %s (depth %d): %s — its outcome returns to your working state (Ring 4) and wakes you to harvest it; record this ID in your plan if it belongs to one. Note what deserves to become memory.", wsID, depth+1, goal) + spawnBudgetLine(spawn), nil
 
 	case "yield":
-
-		if depth, _ := args["_subagent_depth"].(int); depth > 0 {
-			return "", fmt.Errorf("yield is the resident's turn control and you are a sub-agent (depth %d): you hold no gate to free, and yielding here would deliver a fragment. Finish your one deliverable and return it", depth)
-		}
 
 		answer, _ := args["answer"].(string)
 		answer = strings.TrimSpace(answer)
@@ -191,13 +302,14 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 	case "status":
 
 		if id, _ := args["id"].(string); strings.TrimSpace(id) != "" {
-			return e.workResult(strings.TrimSpace(id))
+			return e.workResult(ctx, strings.TrimSpace(id))
 		}
 		return e.workStatus(ctx)
 
 	case "start":
-		if child, ok := ctx.Value(SubagentWorkSession{}).(string); ok && child != "" {
-			return "", fmt.Errorf("rejected_before_effect (start.worker_session): no effect — your work session is already %s; use work update or work deliver on that session", child)
+
+		if extra := startExtras(args); len(extra) > 0 {
+			return "", withCode("start.fields", fmt.Errorf(startFieldsWords, strings.Join(extra, ", ")))
 		}
 		desc, _ := args["description"].(string)
 		if desc == "" {
@@ -206,19 +318,53 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		family, _ := args["family"].(string)
 		family = strings.TrimSpace(family)
 		if family != "" && !store.FamilySlug(family) {
-			return "", fmt.Errorf("rejected_before_effect (start.family): no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters (e.g. \"deploy-preview\")", family)
+			return "", rejectf("start.family", "no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters (e.g. \"deploy-preview\")", family)
+		}
+
+		args = startGiven(args)
+		if err := e.updateFits(args); err != nil {
+			return "", err
+		}
+		if err := e.decisionFits("", args); err != nil {
+			return "", err
+		}
+		with := workFields(args)
+		if family != "" {
+			with.Family = &family
+		}
+		if v, ok := args["standing"].(string); ok {
+			with.Standing = &v
+		}
+		if v, ok := args["check"].(string); ok {
+			with.Check = &v
 		}
 		wsID := "ws_" + uuid.New().String()
 
-		if err := e.store.StartWorkSession(ctx, wsID, desc); err != nil {
+		older, err := e.store.ActiveWorkSession()
+		if err != nil {
+			return "", fmt.Errorf(startOlderUnread, err)
+		}
+		if slot, ok := ctx.Value(StartedSession{}).(*string); ok {
+			defer func() { *slot = startedID }()
+		}
+
+		if err := e.store.StartWorkSessionWith(ctx, wsID, desc, with); err != nil {
 			return "", err
 		}
+		startedID = wsID
 		out := fmt.Sprintf("Started work session %s: %s", wsID, desc)
 		if family != "" {
-			if err := e.store.SetWorkSessionFamily(ctx, wsID, family); err != nil {
-				return "", fmt.Errorf("work session %s started, but its family was not recorded: %w", wsID, err)
-			}
 			out = fmt.Sprintf("Started work session %s (family %s): %s", wsID, family, desc)
+		}
+		if with.DecisionNeeded != nil && e.askProposer != nil {
+			choices, connector := decisionCard(args)
+			if err := e.askProposer(wsID, *with.DecisionNeeded, choices, connector); err != nil {
+
+				return "", fmt.Errorf(startedButWords, wsID, err)
+			}
+		}
+		if older != nil {
+			out += fmt.Sprintf(startOlderActive, older.ID, recallExcerpt(older.Description, 120))
 		}
 		if e.workStarted != nil {
 			out += e.workStarted(ctx, wsID, family, desc)
@@ -227,6 +373,15 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 
 	case "update":
 
+		if err := e.updateFits(args); err != nil {
+			return "", err
+		}
+		if _, ok := args["decision_needed"]; ok {
+			session, _ := e.currentWorkSessionID(ctx)
+			if err := e.decisionFits(session, args); err != nil {
+				return "", err
+			}
+		}
 		standingSet := false
 		if v, ok := args["standing"].(string); ok {
 			if err := e.store.SetStandingState(v); err != nil {
@@ -235,40 +390,23 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			standingSet = true
 		}
 
-		var state, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string
-		if v, ok := args["state"].(string); ok {
-			state = &v
-		} else if v, ok := args["_positional"].(string); ok {
-			state = &v
+		f := workFields(args)
+		if f.State == nil {
+			if v, ok := args["_positional"].(string); ok {
+				f.State = &v
+			}
 		}
-
-		if v, ok := args["focus"].(string); ok {
-			focus = &v
-		}
-		if v, ok := args["next_move"].(string); ok {
-			nextMove = &v
-		}
-		if v, ok := args["plan"].(string); ok {
-			plan = &v
-		}
-		if v, ok := args["expected_evidence"].(string); ok {
-			expectedEvidence = &v
-		}
-		if v, ok := args["falsifier"].(string); ok {
-			falsifier = &v
-		}
-		if v, ok := args["decision_needed"].(string); ok {
-			decisionNeeded = &v
-		}
+		state, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded := f.State, f.Focus, f.NextMove, f.Plan, f.ExpectedEvidence, f.Falsifier, f.DecisionNeeded
 		var family *string
 		if v, ok := args["family"].(string); ok {
 			v = strings.TrimSpace(v)
 			if !store.FamilySlug(v) {
-				return "", fmt.Errorf("rejected_before_effect (update.family): no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", v)
+				return "", rejectf("update.family", "no effect — family %q is not a slug: lowercase letters, digits and hyphens, at most 40 characters", v)
 			}
 			family = &v
 		}
-		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil || family != nil
+		check, hasCheck := args["check"].(string)
+		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil || family != nil || hasCheck
 
 		for _, k := range []string{"steps", "independent"} {
 			if _, ok := args[k]; ok {
@@ -293,6 +431,11 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 				return "", err
 			}
 		}
+		if hasCheck {
+			if err := e.store.SetWorkCheck(ctx, wsID, check); err != nil {
+				return "", err
+			}
+		}
 		if state != nil {
 			if err := e.store.UpdateWorkState(ctx, wsID, *state); err != nil {
 				return "", err
@@ -304,19 +447,8 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			}
 		}
 
-		if decisionNeeded != nil && e.askProposer != nil {
-			var choices []string
-			if raw, ok := args["choices"].([]any); ok {
-				for _, c := range raw {
-					if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
-						choices = append(choices, strings.TrimSpace(s))
-					}
-				}
-			}
-			connector, _ := args["connector"].(string)
-			if perr := e.askProposer(wsID, *decisionNeeded, choices, strings.TrimSpace(connector)); perr != nil {
-				return "", fmt.Errorf("the decision was stored but could not be put to your operator: %w", perr)
-			}
+		if err := e.putDecision(wsID, decisionNeeded, args); err != nil {
+			return "", err
 		}
 		switch {
 		case sessionWork && standingSet:
@@ -338,42 +470,21 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		evidenceArg, _ := args["evidence"].(string)
 		readbackArg, _ := args["evidence_readback"].(string)
 
+		if err := e.workLineFits("evidence_readback", readbackArg); err != nil {
+			return "", err
+		}
+
 		if !outcomeForm.MatchString(result) {
-			return "", fmt.Errorf("rejected_before_effect (deliver.outcome_line): no effect — begin the result with served:, partial: or unserved:, then one line of what happened (e.g. \"partial: tests written, integration blocked\"); nothing was delivered, so correct the outcome line and deliver again")
+			return "", rejectf("deliver.outcome_line", "no effect — begin the result with served:, partial: or unserved:, then one line of what happened (e.g. \"partial: tests written, integration blocked\"); nothing was delivered, so correct the outcome line and deliver again")
 		}
 
 		if store.IsPreStartFailure(result) {
-			return "", fmt.Errorf("rejected_before_effect (deliver.reserved_marker): no effect — a result that begins \"unserved: failed before start:\" is the runtime's record of a run that never started; state the verdict in your own words (e.g. \"unserved: could not read the input\") and deliver again")
+			return "", rejectf("deliver.reserved_marker", "no effect — a result that begins \"unserved: failed before start:\" is the runtime's record of a run that never started; state the verdict in your own words (e.g. \"unserved: could not read the input\") and deliver again")
 		}
 		subID, _ := ctx.Value(SubagentWorkSession{}).(string)
 		evidence, err := resolveDeliveryEvidence(evidenceArg, readbackArg, result, subID != "")
 		if err != nil {
 			return "", err
-		}
-
-		if commitmentID, ok := args["commitment_id"].(string); ok && commitmentID != "" {
-			commitments, err := e.store.ListCommitments(true)
-			if err != nil {
-				return "", fmt.Errorf("deliver: list commitments: %w", err)
-			}
-			found := false
-			for _, c := range commitments {
-				if c.ID == commitmentID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return "", fmt.Errorf("rejected_before_effect (deliver.commitment_id): no effect — commitment %s not found among active commitments; nothing was delivered", commitmentID)
-			}
-			if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
-				return "", fmt.Errorf("deliver work session: %w", err)
-			}
-			msg := fmt.Sprintf("%s Naming commitment %s. If this delivery fulfills it, the completion is yours to write: commit commitment.state_change — a promise kept is identity truth only when YOU complete it.", deliveredLine(e.store, wsID), commitmentID)
-			if scope := store.RenderEvidenceScope(evidence); scope != "" {
-				msg += "\nEvidence: " + scope
-			}
-			return msg, nil
 		}
 
 		if err := e.store.DeliverWorkSession(ctx, wsID, result, evidence, readbackArg); err != nil {
@@ -383,10 +494,14 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if scope := store.RenderEvidenceScope(evidence); scope != "" {
 			msg += "\nEvidence: " + scope
 		}
+
+		if e.workDelivered != nil {
+			msg += e.workDelivered(ctx, wsID)
+		}
 		return msg, nil
 
 	default:
-		return "", fmt.Errorf("unknown work action: %s", action)
+		return "", withCode("work.action", fmt.Errorf("unknown work action: %s", action))
 	}
 }
 
@@ -407,7 +522,7 @@ func (e *Engine) workStatus(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("work status: %w", cause)
 		}
 
-		return e.boundWorkStatus(state + "\n\nSub-agent rendezvous unavailable in SAFE: " + cause.Error() + ". Retained worker state could not be read; do not infer zero running or delivered workers.")
+		return e.boundWorkStatus(ctx, state+"\n\nSub-agent rendezvous unavailable in "+e.heldBy().Name()+": "+cause.Error()+". Retained worker state could not be read; do not infer zero running or delivered workers.")
 	}
 	live, err := e.store.LiveSubagentSessions()
 	if err != nil {
@@ -433,7 +548,7 @@ func (e *Engine) workStatus(ctx context.Context) (string, error) {
 	if len(live) > 0 && len(delivered) == 0 {
 		b.WriteString("If only waiting remains, end the turn — a delivery wakes you. Never sleep or poll: your held turn is what blocks the wake.")
 	}
-	return e.boundWorkStatus(strings.TrimRight(b.String(), "\n"))
+	return e.boundWorkStatus(ctx, strings.TrimRight(b.String(), "\n"))
 }
 
 type WorkStatusSizeError struct {
@@ -444,22 +559,22 @@ func (e *WorkStatusSizeError) Error() string {
 	return fmt.Sprintf("rejected_before_effect (status.size): no effect — the whole work status needs %d characters; prompt.max_tool_result_chars allows %d. Nothing was clipped. Ask your operator to raise prompt.max_tool_result_chars to at least %d and restart before reading again", e.Required, e.Limit, e.Required)
 }
 
-func (e *Engine) boundWorkStatus(out string) (string, error) {
+func (e *Engine) boundWorkStatus(ctx context.Context, out string) (string, error) {
 	if !utf8.ValidString(out) {
-		return "", fmt.Errorf("rejected_before_effect (status.encoding): no effect — the whole work status contains text that is not valid UTF-8 and cannot be returned verbatim. Nothing was changed; ask your operator to inspect the retained work text before retrying")
+		return "", rejectf("status.encoding", "no effect — the whole work status contains text that is not valid UTF-8 and cannot be returned verbatim. Nothing was changed; ask your operator to inspect the retained work text before retrying")
 	}
-	bound := e.ToolResultLimit()
+	bound := e.ResultLimit(ctx)
 	if size := utf8.RuneCountInString(out); size > bound {
 		return "", &WorkStatusSizeError{Required: size, Limit: bound}
 	}
 	return out, nil
 }
 
-const workResultPart = recallReasoningPart
+const workResultLabels = 200
 
 var workResultRef = regexp.MustCompile(`(?i)^(\S+)\s+part\s*[:#]?\s*(\d+)$`)
 
-func (e *Engine) workResult(ref string) (string, error) {
+func (e *Engine) workResult(ctx context.Context, ref string) (string, error) {
 	id, partArg := ref, ""
 	if m := workResultRef.FindStringSubmatch(ref); m != nil {
 		id, partArg = m[1], m[2]
@@ -469,29 +584,26 @@ func (e *Engine) workResult(ref string) (string, error) {
 		return "", fmt.Errorf("work status: %w", err)
 	}
 	if ws == nil || !ws.Child {
-		return "", fmt.Errorf("rejected_before_effect (status.id): no effect — %s names none of your sub-agents; a ws_ id from an outcome line or from work action=status names one", id)
+		return "", rejectf("status.id", "no effect — %s names none of your sub-agents; a ws_ id from an outcome line or from work action=status names one", id)
 	}
 	if ws.Status != "delivered" {
-		return "", fmt.Errorf("rejected_before_effect (status.delivered): no effect — sub-agent %s has not delivered; its outcome wakes you when it does", id)
+		return "", rejectf("status.delivered", "no effect — sub-agent %s has not delivered; its outcome wakes you when it does", id)
 	}
-	runes := []rune(ws.Result)
-	parts := max(1, (len(runes)+workResultPart-1)/workResultPart)
-	part := 1
-	if partArg != "" {
-		if p, err := strconv.Atoi(partArg); err == nil && p >= 1 && p <= parts {
-			part = p
-		} else {
-			return "", fmt.Errorf("rejected_before_effect (status.part): no effect — %s's result has %d part(s); part %s is not one of them", id, parts, partArg)
-		}
-	}
+
 	head := fmt.Sprintf("Delivered result of sub-agent %s (%s)", id, store.SubagentGoal(ws.Description))
+	scope := store.RenderEvidenceScope(ws.Evidence)
+	labels := utf8.RuneCountInString(head) + utf8.RuneCountInString(scope) + workResultLabels
+	body, part, parts, ok := partOf(ws.Result, partArg, partRunes(e.ResultLimit(ctx), labels))
+	if !ok {
+		return "", rejectf("status.part", "no effect — %s's result has %d part(s); part %s is not one of them", id, parts, partArg)
+	}
 	if parts > 1 {
 		head += fmt.Sprintf(", part %d of %d", part, parts)
 	}
-	if scope := store.RenderEvidenceScope(ws.Evidence); scope != "" {
+	if scope != "" {
 		head += " " + scope
 	}
-	out := head + ":\n\n" + string(runes[(part-1)*workResultPart:min(part*workResultPart, len(runes))])
+	out := head + ":\n\n" + body
 
 	out += fmt.Sprintf("\n\n[end of %s's result, part %d of %d", id, part, parts)
 	if part < parts {
@@ -515,15 +627,12 @@ func resolveDeliveryEvidence(class, readback, result string, workerSeat bool) (s
 		return "", nil
 	}
 	if !store.IsEvidenceClass(class) {
-		return "", fmt.Errorf("rejected_before_effect (deliver.evidence): nothing was delivered. Put one class value in evidence and explanatory text in evidence_readback; class is for project.evidence. Accepted evidence values: not_run, rejected_before_effect, completed_locally, partial_or_mixed, external_effect_unknown, worker_report_only, locally_verified, host_receipted. Correct the fields and deliver again")
+		return "", rejectf("deliver.evidence", "nothing was delivered. Put one class value in evidence and explanatory text in evidence_readback; class is for project.evidence. Accepted evidence values: not_run, rejected_before_effect, completed_locally, partial_or_mixed, external_effect_unknown, worker_report_only, locally_verified, host_receipted. Correct the fields and deliver again")
 	}
 	if store.EvidenceVerifiedTier(class) {
 
 		if !strings.HasPrefix(result, "served:") {
 			return "", fmt.Errorf("deliver: a %s result must begin served: — you cannot verify an outcome you did not serve; use partial:/unserved: with an unverified class", class)
-		}
-		if workerSeat {
-			return "", fmt.Errorf("deliver: a worker seat cannot declare %q — deliver worker_report_only; the primary seat verifies from its own reads", class)
 		}
 		if strings.TrimSpace(readback) == "" {
 			return "", fmt.Errorf("deliver: evidence %q requires evidence_readback — one line of what you executed and read back; a verified result is a check, not a claim", class)
@@ -542,7 +651,7 @@ func (e *Engine) currentWorkSessionID(ctx context.Context) (string, error) {
 	}
 	if ws == nil {
 
-		return "", fmt.Errorf("no active work session — `work start` opens one (description=what the work is), then update and deliver act on it")
+		return "", withCode("work.no_session", fmt.Errorf("no active work session — `work start` opens one (description=what the work is), then update and deliver act on it"))
 	}
 	return ws.ID, nil
 }

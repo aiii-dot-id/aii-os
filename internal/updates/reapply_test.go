@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -238,12 +239,27 @@ func newTestChecker(root *sigenvelope.PublicKeyEnvelope, dataDir string, release
 		dataDir,
 		func() bool { return false }, func() bool { return false },
 	)
+	// A release a test holds is read from the default source, as one a
+	// check read would be (fetchRelease records it).
+	if release != nil && release.source == nil {
+		release.source, _ = APIBase("") // the default always parses
+	}
 	c.cachedRelease = release
 	// Local httptest servers are not GitHub; relax the egress fence for
-	// tests that drive a full download. Production keeps gitHubReleaseHost
+	// tests that drive a full download. Production keeps releaseHost
 	// (asserted by the egress tests, which restore it explicitly).
-	c.hostAllowlist = func(string) error { return nil }
+	c.hostAllowlist = func(*neturl.URL, string) error { return nil }
 	return c
+}
+
+// defaultSource is the release source with nothing set.
+func defaultSource(t *testing.T) *neturl.URL {
+	t.Helper()
+	base, err := APIBase("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base
 }
 
 // releaseArchive builds the archive shape this host's extractBinary

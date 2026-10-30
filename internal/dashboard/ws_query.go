@@ -126,15 +126,6 @@ func (s *Server) querySpeechLists(ctx context.Context, conn carrier, h *WSHandle
 	})
 }
 
-func (s *Server) queryDashboardToken(ctx context.Context, conn carrier, h *WSHandler, msg ClientMessage) {
-
-	if h.DashboardToken == nil || !s.AccessTokenRequired() {
-		s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "error", Message: "not available"})
-		return
-	}
-	s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "dashboard_token", DashboardToken: h.DashboardToken()})
-}
-
 func (s *Server) queryContinuity(ctx context.Context, conn carrier, h *WSHandler) {
 	if h.GetContinuity == nil {
 		s.sendError(ctx, conn, "not available")

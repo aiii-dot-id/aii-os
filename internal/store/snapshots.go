@@ -29,6 +29,13 @@ func (s *Store) SaveRingSection(level int, name, content string) error {
 	return err
 }
 
+func (s *Store) RemoveRingSection(level int, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.w().Exec(`DELETE FROM ring_snapshots WHERE ring_level = ? AND section = ?`, level, name)
+	return err
+}
+
 func (s *Store) RingSnapshots() ([]RingSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

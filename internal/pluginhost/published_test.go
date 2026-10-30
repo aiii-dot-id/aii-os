@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
@@ -146,19 +147,6 @@ func TestAPublishedToolAnswersToTheOperatorsGate(t *testing.T) {
 	}
 }
 
-// A TOOL NO OPERATOR CONFIRMED IS HELD TO THE EFFECT IT DECLARED (S10).
-// An MCP connector publishes at run time what its server offers, and the
-// plugin, not its signed package, names each tool's effect class. The
-// guest here writes to its key-value store whatever it is asked to do,
-// as a connector whose server does more than it said would. Published
-// as a read, the write is refused by the class it published, before the
-// operator's grant that would allow it; in SAFE, the tool is suspended
-// whole; nothing is written. Published as a write, under a grant that
-// allows writing, it runs on the call: the operator's gate is asked and
-// admits it, and no confirmation is proposed — a published tool carries
-// none (PublishedTool has no operator_confirms). That is what is NOT
-// guaranteed, kept here as the control: the grant is the operator's
-// only word on a published write.
 func TestAPublishedToolIsHeldToTheEffectItDeclared(t *testing.T) {
 	const id = "org.example.mcp"
 	st := newBrokerStore(t)
@@ -213,11 +201,108 @@ func TestAPublishedToolIsHeldToTheEffectItDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Output, `"stored":true`) || written() != 1 {
-		t.Fatalf("control: a published write under a write grant runs: %+v, %d row(s)", res, written())
+	if !strings.Contains(res.Output, `"proposed":true`) || written() != 0 {
+		t.Fatalf("a published write ran on the identity's call: %+v, %d row(s)", res, written())
 	}
-	if len(seam.proposals) != 0 || len(seam.gated) != 2 || seam.gated[1] != "server.put:write.local" {
-		t.Fatalf("the operator's gate was asked and nothing was proposed for confirmation: gated %v, proposed %d", seam.gated, len(seam.proposals))
+	if len(seam.proposals) != 1 || seam.proposals[0].Operation != "server.put" || seam.proposals[0].Tool != put || seam.proposals[0].Effects != broker.EffectsWriteLocal ||
+		len(seam.gated) != 2 || seam.gated[1] != "server.put:write.local" {
+		t.Fatalf("the operator's gate and then the operator were not asked: gated %v, proposed %+v", seam.gated, seam.proposals)
+	}
+	confirmed := WithOperatorAct(context.Background(), OperatorAct{ID: "act-test", ConfirmedAt: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)})
+	res, err = reg.Execute(confirmed, put, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, `"stored":true`) || written() != 1 || len(seam.proposals) != 1 {
+		t.Fatalf("the operator's confirmation did not run the published write once: %+v, %d row(s)", res, written())
+	}
+
+	put2, err := ap.PublishTool(broker.PublishedTool{Name: "server.cache", Summary: "Cache something the server sent", Effects: broker.EffectsWriteLocal,
+		Capabilities: []string{"ring4.kv"}, UnconfirmedByDesign: "it keeps a copy in the plugin's own store, which nobody else reads"})
+	if err != nil {
+		t.Fatalf("publish a write with its reason: %v", err)
+	}
+	res, err = reg.Execute(context.Background(), put2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, `"stored":true`) || len(seam.proposals) != 1 {
+		t.Fatalf("a write published with its reason did not run on the call: %+v, proposed %d", res, len(seam.proposals))
+	}
+}
+
+// WHAT A PUBLISHER MAY SAY OF CONFIRMATION, AND WHAT THE CARD SHOWS (row
+// 6.5). A read asks for the operator only when it says so; a reason
+// excuses nothing on a read, contradicts operator_confirms on a write,
+// and must say something and be no longer than a summary. A tool may not
+// take the name of an operation the package declares, whose standing
+// confirmation it would run under. What the registry hands the
+// operator's card says which tools wait and which do not, and why.
+func TestAPublishedToolSaysWhetherTheOperatorConfirms(t *testing.T) {
+	const id = "org.example.mcp"
+	st := newBrokerStore(t)
+	h, err := broker.New(broker.Config{Store: st, Grants: map[string]broker.Grant{id: {Tools: true, KV: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := newRegistry(t)
+	pkg := effectsPkg(t, id, []byte(`[{"id":"roundtrip","summary":"Refresh the server's tools","effects":"write.local","capabilities":["tools.publish"]}]`), kvPutGuest(), []string{"tools.publish", "ring4.kv"})
+	seam := &gatedProposer{}
+	ap, err := Activate(context.Background(), pkg, reg, &Options{Broker: h, Acts: seam})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	t.Cleanup(func() { _ = ap.Deactivate(context.Background()) })
+
+	for _, c := range []struct {
+		spec broker.PublishedTool
+		want string
+	}{
+		{broker.PublishedTool{Name: "a.read", Effects: broker.EffectsReadInternal, UnconfirmedByDesign: "it only looks"}, "unconfirmed_by_design excuses nothing"},
+		{broker.PublishedTool{Name: "a.write", Effects: broker.EffectsWriteExternal, OperatorConfirms: true, UnconfirmedByDesign: "why not"}, "say opposite things"},
+		{broker.PublishedTool{Name: "a.blank", Effects: broker.EffectsExec, UnconfirmedByDesign: "   "}, "gives no reason"},
+		{broker.PublishedTool{Name: "a.long", Effects: broker.EffectsWriteLocal, UnconfirmedByDesign: strings.Repeat("x", tools.MaxSummaryBytes+1)}, "at most 256 bytes"},
+		{broker.PublishedTool{Name: "roundtrip", Effects: broker.EffectsReadInternal}, "declares an operation of that name"},
+	} {
+		c.spec.Summary = "A tool"
+		if _, err := ap.PublishTool(c.spec); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %v, want a refusal saying %q", c.spec.Name, err, c.want)
+		}
+	}
+
+	why := "it keeps a copy in the plugin's own store"
+	names := map[string]string{}
+	for _, spec := range []broker.PublishedTool{
+		{Name: "a.peek", Summary: "Look", Effects: broker.EffectsReadInternal},
+		{Name: "a.watch", Summary: "Look, with the operator", Effects: broker.EffectsReadExternal, OperatorConfirms: true},
+		{Name: "a.send", Summary: "Send", Effects: broker.EffectsWriteExternal},
+		{Name: "a.run", Summary: "Run", Effects: broker.EffectsExec},
+		{Name: "a.cache", Summary: "Cache", Effects: broker.EffectsWriteLocal, UnconfirmedByDesign: "  " + why + " "},
+	} {
+		name, err := ap.PublishTool(spec)
+		if err != nil {
+			t.Fatalf("publish %s: %v", spec.Name, err)
+		}
+		names[spec.Name] = name
+	}
+	for op, want := range map[string]tools.Discovery{
+		"a.peek":  {Operation: "a.peek", Published: true},
+		"a.watch": {Operation: "a.watch", Published: true, OperatorConfirms: true},
+		"a.send":  {Operation: "a.send", Published: true, OperatorConfirms: true},
+		"a.run":   {Operation: "a.run", Published: true, OperatorConfirms: true},
+		"a.cache": {Operation: "a.cache", Published: true, UnconfirmedByDesign: why},
+	} {
+		d, ok := reg.Declared(names[op])
+		if !ok || d.Operation != want.Operation || d.Published != want.Published || d.OperatorConfirms != want.OperatorConfirms || d.UnconfirmedByDesign != want.UnconfirmedByDesign {
+			t.Fatalf("%s reads %+v (%v), want %+v", op, d, ok, want)
+		}
+	}
+	if d, ok := reg.Declared("pl_org_example_mcp_roundtrip"); !ok || d.Published || d.OperatorConfirms {
+		t.Fatalf("the declared operation reads %+v", d)
+	}
+	res, err := reg.Execute(context.Background(), names["a.watch"], nil)
+	if err != nil || !strings.Contains(res.Output, `"proposed":true`) {
+		t.Fatalf("a read that asked for the operator was not proposed: %+v %v", res, err)
 	}
 }
 

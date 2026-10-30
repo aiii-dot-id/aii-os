@@ -231,6 +231,16 @@ func (s *Store) withSchema(ctx context.Context, target string, apply func() erro
 		return &SchemaError{"apply", err}
 	}
 	for _, name := range sortedKeys(views) {
+
+		if _, declared := ref.Objects["view"][name]; !declared {
+			var n int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'view' AND name = ?", name).Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				continue
+			}
+		}
 		probe, err := tx.QueryContext(ctx, "SELECT * FROM "+quoteIdentifier(name)+" LIMIT 0")
 		if err != nil {
 			return &SchemaError{"verify view " + name, err}

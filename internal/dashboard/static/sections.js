@@ -8,6 +8,7 @@ import { renderPanel } from './panel.js';
 
 let sectionsList = [];
 let safeReason = '';
+let heldName = 'SAFE';
 let layout = null;
 let lastPlanJSON = '';
 const mounted = new Map();
@@ -29,12 +30,18 @@ export function onLayout(raw) {
 }
 
 export function publish(msg) {
+  if (msg.type === 'continuity' && msg.continuity) {
+    const name = msg.continuity.mode === 'degraded_ring5' ? 'DEGRADED' : 'SAFE';
+    if (name !== heldName) { heldName = name; if (safeReason) remount(); }
+  }
   if (msg.type === 'continuity' && msg.continuity && msg.continuity.mode === 'safe') {
     if (!safeReason) { safeReason = msg.continuity.safe_reason || 'safe mode'; remount(); }
+  } else if (msg.type === 'continuity' && msg.continuity && msg.continuity.mode === 'degraded_ring5') {
+    if (!safeReason) { safeReason = msg.continuity.degraded_why || 'waiting for Ring 5'; remount(); }
   }
   const t = topicOf(msg);
   if (!t) return;
-  mounted.forEach(function (m) { m.bridge.publish(t.topic, t.data); });
+  mounted.forEach(function (m) { if (m.bridge) m.bridge.publish(t.topic, t.data); });
 }
 export function sectionTitle(view) {
   if (view.indexOf('section:') !== 0) return '';
@@ -112,7 +119,7 @@ function remount() {
       el.classList.add('occupied');
       const div = document.createElement('div');
       div.className = 'sections-safe';
-      div.textContent = 'sections suspended — SAFE: ' + safeReason;
+      div.textContent = 'sections suspended — ' + heldName + ': ' + safeReason;
       el.appendChild(div);
     }
   });

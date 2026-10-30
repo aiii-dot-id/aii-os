@@ -29,10 +29,14 @@ export function renderIdentity() {
   const id = S.identity, c = S.cont;
   let html = '';
   if (id && id.brief) html += '<div class="card"><h3>THEIR MORNING BRIEF</h3><div class="quote">' + esc(id.brief) + '</div></div>';
-  if (id && id.charter) html += '<div class="card"><h3>CHARTER — RING 1</h3>' + approvalHTML(id.approval) + '<div style="white-space:pre-wrap;font-size:13.5px;line-height:1.6;color:var(--dim)">' + esc(id.charter) + '</div></div>';
+  if (id && id.charter) html += '<div class="card"><h3>CHARTER — RING 1</h3>' + approvalHTML(id.approval) + charterText(id.charter) + '</div>';
+  const others = (id && id.relationships) || [];
+  if (others.length) html += '<div class="card" data-relationships><h3>OTHER RELATIONSHIPS — RING 1</h3>' + others.map(relationshipHTML).join('') + '</div>';
   html += '<div class="card"><h3>CONTINUITY</h3>';
   if (c) {
-    html += '<div class="kv"><span>mode</span><b>' + esc(c.mode || 'normal') + (c.safe_reason ? ' — ' + esc(c.safe_reason) : '') + '</b></div>';
+    const modeWhy = c.safe_reason || c.degraded_why;
+    html += '<div class="kv"><span>mode</span><b>' + esc(c.mode || 'normal') + (modeWhy ? ' — ' + esc(modeWhy) : '') + '</b></div>';
+    if ((c.mode || 'normal') === 'safe' && c.safe_cleared) html += '<div class="dim-note" data-safe-cleared>' + esc(c.safe_cleared) + '</div>';
     html += '<div class="kv"><span>ledger seq</span><b>' + c.ledger_seq + '</b></div>';
     html += '<div class="kv"><span>witnessed</span><b>' + witnessedText(c) + '</b></div>';
     if (c.witnessed_at) html += '<div class="kv"><span>last witness</span><b>' + esc(c.witnessed_at) + '</b></div>';
@@ -49,6 +53,20 @@ export function renderIdentity() {
     '<div class="kv"><span>autonomy</span><b>' + esc(id.autonomy_level || '—') + '</b></div></div>';
   st.innerHTML = html || '<div class="empty">listening…</div>';
   st.querySelectorAll('[data-open-backups]').forEach(a => { a.onclick = e => { e.preventDefault(); openBackups(); go('settings'); }; });
+}
+
+function charterText(t) {
+  return '<div style="white-space:pre-wrap;font-size:13.5px;line-height:1.6;color:var(--dim)">' + esc(t) + '</div>';
+}
+
+function relationshipHTML(r) {
+  const seq = esc(String(r.record));
+  const html = '<div data-relationship="' + esc(r.id) + '" style="margin-top:14px">' +
+    '<div class="kv"><span>with</span><b>' + (r.name ? esc(r.name) : 'no name given') + '</b></div>' +
+    '<div class="kv"><span>role</span><b>' + esc(r.role) + '</b></div>' +
+    '<div class="kv"><span>entry</span><b><a href="#/record/' + seq + '">record ' + seq + '</a></b></div>';
+  if (!r.charter) return html + '<div class="dim-note">No text is recorded for this relationship.</div></div>';
+  return html + approvalHTML(r.approval) + charterText(r.charter) + '</div>';
 }
 
 function approvalHTML(a) {

@@ -19,7 +19,7 @@ import (
 
 const pagePass = "correct horse battery staple"
 
-// THE DOOR TAKES THE THREE KEYS, held to their bounds, and they apply at once.
+// THE DOOR TAKES THE FOUR KEYS, held to their bounds, and they apply at once.
 func TestTheConfigDoorTakesTheMaintenanceKeys(t *testing.T) {
 	a, _, _ := maintApp(t)
 	initial := a.configState().Maintenance
@@ -29,6 +29,7 @@ func TestTheConfigDoorTakesTheMaintenanceKeys(t *testing.T) {
 	for _, bad := range []map[string]any{
 		{"maintenance.backup_keep": float64(0)}, {"maintenance.backup_keep": float64(366)},
 		{"maintenance.enabled": "yes"}, {"maintenance.on_demand_spacing_seconds": float64(86401)},
+		{"maintenance.restore_upload_idle_seconds": float64(-1)}, {"maintenance.restore_upload_idle_seconds": float64(86401)},
 	} {
 		if _, err := a.applyConfigChange(bad); err == nil {
 			t.Errorf("%v was accepted", bad)
@@ -56,6 +57,12 @@ func TestTheConfigDoorTakesTheMaintenanceKeys(t *testing.T) {
 	}
 	if v := continuityDoor(a).View(); v.Enabled || v.BackupKeep != 14 {
 		t.Errorf("the change did not reach the view at once: %+v", v)
+	}
+	if _, err := a.applyConfigChange(map[string]any{"maintenance.restore_upload_idle_seconds": float64(600)}); err != nil {
+		t.Fatalf("a good wait: %v", err)
+	}
+	if got := a.continuity.NewMachineUploadIdle(); got != 600*time.Second {
+		t.Errorf("the restore door's wait did not reach the door at once: %v", got)
 	}
 }
 

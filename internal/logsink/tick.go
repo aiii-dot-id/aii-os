@@ -81,13 +81,14 @@ func resetTicks() {
 	ticks.Unlock()
 }
 
-func digestEvery(d time.Duration, stop <-chan struct{}) {
+func beat(d time.Duration, stop <-chan struct{}, file *liveLog) {
 	t := time.NewTicker(d)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
 			FlushDigest()
+			file.noteSize()
 		case <-stop:
 			return
 		}

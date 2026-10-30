@@ -19,9 +19,15 @@ func (s *Server) wsAccessCode(ctx context.Context, conn carrier, cl *wsClient, m
 	if h := s.currentHandler(); h != nil && h.AccessCodeSeconds != nil {
 		s.SetAccessCodeSeconds(h.AccessCodeSeconds())
 	}
-	st, err := s.issueAccessCode(cl.policy, msg.AccessCode)
+	st, err := s.issueAccessCode(cl.policy, msg.AccessCode, msg.AccessCodeLocal)
 	if err != nil {
 		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+		return
+	}
+
+	if msg.AccessCodeLocal {
+		st.Link = accessCodeLink(cl.origin, st.Code)
+		s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "access_code", AccessCode: &st})
 		return
 	}
 	origin := ""

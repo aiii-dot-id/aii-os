@@ -29,7 +29,13 @@ func (s *Store) StandingStateAuthored() (string, int64, error) {
 func (s *Store) SetStandingState(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.w().Exec(
+	return setStanding(s.w(), text)
+}
+
+func setStanding(db interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, text string) error {
+	_, err := db.Exec(
 		`INSERT INTO standing_state (singleton_id, text, updated_ms) VALUES ('current', ?, ?)
 		 ON CONFLICT(singleton_id) DO UPDATE SET text = excluded.text, updated_ms = excluded.updated_ms`,
 		text, time.Now().UTC().UnixMilli())

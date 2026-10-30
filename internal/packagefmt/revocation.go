@@ -8,7 +8,9 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
 	"github.com/aiii-dot-id/aii-os/internal/crypto"
@@ -55,9 +57,20 @@ type revocationPayload struct {
 }
 
 type EpochGuard interface {
-	TrustEpochHighWater(root string) (epoch int64, payloadSHA256 string, ok bool, err error)
+	TrustEpochHighWater(mark string) (epoch int64, payloadSHA256 string, ok bool, err error)
 
-	AcceptTrustEpoch(root string, epoch int64, payloadSHA256 string) error
+	AcceptTrustEpoch(mark string, epoch int64, payloadSHA256 string) error
+}
+
+func EpochMark(root *sigenvelope.PublicKeyEnvelope) string {
+	if root == nil {
+		return ""
+	}
+	key, ok := root.FindPublicKey(crypto.SigAlg)
+	if !ok || key.PublicKeyFingerprint == "" {
+		return ""
+	}
+	return root.KeyType + ":" + key.PublicKeyFingerprint
 }
 
 type rootSnapshot struct {
@@ -149,7 +162,7 @@ func loadRootSnapshot(dir string, d RevocationDomain, root *sigenvelope.PublicKe
 	if guard != nil {
 
 		isShipped := sameRoot(root, shippedRoot(d.RootKeyType)) && bytes.Equal(raw, shippedSnapshot(d.FileName))
-		if err := applyEpochGuard(snap, guard, !isShipped); err != nil {
+		if err := applyEpochGuard(snap, root, guard, !isShipped); err != nil {
 			return absent("status file %s: %v", d.FileName, err)
 		}
 	}
@@ -185,30 +198,90 @@ func shippedStandIn(d RevocationDomain, root *sigenvelope.PublicKeyEnvelope) *ro
 }
 
 func ProvisionShippedStatus(dir string, roots TrustRoots) ([]string, error) {
+	return placeShipped(dir, roots, false)
+}
+
+func PlaceShippedStatus(dir string, roots TrustRoots) ([]string, error) {
+	return placeShipped(dir, roots, true)
+}
+
+func placeShipped(dir string, roots TrustRoots, overOlder bool) ([]string, error) {
+	return placeFrom(dir, roots, overOlder, func(d RevocationDomain) (*sigenvelope.PublicKeyEnvelope, []byte) {
+		return shippedRoot(d.RootKeyType), shippedSnapshot(d.FileName)
+	})
+}
+
+func placeFrom(dir string, roots TrustRoots, overOlder bool, shipped func(RevocationDomain) (*sigenvelope.PublicKeyEnvelope, []byte)) ([]string, error) {
 	var wrote []string
 	var errs []error
 	for _, d := range revocationDomains {
-		if !sameRoot(rootForDomain(roots, d.RootKeyType), shippedRoot(d.RootKeyType)) {
+		root, raw := shipped(d)
+		if !sameRoot(rootForDomain(roots, d.RootKeyType), root) || raw == nil {
 			continue
 		}
-		raw := shippedSnapshot(d.FileName)
-		if raw == nil {
-			continue
+		var placed bool
+		var err error
+		if overOlder {
+			_, placed, err = PlaceStatus(dir, roots, d.FileName, raw)
+		} else {
+			placed, err = writeIfAbsent(dir, d.FileName, raw)
 		}
-		path := filepath.Join(dir, d.FileName)
-		if _, err := os.Lstat(path); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
+		if err != nil {
 			errs = append(errs, fmt.Errorf("status file %s: %w", d.FileName, err))
 			continue
 		}
-		if err := writeStatusFile(dir, d.FileName, raw); err != nil {
-			errs = append(errs, fmt.Errorf("status file %s: %w", d.FileName, err))
-			continue
+		if placed {
+			wrote = append(wrote, d.FileName)
 		}
-		wrote = append(wrote, d.FileName)
 	}
 	return wrote, errors.Join(errs...)
+}
+
+var statusWrite sync.Mutex
+
+func writeIfAbsent(dir, name string, raw []byte) (bool, error) {
+	statusWrite.Lock()
+	defer statusWrite.Unlock()
+	if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := writeStatusFile(dir, name, raw); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func PlaceStatus(dir string, roots TrustRoots, fileName string, raw []byte) (int64, bool, error) {
+	d, root, err := domainOfFile(roots, fileName)
+	if err != nil {
+		return 0, false, err
+	}
+	snap, err := parseRootSnapshot(raw, d, root)
+	if err != nil {
+		return 0, false, err
+	}
+	statusWrite.Lock()
+	defer statusWrite.Unlock()
+	there, err := atomicfile.ReadFile(filepath.Join(dir, fileName))
+	switch {
+	case os.IsNotExist(err):
+	case err != nil:
+		return snap.trustEpoch, false, fmt.Errorf("the file there cannot be read: %v", err)
+	default:
+		held, err := parseRootSnapshot(there, d, root)
+		if err != nil {
+			return snap.trustEpoch, false, fmt.Errorf("the file there does not verify (%v), and a broken file is left for the operator to mend", err)
+		}
+		if held.trustEpoch >= snap.trustEpoch {
+			return snap.trustEpoch, false, nil
+		}
+	}
+	if err := writeStatusFile(dir, fileName, raw); err != nil {
+		return snap.trustEpoch, false, err
+	}
+	return snap.trustEpoch, true, nil
 }
 
 func writeStatusFile(dir, name string, raw []byte) error {
@@ -232,6 +305,95 @@ func writeStatusFile(dir, name string, raw []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), filepath.Join(dir, name))
+}
+
+func domainOfFile(roots TrustRoots, fileName string) (RevocationDomain, *sigenvelope.PublicKeyEnvelope, error) {
+	for _, d := range revocationDomains {
+		if d.FileName != fileName {
+			continue
+		}
+		root := rootForDomain(roots, d.RootKeyType)
+		if root == nil {
+			return d, nil, fmt.Errorf("no %s root is pinned, so the list cannot be verified", d.RootKeyType)
+		}
+		return d, root, nil
+	}
+	return RevocationDomain{}, nil, fmt.Errorf("%q is not the name of a status file", fileName)
+}
+
+func StatusEpoch(roots TrustRoots, fileName string, raw []byte) (int64, error) {
+	d, root, err := domainOfFile(roots, fileName)
+	if err != nil {
+		return 0, err
+	}
+	snap, err := parseRootSnapshot(raw, d, root)
+	if err != nil {
+		return 0, err
+	}
+	return snap.trustEpoch, nil
+}
+
+func NextStatusPayload(roots TrustRoots, fileName string, current []byte, withdraw [][]byte) ([]byte, error) {
+	d, root, err := domainOfFile(roots, fileName)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := parseRootSnapshot(current, d, root)
+	if err != nil {
+		return nil, fmt.Errorf("the current list: %w", err)
+	}
+	keys := make(map[string]bool, len(snap.revoked)+len(withdraw))
+	for k := range snap.revoked {
+		keys[k] = true
+	}
+	for i, raw := range withdraw {
+
+		var env sigenvelope.Envelope
+		if err := sigenvelope.Decode(raw, &env); err != nil {
+			return nil, fmt.Errorf("withdrawn artifact %d is not a signature envelope: %v", i+1, err)
+		}
+		allowed := false
+		for _, k := range d.ArtifactKinds {
+			allowed = allowed || k == env.ArtifactKind
+		}
+		if !allowed {
+			return nil, fmt.Errorf("withdrawn artifact %d is of kind %q, which the %s root may not revoke", i+1, env.ArtifactKind, d.RootKeyType)
+		}
+		payload, err := sigenvelope.VerifyPayload(raw, root, env.ArtifactKind, crypto.ProfileRoot)
+		if err != nil {
+			return nil, fmt.Errorf("withdrawn artifact %d does not verify under the pinned %s root: %v", i+1, d.RootKeyType, err)
+		}
+		canonical, err := canonicaljson.CanonicalizeV1(payload)
+		if err != nil {
+			return nil, fmt.Errorf("withdrawn artifact %d: %v", i+1, err)
+		}
+		keys[revokedKey(env.ArtifactKind, sigenvelope.SHA256Prefixed(canonical))] = true
+	}
+	entries := make([]RevokedEntry, 0, len(keys))
+	for k := range keys {
+		kind, digest, _ := strings.Cut(k, "\n")
+		entries = append(entries, RevokedEntry{ArtifactKind: kind, PayloadSHA256: digest})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ArtifactKind != entries[j].ArtifactKind {
+			return entries[i].ArtifactKind < entries[j].ArtifactKind
+		}
+		return entries[i].PayloadSHA256 < entries[j].PayloadSHA256
+	})
+	one, next := 1, snap.trustEpoch+1
+	return json.MarshalIndent(revocationPayload{SchemaVersion: &one, TrustEpoch: &next, Revoked: &entries}, "", "  ")
+}
+
+func (s *RevocationStatusSet) Entries(rootKeyType string) int {
+	snap := s.lookup(rootKeyType)
+	if snap == nil || snap.err != nil {
+		return 0
+	}
+	return len(snap.revoked)
+}
+
+func IsShippedRoot(root *sigenvelope.PublicKeyEnvelope) bool {
+	return root != nil && sameRoot(root, shippedRoot(root.KeyType))
 }
 
 func sameRoot(a, b *sigenvelope.PublicKeyEnvelope) bool {
@@ -309,10 +471,21 @@ func validateRevokedDigest(v string) error {
 
 func revokedKey(kind, digest string) string { return kind + "\n" + digest }
 
-func applyEpochGuard(snap *rootSnapshot, guard EpochGuard, record bool) error {
-	hw, hwSHA, ok, err := guard.TrustEpochHighWater(snap.domain.RootKeyType)
+func applyEpochGuard(snap *rootSnapshot, root *sigenvelope.PublicKeyEnvelope, guard EpochGuard, record bool) error {
+	mark := EpochMark(root)
+	if mark == "" {
+		return fmt.Errorf("the pinned %s root has no %s key to name its epoch mark by", snap.domain.RootKeyType, crypto.SigAlg)
+	}
+	hw, hwSHA, ok, err := guard.TrustEpochHighWater(mark)
 	if err != nil {
 		return fmt.Errorf("trust_epoch high-water read failed: %v", err)
+	}
+	old, oldSHA, oldOK, err := guard.TrustEpochHighWater(snap.domain.RootKeyType)
+	if err != nil {
+		return fmt.Errorf("trust_epoch high-water read failed: %v", err)
+	}
+	if oldOK && (!ok || old > hw) {
+		hw, hwSHA, ok = old, oldSHA, true
 	}
 	if ok {
 		if snap.trustEpoch < hw {
@@ -328,7 +501,7 @@ func applyEpochGuard(snap *rootSnapshot, guard EpochGuard, record bool) error {
 	if !record {
 		return nil
 	}
-	if err := guard.AcceptTrustEpoch(snap.domain.RootKeyType, snap.trustEpoch, snap.payloadSHA256); err != nil {
+	if err := guard.AcceptTrustEpoch(mark, snap.trustEpoch, snap.payloadSHA256); err != nil {
 		return fmt.Errorf("trust_epoch %d acceptance could not be ledgered: %v", snap.trustEpoch, err)
 	}
 	return nil

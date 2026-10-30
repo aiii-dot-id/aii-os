@@ -27,6 +27,7 @@ func TestAScopeFailsWhenAReleaseCriticalTestDidNotRun(t *testing.T) {
 			t.Skip("no Go toolchain")
 		}
 	}
+	skipWhereRaceCannotRun(t, goBin)
 	root := t.TempDir()
 	put := func(path string, content []byte) {
 		t.Helper()

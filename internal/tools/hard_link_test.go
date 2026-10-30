@@ -752,3 +752,52 @@ func TestAReadAsksTheFileItOpenedWhenItHasMoreThanOneName(t *testing.T) {
 		}
 	}
 }
+
+// A PLACE THAT CANNOT BE CHECKED AFTER THE GATE REFUSES THE EDIT. The
+// wall's refusal of a place it could not check is an error of its own
+// (firewall.UncheckedError), no longer a rule; the question an edit asks of
+// the file it opened to write back must know it as the wall's refusal, as
+// it knew the rule. The seam closes the directory a kept place lies in just
+// after the gate: the edit is refused, saying that, and the file is as it
+// was. Skipped where root runs it, and on Windows.
+func TestAPlaceThatCannotBeCheckedAfterTheGateRefusesTheEdit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a directory's mode does not close it on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root searches a directory at mode 000: nothing here fails to be checked")
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, locked := filepath.Join(base, "home"), filepath.Join(base, "locked")
+	for _, d := range []string{home, locked} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	note := filepath.Join(home, "note.txt")
+	if err := os.WriteFile(note, []byte("BEFORE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := firewall.DefaultPolicy()
+	policy.SetPlaces([]*firewall.Rule{{ID: "sub.vault", Kind: firewall.KindSubstrate, Path: filepath.Join(locked, "token.json"), Reason: "kept", Enforced: true}})
+	r := NewRegistry(home, policy, Timeouts{})
+	e, _ := r.Get("edit")
+	e.(*EditTool).window = func(at, _ string) {
+		if at == "gate" {
+			if err := os.Chmod(locked, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	res := modelCall(t, r, "edit", map[string]any{"file_path": "note.txt", "old_string": "BEFORE", "new_string": "AFTER"})
+	if !res.Refused || !strings.Contains(res.Error, "access denied: the host could not check token.json, a place it keeps") {
+		t.Errorf("an edit whose kept place could not be checked after the gate is refused, saying so: %+v", res)
+	}
+	if b, err := os.ReadFile(note); err != nil || string(b) != "BEFORE\n" {
+		t.Errorf("the file is as it was: %q %v", b, err)
+	}
+}

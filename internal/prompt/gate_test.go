@@ -141,3 +141,24 @@ func TestGateHonorsFoldedDispositions(t *testing.T) {
 		t.Fatal("protected rings must be present through the gate")
 	}
 }
+
+func TestFacilitiesSeeWhoTheIdentityWorksWith(t *testing.T) {
+	rings := fakeRings{r0: "R0-CONSTITUTION-VERBATIM", r5: "R5-FIREWALL-VERBATIM", r3: "R3-WORKING", r4: "R4-STATE"}
+	about := "## Who You Work With\n\nWHO-QUINN-IS\n- Quinn asks first [b1]"
+	sys, seam := NewGate(rings, 100000).SystemWithin("CALLER", "R1-CHARTER-VERBATIM", about, "R2-IDENTITY", 0)
+	charter, who, ring2 := strings.Index(sys, "R1-CHARTER-VERBATIM"), strings.Index(sys, "WHO-QUINN-IS"), strings.Index(sys, "R2-IDENTITY")
+	if charter < 0 || who < 0 || ring2 < 0 || !(charter < who && who < ring2) {
+		t.Fatalf("THE FACILITIES DO NOT SEE WHO THE IDENTITY WORKS WITH AFTER THE CHARTER:\n%s", sys)
+	}
+	if who > seam {
+		t.Fatalf("the part is behind the seam (%d > %d)", who, seam)
+	}
+	long := "## Who You Work With\n\n" + strings.Repeat("- WHO-QUINN-IS a belief about them [b]\n", 60)
+	tight, _ := NewGate(rings, 60).SystemWithin("CALLER", "R1-CHARTER-VERBATIM", long, "R2-IDENTITY", 0)
+	if strings.Contains(tight, "WHO-QUINN-IS") || !strings.Contains(tight, "R1-CHARTER-VERBATIM") || !strings.Contains(tight, "R2-IDENTITY") {
+		t.Fatalf("under pressure the part did not yield whole before the charter and Ring 2:\n%s", tight)
+	}
+	if !strings.Contains(tight, "- Who You Work With — recall (source=ledger) reaches your beliefs about the person you work with") {
+		t.Fatalf("its receipt and route are missing:\n%s", tight)
+	}
+}

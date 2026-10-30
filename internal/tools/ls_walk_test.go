@@ -95,7 +95,7 @@ func TestLsShowsTypeTimeSizeAndName(t *testing.T) {
 
 func TestLsRecursesWithAPatternAndADepth(t *testing.T) {
 	depth := (&LsTool{}).Parameters()["properties"].(map[string]any)["depth"].(map[string]any)
-	if words, _ := depth["description"].(string); !strings.Contains(words, "requires recursive=true") || !strings.Contains(words, "With recursive=true, zero means no depth bound") {
+	if words, _ := depth["description"].(string); !strings.Contains(words, "a positive depth lists recursively") || !strings.Contains(words, "With recursive=true, zero means no depth bound") {
 		t.Fatalf("the advertised depth must name its existing dependency and zero behavior: %v", depth)
 	}
 	r, home := readHome(t, nil)
@@ -129,8 +129,9 @@ func TestLsRecursesWithAPatternAndADepth(t *testing.T) {
 	if !strings.Contains(res.Output, "1 directory(ies) at depth 2 not entered") {
 		t.Errorf("a depth bound must say what it did not enter:\n%s", res.Output)
 	}
-	if res := lsCall(t, r, map[string]any{"depth": 2}); !strings.Contains(res.Error, "pass recursive=true") {
-		t.Errorf("depth without recursive: %+v", res)
+	// A positive depth is a recursive listing whatever recursive says.
+	if got := strings.Join(names(lsCall(t, r, map[string]any{"depth": 2}).Output), " "); got != ".git/ a/ a/b/ a/x.go node_modules/ top.go" {
+		t.Errorf("depth without recursive: %s", got)
 	}
 	// Asked for by name, a tree the walk does not enter is listed.
 	if got := strings.Join(names(lsCall(t, r, map[string]any{"path": "node_modules", "recursive": true}).Output), " "); got != "m.js" {
@@ -190,7 +191,7 @@ func TestLsAppliesTheFloorGrepApplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home, granted := filepath.Join(base, "vega"), filepath.Join(base, "grants", "aii-os")
+	home, granted := filepath.Join(base, "example"), filepath.Join(base, "grants", "aii-os")
 	data := filepath.Join(home, "data")
 	lsTree(t, home, []string{"notes.md", "ledger.jsonl", "providers.json", "data/credentials/k.key", "data/ui-layout.json"})
 	lsTree(t, granted, []string{"config.json", "internal/plain.go"})

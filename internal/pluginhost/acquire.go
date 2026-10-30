@@ -134,7 +134,9 @@ type AcquireStatus struct {
 	Attempt   int
 	LastError string
 
-	Remedy  string
+	Remedy string
+
+	Resumes bool
 	RetryAt time.Time
 
 	Models []ModelStatus
@@ -331,17 +333,39 @@ func (q *Acquirer) Retry(id string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if job := q.jobs[id]; job != nil && !job.stopping && job.phase != PhaseReady {
-
-		var final *DownloadError
-		if errors.As(job.lastErr, &final) {
-			job.lastErr = final.Cause
-		}
-		var ended *MaterialEnded
-		if errors.As(job.lastErr, &ended) {
-			job.lastErr, job.retry = ended.Momentary(), true
-		}
-		q.wantLocked(job.m, job.key)
+		q.reopenLocked(job)
 	}
+}
+
+func (q *Acquirer) Resume() []string {
+	q.mu.Lock()
+	var ids []string
+	var resumed []*acquireJob
+	for id, job := range q.jobs {
+		if job.stopping || job.phase != PhaseWaiting || !waitsOnNetwork(job.lastErr) {
+			continue
+		}
+		q.reopenLocked(job)
+		ids, resumed = append(ids, id), append(resumed, job)
+	}
+	q.mu.Unlock()
+	for _, job := range resumed {
+		q.cfg.Logf("plugin %s %s: this host completed a fetch — the download the network's failures ended is tried again", job.m.PluginID, job.m.Version)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (q *Acquirer) reopenLocked(job *acquireJob) {
+	var final *DownloadError
+	if errors.As(job.lastErr, &final) {
+		job.lastErr = final.Cause
+	}
+	var ended *MaterialEnded
+	if errors.As(job.lastErr, &ended) {
+		job.lastErr, job.retry = ended.Momentary(), true
+	}
+	q.wantLocked(job.m, job.key)
 }
 
 func (q *Acquirer) wantLocked(m Material, key string) {
@@ -521,7 +545,7 @@ func (q *Acquirer) run(ctx context.Context, job *acquireJob) {
 			q.mu.Lock()
 			job.phase, job.lastErr, job.retryAt = PhaseWaiting, err, time.Time{}
 			q.mu.Unlock()
-			q.cfg.Logf("plugin %s %s: preparing — %v; nothing tries it again on its own — %s", m.PluginID, m.Version, ended, ended.Final())
+			q.cfg.Logf("plugin %s %s: preparing — %v; %s — %s", m.PluginID, m.Version, ended, againWords(ended), ended.Final())
 			q.changed()
 			q.ended(m.PluginID, err)
 			select {
@@ -571,7 +595,7 @@ func (q *Acquirer) run(ctx context.Context, job *acquireJob) {
 			q.mu.Lock()
 			job.phase, job.lastErr, job.retryAt = PhaseWaiting, final, time.Time{}
 			q.mu.Unlock()
-			q.cfg.Logf("plugin %s %s: preparing — attempt %d: %v; %s; nothing tries it again on its own — %s", m.PluginID, m.Version, attempt, final, q.status(job).Summary(), final.Final())
+			q.cfg.Logf("plugin %s %s: preparing — attempt %d: %v; %s; %s — %s", m.PluginID, m.Version, attempt, final, q.status(job).Summary(), againWords(final), final.Final())
 			q.changed()
 			q.ended(m.PluginID, final)
 			select {
@@ -599,6 +623,13 @@ func (q *Acquirer) run(ctx context.Context, job *acquireJob) {
 		case <-wait:
 		}
 	}
+}
+
+func againWords(end error) string {
+	if waitsOnNetwork(end) {
+		return "it is tried again when this host next completes a fetch, or at Try again"
+	}
+	return "nothing tries it again on its own"
 }
 
 func materialWaitsOnPackage(err error) bool {
@@ -669,7 +700,7 @@ func (q *Acquirer) status(job *acquireJob) AcquireStatus {
 		st.LastError = shortCause(cause)
 		var final interface{ Final() string }
 		if errors.As(cause, &final) {
-			st.Remedy = final.Final()
+			st.Remedy, st.Resumes = final.Final(), waitsOnNetwork(cause)
 		}
 	}
 	m := job.m

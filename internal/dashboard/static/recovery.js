@@ -1,5 +1,7 @@
 const SHIPPED = '/shipped/';
+const PLAIN = '/plain/';
 const onShipped = location.pathname.startsWith(SHIPPED);
+const onPlain = location.pathname.startsWith(PLAIN);
 const SHIPPED_NOTE_DISMISSED = 'aii.shipped-note.dismissed';
 
 function remembered(key) {
@@ -71,6 +73,15 @@ function button(label) {
   return b;
 }
 
+async function signedFetch(url, init) {
+  for (const at of ['./pagekey.js', '/shipped/pagekey.js']) {
+    let keyed;
+    try { keyed = (await import(at)).signedFetch; } catch (e) { continue; }
+    if (typeof keyed === 'function') return keyed(url, init);
+  }
+  return fetch(url, init);
+}
+
 async function refusal(r) {
   try { const said = await r.json(); if (said && said.error) return said.error; } catch (e) { }
   return 'the dashboard answered ' + r.status;
@@ -79,7 +90,7 @@ async function refusal(r) {
 async function nameTheCause(into) {
   let listed;
   try {
-    const r = await fetch('/overlay/replacements', { cache: 'no-store', credentials: 'same-origin' });
+    const r = await signedFetch('/overlay/replacements', { cache: 'no-store', credentials: 'same-origin' });
     if (!r.ok) return;
     listed = await r.json();
   } catch (e) { return; }
@@ -95,7 +106,7 @@ async function nameTheCause(into) {
     act.disabled = true;
     said.textContent = '';
     try {
-      const r = await fetch('/overlay/set-aside', {
+      const r = await signedFetch('/overlay/set-aside', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: files }),
       });
@@ -108,21 +119,80 @@ async function nameTheCause(into) {
   });
 }
 
+function link(text, href) {
+  const a = document.createElement('a');
+  a.textContent = text;
+  a.href = href;
+  a.style.cssText = 'color:inherit;text-decoration:underline;overflow-wrap:anywhere';
+  return a;
+}
+
+function backLink() {
+  const back = link('Back to your dashboard', '/' + location.hash);
+  back.style.whiteSpace = 'nowrap';
+  return back;
+}
+
+function plainNamed(into) {
+  const p = line(into, 'If a change to this page has hidden it, open ');
+  p.appendChild(link(location.origin + PLAIN, PLAIN));
+  p.append(': it shows the page as shipped, with nothing of the changes applied.');
+}
+
+async function setAsideAll(said) {
+  let listed;
+  try {
+    const r = await fetch('/overlay/replacements', { cache: 'no-store', credentials: 'same-origin' });
+    if (!r.ok) { said.textContent = 'Not set aside: ' + await refusal(r); return; }
+    listed = await r.json();
+  } catch (e) {
+    said.textContent = 'Not set aside: ' + ((e && e.message) || String(e));
+    return;
+  }
+  const paths = [].concat(listed && Array.isArray(listed.files) ? listed.files : [], listed && Array.isArray(listed.additions) ? listed.additions : [])
+    .map(f => f && f.path).filter(p => typeof p === 'string');
+  if (!paths.length) { said.textContent = 'Nothing of yours changes this page now.'; return; }
+  if (window.confirm && !window.confirm('Set aside ' + paths.join(', ') + '? Each is renamed to <name>.set-aside-<version>; nothing is deleted.')) return;
+  try {
+    const r = await fetch('/overlay/set-aside', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths }),
+    });
+    said.textContent = r.ok ? 'Set aside: ' + paths.join(', ') + '.' : 'Not set aside: ' + await refusal(r);
+  } catch (e) {
+    said.textContent = 'Not set aside: ' + ((e && e.message) || String(e));
+  }
+}
+
+function startedPlain() {
+  const words = bar('boot-plain', 'status');
+  const head = line(words, 'Plain: nothing of your changes to this page is applied here, neither scripts nor styles. ');
+  head.appendChild(backLink());
+  const act = button('Set aside your changes to this page');
+  act.title = 'Lists the files of yours that change this page, custom.css and custom.js among them, and renames each to <name>.set-aside-<version> once you confirm; nothing is deleted';
+  words.appendChild(act);
+  const said = line(words, '');
+  act.addEventListener('click', async () => {
+    act.disabled = true;
+    said.textContent = '';
+    await setAsideAll(said);
+    act.disabled = false;
+  });
+}
+
 function started() {
+  if (onPlain) { startedPlain(); return; }
   if (!onShipped || remembered(SHIPPED_NOTE_DISMISSED)) return;
   const words = bar('boot-shipped', 'status', () => remember(SHIPPED_NOTE_DISMISSED));
-  words.append('As shipped: your scripts are not loaded here; your styles are. ');
-  const back = document.createElement('a');
-  back.textContent = 'Back to your dashboard';
-  back.href = '/' + location.hash;
-  back.style.cssText = 'color:inherit;text-decoration:underline;white-space:nowrap';
-  words.appendChild(back);
+  const head = line(words, 'As shipped: your scripts are not loaded here; your styles are. ');
+  head.appendChild(backLink());
+  plainNamed(words);
 }
 
 function failed(err) {
   const why = (err && err.message) ? err.message : String(err);
   const words = bar('boot-failure', 'alert');
-  if (onShipped) {
+  if (onShipped || onPlain) {
     line(words, 'The dashboard as shipped did not start.', true);
     line(words, why);
     actions(words, [['Try again', () => location.reload()]]);

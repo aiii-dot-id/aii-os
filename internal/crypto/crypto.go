@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	slh "github.com/trailofbits/go-slh-dsa/slh_dsa"
@@ -106,6 +105,13 @@ func PublishKeyFile(data []byte, path string) (bool, error) {
 	if _, err := ParseKeyPair(data); err != nil {
 		return false, fmt.Errorf("refusing to publish: %w", err)
 	}
+	if k := heldDeviceKey(); k != nil {
+		sealed, err := wrapVerified(k, data, path)
+		if err != nil {
+			return false, err
+		}
+		data = sealed
+	}
 
 	published, err := atomicfile.WriteNew(path, data, 0o600)
 	if err == nil {
@@ -118,10 +124,11 @@ func PublishKeyFile(data []byte, path string) (bool, error) {
 }
 
 func LoadKeyPair(path string) (*KeyPair, error) {
-	data, err := os.ReadFile(path)
+	data, err := ReadKeyFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read key file: %w", err)
 	}
+	defer wipe(data)
 	return ParseKeyPair(data)
 }
 
@@ -149,7 +156,7 @@ func ParseKeyPair(data []byte) (*KeyPair, error) {
 
 	return &KeyPair{
 		Algorithm:  SigAlg,
-		PublicKey:  pubBytes,
+		PublicKey:  derived,
 		PrivateKey: sk,
 	}, nil
 }

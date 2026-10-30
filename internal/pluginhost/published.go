@@ -2,6 +2,7 @@ package pluginhost
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/broker"
@@ -32,6 +33,10 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 		if !ap.envelopeHas(c) {
 			return "", fmt.Errorf("tool %s: capability %s is outside the plugin's signed envelope", spec.Name, c)
 		}
+	}
+	confirms, err := publishedConfirms(spec)
+	if err != nil {
+		return "", err
 	}
 	var compiled *jsonschema.Schema
 	raw := spec.Input
@@ -70,7 +75,14 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	if _, dup := ap.published[spec.Name]; dup {
 		return "", fmt.Errorf("tool %s is already published; withdraw it first", spec.Name)
 	}
-	desc := &opDescriptor{raw: raw, input: compiled, effects: spec.Effects, capabilities: append([]string(nil), spec.Capabilities...), capsDeclared: true, summary: spec.Summary, family: spec.Family}
+
+	for _, n := range ap.ToolNames {
+		if d, ok := ap.reg.Declared(n); ok && d.Operation == spec.Name && !d.Published {
+			return "", fmt.Errorf("tool %s: the plugin's package declares an operation of that name; publish under another", spec.Name)
+		}
+	}
+	desc := &opDescriptor{raw: raw, input: compiled, effects: spec.Effects, capabilities: append([]string(nil), spec.Capabilities...), capsDeclared: true, summary: spec.Summary, family: spec.Family,
+		operatorConfirms: confirms, published: true, unconfirmed: strings.TrimSpace(spec.UnconfirmedByDesign)}
 
 	t := ap.newOperationTool(name, spec.Name,
 		tools.AuthorLine(ap.ID, spec.Summary, name)+fmt.Sprintf(" — published at run time by plugin %s (brokered under its signed envelope).", ap.ID),
@@ -84,6 +96,26 @@ func (ap *ActivePlugin) PublishTool(spec broker.PublishedTool) (string, error) {
 	ap.published[spec.Name] = name
 	ap.ToolNames = append(ap.ToolNames, name)
 	return name, nil
+}
+
+func publishedConfirms(spec broker.PublishedTool) (bool, error) {
+	reason := strings.TrimSpace(spec.UnconfirmedByDesign)
+	if len(reason) > tools.MaxSummaryBytes {
+		return false, fmt.Errorf("tool %s: unconfirmed_by_design must be at most %d bytes", spec.Name, tools.MaxSummaryBytes)
+	}
+	if broker.IsReadEffect(spec.Effects) {
+		if reason != "" {
+			return false, fmt.Errorf("tool %s: unconfirmed_by_design excuses nothing: a %s tool runs on the identity's call unless it asks for operator_confirms", spec.Name, spec.Effects)
+		}
+		return spec.OperatorConfirms, nil
+	}
+	if reason != "" && spec.OperatorConfirms {
+		return false, fmt.Errorf("tool %s: operator_confirms and unconfirmed_by_design say opposite things; publish one of them", spec.Name)
+	}
+	if reason == "" && spec.UnconfirmedByDesign != "" {
+		return false, fmt.Errorf("tool %s: unconfirmed_by_design gives no reason", spec.Name)
+	}
+	return reason == "", nil
 }
 
 func (ap *ActivePlugin) WithdrawTool(name string) error {

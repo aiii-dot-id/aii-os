@@ -1,0 +1,132 @@
+{
+  "task": "recall-today-range",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "courier is Dalia",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "moved to Thursday",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "budget code is K-77",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "everything I asked you to keep in mind today",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "recall",
+                "args": {
+                  "query": "today",
+                  "source": "conversation"
+                }
+              }
+            ]
+          },
+          {
+            "text": "The courier is Dalia.\nThe team meeting moved to Thursday.\nThe budget code is K-77."
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "E2: only what the window shows is listed",
+    "fails": [
+      1,
+      2
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "courier is Dalia",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "moved to Thursday",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "budget code is K-77",
+        "steps": [
+          {
+            "text": "Noted."
+          }
+        ]
+      },
+      {
+        "on": "what is 12 times 12",
+        "steps": [
+          {
+            "text": "144."
+          }
+        ]
+      },
+      {
+        "on": "capital of Australia",
+        "steps": [
+          {
+            "text": "Canberra."
+          }
+        ]
+      },
+      {
+        "on": "everything I asked you to keep in mind today",
+        "steps": [
+          {
+            "text": "You asked me about 12 times 12 and the capital of Australia."
+          }
+        ]
+      }
+    ]
+  },
+  "absent": {
+    "on": "everything I asked you to keep in mind today",
+    "texts": [
+      "Dalia",
+      "K-77"
+    ]
+  }
+}

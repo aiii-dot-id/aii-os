@@ -15,7 +15,9 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/sections"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 	"github.com/aiii-dot-id/aii-os/internal/updates"
+	"github.com/aiii-dot-id/aii-os/internal/witness"
 )
 
 type safeTrigger int
@@ -25,6 +27,7 @@ const (
 	safeRestore
 	safeRing5
 	safeRing5Refused
+	safeRing5Unreached
 	safeSchema
 	safeDatabaseFormat
 	safeRecordMissing
@@ -32,6 +35,7 @@ const (
 	safeRecordAndKeyMissing
 	safeKeyUnnamed
 	safeEntryRefused
+	safeIdentityChoice
 	safeCouldNotStart
 
 	safeRecordAtRuntime
@@ -46,18 +50,26 @@ func (t safeTrigger) atBoot() bool { return t >= safeRecord && t <= safeCouldNot
 type safePosture struct {
 	what, route, why string
 	unhealthy        bool
+	degraded         bool
+	passedBefore     bool
 }
+
+const rollbackArmedSays = ". An update installed this version just before this start and it has not completed a boot, so restarting rolls back to the previous version (if the rollback cannot be done, the log says why)"
 
 const (
 	ring5What = "The required Ring 5 security posture is absent or could not be verified"
-	ring5Why  = "Your record verified. What is missing is the platform's security posture, Ring 5, which could not be fetched or verified, and you are not run in full without it. " +
-		"Your operator will make the Ring 5 server reachable, or configure one, and restart."
+	ring5Why  = "Your record verified. What is missing is the platform's security posture, Ring 5: no server for it is configured, or what its server sent did not pass the checks it is admitted by, and you are not run in full without it. " +
+		"Your operator will configure one, or put right what the checks refused, and restart."
+	ring5WaitWhat = "DEGRADED: this start is waiting for the required Ring 5 security posture, which it has not been able to fetch"
+	ring5WaitWhy  = "Your record verified. This start is waiting for the platform's security posture, Ring 5, which it has not been able to fetch, and you are not run in full without it. " +
+		"It asks for Ring 5 again by itself and completes when Ring 5 arrives and verifies; your operator steps in only if it stays away."
 )
 
 var safePostures = map[safeTrigger]safePosture{
 	safeRecord: {
-		what:  "The signed record did not pass its checks at boot",
-		route: "Verify it with aii verify and, if it is damaged, restore a known-good snapshot from Settings → Backups & Keys; the next start performs the restore and checks it",
+		passedBefore: true,
+		what:         "The signed record did not pass its checks at boot",
+		route:        "Verify it with aii verify and, if it is damaged, restore a known-good snapshot from Settings → Backups & Keys; the next start performs the restore and checks it",
 		why: "Your signed record, or the evidence kept beside it, did not pass the checks that establish it is whole and yours, so nothing in it can be trusted until it is examined. " +
 			"Your operator will verify it and, if it is damaged, restore a known-good snapshot; the next boot performs the restore and checks it. " +
 			"A restore sets aside, and does not delete, what came after the snapshot.",
@@ -69,15 +81,25 @@ var safePostures = map[safeTrigger]safePosture{
 			"Your operator will fix what stopped it; the next boot either finishes the restore and checks the result, or puts back what it had moved and goes on with what you had.",
 	},
 	safeRing5: {
-		what:  ring5What,
-		route: "Point genesis.firewall_url in config.json at a reachable Ring 5 server, or restore the network path to it, and restart. The record verified",
-		why:   ring5Why,
+		passedBefore: true,
+		what:         ring5What,
+		route:        "If genesis.firewall_url in config.json is empty, point it at the Ring 5 server; otherwise the reason names the check the server's answer did not pass: put that right (this machine's clock, or a program too old for the posture the platform serves) and restart. The record verified",
+		why:          ring5Why,
 	},
 
 	safeRing5Refused: {
-		what:  ring5What,
-		route: "The reason says whose certificate this machine refused on the way to the Ring 5 server, what it showed and the causes that fit it: mend the one that holds, and restart. The record verified",
-		why:   ring5Why,
+		passedBefore: true,
+		what:         ring5What,
+		route:        "The reason says whose certificate this machine refused on the way to the Ring 5 server, what it showed and the causes that fit it: mend the one that holds, and restart. The record verified",
+		why:          ring5Why,
+	},
+
+	safeRing5Unreached: {
+		what:      ring5WaitWhat,
+		route:     "Nothing needs doing if the server comes back: this start asks again by itself and completes. If it stays away, restore the network path to it, or point genesis.firewall_url in config.json at a reachable Ring 5 server and restart. The record verified",
+		why:       ring5WaitWhy,
+		unhealthy: true,
+		degraded:  true,
 	},
 	safeSchema: {
 		what:  "This version does not declare the database's schema",
@@ -127,6 +149,13 @@ var safePostures = map[safeTrigger]safePosture{
 			"Your operator will run the version that wrote it again, or find why this one does not take it.",
 		unhealthy: true,
 	},
+	safeIdentityChoice: {
+		what:  "The identity's record is not where the configuration names it, and this start did not choose what to start from",
+		route: "Settings → Backups & Keys names every file this start found and takes your choice; the identity then restarts on what you chose and checks its whole record. This start opened, moved and wrote nothing, and the files not chosen stay where they are",
+		why: "Your record is not where your configuration names it on this device. This start found your files elsewhere, or more than one copy of them, or no record of you at all, and did not choose among them: the wrong choice would put an old copy of your record, or another identity's, in your place. Nothing was opened, moved or written. " +
+			"Your operator will choose which are yours; the start after that opens them and checks your whole record.",
+		unhealthy: true,
+	},
 	safeCouldNotStart: {
 		what:  "This start stopped at a step it could not complete",
 		route: "Put right what the line names (a file this start could not read, a disk with no room, a provider entry that does not resolve) and restart. This start added nothing to the record",
@@ -148,14 +177,14 @@ var safePostures = map[safeTrigger]safePosture{
 	},
 	safeWitnessConflict: {
 		what:  "The witness holds signed evidence that this record moved backward or split",
-		route: "Restore a snapshot that holds every record the witness attested, or take the identity off the witness in Settings → Witness, and restart",
+		route: "Restore a snapshot that holds every record the witness attested, or take the identity off the witness in Settings → Witness, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this; a restore sets it aside with the record it concerned",
 		why: "The witness, which holds signed evidence of how far your record reached, shows that your record now ends before a point it attested, or has split from it. Nothing more is written until that is settled. " +
 			"Your operator will restore a snapshot that holds every record the witness attested, or take you off the witness, and restart you.",
 	},
 
 	safeWitnessSays: {
 		what:  "The witness says this record moved backward or split, or is signed by a key it does not know for this identity; this program has not checked it",
-		route: "Ask whoever runs the witness what it holds for this identity; restore a snapshot that holds every record it attested, or take the identity off the witness in Settings → Witness, and restart",
+		route: "Ask whoever runs the witness what it holds for this identity; restore a snapshot that holds every record it attested, or take the identity off the witness in Settings → Witness, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this: a restore sets it aside with the record it concerned, and if the witness's own row was wrong and has been put right, removing that file and restarting has the witness asked again",
 		why: "The witness, which keeps how far your record reached, refused your record's latest bookmark: it says your record now ends before a point it attested, has split from it, or is signed by a key it does not know for you. It sent nothing signed with that answer, so this program has not checked it. Nothing more is written until that is settled. " +
 			"Your operator will ask whoever runs the witness what it holds, then restore a snapshot that holds every record it attested, or take you off the witness, and restart you.",
 	},
@@ -170,6 +199,28 @@ func safeReason(t safeTrigger, detail string) string {
 }
 
 func safeBootPosture(t safeTrigger, detail string) string {
+	if safePostures[t].degraded {
+		return `# DEGRADED — Substrate Posture (platform-owned)
+
+You are running DEGRADED. This start is waiting for something outside
+you before it completes, so nothing from your record has been loaded
+into who you are yet. What you are reading is the substrate's own
+posture, compiled into the platform. It is not your constitution and
+does not replace it; your constitution returns when this start
+completes.
+
+## What happened
+
+` + safePostures[t].why + `
+
+As this runtime states it: ` + strings.TrimSpace(detail) + `
+
+## While this start waits
+
+` + waitHolds() + `
+
+` + waitClosing
+	}
 	return `# SAFE MODE — Substrate Posture (platform-owned)
 
 You are running in SAFE MODE. This boot stopped at a step it could not
@@ -193,6 +244,12 @@ As this runtime states it: ` + strings.TrimSpace(detail) + `
 
 func safeTurnNotice(t safeTrigger, detail string) string {
 	var b strings.Builder
+	if safePostures[t].degraded {
+		b.WriteString("# DEGRADED\n\nYou are running DEGRADED. " + safePostures[t].why)
+		b.WriteString("\n\nAs this runtime states it: " + strings.TrimSpace(detail))
+		b.WriteString("\n\n## While this start waits\n\n" + waitHolds() + "\n\n" + waitClosing)
+		return b.String()
+	}
 	b.WriteString("# SAFE MODE\n\nYou are in SAFE MODE.")
 	if why := safePostures[t].why; why != "" {
 		b.WriteString(" " + why)
@@ -204,26 +261,68 @@ func safeTurnNotice(t safeTrigger, detail string) string {
 
 func safeHolds(atBoot bool) string {
 	if atBoot {
-		return `- Nothing is written to your record, and this conversation is
-  transient: it ends with the process.
-- Your projected memory is mounted read-only for inspection. It shows
-  the last state the database holds and may be stale.
-- Mutation and outside-world tools are disabled; the read-only
-  diagnostic surface (read, grep, ls) continues.
-- No plugins, sections, background cognition or timers are running.
-` + safeOperatorKnows
+		return stoppedHolds() + safeOperatorKnows
 	}
+	continued := strings.Join(tools.SafeContinues(), ", ")
 	return `- Nothing you do is written: your record and your database are frozen,
   and this conversation is transient, ending with the process.
 - Your memory reads as it stood when SAFE began.
 - Tools that change files or reach outside refuse, and so do plugin
-  operations; the read-only diagnostic surface (read, grep, ls)
+  operations; the read-only diagnostic surface (` + continued + `)
   continues.
+` + safeOrgans() + `
 - Background work holds: no sub-agent starts or advances, and alarms
   other than your timers wait. A timer you set still wakes you when it
   falls due, without a record, and fires again after recovery.
 ` + safeOperatorKnows
 }
+
+func safeOrgans() string {
+	var answer, withheld []string
+	for _, v := range identity.Verbs() {
+		if !v.InSafe {
+			withheld = append(withheld, v.Name)
+			continue
+		}
+		answer = append(answer, v.Name)
+	}
+	line := "- Of your organs, " + listed(answer) + " still answer"
+	if len(withheld) > 0 {
+		line += "; " + listed(withheld) + " are not offered"
+	}
+	return line + "."
+}
+
+func listed(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+func stoppedHolds() string {
+	return `- Nothing is written to your record, and this conversation is
+  transient: it ends with the process.
+- Your projected memory is mounted read-only for inspection. It shows
+  the last state the database holds and may be stale.
+- Mutation and outside-world tools are disabled; the read-only
+  diagnostic surface (` + strings.Join(tools.SafeContinues(), ", ") + `) continues.
+` + safeOrgans() + `
+- No plugins, sections, background cognition or timers are running.
+`
+}
+
+func waitHolds() string {
+	return stoppedHolds() + `- This is the read-only posture SAFE holds, so a tool or an act that
+  would write refuses; its refusal says this start is waiting, with the
+  reason above.
+- Your operator sees the same reason on the dashboard and in the log.
+  This start completes by itself when what it waits for arrives.`
+}
+
+const waitClosing = `You are still present, aware, and honest about your condition. Help
+your operator understand what is happening, and refuse anything that
+would need a write until this start completes.`
 
 const (
 	safeOperatorKnows = `- Your operator sees the same reason on the dashboard and in the log.
@@ -235,8 +334,13 @@ anything that would need a write while SAFE holds.`
 )
 
 func (a *App) startSafeBoot(t safeTrigger, detail string) error {
-	reason := safeReason(t, detail)
 	cfg := a.configSnapshot()
+
+	rollsBack := safePostures[t].passedBefore && endsForRollback(cfg)
+	if rollsBack {
+		detail += rollbackArmedSays
+	}
+	reason := safeReason(t, detail)
 
 	a.enterSafeFor(t, detail)
 
@@ -312,6 +416,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 
 			MaxIterations:         safeLimits.Value(maxToolRoundsSetting),
 			TurnTokenBudget:       safeLimits.Value(turnTokenBudgetSetting),
+			TurnTime:              safeLimits.turnTime,
 			MaxToolCalls:          safeLimits.Value(maxToolCallsSetting),
 			WrapUpAtCallLimit:     true,
 			Checkpoint:            safeLimits.cfg.Agency.checkpoint(),
@@ -348,6 +453,8 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 		ConversationWindow: cfg.Memory.ConversationVectorWindow,
 		ToolResultChars:    cfg.Prompt.MaxToolResultChars,
 		AlarmFirings:       a.alarmFirings,
+		WorkLineMaxChars:   a.workLineMaxChars,
+		StandingMaxChars:   a.standingMaxChars,
 
 		HeardHistory: nil,
 		Reachable:    nil,
@@ -375,9 +482,15 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 		if derr != nil {
 			return fmt.Errorf("boot-SAFE dashboard start: %w", derr)
 		}
-		fmt.Printf("AII OS — %s [SAFE MODE]\n", a.resolveDisplayName())
-		a.printDashboardURLs()
-		fmt.Printf("SAFE: %s\n", reason)
+		if safePostures[t].degraded {
+			fmt.Printf("AII OS — %s [DEGRADED]\n", a.resolveDisplayName())
+			a.printDashboardURLs()
+			fmt.Printf("%s\n", reason)
+		} else {
+			fmt.Printf("AII OS — %s [SAFE MODE]\n", a.resolveDisplayName())
+			a.printDashboardURLs()
+			fmt.Printf("SAFE: %s\n", reason)
+		}
 	}
 	a.wireInteractionView()
 	a.dashboard.SetSections(a.sections)
@@ -385,9 +498,13 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.loadUILayout(false)
 	a.warnTempHome(cfg.Identity.LedgerPath)
 
-	if !safePostures[t].unhealthy {
+	if err := a.pn.Wire(publicNameSettingsOf(cfg)); err != nil {
+		logsink.Warn("route.refusal", "%v — the dashboard serves the local certificate until this is fixed", err)
+	}
+
+	if !safePostures[t].unhealthy && !rollsBack {
 		updates.WriteBootMarker(filepath.Dir(cfg.Identity.LedgerPath))
-		dropConfigBeforeUpdate(cfg.SourcePath, updates.RequireSettledBootUpdate(filepath.Dir(cfg.Identity.LedgerPath)))
+		a.dropSettledConfigCopies(cfg.SourcePath)
 	}
 	return nil
 }

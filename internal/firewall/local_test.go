@@ -197,7 +197,7 @@ func TestThePinnedDialDoesNotResolveAgain(t *testing.T) {
 	// Now the name would answer public. The dial must not ask.
 	r.answers["device.local"] = addrs("93.184.216.34")
 	ctx := WithPins(context.Background(), g)
-	c, err := guardedDialContext(ctx, "tcp", net.JoinHostPort("device.local", itoa(port)), g.Guard)
+	c, err := guardedDialContext(ctx, "tcp", net.JoinHostPort("device.local", itoa(port)), URLDialGuard(g.Guard))
 	if err != nil {
 		t.Fatalf("the pinned dial reaches the address the guard saw: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestThePinnedDialDoesNotResolveAgain(t *testing.T) {
 	// the address is unroutable in tests, so the dial itself is not made.
 	rebound := &fakeResolver{answers: map[string][]net.IPAddr{"device.local": addrs("10.9.9.9")}}
 	useResolver(t, rebound)
-	if _, err := guardedDialContext(context.Background(), "tcp", "device.local:1", g.Guard); !errors.Is(err, ErrEgressBlocked) {
+	if _, err := guardedDialContext(context.Background(), "tcp", "device.local:1", URLDialGuard(g.Guard)); !errors.Is(err, ErrEgressBlocked) {
 		t.Fatalf("an unpinned dial to a local address no scope covers is refused by the guard: %v", err)
 	}
 	if ip, _ := netip.ParseAddr("10.9.9.9"); !IsLocalIP(ip.AsSlice()) {

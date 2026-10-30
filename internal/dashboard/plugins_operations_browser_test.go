@@ -31,8 +31,11 @@ run(() => {
         grants: { listed: true, read_only: false, auto_confirm: [] },
         tools: ['pl_org_example_judge_query', 'pl_org_example_judge_models'],
         operations: [
-          { tool: 'pl_org_example_judge_query', operation: 'query', summary: long },
+          { tool: 'pl_org_example_judge_query', operation: 'query', summary: long, confirms: true },
           { tool: 'pl_org_example_judge_models', operation: 'models' },
+          { tool: 'pl_org_example_judge_dyn_server_send', operation: 'server.send', summary: 'Send it', published: true, confirms: true },
+          { tool: 'pl_org_example_judge_dyn_server_cache', operation: 'server.cache', summary: 'Cache it', published: true,
+            unconfirmed_by_design: 'it keeps a copy <b>here</b>' },
         ] },
       { id: 'org.example.bare', version: '1.0.0', tier: 'T1', mode: 'wasm', variant: 'wasm', settings: [],
         grants: { listed: true, read_only: false, auto_confirm: [] } },
@@ -48,8 +51,18 @@ run(() => {
   assert(words && words.textContent === long, 'the summary is not on the card whole and as written: ' + (words && words.textContent));
   assert(!judge.querySelector('img') && !window.__hit, 'the author\'s text was read as markup');
   const ops = Array.from(judge.querySelectorAll('.plugin-op')).map(o => o.textContent);
-  assert(ops.length === 2 && ops[0].includes('query') && ops[0].includes('pl_org_example_judge_query'), 'each operation is named, with its tool name: ' + ops.join(' | '));
+  assert(ops.length === 4 && ops[0].includes('query') && ops[0].includes('pl_org_example_judge_query'), 'each operation is named, with its tool name: ' + ops.join(' | '));
   assert(ops[1].includes('models') && ops[1].includes('the package declared no summary for it'), 'an operation with no summary says so: ' + ops[1]);
+  // Which calls wait for the operator, and why a published write does not.
+  const rows = Array.from(judge.querySelectorAll('.plugin-op'));
+  const waits = r => !!r.querySelector('.op-confirms') && r.querySelector('.op-confirms').textContent === 'Each call waits for your confirmation here.';
+  assert(waits(rows[0]) && !waits(rows[1]) && waits(rows[2]) && !waits(rows[3]), 'the card does not say which calls wait for the operator: ' + ops.join(' | '));
+  assert(!rows[0].querySelector('.op-published') && rows[2].querySelector('.op-published') && rows[3].querySelector('.op-published'), 'the card does not say which operations were published while running');
+  const unconfirmed = rows[3].querySelector('.op-unconfirmed');
+  const why = rows[3].querySelector('.op-unconfirmed-why');
+  assert(unconfirmed && unconfirmed.textContent.includes('its calls do not wait for your confirmation') && why && why.textContent === 'it keeps a copy <b>here</b>' && !why.querySelector('b'),
+    'a published write that does not wait does not show its plugin\'s reason, as text: ' + rows[3].innerHTML);
+  assert(!rows[2].querySelector('.op-unconfirmed'), 'a write that waits shows a reason it does not wait');
 
   assert(!card('org.example.bare').querySelector('.plugin-ops'), 'a plugin with no operations lists none');
 });

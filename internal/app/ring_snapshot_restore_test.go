@@ -1,8 +1,10 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -44,5 +46,49 @@ func TestARing0SnapshotIsSkippedAtRestoreAndTheRestComeBack(t *testing.T) {
 	}
 	if !app.rings.Ring0IsConstitution() {
 		t.Fatal("Ring 0 should hold the constitution")
+	}
+}
+
+func TestAnOperatorModelSnapshotIsRemovedAtTheFirstStartAndSaid(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, ledgerPath, dbPath := birthFixture(t, dir, "Snapshots")
+	buildPriorProjection(t, ledgerPath, dbPath)
+	st, err := store.NewForTest(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveRingSection(int(ring.Ring3), "operator", "Quinn asks what you think and reads the answer."); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveRingSection(int(ring.Ring3), "surfacing", "a note kept across the restart"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logs := logsink.CaptureForTest(t)
+	app := New(safebootConfig(t, dir, "Snapshots", keyPath, ledgerPath, dbPath))
+	if err := startLiveForTest(app); err != nil {
+		t.Fatal(err)
+	}
+	defer stopApp(t, app)
+	if got := app.rings.Section(ring.Ring3, "operator"); got != "" {
+		t.Fatalf("THE PROSE MODEL OF THE OPERATOR WAS RESTORED: %q", got)
+	}
+	if got := app.rings.Section(ring.Ring3, "surfacing"); got != "a note kept across the restart" {
+		t.Fatalf("the rest of Ring 3 should come back, got %q", got)
+	}
+	snaps, err := app.store.RingSnapshots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sn := range snaps {
+		if sn.Section == "operator" {
+			t.Fatalf("THE PROSE MODEL OF THE OPERATOR IS STILL IN THE STORE: %+v", sn)
+		}
+	}
+	if !strings.Contains(logs.String(), "Ring 3's operator model (47 characters, written ") ||
+		!strings.Contains(logs.String(), "is removed: what the identity learns about the operator is recorded as beliefs with evidence now, and \"Who You Work With\" is rendered from them after the charter. It read: Quinn asks what you think and reads the answer.") {
+		t.Fatalf("the removal is not said, with what the model read:\n%s", logs.String())
 	}
 }

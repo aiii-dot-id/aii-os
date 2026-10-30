@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/app"
+	"github.com/aiii-dot-id/aii-os/internal/crypto"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
@@ -36,7 +37,11 @@ type startupCleanupError struct{ cause error }
 func (e *startupCleanupError) Error() string { return e.cause.Error() }
 func (e *startupCleanupError) Unwrap() error { return e.cause }
 
-func Start(configPath, dataDir string) (*Runtime, error) {
+func Start(configPath, dataDir string, deviceKey DeviceKey) (*Runtime, error) {
+	if deviceKey == nil {
+		return nil, errNoDeviceKey
+	}
+	crypto.SetDeviceKey(deviceKey)
 	return start(configPath, dataDir, true)
 }
 
@@ -65,11 +70,17 @@ func start(configPath, dataDir string, cold bool) (*Runtime, error) {
 			return nil, err
 		}
 	}
+	begin := (*app.App).StartAuthenticatedEmbedded
 	if err := rerootContainerPaths(cfg, dataDir); err != nil {
-		return nil, err
+		var choose *identityChoiceError
+		if !errors.As(err, &choose) {
+			return nil, err
+		}
+
+		begin = func(a *app.App) error { return a.StartAuthenticatedEmbeddedAtChoice(choose.choice) }
 	}
 	a := app.New(cfg)
-	if err := a.StartAuthenticatedEmbedded(); err != nil {
+	if err := begin(a); err != nil {
 
 		if closeErr := a.Shutdown(context.Background()); closeErr != nil {
 			return nil, &startupCleanupError{cause: errors.Join(err, closeErr)}
@@ -156,16 +167,24 @@ func rerootContainerPaths(cfg *app.Config, dataDir string) error {
 	if cfg == nil || dataDir == "" {
 		return nil
 	}
-	type resolution struct{ name, dir string }
+	type field struct {
+		name string
+		p    *string
+	}
+	type resolution struct {
+		app.IdentityFiles
+		p  *string
+		to string
+	}
 	var moved []resolution
-	fix := func(name string, p *string) error {
-		if *p == "" || !filepath.IsAbs(*p) {
-			return nil
+	for _, f := range []field{{"ledger_path", &cfg.Identity.LedgerPath}, {"db_path", &cfg.Identity.DBPath}, {"key_path", &cfg.Identity.KeyPath}} {
+		was := *f.p
+		if was == "" || !filepath.IsAbs(was) {
+			continue
 		}
-		if rel, err := filepath.Rel(dataDir, *p); err == nil && !strings.HasPrefix(rel, "..") {
-			return nil
+		if rel, err := filepath.Rel(dataDir, was); err == nil && !strings.HasPrefix(rel, "..") {
+			continue
 		}
-		was := *p
 
 		parts := strings.Split(filepath.ToSlash(was), "/")
 		cands := make([]string, 0, 5)
@@ -184,36 +203,45 @@ func rerootContainerPaths(cfg *app.Config, dataDir string) error {
 				found = append(found, cand)
 			}
 		}
-		switch len(found) {
-		case 1:
-			*p = found[0]
-		case 0:
 
-			*p = filepath.Join(dataDir, "data", filepath.Base(was))
-		default:
-			return fmt.Errorf("mobile: %s is ambiguous — %s all exist in this container; refusing to choose between identity records (recovery required)", name, strings.Join(found, " and "))
+		to := filepath.Join(dataDir, "data", filepath.Base(was))
+		if len(found) > 0 {
+			to = found[0]
 		}
-		logsink.Info("config.decision", "mobile: %s pointed outside this container (%s) — re-rooted to %s", name, was, *p)
-		moved = append(moved, resolution{name: name, dir: filepath.Dir(*p)})
-		return nil
+		moved = append(moved, resolution{IdentityFiles: app.IdentityFiles{Key: f.name, Was: was, Found: found}, p: f.p, to: to})
 	}
-	if err := fix("ledger_path", &cfg.Identity.LedgerPath); err != nil {
-		return err
-	}
-	if err := fix("db_path", &cfg.Identity.DBPath); err != nil {
-		return err
-	}
-	if err := fix("key_path", &cfg.Identity.KeyPath); err != nil {
-		return err
+	var why []string
+	for _, m := range moved {
+		if len(m.Found) > 1 {
+			why = append(why, fmt.Sprintf("%s is ambiguous — %s all exist in this container", m.Key, strings.Join(m.Found, " and ")))
+		}
 	}
 
-	for i := 1; i < len(moved); i++ {
-		if moved[i].dir != moved[0].dir {
-			return fmt.Errorf("mobile: re-rooted identity files resolved into different directories (%s in %s, %s in %s) — one identity lives in one place; refusing a mixed set (recovery required)", moved[0].name, moved[0].dir, moved[i].name, moved[i].dir)
+	if len(why) == 0 {
+		for i := 1; i < len(moved); i++ {
+			if filepath.Dir(moved[i].to) != filepath.Dir(moved[0].to) {
+				why = append(why, fmt.Sprintf("re-rooted identity files resolved into different directories (%s in %s, %s in %s) — one identity lives in one place", moved[0].Key, filepath.Dir(moved[0].to), moved[i].Key, filepath.Dir(moved[i].to)))
+				break
+			}
 		}
+	}
+	if len(why) > 0 {
+		choice := app.IdentityChoice{Home: dataDir, Why: "mobile: " + strings.Join(why, "; ") + "; this start does not choose between identity records"}
+		for _, m := range moved {
+			choice.Files = append(choice.Files, m.IdentityFiles)
+		}
+		return &identityChoiceError{choice}
+	}
+	for _, m := range moved {
+		*m.p = m.to
+		logsink.Info("config.decision", "mobile: %s pointed outside this container (%s) — re-rooted to %s", m.Key, m.Was, m.to)
 	}
 	return nil
 }
+
+type identityChoiceError struct{ choice app.IdentityChoice }
+
+func (e *identityChoiceError) Error() string { return e.choice.Why }
 
 func quarantineUnreadableConfig(configPath string, cause error) (*app.Config, error) {
 
@@ -221,26 +249,26 @@ func quarantineUnreadableConfig(configPath string, cause error) (*app.Config, er
 	if err != nil {
 		return nil, cause
 	}
-	aside := configPath + ".unreadable-" + time.Now().UTC().Format("20060102T150405Z")
+	aside := app.SetAsideName(configPath, time.Now())
 	if rerr := os.Rename(configPath, aside); rerr != nil {
 
 		logsink.Warn("config.error", "mobile: config is unreadable (%v) and could not be set aside (%v)", cause, rerr)
 		return nil, cause
 	}
-	logsink.Warn("boot.refusal", "mobile: config was unreadable (%v) — set aside as %s and started from a default; "+
-		"the identity's record and key are untouched", cause, filepath.Base(aside))
-	cfg, err := app.LoadConfig(configPath)
+	cfg, lost, err := app.SalvageConfig(configPath, raw)
 	if err != nil {
-		return nil, err
-	}
 
-	if adopted, perr := app.SalvageIdentityInto(raw, cfg); len(adopted) > 0 {
-		if perr != nil {
-
-			return nil, fmt.Errorf("mobile: identity locations were salvaged from the unreadable config but could not be persisted: %w", perr)
+		if rerr := os.Rename(aside, configPath); rerr != nil {
+			return nil, fmt.Errorf("mobile: config was unreadable (%w), what could be read of it was not written (%v), and it could not be put back from %s (%v)", cause, err, filepath.Base(aside), rerr)
 		}
-		logsink.Info("config.decision", "mobile: salvaged from the unreadable config: %s", strings.Join(adopted, ", "))
+		return nil, fmt.Errorf("mobile: config was unreadable (%w) and what could be read of it was not written (%v); it is where it was", cause, err)
 	}
+	notKept := "every setting in it is kept"
+	if len(lost) > 0 {
+		notKept = "not kept: " + strings.Join(lost, ", ")
+	}
+	logsink.Warn("boot.refusal", "mobile: config was unreadable (%v) — set aside as %s and started from what could be read of it (%s); "+
+		"the identity's record and key are untouched", cause, filepath.Base(aside), notKept)
 	return cfg, nil
 }
 

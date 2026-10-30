@@ -40,10 +40,11 @@ func TestDatabaseExportHTTPBoundary(t *testing.T) {
 			r.Header.Set("Sec-Fetch-Site", tc.site)
 			if tc.authorized {
 				r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+				r.Header.Set(pageKeyHeader, pageKeyFor(s))
 			}
 			w := httptest.NewRecorder()
 			// Through the server's own handler, as the browser reaches it: the
-			// private headers are the route's (privateRoute), not the body's.
+			// private headers are the route's (the route table's wall), not the body's.
 			s.AllowHost(r.Host)
 			s.server.Handler.ServeHTTP(w, r)
 			if w.Code != tc.status {
@@ -123,6 +124,7 @@ func TestTheDatabaseExportIsNotReachableByNavigation(t *testing.T) {
 				r.Header.Set("Sec-Fetch-Mode", "navigate")
 			}
 			r.AddCookie(&http.Cookie{Name: dashboardCookieName(r), Value: s.accessHash()})
+			r.Header.Set(pageKeyHeader, pageKeyFor(s))
 			w := httptest.NewRecorder()
 			s.handleDatabaseExport(w, r)
 			if w.Code != tc.status || called != (tc.status == 200) {
@@ -150,6 +152,7 @@ func exportRouteStatus(t *testing.T, method string) int {
 	}
 	s.AllowHost(req.Host) // the port is the test server's, not the configured one
 	req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: s.accessHash()})
+	req.Header.Set(pageKeyHeader, pageKeyFor(s))
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

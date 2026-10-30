@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -117,7 +118,7 @@ func TestFailedApplyReleasesAdmissionForRetry(t *testing.T) {
 	c, _ := applyOwnerFixture(t, dir)
 	refusal := errors.New("test release download refused")
 	allow := c.hostAllowlist
-	c.hostAllowlist = func(string) error { return refusal }
+	c.hostAllowlist = func(*neturl.URL, string) error { return refusal }
 	if err := c.applyTo(t.Context(), exe); !errors.Is(err, refusal) {
 		t.Fatalf("expected the injected download refusal, got %v", err)
 	}

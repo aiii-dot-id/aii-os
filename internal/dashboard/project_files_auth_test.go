@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,7 +44,10 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tok != "" {
-			req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: tok})
+			// Over TLS the cookie is the __Host- one; a client's request has no TLS field to say so.
+			_, port, _ := net.SplitHostPort(addr)
+			req.AddCookie(&http.Cookie{Name: tlsCookieName(port), Value: tok})
+			req.Header.Set(pageKeyHeader, pageKeyFor(s))
 		}
 		resp, err := testClient.Do(req)
 		if err != nil {
@@ -60,14 +64,19 @@ func TestProjectFilesRequireTheAccessTokenAndServeInertly(t *testing.T) {
 		t.Fatalf("control: the correct token must serve the file; got %d", ok.StatusCode)
 	}
 
-	// The finding: no token, required mode armed.
-	if resp := get("/p/p1/README.md", ""); resp.StatusCode != http.StatusNotFound {
+	// The finding: no token, required mode armed. Refused at the route
+	// table's wall before any path is looked up, so the answer is one for
+	// every path and says nothing of what exists.
+	if resp := get("/p/p1/README.md", ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("a tokenless GET received %d — required-token mode does not protect project files", resp.StatusCode)
+	}
+	if resp := get("/p/p1/no-such-file.md", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a tokenless GET of a file that is not there received %d, not the one refusal", resp.StatusCode)
 	}
 	// A wrong token is refused the same way, and by constant-time
 	// comparison rather than by length or prefix.
-	if resp := get("/p/p1/README.md", "not-the-token"); resp.StatusCode != http.StatusNotFound {
-		t.Errorf("a wrong token received %d, want 404", resp.StatusCode)
+	if resp := get("/p/p1/README.md", "not-the-token"); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a wrong token received %d, want 401", resp.StatusCode)
 	}
 
 	// Inert on arrival, however it is reached. The EXACT policy is
@@ -138,7 +147,9 @@ func TestSectionFilesRequireTheAccessToken(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tok != "" {
-			req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: tok})
+			// Over TLS the cookie is the __Host- one; a client's request has no TLS field to say so.
+			_, port, _ := net.SplitHostPort(addr)
+			req.AddCookie(&http.Cookie{Name: tlsCookieName(port), Value: tok})
 		}
 		resp, err := testClient.Do(req)
 		if err != nil {

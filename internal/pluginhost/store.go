@@ -56,11 +56,14 @@ func (e *MaterialWait) Error() string {
 }
 
 type MaterialEnded struct {
-	Cause  string
-	Remedy string
+	Cause   string
+	Remedy  string
+	Network bool
 }
 
 func (e *MaterialEnded) Error() string { return e.Cause }
+
+func (e *MaterialEnded) WaitsOnNetwork() bool { return e.Network }
 
 func (e *MaterialEnded) Final() string { return e.Remedy }
 
@@ -127,10 +130,10 @@ func (m Material) modelStatuses(decls []ModelDecl) []ModelStatus {
 			}
 		}
 		if blob, err := s.Blob(d.SHA256); err == nil && m.store != "" {
-			if fi, err := os.Stat(blob); err == nil && fi.Mode().IsRegular() && fi.Size() == d.Size {
+			if fi, err := os.Stat(blob + plugstore.PartialSuffix); err == nil && fi.Mode().IsRegular() {
+				st.Present, st.Partial = false, fi.Size()
+			} else if fi, err := os.Stat(blob); err == nil && fi.Mode().IsRegular() && fi.Size() == d.Size {
 				st.Stored = true
-			} else if fi, err := os.Stat(blob + plugstore.PartialSuffix); err == nil && fi.Mode().IsRegular() {
-				st.Partial = fi.Size()
 			}
 		}
 		out = append(out, st)

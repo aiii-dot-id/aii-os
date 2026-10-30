@@ -55,19 +55,14 @@ func applyPluginGrant(cfg *Config, key string, v any) error {
 	g := next[id]
 	if field == "auto_confirm" {
 
-		list, err := operationList(v)
-		if err != nil {
-			return fmt.Errorf("%s: %v", key, err)
-		}
-		g.AutoConfirm = list
-	} else {
-		on, ok := v.(bool)
-		if !ok {
-			return fmt.Errorf("%s: want a boolean", key)
-		}
-		if !setGrantField(&g, field, on) {
-			return fmt.Errorf("%s: %q is not a grant the page sets (%s); hosts and credential_handles are granted by a key pasted on the plugin's card or an account chosen on it, or in the config file, and local in the config file; folders are the identity's sandbox (tools.extra_roots, Settings → Sandbox)", key, field, strings.Join(grantFields, ", "))
-		}
+		return standingListRefused(key)
+	}
+	on, ok := v.(bool)
+	if !ok {
+		return fmt.Errorf("%s: want a boolean", key)
+	}
+	if !setGrantField(&g, field, on) {
+		return fmt.Errorf("%s: %q is not a grant the page sets (%s); hosts and credential_handles are granted by a key pasted on the plugin's card or an account chosen on it, or in the config file, and local in the config file; folders are the identity's sandbox (tools.extra_roots, Settings → Sandbox)", key, field, strings.Join(grantFields, ", "))
 	}
 	if grantEmpty(g) {
 		delete(next, id)
@@ -81,32 +76,8 @@ func applyPluginGrant(cfg *Config, key string, v any) error {
 	return nil
 }
 
-func operationList(v any) ([]string, error) {
-	var raw []string
-	switch list := v.(type) {
-	case []string:
-		raw = list
-	case []any:
-		for _, item := range list {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("want a list of operation names")
-			}
-			raw = append(raw, s)
-		}
-	case nil:
-	default:
-		return nil, fmt.Errorf("want a list of operation names")
-	}
-	var out []string
-	for _, s := range raw {
-		s = strings.TrimSpace(s)
-		if s == "" || hasOperation(out, s) {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out, nil
+func standingListRefused(key string) error {
+	return fmt.Errorf("%s is not set through the settings door: a standing confirmation is given by Always on a plugin's act and taken back by revoke on the plugin's card, one at a time. This page and the running program are different versions. Reload the page.", key)
 }
 
 func (a *App) publishGrants(cfg Config) {

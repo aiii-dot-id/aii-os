@@ -172,6 +172,208 @@ func TestStoredMaterialIsRefusedWhenItDoesNotFit(t *testing.T) {
 	}
 }
 
+// A CHANGED DIRECTORY KEEPS THE HELD CERTIFICATE SERVING UNTIL THE NEW CA
+// ISSUES. The state kept the directory beside the account's URL and nothing
+// compared it with the configured one: after certificate.acme_directory
+// changed, every request to the new CA was signed under the old CA's
+// account and refused. What the old CA issued is valid until it expires
+// whatever directory is configured, so it is served throughout: Ensure
+// and the next renewal pass each order at the new CA under an
+// account made there, a failed order leaves the old certificate in
+// service, and a directory set back finds its own account and certificate
+// and orders nothing. The order is owed at once (OrderOwed): a start, or
+// the card's Retry, places it through Ensure, and so does the daily pass.
+func TestAChangedDirectoryKeepsTheHeldCertificateServingUntilTheNewCAIssues(t *testing.T) {
+	pub := newStubPublisher()
+	first, second, down := newFakeCA(t, pub), newFakeCA(t, pub), newFakeCA(t, pub)
+	down.srv.Close() // a CA that cannot be reached
+	dir := t.TempDir()
+	const name = "ui.abcdefghijklmnopqrstuvwxyz.example"
+	m := managerFor(t, first, pub, dir, name)
+	if _, err := m.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	held := m.Certificate().Leaf.SerialNumber
+	if got := m.State().AccountURL; !strings.HasPrefix(got, first.url("/acct/")) {
+		t.Fatalf("the account was not made at the first CA: %q", got)
+	}
+	// servesTheFirst holds that what the manager serves is still the first
+	// CA's certificate, and that its state still names the first CA.
+	servesTheFirst := func(m *Manager, when string) {
+		t.Helper()
+		cert := m.Certificate()
+		if cert == nil {
+			t.Fatalf("%s: THE NAME HAS NO CERTIFICATE — the first CA's is valid and was taken out of service", when)
+		}
+		if cert.Leaf.SerialNumber.Cmp(held) != 0 || cert.Leaf.CheckSignatureFrom(first.caCert) != nil {
+			t.Fatalf("%s: the certificate served is not the one the first CA issued", when)
+		}
+		if st := m.State(); st.DirectoryURL != first.url("/dir") || !strings.HasPrefix(st.AccountURL, first.url("/acct/")) {
+			t.Fatalf("%s: the state no longer names the CA of the certificate held: directory %q account %q", when, st.DirectoryURL, st.AccountURL)
+		}
+	}
+	ordersAt := func(ca *fakeCA) int {
+		ca.mu.Lock()
+		defer ca.mu.Unlock()
+		return len(ca.orders)
+	}
+
+	// The directory changes to a CA that is down. An order is owed at
+	// once; the start's Ensure and the pass each try it and fail, and the
+	// first CA's certificate serves.
+	unreachable := managerFor(t, down, pub, dir, name)
+	servesTheFirst(unreachable, "after the change")
+	if !unreachable.OrderOwed() {
+		t.Fatal("no order is owed under the new directory")
+	}
+	if issued, err := unreachable.Ensure(context.Background()); err == nil || issued {
+		t.Fatalf("a start under the new directory did not try it at once: issued=%v err=%v", issued, err)
+	}
+	servesTheFirst(unreachable, "after a start that could not reach the new CA")
+	if at := unreachable.State().RenewAt; at.After(time.Now()) {
+		t.Fatalf("renewal is not due under the new directory: renew_at %s", at)
+	}
+	if renewed, err := unreachable.Renew(context.Background()); err == nil || renewed {
+		t.Fatalf("the renewal pass did not try the new directory: renewed=%v err=%v", renewed, err)
+	}
+	servesTheFirst(unreachable, "after a CA that cannot be reached")
+	if unreachable.State().LastError == "" {
+		t.Fatal("the failed attempt at the new directory was not recorded")
+	}
+
+	// The directory is set back. Nothing is ordered, and the first CA's
+	// account is still the one in use.
+	back := managerFor(t, first, pub, dir, name)
+	servesTheFirst(back, "after the directory was set back")
+	if at := back.State().RenewAt; !at.After(time.Now()) {
+		t.Fatalf("a failed attempt elsewhere left renewal due at the first CA: renew_at %s", at)
+	}
+	if renewed, err := back.Renew(context.Background()); err != nil || renewed {
+		t.Fatalf("setting the directory back placed an order: renewed=%v err=%v", renewed, err)
+	}
+	if issued, err := back.Ensure(context.Background()); err != nil || issued || back.OrderOwed() {
+		t.Fatalf("setting the directory back owes an order: issued=%v err=%v", issued, err)
+	}
+	if n := ordersAt(first); n != 1 || first.issued != 1 {
+		t.Fatalf("the first CA saw %d order(s) and issued %d; want 1 and 1", n, first.issued)
+	}
+
+	// The directory changes to a CA that answers, and its first order fails.
+	moved := managerFor(t, second, pub, dir, name)
+	servesTheFirst(moved, "after the second change")
+	moved.cfg.Publisher = failingPublisher{}
+	if renewed, err := moved.Renew(context.Background()); err == nil || renewed {
+		t.Fatalf("a failed publish renewed: renewed=%v err=%v", renewed, err)
+	}
+	servesTheFirst(moved, "after a failed order at the new CA")
+	second.mu.Lock()
+	for id, o := range second.orders {
+		if !strings.HasPrefix(o.account, second.url("/acct/")) {
+			t.Errorf("order %s at the second CA was signed under an account it never made: %q", id, o.account)
+		}
+	}
+	second.mu.Unlock()
+	if n := ordersAt(second); n != 1 || second.issued != 0 {
+		t.Fatalf("the second CA saw %d order(s) and issued %d; want 1 and 0", n, second.issued)
+	}
+
+	// The card's Retry (Ensure) succeeds: only now is the pair replaced,
+	// and nothing more is owed.
+	moved.cfg.Publisher = pub
+	if issued, err := moved.Ensure(context.Background()); err != nil || !issued {
+		t.Fatalf("no certificate from the second CA: issued=%v err=%v", issued, err)
+	}
+	if moved.OrderOwed() {
+		t.Fatal("an order is still owed once the second CA has issued")
+	}
+	if err := moved.Certificate().Leaf.CheckSignatureFrom(second.caCert); err != nil {
+		t.Fatalf("the certificate served is not the second CA's: %v", err)
+	}
+	if st := moved.State(); st.DirectoryURL != second.url("/dir") || !strings.HasPrefix(st.AccountURL, second.url("/acct/")) {
+		t.Fatalf("the state does not name the second CA: directory %q account %q", st.DirectoryURL, st.AccountURL)
+	}
+	// A restart under the same directory is a restart: nothing is ordered.
+	again := managerFor(t, second, pub, dir, name)
+	if again.Certificate() == nil || again.Certificate().Leaf.CheckSignatureFrom(second.caCert) != nil {
+		t.Fatal("the second CA's certificate did not load on restart")
+	}
+	if renewed, err := again.Renew(context.Background()); err != nil || renewed {
+		t.Fatalf("a restart under the same directory placed an order: renewed=%v err=%v", renewed, err)
+	}
+	if issued, err := again.Ensure(context.Background()); err != nil || issued {
+		t.Fatalf("a restart's Ensure under the same directory placed an order: issued=%v err=%v", issued, err)
+	}
+	if n := ordersAt(second); n != 2 || first.issued != 1 || second.issued != 1 {
+		t.Fatalf("orders at the second CA=%d, issued first=%d second=%d; want 2, 1, 1", n, first.issued, second.issued)
+	}
+}
+
+func TestAnOrderAtAChangedDirectoryIsSignedUnderAnAccountMadeThere(t *testing.T) {
+	pub := newStubPublisher()
+	first, second := newFakeCA(t, pub), newFakeCA(t, pub)
+	dir := t.TempDir()
+	const name = "ui.abcdefghijklmnopqrstuvwxyz.example"
+	if _, err := managerFor(t, first, pub, dir, name).Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"public.crt", "public.key"} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := managerFor(t, second, pub, dir, name)
+	_, err := m.Ensure(context.Background())
+	second.mu.Lock()
+	defer second.mu.Unlock()
+	if len(second.orders) == 0 {
+		t.Fatalf("no order reached the second CA: %v", err)
+	}
+	for id, o := range second.orders {
+		if !strings.HasPrefix(o.account, second.url("/acct/")) {
+			t.Errorf("order %s at the second CA was signed under an account it never made: %q (ensure: %v)", id, o.account, err)
+		}
+	}
+	if err != nil {
+		t.Fatalf("the order at the second CA failed: %v", err)
+	}
+	if st := m.State(); st.DirectoryURL != second.url("/dir") || !strings.HasPrefix(st.AccountURL, second.url("/acct/")) {
+		t.Fatalf("the state does not name the second CA: directory %q account %q", st.DirectoryURL, st.AccountURL)
+	}
+}
+
+// A TRAILING SLASH IS THE SAME DIRECTORY. The directory was compared as a
+// string, so the operator's same URL written with a slash at its end was
+// another CA: an order owed, its account registered again, one duplicate
+// certificate spent. The certificate held stays the configured CA's, and
+// nothing is ordered.
+func TestATrailingSlashIsTheSameDirectory(t *testing.T) {
+	pub := newStubPublisher()
+	ca := newFakeCA(t, pub)
+	dir := t.TempDir()
+	const name = "ui.abcdefghijklmnopqrstuvwxyz.example"
+	if _, err := managerFor(t, ca, pub, dir, name).Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(Config{Dir: dir, Name: name, DirectoryURL: ca.url("/dir") + "/", Publisher: pub, HTTPClient: ca.srv.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.OrderOwed() {
+		t.Fatal("the same directory with a trailing slash owes an order")
+	}
+	if at := m.State().RenewAt; !at.After(time.Now()) {
+		t.Fatalf("renewal is due under the same directory with a trailing slash: renew_at %s", at)
+	}
+	if issued, err := m.Ensure(context.Background()); err != nil || issued {
+		t.Fatalf("the same directory with a trailing slash placed an order: issued=%v err=%v", issued, err)
+	}
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	if len(ca.orders) != 1 || ca.issued != 1 {
+		t.Fatalf("the CA saw %d order(s) and issued %d; want 1 and 1", len(ca.orders), ca.issued)
+	}
+}
+
 // RFC 9773 §4.1's example: the identifier is the AKI and the serial's
 // INTEGER value bytes, base64url, joined by a dot.
 func TestCertIDMatchesTheRFCExample(t *testing.T) {
@@ -355,5 +557,47 @@ func TestAStateThatCannotBeSavedIsNotSilent(t *testing.T) {
 	}
 	if !logs.Contains("was not saved") {
 		t.Fatal("a state that could not be saved went unsaid")
+	}
+}
+
+// A CERTIFICATE THAT CANNOT BE READ IS NOT AN ABSENT ONE. A start on a disk
+// that does not answer took the stored pair for absent and ordered a new
+// certificate, and a start that is tried again by itself on that disk did
+// so at each try: every public name shares one registered domain's weekly
+// count of new certificates. Nothing is ordered or renewed over a pair that
+// could not be read; once it reads (here, once nothing stands in its way and
+// it is absent), the order is owed as before.
+func TestACertificateThatCannotBeReadOwesNoOrder(t *testing.T) {
+	pub := newStubPublisher()
+	ca := newFakeCA(t, pub)
+	dir := t.TempDir()
+	const name = "ui.unreadable.example"
+	// A directory where the certificate's file belongs: its read fails, and
+	// not as a file that does not exist.
+	if err := os.MkdirAll(filepath.Join(dir, "public.crt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := managerFor(t, ca, pub, dir, name)
+	if m.OrderOwed() {
+		t.Fatal("A CERTIFICATE THAT COULD NOT BE READ OWES AN ORDER: a failing disk would order one at every start")
+	}
+	for _, step := range []struct {
+		what string
+		run  func(context.Context) (bool, error)
+	}{{"Ensure", m.Ensure}, {"Renew", m.Renew}} {
+		if did, err := step.run(context.Background()); err != nil || did {
+			t.Fatalf("%s over an unreadable certificate: did=%v err=%v; nothing is ordered", step.what, did, err)
+		}
+	}
+	if len(ca.orders) != 0 {
+		t.Fatalf("%d order(s) were placed over a certificate that could not be read", len(ca.orders))
+	}
+	// The disk answers again, and what it holds is no certificate: the order
+	// is owed and placed.
+	if err := os.Remove(filepath.Join(dir, "public.crt")); err != nil {
+		t.Fatal(err)
+	}
+	if issued, err := m.Ensure(context.Background()); err != nil || !issued {
+		t.Fatalf("once the certificate's place reads as empty, the order is owed: issued=%v err=%v", issued, err)
 	}
 }

@@ -82,6 +82,7 @@ func TestTheTwoMembersTravelTogetherOrNotAtAll(t *testing.T) {
 func TestACorrectedFinalIsAnsweredAsCorrectedAndKeepsWhatWasHeard(t *testing.T) {
 	a := newVoiceApp(t)
 	h, _ := newTrackedSession(a, "corrected", true)
+	identifyTheOperator(t, a, h.id, 7)
 	page, fanned := &pageLog{}, &pageLog{}
 	a.voiceEventSink = fanned.enqueue
 	var mu sync.Mutex

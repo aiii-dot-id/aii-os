@@ -310,7 +310,8 @@ func side(err error) string {
 
 func heldKept(err error) bool {
 	var kept *SubstrateError
-	return errors.As(err, &kept)
+	var unchecked *firewall.UncheckedError
+	return errors.As(err, &kept) || errors.As(err, &unchecked)
 }
 
 func stillMade(path string, made fs.FileInfo) bool {

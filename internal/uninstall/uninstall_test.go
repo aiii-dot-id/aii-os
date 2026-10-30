@@ -83,7 +83,7 @@ func newAccount(t *testing.T) *account {
 		if err := os.Rename(far, filepath.Join(a.root, "identity-1")); err != nil {
 			t.Fatal(err)
 		}
-	} else if err := os.Symlink(filepath.Join("..", "identity-0"), filepath.Join(a.root, install.ByName, "Vega")); err != nil {
+	} else if err := os.Symlink(filepath.Join("..", "identity-0"), filepath.Join(a.root, install.ByName, "Example")); err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(a.root, "notes.txt"), "the person's own file")
@@ -158,7 +158,7 @@ func (a *account) env() Env {
 		SlotDirs: install.SlotDirs,
 		Name: func(dir string) string {
 			if filepath.Base(dir) == "identity-0" {
-				return "Vega"
+				return "Example"
 			}
 			return ""
 		},
@@ -679,10 +679,10 @@ func TestAPlanChangesNothing(t *testing.T) {
 	if !r.Plan || len(a.calls) != 0 || !mapsEqual(a.everything(), before) {
 		t.Fatalf("a plan acted: %q", a.calls)
 	}
-	if len(r.Identities) != 2 || !r.Identities[0].Running || r.Identities[0].Name != "Vega" || r.FreedBytes == 0 {
+	if len(r.Identities) != 2 || !r.Identities[0].Running || r.Identities[0].Name != "Example" || r.FreedBytes == 0 {
 		t.Fatalf("the plan does not name the identities that would stop, or the store's size: %+v", r)
 	}
-	if !slices.ContainsFunc(r.Steps, func(s string) bool { return strings.HasPrefix(s, "stop and unregister identity-0 (Vega)") }) {
+	if !slices.ContainsFunc(r.Steps, func(s string) bool { return strings.HasPrefix(s, "stop and unregister identity-0 (Example)") }) {
 		t.Fatalf("the plan's steps: %q", r.Steps)
 	}
 }

@@ -56,6 +56,7 @@ var levelNames = []string{"primitive", "record", "values", "projection", "semant
 var layers = map[string]int{
 	// 0 primitives — no domain, importable by anyone.
 	"internal/atomicfile": 0, "internal/canonicaljson": 0, "internal/crypto": 0, "internal/sigenvelope": 0,
+	"internal/rootlist": 0, // the pinned roots of one authority, oldest first: the grammar's, no policy
 	"internal/fileperm": 0, "internal/filelock": 0, "internal/logsink": 0, "internal/hostcap": 0, "internal/untrusted": 0,
 	"internal/vulkancap": 0, "internal/vulkancap/driver": 0, // isolated OS/driver facts; no identity or plugin policy
 	"internal/quiesce": 0, "internal/tokenestimate": 0, "internal/version": 0, "internal/jsonschema": 0, "internal/browsertest": 0,
@@ -63,8 +64,9 @@ var layers = map[string]int{
 	"internal/store/compressvfs": 0, "internal/memory/actr": 0, "internal/memory/carrd": 0,
 	"internal/memory/fuse": 0, "internal/memory/trigram": 0, "internal/memory/vec": 0,
 	"internal/pluginworker/wasmgen": 0, "internal/genesis/genesislive": 0, "config": 0, "packaging/icon": 0,
-	"internal/tlsfault": 0, "internal/tlsfault/tlsfaulttest": 0,
+	"internal/tlsfault": 0, "internal/tlsfault/tlsfaulttest": 0, "internal/crypto/devicekeytest": 0,
 	"internal/limits": 0, // a limit the operator may lift, and the code defaults of a run's limits (one owner)
+	"internal/hold":   0, // what a refusal calls the read-only posture: SAFE, or a start that waits (one owner: the app's mode)
 	// 1 the record.
 	"internal/ledger": 1,
 	// 2 values shared by record owners — and every leaf carved out of an
@@ -84,12 +86,15 @@ var layers = map[string]int{
 	"internal/tools": 5, "internal/firewall": 5, "internal/broker": 5, "internal/pluginhost": 5,
 	"internal/pluginworker": 5, "internal/workercmd": 5, "internal/supervisor": 5, "internal/witness": 5,
 	"internal/witness/witnesstest": 5, "internal/pluginhost/pluginhosttest": 5, "internal/certs": 5, "internal/relay": 5, "internal/relay/relaytest": 5,
-	"internal/updates": 5, "internal/audio": 5, "internal/speech": 5, "internal/speecheval": 5, "internal/memory/memoryeval": 5, "internal/acceptance": 5,
+	"internal/updates": 5, "internal/audio": 5, "internal/speech": 5, "internal/speecheval": 5, "internal/memory/memoryeval": 5, "internal/acceptance": 5, "internal/promptsuite": 5,
 	"internal/oauth": 5, "internal/escrow": 5, "internal/project": 5, "internal/sections": 5,
 	"internal/packagefmt": 5, "internal/packagefmt/packagetest": 5,
 	"internal/pluginfacility": 5, "internal/googleoidc": 5, "internal/install": 5, "internal/genesis/genesistest": 5,
-	"internal/machine":   5, // the account's machine service and an identity's link to it (engine split, L1a)
-	"internal/plugstore": 5,
+	"internal/machine":     5,
+	"internal/plugstore":   5,
+	"internal/oswall":      5,
+	"internal/workrecord":  5,
+	"internal/agentmemory": 5,
 	// 6 features the composition root wires.
 	"internal/dashboard": 6, "internal/plugincatalog": 6,
 	"internal/publicname": 6, "internal/publicname/publicnametest": 6,
@@ -102,6 +107,7 @@ var layers = map[string]int{
 	"cmd/aii": 8, "cmd/aii-app": 8, "cmd/aii-devsign": 8, "cmd/aii-plugin-worker": 8, "cmd/aii-release": 8,
 	"cmd/aii-setup": 8, "cmd/aii-speech-eval": 8, "cmd/aii-vulkan-probe": 8, "cmd/rewrap": 8, "cmd/verify": 8, "export": 8, "mobile": 8, "test": 8,
 	"test/mobilehandoffprobe": 8,
+	"test/promptsuite":        8,
 	"test/decls":              8, // the pure-move proof tool: it reads Go source and imports nothing of the module
 	"test/skipreport":         8, // reads what go test printed (skips, release-critical tests): the standard library only
 }

@@ -113,7 +113,12 @@ func (a *App) handleWebhook(w http.ResponseWriter, r *http.Request, pluginID, ho
 		"body":    string(body),
 	}
 
-	route := a.webhookRoute(ctx, pluginID)
+	route, routed := a.webhookRoute(ctx, pluginID)
+	if !routed {
+		logsink.Warn("webhook.refusal", webhookUndescribedLog, pluginID, hookPath)
+		http.Error(w, webhookUndescribedBody, http.StatusServiceUnavailable)
+		return
+	}
 	if route.Acknowledges {
 		args["recorded"] = a.heldFor(pluginID)
 	}
@@ -181,13 +186,22 @@ func (a *App) noteHeld(pluginID string, held []string) {
 	a.channels.held[pluginID] = held
 }
 
-func (a *App) webhookRoute(ctx context.Context, pluginID string) channelRoute {
+const (
+	webhookUndescribedLog  = "%s/%s: the plugin is a channel adapter whose channel is not described yet — answered 503, the operation did not run; the sender may retry"
+	webhookUndescribedBody = "the channel is not ready"
+)
+
+func (a *App) webhookRoute(ctx context.Context, pluginID string) (route channelRoute, routed bool) {
 	for _, r := range a.channelRoutes(ctx) {
 		if r.Plugin == pluginID {
-			return r
+			return r, true
 		}
 	}
-	return channelRoute{Channel: "hook:" + pluginID, Plugin: pluginID, Hook: true}
+	if ap := a.activePlugin(pluginID); ap != nil && ap.Channel != nil {
+		a.wakeSweep()
+		return channelRoute{}, false
+	}
+	return channelRoute{Channel: "hook:" + pluginID, Plugin: pluginID, Hook: true}, true
 }
 
 func (a *App) webhookSecret(pluginID, setting string) (string, string) {

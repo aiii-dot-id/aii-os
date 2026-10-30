@@ -135,8 +135,8 @@ func TestSchemaUpgradeSetAsideAdmissionPreservesAcknowledgment(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			through, err := a.continuity.stageAndProve(t.Context(), cfg, a.door.kp, source, nil,
-				filepath.Join(staged, "set"), filepath.Join(staged, "proof"))
+			through, _, err := a.continuity.stageAndProve(t.Context(), cfg, a.door.kp, source, nil,
+				filepath.Join(staged, "set"), filepath.Join(staged, "proof"), false)
 			if tc.refuse {
 				if err == nil {
 					t.Fatalf("set-aside admission accepted record %d despite the mirror acknowledging %d", through, want)

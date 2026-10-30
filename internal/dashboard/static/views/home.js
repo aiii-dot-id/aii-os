@@ -94,10 +94,13 @@ export function continuityLine(cont, stats) {
   if (!cont) return [];
   const mode = cont.mode || 'normal';
   const out = [];
-  out.push({ cls: mode === 'safe' ? 'bad' : mode === 'degraded_witness' ? 'warn' : 'good',
+  out.push({ cls: mode === 'safe' ? 'bad' : mode === 'degraded_witness' || mode === 'degraded_ring5' ? 'warn' : 'good',
     text: mode === 'safe' ? 'SAFE — record frozen' + (cont.safe_reason ? ': ' + esc(cont.safe_reason) : '')
+        : mode === 'degraded_ring5' ? 'degraded — waiting for Ring 5' + (cont.degraded_why ? ': ' + esc(cont.degraded_why) : '')
         : mode === 'degraded_witness' ? (cont.degraded_why ? 'degraded — witness certificate refused' : 'degraded — witness dark') + (cont.degraded_since ? ' since ' + ago(cont.degraded_since) : '') + (cont.degraded_why ? ': ' + esc(cont.degraded_why) : '')
         : 'record sound' });
+  if (mode === 'safe' && cont.safe_cleared) out.push({ cls: 'good', text: esc(cont.safe_cleared) });
+  if (cont.serving_unkept) out.push({ cls: 'warn', text: esc(cont.serving_unkept) });
   if (cont.ledger_seq != null) out.push({ text: 'ledger seq ' + Number(cont.ledger_seq).toLocaleString() });
   if (cont.witnessed_at) out.push({ text: 'witnessed ' + ago(cont.witnessed_at) + (cont.unanchored ? ' · ' + cont.unanchored + ' unanchored' : '') });
   else out.push({ text: 'not yet witnessed' + (cont.unanchored ? ' · ' + cont.unanchored + ' unanchored' : '') });
@@ -116,6 +119,7 @@ const TALK_TITLES = {
   setup: 'Voice isn\'t set up — opens Speech settings',
   unreachable: 'Voice can\'t reach its service — opens Speech settings',
   safe: 'Voice is paused while this identity is in SAFE',
+  waiting: 'Voice is paused while this start waits for Ring 5',
 };
 function talkState() {
   const state = S.stats && S.stats.voice_state;
@@ -128,7 +132,8 @@ function heroHTML(name) {
   else if (!S.identityExists) sub = 'No identity lives here yet — the first conversation, in Chat, is where one begins.';
   else sub = (name && name !== 'Unnamed' ? name : 'Your identity') + ' is here. What shall we work on together?';
   if (S.connected && S.identityExists) {
-    const state = talkState(), title = TALK_TITLES[state];
+    const state = talkState();
+    const title = state === 'safe' && S.cont && S.cont.mode === 'degraded_ring5' ? TALK_TITLES.waiting : TALK_TITLES[state];
     const talk = '<button class="home-talk' + (state === 'setup' || state === 'unreachable' ? ' faint' : '') + '" id="home-talk" type="button"' +
       (state === 'safe' ? ' disabled' : '') + ' title="' + title + '" aria-label="' + title + '">' + ico('mic') + '</button>';
     field = '<div class="home-field"><input type="text" id="home-input" placeholder="Say what you need — it carries into Chat" autocomplete="off">' +

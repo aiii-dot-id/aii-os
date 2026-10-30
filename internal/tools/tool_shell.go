@@ -19,13 +19,62 @@ type ShellTool struct {
 
 	wall func() (shellWall, error)
 
+	holder shellHolder
+
 	left leftJobs
+
+	extraEnv []string
+
+	windowsUTF8 func() bool
+}
+
+func (t *ShellTool) relayed() bool { return t.windowsUTF8 == nil || t.windowsUTF8() }
+
+type shellStart struct {
+	bin         string
+	argv        []string
+	env         []string
+	mark        string
+	constrained string
+}
+
+const (
+	shellRelayLanguage = "language"
+	shellRelayStart    = "start"
+)
+
+const ReasonShellRelayFailed = "SHELL_RELAY_FAILED"
+
+const ReasonShellCommandTooLong = "SHELL_COMMAND_TOO_LONG"
+
+func shellRelayFailed(reason string) string {
+	return "the host's starter could not start your shell: " + strings.TrimRight(reason, ". ") + ". Nothing of your command ran."
+}
+
+func (s shellStart) relayFailure(output []byte) (string, bool) {
+	if s.mark == "" {
+		return "", false
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		i := strings.Index(line, s.mark+" ")
+		if i < 0 {
+			continue
+		}
+		kind, reason, _ := strings.Cut(strings.TrimSpace(line[i+len(s.mark)+1:]), " ")
+		if kind == shellRelayLanguage && s.constrained != "" {
+			return s.constrained, true
+		}
+		return shellRelayFailed(strings.ToValidUTF8(strings.TrimSpace(reason), "\uFFFD")), true
+	}
+	return "", false
 }
 
 type shellWall struct {
 	kept     []*firewall.Rule
 	roots    []string
 	boundary bool
+
+	settings ShellWallSettings
 }
 
 const ReasonShellWallUnavailable = "SHELL_WALL_UNAVAILABLE"
@@ -40,10 +89,16 @@ var errShellCeiling = errors.New("the shell's ceiling was reached")
 
 const ReasonShellTimeout = "SHELL_TIMEOUT"
 
+const ReasonShellExit = "SHELL_EXIT"
+
 func (t *ShellTool) Name() string { return "shell" }
 func (t *ShellTool) Description() string {
 
-	return "Execute a command with the host shell (" + shellDialect + ")." + shellWallDescription + " Args: command (required), cwd (optional: the directory to run in)"
+	relay := ""
+	if t.relayed() {
+		relay = shellRelayDescription
+	}
+	return "Execute a command with the host shell (" + shellDialect + ")." + shellWallDescriptionNow() + relay
 }
 
 func (t *ShellTool) Parameters() map[string]any {
@@ -74,8 +129,10 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 	ctx, cancel := context.WithTimeoutCause(ctx, t.timeout, errShellCeiling)
 	defer cancel()
 
-	bin, argv := shellInvocation()
-	argv = append(argv, command)
+	start, err := shellCommand(command, dir, t.relayed())
+	if err != nil {
+		return Refusal(ReasonShellCommandTooLong, err.Error()), nil
+	}
 
 	w := shellWall{boundary: true}
 	if t.wall != nil {
@@ -85,20 +142,29 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 		}
 		w = got
 	}
-	wbin, wargv, werr := behindWall(t.sandbox, w, bin, argv)
+	wbin, wargv, wfiles, release, werr := t.behindTheWall(w, dir, start.bin, start.argv)
 	if werr != nil {
 		return Refusal(ReasonShellWallUnavailable, shellWallUnavailable(werr)), nil
 	}
+	defer release()
 	cmd := exec.CommandContext(ctx, wbin, wargv...)
+
+	cmd.ExtraFiles = wfiles
 
 	tree := &shellTree{}
 	prepareTree(cmd)
+
+	releaseToken, terr := wallProcess(cmd, w)
+	if terr != nil {
+		return Refusal(ReasonShellWallUnavailable, shellWallUnavailable(terr)), nil
+	}
+	defer releaseToken()
 
 	var killed atomic.Bool
 	cmd.Cancel = func() error { killed.Store(true); return tree.kill(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = dir
-	cmd.Env = shellEnv(t.sandbox)
+	cmd.Env = append(append(shellEnv(t.sandbox), start.env...), t.extraEnv...)
 
 	cmd.Stdin = strings.NewReader("")
 
@@ -111,9 +177,21 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 		return Result{Error: err.Error() + fmt.Sprintf(" [sandbox=%q]", t.sandbox)}, nil
 	}
 
-	tree.adopt(cmd)
+	if aerr := tree.adopt(cmd, w.boundary); aerr != nil {
+
+		_ = tree.kill(cmd)
+		_ = cmd.Wait()
+		tree.close()
+		return Refusal(ReasonShellWallUnavailable, shellWallUnavailable(aerr)), nil
+	}
 	defer tree.close()
-	err := cmd.Wait()
+	err = cmd.Wait()
+
+	if ctx.Err() == nil {
+		if why, failed := start.relayFailure(buf.buf.Bytes()); failed {
+			return Result{Error: why, ReasonCode: ReasonShellRelayFailed}, nil
+		}
+	}
 
 	output := normalizeShellOutput(buf.buf.Bytes())
 	if buf.dropped > 0 {
@@ -150,6 +228,10 @@ func (t *ShellTool) Execute(ctx context.Context, args map[string]any) (Result, e
 	if !result.Interrupted && result.Error == "" && cmd.ProcessState != nil {
 		if code := cmd.ProcessState.ExitCode(); code >= 0 {
 			result.ExitStatus = &code
+
+			if code != 0 {
+				result.ReasonCode = ReasonShellExit
+			}
 		}
 	}
 	return result, nil

@@ -23,16 +23,29 @@ func lineAfter(t *testing.T, app *App, said string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The loop's own notes on the turn come back first, right after the
+	// reply (store.ReasonLoopNote); the line looked for follows them.
+	notes := strings.Count(loopNotesBeside(t, app, replyID(t, app, said)), "\n\n")
 	for i, m := range msgs {
 		if m.Role == "assistant" && strings.HasPrefix(m.Content, said) {
-			if i+1 < len(msgs) {
-				return msgs[i+1].Content
+			if i+1+notes < len(msgs) {
+				return msgs[i+1+notes].Content
 			}
 			return ""
 		}
 	}
 	t.Fatalf("the identity's history holds no reply beginning %q", said)
 	return ""
+}
+
+// replyID is the id of the newest recorded reply beginning said.
+func replyID(t *testing.T, a *App, said string) string {
+	t.Helper()
+	var id string
+	if err := a.store.DB().QueryRow(`SELECT id FROM conversations WHERE role='resident' AND substr(content,1,?)=? ORDER BY turn_seq DESC LIMIT 1`, len(said), said).Scan(&id); err != nil {
+		t.Fatalf("the record holds no reply beginning %q: %v", said, err)
+	}
+	return id
 }
 
 // fencedThenLeg is a model that caps the operator's turn at its token fence
@@ -69,7 +82,7 @@ func cappedByTheOperator(t *testing.T, app *App) {
 	if err != nil {
 		t.Fatalf("turn failed: %v", err)
 	}
-	if !strings.HasSuffix(reply, "the work continues automatically in a fresh turn.]") {
+	if !strings.HasSuffix(recordedReply(t, app, reply), "the work continues automatically in a fresh turn.]") {
 		t.Fatalf("rig: the capped turn was not handed to a fresh turn: %q", reply)
 	}
 }
@@ -252,7 +265,7 @@ func TestALegSaysWhetherAnotherTurnRanSinceTheOneItContinues(t *testing.T) {
 	previous := "Your previous turn ended at its declared tool budget. Work session ws_on is still active"
 	another := "A turn of yours ended at its declared tool budget, and another turn has run since. Work session ws_on is still active"
 	words := func(t *testing.T, app *App, ctx context.Context) {
-		words := interaction.WithTurn(ctx, "turn_words")
+		words := interaction.WithSaid(interaction.WithTurn(ctx, "turn_words"), interaction.SaidTyped) // as the chat door marks them
 		if _, err := app.recordConversationRef(words, string(interaction.Operator), "how is it going?"); err != nil {
 			t.Fatal(err)
 		}
@@ -263,7 +276,7 @@ func TestALegSaysWhetherAnotherTurnRanSinceTheOneItContinues(t *testing.T) {
 	// A turn that answered nothing: its words are recorded, its reply never
 	// was (it failed). It ran all the same.
 	unanswered := func(t *testing.T, app *App, ctx context.Context) {
-		if _, err := app.recordConversationRef(interaction.WithTurn(ctx, "turn_failed"), string(interaction.Operator), "and now?"); err != nil {
+		if _, err := app.recordConversationRef(interaction.WithSaid(interaction.WithTurn(ctx, "turn_failed"), interaction.SaidTyped), string(interaction.Operator), "and now?"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/publicname"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/witness"
 )
 
 func (a *App) continuityWires() continuity.Wires {
@@ -20,8 +21,9 @@ func (a *App) continuityWires() continuity.Wires {
 			got := a.activeIdentity(IdentityConfig{LedgerPath: id.LedgerPath, DBPath: id.DBPath, KeyPath: id.KeyPath})
 			return continuity.Identity{LedgerPath: got.LedgerPath, DBPath: got.DBPath, KeyPath: got.KeyPath}
 		},
-		Safe:  func() bool { _, safe := a.SafeMode(); return safe },
-		Store: func() *store.Store { return a.store },
+		Safe:    func() bool { _, safe := a.SafeMode(); return safe },
+		Waiting: func() bool { h, held := a.Hold(); return held && h.Waiting },
+		Store:   func() *store.Store { return a.store },
 
 		Capture: func(ctx context.Context, tailDst string) (ledger.Capture, *store.Pin, error) {
 			return a.door.capture(ctx, tailDst)
@@ -88,6 +90,12 @@ func (a *App) publicNameWires() publicname.Wires {
 		Key:       func() *crypto.KeyPair { return a.keyPair },
 		IdentityDir: func() string {
 			return filepath.Dir(a.activeIdentity(a.configSnapshot().Identity).LedgerPath)
+		},
+		WitnessFiles: func() witness.FileGuard {
+			if a.door == nil {
+				return nil
+			}
+			return a.door
 		},
 		Settings: func() publicname.Settings { return publicNameSettingsOf(a.configSnapshot()) },
 

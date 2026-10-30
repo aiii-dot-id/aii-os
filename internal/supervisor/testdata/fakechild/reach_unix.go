@@ -207,3 +207,6 @@ func carrierProbe() string {
 	}
 	return "worker=" + worker + " system=" + system
 }
+
+// ownGroup starts cmd in a process group of its own.
+func ownGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }

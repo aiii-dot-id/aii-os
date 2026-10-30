@@ -71,7 +71,7 @@ func TestSpeakerObservationJoinsQueuedTurnAfterSessionEnd(t *testing.T) {
 				}
 			}
 			if c.taken {
-				a.holdVoice(&voiceBinding{session: h.id, seq: 7, text: "words admitted before close", done: func() {}})
+				a.holdVoice(&voiceBinding{session: h.id, seq: 7, text: "words admitted before close", said: voiceMarker + "words admitted before close", done: func() {}})
 			} else {
 				queueSpoken(t, a, h.id, 7, "words admitted before close")
 			}
@@ -292,7 +292,9 @@ func TestAnObservationIsRetiredWithWordsThatAreNeverRecorded(t *testing.T) {
 			}
 		}
 		a.voiceEngineEvent(nil, observationRaw(h.id, 20, knownObservation(9, "Quinn", "quinn")), dropEvent)
-		err := a.observeOperatorVoice(context.Background(), "one word too many", heardUtterance{SessionID: h.id, Sequence: 9, Text: "one word too many", Answer: true, Operator: true})
+		gone, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := a.observeOperatorVoice(gone, "one word too many", heardUtterance{SessionID: h.id, Sequence: 9, Text: "one word too many", Answer: true, Operator: true})
 		if err == nil {
 			t.Fatal("a full mailbox admitted the words")
 		}

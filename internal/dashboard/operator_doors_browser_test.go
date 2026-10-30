@@ -12,7 +12,7 @@ func TestSettingsOffersRotationAndTheRouteOnlyOverAPrivateConnection(t *testing.
 <script type="module">
 import { S } from '/state.js';
 import { sent } from '/ws.js';
-import { renderSettings, acceptDashboardToken, acceptSettingsConfig, rejectSettingsConfig } from '/views/settings.js';
+import { renderSettings, acceptSettingsConfig, rejectSettingsConfig } from '/views/settings.js';
 import { run } from '/__harness.js';
 run(async (assert) => {
   const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -34,10 +34,6 @@ run(async (assert) => {
   const rotate = () => document.querySelector('[data-token-rotate]');
   assert(rotate() && !document.querySelector('[data-token-rotate-private]'), 'a private connection was not offered the rotation');
 
-  document.querySelector('[data-token-reveal]').click();
-  assert(acceptDashboardToken('req-1', 'old-token'), 'the eye was not answered');
-  assert(document.getElementById('cfg-dtoken').value === 'old-token', 'the eye did not show the token');
-
   confirmed = false;
   rotate().click();
   await tick(); await tick();
@@ -49,7 +45,6 @@ run(async (assert) => {
   assert(rotations.length === 1, 'the control did not ask the server once: ' + rotations.length);
   const said = document.querySelector('[data-token-rotate-said]');
   assert(said && said.textContent.includes('Rotated') && said.textContent.includes('every other browser'), 'the rotation was not said: ' + (said && said.textContent));
-  assert(document.getElementById('cfg-dtoken').value === '', 'the old token is still shown after the rotation');
 
   answer = { ok: false, text: 'This connection is not private, so the access token was not rotated' };
   rotate().click();
@@ -128,7 +123,17 @@ run(async (assert) => {
   document.querySelector('[data-save="route"]').click();
   assert(sent[sent.length - 1].config['certificate.direct_addresses'] === null, 'working them out again did not go out as null: ' + JSON.stringify(sent[sent.length - 1]));
   rejectSettingsConfig('fixture', sent[sent.length - 1].request_id);
+  assert(!document.querySelector('[data-route-held]'), 'a family was said to be held where none is');
+  // A FAMILY THE DIRECT ROUTE HOLDS IS SAID: the family, its
+  // addresses, and where they are chosen; the other family is published.
+  S.config = config({ public_name: Object.assign(config().public_name, { machine_addresses: ['10.8.0.2', 'fd00::2', 'fd00::3'], held_families: [{ family: 'IPv6', addresses: ['fd00::2', 'fd00::3'] }] }) });
+  renderSettings();
+  const heldSaid = () => [...document.querySelectorAll('[data-route-held]')].map(e => e.textContent);
+  assert(heldSaid().length === 1 && heldSaid()[0].includes('No IPv6 address is published') && heldSaid()[0].includes('(fd00::2, fd00::3)') && heldSaid()[0].includes('under Direct addresses, below.'),
+    'a family the direct route holds was not said with its addresses: ' + JSON.stringify(heldSaid()));
   S.stats = {};
+  renderSettings();
+  assert(heldSaid().length === 1 && heldSaid()[0].includes('(Show technical controls, under Route, shows them)'), 'without the technical controls the held family does not say where it is chosen: ' + JSON.stringify(heldSaid()));
 
   S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: true, require_token: true, token_short: true } });
   renderSettings();
@@ -161,7 +166,7 @@ run(async (assert) => {
 
   S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: false, require_token: false } });
   renderSettings();
-  assert(!rotate() && !document.getElementById('cfg-dtoken'), 'an open dashboard was offered a token to rotate');
+  assert(!rotate() && !document.querySelector('[data-token-where]'), 'an open dashboard was offered a token to rotate');
 });
 </script></body></html>`
 
@@ -193,7 +198,7 @@ try {
     if (url !== '/auth/token') return nativeFetch(url, options);
     statusChecks++;
     const ok = cookie === 'new' || !rotatedOnServer;
-    return { status: ok ? 204 : 401, ok };
+    return { status: ok ? 204 : 401, ok, headers: new Headers() };
   };
   window.prompt = () => { throw Error('modal prompt used'); };
   const sockets = [];
@@ -214,7 +219,7 @@ try {
   assert(!document.getElementById('dashboard-signin'), 'the rotating page was asked for a token it is about to hold');
   assert(statusChecks === 0, 'recovery asked the server about the old cookie mid-rotation');
   cookie = 'new';
-  answer({ ok: true, status: 204, text: async () => '' });
+  answer({ ok: true, status: 204, text: async () => '', headers: new Headers() });
   const result = await rotation;
   assert(result.ok, 'the rotation was not reported done');
   await tick(20);
@@ -251,7 +256,7 @@ run(async (assert) => {
   S.config = config();
   renderSettings();
   document.querySelector('[data-sec="dashboard"]').click();
-  assert(require() && !document.querySelector('[data-token-rotate]') && !document.getElementById('cfg-dtoken'), 'an open dashboard over a private connection was not offered the requirement alone');
+  assert(require() && !document.querySelector('[data-token-rotate]') && !document.querySelector('[data-token-where]'), 'an open dashboard over a private connection was not offered the requirement alone');
   assert(document.querySelector('[data-token-off-where]').textContent.includes('config.json'), 'the page does not say where asking stops');
   const note = document.querySelector('[data-route-note]').textContent;
   assert(note.includes('Ask for an access token') && !note.includes('aii dashboard-token'), 'the relay note does not send the person to this control: ' + note);
@@ -268,7 +273,7 @@ run(async (assert) => {
   assert(asked.length === 1, 'the control did not ask the server once: ' + asked.length);
   const said = document.querySelector('[data-token-require-said]');
   assert(said && said.className.includes('good') && said.textContent.includes('Asked for'), 'the act was not said: ' + (said && said.textContent));
-  assert(!require() && document.getElementById('cfg-dtoken') && document.querySelector('[data-token-rotate]'), 'after the act the page does not show the token it now asks for');
+  assert(!require() && document.querySelector('[data-token-where]') && document.querySelector('[data-token-rotate]'), 'after the act the page does not say where the token it now asks for is read');
   assert(document.querySelector('[data-token-off-where]'), 'the page stopped saying where asking stops');
 
   answer = { ok: false, text: 'This connection is not private, so the access token was not turned on' };
@@ -277,7 +282,7 @@ run(async (assert) => {
   require().click();
   await tick(); await tick(); await tick();
   const refused = document.querySelector('[data-token-require-said]');
-  assert(refused && refused.className.includes('bad') && refused.textContent.includes('not private') && require() && !document.getElementById('cfg-dtoken'), 'a refusal was not said, or the page showed a token it does not ask for');
+  assert(refused && refused.className.includes('bad') && refused.textContent.includes('not private') && require() && !document.querySelector('[data-token-where]'), 'a refusal was not said, or the page spoke of a token it does not ask for');
 
   S.config = config({ secrets_ok: false });
   renderSettings();
@@ -317,7 +322,7 @@ try {
     if (url !== '/auth/token') return nativeFetch(url, options);
     checks++;
     const ok = !asked || mine;
-    return { status: ok ? 204 : 401, ok };
+    return { status: ok ? 204 : 401, ok, headers: new Headers() };
   };
   window.prompt = () => { throw Error('modal prompt used'); };
   const sockets = [];
@@ -338,7 +343,7 @@ try {
   await tick(60);
   assert(!document.getElementById('dashboard-signin') && checks === 0, 'the asking page was asked for a token it is about to hold');
   mine = true;
-  answer({ ok: true, status: 204, text: async () => '' });
+  answer({ ok: true, status: 204, text: async () => '', headers: new Headers() });
   assert((await act).ok, 'the act was not reported done');
   await tick(20);
   const last = sockets[sockets.length - 1];
@@ -549,6 +554,19 @@ run(async (assert) => {
   S.config = cfg({ require_token: true }, { status: 'none', tls: false, can_claim: false, service_declined: true });
   renderSettings();
   assert(declined.test(said()) && !act('done') && claimed() === claimedBefore + 1, 'a running flow did not stop when the service was declined: ' + said());
+
+  // A NAME WHOSE KEY IS NOT LOADED (a boot into SAFE): the certificate it
+  // holds is served and nothing renews it. The card says so and offers no
+  // Retry; the press says why and asks for nothing.
+  S.config = cfg({ require_token: true }, { status: 'held', name: name, origin: 'https://' + name + ':8181', not_after: '2026-12-01T00:00:00Z', last_error: 'the identity\u2019s key is not loaded', route_mode: 'direct' });
+  renderSettings();
+  const heldSaid = document.querySelector('[data-public-name-state]').textContent;
+  assert(heldSaid.includes('serving the certificate this identity holds, which expires 2026-12-01T00:00:00Z') && heldSaid.includes('It cannot be renewed: the identity\u2019s key is not loaded') && !document.querySelector('[data-public-name="retry"]'),
+    'a held certificate was not said as served and not renewable: ' + heldSaid);
+  const askedBefore = sent.length;
+  act('start').click();
+  assert(/cannot renew it/.test(said()) && sent.slice(askedBefore).every(m => !['public_name_retry', 'public_name_claim', 'public_name_look', 'access_code'].includes(m.type)),
+    'the press on a held certificate did not say why, or asked for something: ' + said());
 });
 </script></body></html>`
 

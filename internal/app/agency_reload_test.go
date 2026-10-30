@@ -53,7 +53,7 @@ func heldFrom(ag AgencyConfig) heldAgency {
 		Depth: int64(ag.MaxSubagentDepth), Parallel: int64(ag.MaxParallelSubagents), Mints: int64(ag.SubagentMaxMints),
 		Wall:       int64(ag.SubagentWallSeconds),
 		QueueOff:   !agencyOn(ag.SpawnQueue),
-		TurnRounds: ag.MaxToolRounds, TurnTokens: ag.TurnTokenBudget, TurnCalls: maxToolCallsSetting.value(Config{Agency: ag}),
+		TurnRounds: ag.MaxToolRounds, TurnTokens: turnTokenBudgetSetting.value(Config{Agency: ag}), TurnCalls: maxToolCallsSetting.value(Config{Agency: ag}),
 	}
 }
 

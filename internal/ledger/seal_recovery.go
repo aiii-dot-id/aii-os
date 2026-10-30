@@ -16,7 +16,7 @@ func (l *Ledger) RecoverSeal(pubKey []byte, heads HeadVerifier) (retErr error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.frozenReason != "" {
-		return fmt.Errorf("seal recovery refused — %w (SAFE): %s", ErrFrozen, l.frozenReason)
+		return fmt.Errorf("seal recovery refused — %w (%s): %s", ErrFrozen, l.frozenName(), l.frozenReason)
 	}
 	if l.dirLock == nil {
 		return os.ErrClosed

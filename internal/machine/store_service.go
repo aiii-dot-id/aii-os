@@ -35,6 +35,12 @@ const (
 
 var errForgotten = errors.New("this slot was unregistered: the machine service no longer records it")
 
+const (
+	remedyStoreElsewhere = "name a place on a volume that keeps hard links: aii machine store <dir>"
+
+	remedyStoreUnmounted = "mount the volume that holds it, or wait for it to be mounted: the machine service opens it again by itself"
+)
+
 type storeOptions struct {
 	fetch pluginhost.ModelFetcher
 
@@ -43,6 +49,8 @@ type storeOptions struct {
 	collected func()
 
 	freeDisk func(string) (int64, error)
+
+	after func(time.Duration) <-chan time.Time
 }
 
 type storeService struct {
@@ -88,7 +96,7 @@ func (s *Server) openStore(ctx context.Context) {
 		ss.dir = defaultStoreDir(s.opts.Dir)
 	}
 	ss.where.Store(&ss.dir)
-	w, err := plugstore.OpenWriter(ss.dir)
+	w, err := plugstore.ReopenWriter(ss.dir)
 	if err != nil {
 		ss.err = err
 		logsink.Error("machine.error", "the plugin store %s cannot be written: %v — every need is refused until it can, or until the operator names another place (aii machine store <dir>)", ss.dir, err)
@@ -97,7 +105,7 @@ func (s *Server) openStore(ctx context.Context) {
 		logsink.Info("machine.decision", "the plugin store is %s; this service is its one writer", ss.dir)
 	}
 	for _, d := range st.Draining {
-		dw, err := plugstore.OpenWriter(d)
+		dw, err := plugstore.ReopenWriter(d)
 		if err != nil {
 			logsink.Warn("machine.error", "the plugin store %s, moved away from, cannot be drained this time: %v", d, err)
 			continue
@@ -115,6 +123,7 @@ func (s *Server) openStore(ctx context.Context) {
 		Spawn:       ss.spawn,
 		Ready:       ss.published,
 		Ended:       ss.jobEnded,
+		After:       s.opts.store.after,
 	})
 	ss.acq.Attach(ss.ctx)
 	ss.resume(st)
@@ -168,19 +177,11 @@ func (ss *storeService) resume(st State) {
 	if len(st.Pending) == 0 {
 		return
 	}
-	referred := map[string]bool{}
-	for _, r := range st.Refs {
-		referred[r.Entry] = true
-	}
-	var keep []Pending
+	keep := resumable(st)
 	for _, p := range st.Pending {
-		if referred[p.Entry] {
-			if _, err := p.Work.Check(); err == nil && p.Work.Entry == p.Entry {
-				keep = append(keep, p)
-				continue
-			}
+		if !slices.ContainsFunc(keep, func(k Pending) bool { return k.Entry == p.Entry }) {
+			logsink.Info("machine.decision", "the plugin store's pending %s is no longer referred to; it is not resumed", p.Entry)
 		}
-		logsink.Info("machine.decision", "the plugin store's pending %s is no longer referred to; it is not resumed", p.Entry)
 	}
 	if len(keep) != len(st.Pending) {
 		if err := ss.s.updateState(func(next *State) error { next.Pending = keep; return nil }); err != nil {
@@ -189,16 +190,64 @@ func (ss *storeService) resume(st State) {
 	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	ss.startPendingLocked(keep)
+}
+
+func resumable(st State) []Pending {
+	referred := referredEntries(st)
+	var keep []Pending
+	for _, p := range st.Pending {
+		if referred[p.Entry] {
+			if _, err := p.Work.Check(); err == nil && p.Work.Entry == p.Entry {
+				keep = append(keep, p)
+			}
+		}
+	}
+	return keep
+}
+
+func (ss *storeService) startPendingLocked(pending []Pending) {
 	if ss.w == nil {
 		return
 	}
-	for _, p := range keep {
+	for _, p := range pending {
+		if _, has := ss.works[p.Entry]; has {
+			continue
+		}
 		ss.works[p.Entry] = p.Work
 		if p.Adopt != nil {
 			ss.adopt[p.Entry] = *p.Adopt
 		}
 		logsink.Info("machine.decision", "the plugin store resumes %s, pending since %s", p.Entry, p.Since)
 		ss.acq.Want(pluginhost.WorkMaterial(ss.w.Dir, p.Work))
+	}
+}
+
+func (ss *storeService) reopenLocked(drained bool) {
+	if ss.w == nil {
+
+		w, err := plugstore.ReopenWriter(ss.dir)
+		if err != nil {
+			ss.err = err
+		} else {
+			ss.w, ss.err = w, nil
+			logsink.Info("machine.decision", "the plugin store %s can be written now; this service is its one writer", ss.dir)
+			ss.startPendingLocked(resumable(ss.s.stateNow()))
+		}
+	}
+	if !drained {
+		return
+	}
+	for _, d := range ss.s.stateNow().Draining {
+		if d == ss.dir || slices.ContainsFunc(ss.drain, func(o *plugstore.Writer) bool { return o.Dir == d }) {
+			continue
+		}
+		dw, err := plugstore.ReopenWriter(d)
+		if err != nil {
+			continue
+		}
+		ss.drain = append(ss.drain, dw)
+		logsink.Info("machine.decision", "the plugin store %s, moved away from, can be drained now", d)
 	}
 }
 
@@ -379,9 +428,14 @@ func (ss *storeService) need(l *link, p NeedParams) (NeedResult, *Refusal) {
 
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	ss.reopenLocked(false)
 	if ss.w == nil {
+		remedy := remedyStoreElsewhere
+		if errors.Is(ss.err, plugstore.ErrStoreUnreachable) {
+			remedy = remedyStoreUnmounted
+		}
 		return NeedResult{}, &Refusal{Reason: ReasonNoStore, Message: fmt.Sprintf("the plugin store %s cannot be written: %v", ss.dir, ss.err),
-			Remedy: "name a place on a volume that keeps hard links: aii machine store <dir>"}
+			Remedy: remedy}
 	}
 	type plan struct {
 		entry   string
@@ -444,6 +498,14 @@ func (ss *storeService) need(l *link, p NeedParams) (NeedResult, *Refusal) {
 		return NeedResult{}, &Refusal{Reason: ReasonNotRecorded, Message: "the need could not be recorded: " + err.Error()}
 	}
 	res := NeedResult{Store: ss.w.Dir, State: NeedPresent}
+
+	network := true
+	for _, pl := range plans {
+		var bound interface{ WaitsOnNetwork() bool }
+		if pl.state == NeedEnded && !(errors.As(pl.cause, &bound) && bound.WaitsOnNetwork()) {
+			network = false
+		}
+	}
 	for _, pl := range plans {
 		if pl.want != nil {
 
@@ -478,6 +540,7 @@ func (ss *storeService) need(l *link, p NeedParams) (NeedResult, *Refusal) {
 	if res.State == NeedEnded && res.Remedy == "" {
 		res.Remedy = "then Try again"
 	}
+	res.WaitsOnNetwork = res.State == NeedEnded && network
 	return res, nil
 }
 
@@ -666,9 +729,12 @@ func (ss *storeService) placeAt(l *link, dir string) (PlaceResult, *Refusal) {
 	if ss.w != nil {
 		drain = append(append([]*plugstore.Writer(nil), drain...), ss.w)
 	}
+
 	var dirs []string
-	for _, d := range drain {
-		dirs = append(dirs, d.Dir)
+	for _, d := range append(ss.s.stateNow().Draining, ss.dir) {
+		if d != dir && !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
 	}
 	if err := ss.s.updateState(func(st *State) error {
 		st.Store, st.Draining = dir, dirs
@@ -686,7 +752,13 @@ func (ss *storeService) placeAt(l *link, dir string) (PlaceResult, *Refusal) {
 			ss.acq.Want(pluginhost.WorkMaterial(dir, work))
 		}
 	}
-	logsink.Info("machine.decision", "identity %s's operator placed the plugin store at %s; %s is adopted from by digest and drained as nothing runs from it", short(l.identity), dir, old)
+
+	ss.startPendingLocked(resumable(ss.s.stateNow()))
+	if old == dir {
+		logsink.Info("machine.decision", "identity %s's operator named the plugin store's place %s again; it is opened", short(l.identity), dir)
+	} else {
+		logsink.Info("machine.decision", "identity %s's operator placed the plugin store at %s; %s is adopted from by digest and drained as nothing runs from it", short(l.identity), dir, old)
+	}
 	ss.poke()
 	return PlaceResult{Store: dir, Draining: dirs}, nil
 }

@@ -18,7 +18,18 @@ const maxPendingSteers = 8
 
 const maxSteerChars = 8_000
 
-var errSteerQueueFull = fmt.Errorf("the identity is holding %d unread messages already; wait for the next tool call", maxPendingSteers)
+type queueFull struct{ room <-chan struct{} }
+
+func (queueFull) Error() string {
+	return fmt.Sprintf("the identity is holding %d unread messages already; wait for the next tool call", maxPendingSteers)
+}
+
+func (a *App) steersTakenLocked() {
+	if a.steerRoom != nil {
+		close(a.steerRoom)
+		a.steerRoom = nil
+	}
+}
 
 func (a *App) admitOperatorChat(ctx context.Context, text string) (bool, error) {
 	return a.admit(roleOperator, text, nil, ctx)
@@ -100,8 +111,9 @@ func (a *App) arrivalCtx(e steerEntry) context.Context {
 }
 
 type steerEntry struct {
-	role      string
-	content   string
+	role    string
+	content string
+
 	recordCtx context.Context
 
 	voice *voiceBinding
@@ -116,6 +128,8 @@ type voiceBinding struct {
 
 	seq  int64
 	text string
+
+	said string
 
 	recognized  string
 	corrections int64
@@ -178,10 +192,13 @@ func (a *App) steer(role, text string, voice *voiceBinding, recordCtx context.Co
 		return false, dashboard.ErrBusyInternal
 	}
 	if len(a.steers) >= maxPendingSteers {
-		return false, errSteerQueueFull
+		if a.steerRoom == nil {
+			a.steerRoom = make(chan struct{})
+		}
+		return false, &queueFull{room: a.steerRoom}
 	}
 	a.steers = append(a.steers, steerEntry{role: role, content: text, voice: voice, recordCtx: recordCtx})
-	logsink.Info("steering.decision", "operator spoke mid-turn (%d char(s), %d pending)", len(text), len(a.steers))
+	logsink.Info("steering.decision", "the %s spoke mid-turn (%d char(s), %d pending)", role, len(text), len(a.steers))
 	return true, nil
 }
 
@@ -203,7 +220,7 @@ func (a *App) recordRoom(room []steerEntry) {
 		a.noteReplyOutcome(e.voice.session, "recorded (meeting), no reply")
 		e.voice.trace.end("recorded (meeting), no reply: a meeting began while the words waited for the turn")
 		e.voice.release("recorded as the room's: a meeting began while the words waited for the turn")
-		if err := a.recordRoomWords(a.arrivalCtx(e), strings.TrimPrefix(e.content, voiceMarker), e.voice); err != nil {
+		if err := a.recordRoomWords(a.arrivalCtx(e), e.role, e.content, e.voice); err != nil {
 			logsink.Warn("steering.error", "the room's words were not recorded: %v", err)
 		}
 	}
@@ -215,6 +232,7 @@ func (a *App) DrainSteering() []string {
 	a.turnMu.Lock()
 	queued := a.steers
 	a.steers = nil
+	a.steersTakenLocked()
 	said, room := splitRoom(queued, listen == listenMeeting)
 
 	for _, e := range said {

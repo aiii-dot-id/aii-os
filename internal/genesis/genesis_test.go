@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -346,5 +347,43 @@ func TestVerifySelfContained(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "ledger.jsonl"), raw, 0600)
 	if _, _, err := VerifySelfContained(filepath.Join(dir, "ledger.jsonl")); err == nil {
 		t.Fatal("tampered chain must not verify")
+	}
+}
+
+// THE DIGEST A BIRTH RECORDS IS THE ONE VERIFIED. The birth recorded the
+// Ring 0 bundle's payload_sha256 read from the bundle as received, after
+// verifying the bundle from its canonical bytes: a member spelled in
+// another case after the real one was the digest recorded. Read from the
+// canonical bytes, where "PAYLOAD_SHA256" sorts before the real member,
+// the digest recorded is the verified one, in either order.
+func TestABirthRecordsTheDigestItVerified(t *testing.T) {
+	root, bundle, _ := mintTestRing0(t)
+	var honest struct {
+		PayloadSHA256 string `json:"payload_sha256"`
+	}
+	if err := json.Unmarshal(bundle, &honest); err != nil || honest.PayloadSHA256 == "" {
+		t.Fatalf("the live bundle carries no payload_sha256: %v", err)
+	}
+	other := `"PAYLOAD_SHA256":"sha256:` + strings.Repeat("0", 64) + `"`
+	trimmed := bytes.TrimRight(bundle, " \n")
+	for _, before := range []bool{false, true} {
+		doc := append([]byte("{"+other+","), trimmed[1:]...)
+		if !before {
+			doc = append(append([]byte(nil), trimmed[:len(trimmed)-1]...), []byte(","+other+"}")...)
+		}
+		dir := t.TempDir()
+		res, err := Birth(&BirthConfig{Name: "Digest", Ring0Bundle: doc, Root: root.Env,
+			KeyPath: filepath.Join(dir, "identity.sec"), LedgerPath: filepath.Join(dir, "ledger.jsonl"), DBPath: filepath.Join(dir, "aii.db")})
+		if err != nil {
+			t.Fatalf("before=%v: birth: %v", before, err)
+		}
+		res.Ledger.Close()
+		var att BirthAttestationPayload
+		if err := json.Unmarshal(res.BirthEvent.Payload, &att); err != nil {
+			t.Fatal(err)
+		}
+		if att.Ring0BundlePayloadSHA != honest.PayloadSHA256 {
+			t.Fatalf("before=%v: the birth recorded %s, the bundle verified under %s", before, att.Ring0BundlePayloadSHA, honest.PayloadSHA256)
+		}
 	}
 }

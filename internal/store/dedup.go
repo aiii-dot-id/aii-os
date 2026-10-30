@@ -50,6 +50,8 @@ type LedgerEventRow struct {
 
 	Citation      ledger.Citation
 	CitationError error
+
+	External bool
 }
 
 func (s *Store) SearchLedgerMirror(q string, beforeSeq uint64, limit int) ([]LedgerEventRow, int, error) {
@@ -61,7 +63,8 @@ func (s *Store) SearchLedgerMirror(q string, beforeSeq uint64, limit int) ([]Led
 	}
 	self, identityErr := s.ownFingerprintLocked()
 	rows, err := s.db.Query(
-		`SELECT seq, type, ring, ts, substr(payload, 1, 200), prev, content
+		`SELECT seq, type, ring, ts, substr(payload, 1, 200), prev, content,
+		        COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.provenance') = 'external' END, 0)
 		 FROM ledger
 		 WHERE seq < ?
 		   AND (? = '' OR INSTR(LOWER(type), LOWER(?)) > 0 OR INSTR(LOWER(payload), LOWER(?)) > 0)
@@ -76,7 +79,7 @@ func (s *Store) SearchLedgerMirror(q string, beforeSeq uint64, limit int) ([]Led
 		var r LedgerEventRow
 		var ring sql.NullInt64
 		var prev, content string
-		if err := rows.Scan(&r.Seq, &r.Type, &ring, &r.Timestamp, &r.Payload, &prev, &content); err != nil {
+		if err := rows.Scan(&r.Seq, &r.Type, &ring, &r.Timestamp, &r.Payload, &prev, &content, &r.External); err != nil {
 			return nil, 0, err
 		}
 		r.Ring = -1

@@ -26,7 +26,8 @@ func TestTheCommitVerbSaysWhoseWordRing1Cites(t *testing.T) {
 	for _, said := range []string{
 		"relationship.upsert", "primary human operator", "you do not choose it",
 		"A word they typed stands", "identified its speaker as them", "enrolled voice",
-		"speaker UUID they named as their own", "another identity's", "no earlier word is cited",
+		"speaker UUID they named as their own", "confirmed in their page that the words are theirs",
+		"their page shows them the words to confirm", "another identity's", "no earlier word is cited",
 	} {
 		if !strings.Contains(OperatorWordRule, said) {
 			t.Errorf("the rule does not say %q: %q", said, OperatorWordRule)

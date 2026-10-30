@@ -27,6 +27,21 @@ type swapFetch struct {
 	fail  map[string]error
 	gate  map[string]chan struct{}
 	part  map[string]int
+	// pass lets the download rule's waits pass at once; else a wait passes
+	// only by a wake.
+	pass bool
+}
+
+// after is the identity's Acquirer's time seam.
+func (f *swapFetch) after(time.Duration) <-chan time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.pass {
+		return nil
+	}
+	c := make(chan time.Time, 1)
+	c <- time.Now()
+	return c
 }
 
 func newSwapFetch() *swapFetch {
@@ -186,7 +201,7 @@ func bootSwap(t *testing.T, roots packagefmt.TrustRoots, pkg string, models *tes
 	var f *pluginfacility.Facility
 	var fmu sync.Mutex
 	acq := models.acquirer(fetch.fetch, pluginhost.AcquirerConfig{
-		After: func(time.Duration) <-chan time.Time { return nil }, Logf: func(string, ...any) {},
+		After: fetch.after, Logf: func(string, ...any) {},
 		Spawn: func(fn func()) bool { wg.Add(1); go func() { defer wg.Done(); fn() }(); return true },
 		Ready: func(string) {
 			fmu.Lock()

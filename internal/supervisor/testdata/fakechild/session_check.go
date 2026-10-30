@@ -81,6 +81,9 @@ func (e *checkEngine) control(frame []byte) {
 	}
 	switch req.Params.Operation {
 	case "speech.session.open":
+		if e.knob == "mute" {
+			return
+		}
 		if e.knob == "refuse" {
 			refuse("a session is already open")
 			return

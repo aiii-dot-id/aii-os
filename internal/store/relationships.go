@@ -7,7 +7,56 @@ import (
 	"fmt"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
+	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
+
+const CharterDefaultMaxTokens = 2000
+
+func (s *Store) SetCharterMaxTokens(n int) {
+	if n <= 0 {
+		n = CharterDefaultMaxTokens
+	}
+	s.charterMaxTokens.Store(int64(n))
+}
+
+func (s *Store) CharterMaxTokens() int {
+	if n := s.charterMaxTokens.Load(); n > 0 {
+		return int(n)
+	}
+	return CharterDefaultMaxTokens
+}
+
+type CharterBudgetRefusal struct {
+	Tokens, Max int
+}
+
+func (e *CharterBudgetRefusal) Error() string {
+	return fmt.Sprintf("relationship.upsert refused: bounded charter: charter_text is approximately %d tokens; maximum is %d (prompt.charter_max_tokens). Your charter rides whole in every prompt. Shorten it, say the shorter charter to your operator, and record it once they have affirmed it; or ask them to raise the budget (Settings → Identity → Cognition). The charter you hold now, sent again unchanged, is admitted", e.Tokens, e.Max)
+}
+
+func (s *Store) admitCharterBudgetLocked(payload []byte) error {
+	p, err := readRelationshipPayload(payload)
+	if err != nil || p.CounterpartRole != "operator" || p.CharterText == "" || s.validateRelationshipLocked(invariantsOf(p)) != nil {
+		return nil
+	}
+	budget := s.CharterMaxTokens()
+	tokens := tokenestimate.EstimateWire(p.CharterText)
+	if tokens <= budget {
+		return nil
+	}
+	var recorded string
+	err = s.h().QueryRow(`
+		SELECT charter_text FROM relationships
+		WHERE counterpart_role = 'operator' AND superseded_by IS NULL
+		ORDER BY created_seq DESC LIMIT 1`).Scan(&recorded)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read the recorded charter: %w", err)
+	}
+	if err == nil && recorded == p.CharterText {
+		return nil
+	}
+	return &CharterBudgetRefusal{Tokens: tokens, Max: budget}
+}
 
 func (s *Store) CurrentOperatorRelationship() (*Relationship, error) {
 	s.mu.RLock()
@@ -34,6 +83,38 @@ func (s *Store) CurrentOperatorRelationship() (*Relationship, error) {
 	return &r, nil
 }
 
+func (s *Store) OtherCurrentRelationships() ([]Relationship, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`
+		SELECT id, counterpart_name, counterpart_role, trust_level, autonomy_level,
+		       relationship_type, charter_text, created_seq, updated_seq
+		FROM relationships
+		WHERE superseded_by IS NULL
+		  AND id IS NOT (SELECT id FROM relationships
+		                  WHERE counterpart_role = 'operator' AND superseded_by IS NULL
+		                  ORDER BY created_seq DESC LIMIT 1)
+		ORDER BY created_seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Relationship
+	for rows.Next() {
+		var r Relationship
+		var updatedSeq sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.CounterpartName, &r.CounterpartRole, &r.TrustLevel,
+			&r.AutonomyLevel, &r.RelationshipType, &r.CharterText, &r.CreatedSeq, &updatedSeq); err != nil {
+			return nil, err
+		}
+		if updatedSeq.Valid {
+			r.UpdatedSeq = uint64(updatedSeq.Int64)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) RelationshipAsHeld(id string) (rel *Relationship, ring1 bool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -41,13 +122,13 @@ func (s *Store) RelationshipAsHeld(id string) (rel *Relationship, ring1 bool, er
 	var updatedSeq sql.NullInt64
 	err = s.db.QueryRow(`
 		SELECT id, counterpart_name, counterpart_role, trust_level, autonomy_level,
-		       relationship_type, charter_text, created_seq, updated_seq,
+		       relationship_type, charter_text, created_seq, updated_seq, COALESCE(superseded_by, ''),
 		       id IS (SELECT id FROM relationships
 		               WHERE counterpart_role = 'operator' AND superseded_by IS NULL
 		               ORDER BY created_seq DESC LIMIT 1)
 		FROM relationships WHERE id = ?
 	`, id).Scan(&r.ID, &r.CounterpartName, &r.CounterpartRole, &r.TrustLevel,
-		&r.AutonomyLevel, &r.RelationshipType, &r.CharterText, &r.CreatedSeq, &updatedSeq, &ring1)
+		&r.AutonomyLevel, &r.RelationshipType, &r.CharterText, &r.CreatedSeq, &updatedSeq, &r.SupersededBy, &ring1)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -145,6 +226,45 @@ func (s *Store) operatorCharterLocked() (charter, name string, has bool, err err
 		return "", "", false, nil
 	}
 	return charter, name, err == nil, err
+}
+
+func (s *Store) AboutOperator() (AboutOperator, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.aboutOperatorLocked()
+}
+
+func (s *Store) aboutOperatorLocked() (AboutOperator, error) {
+	var about AboutOperator
+	err := s.db.QueryRow(`
+		SELECT id, COALESCE(counterpart_name, '') FROM relationships
+		WHERE counterpart_role = 'operator' AND superseded_by IS NULL
+		ORDER BY created_seq DESC LIMIT 1
+	`).Scan(&about.RelationshipID, &about.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AboutOperator{}, nil
+	}
+	if err != nil {
+		return AboutOperator{}, err
+	}
+	rows, err := s.db.Query(`
+		SELECT b.id, b.statement FROM beliefs b
+		WHERE b.ring = 3 AND b.archived = 0 AND b.superseded_by IS NULL
+		  AND EXISTS (SELECT 1 FROM edges e WHERE e.from_id = ? AND e.to_id = b.id
+		              AND e.edge_type = 'SHAPED_BY' AND e.archived = 0)
+		ORDER BY b.last_seq DESC, b.id`, about.RelationshipID)
+	if err != nil {
+		return AboutOperator{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var b OperatorBelief
+		if err := rows.Scan(&b.ID, &b.Statement); err != nil {
+			return AboutOperator{}, err
+		}
+		about.Beliefs = append(about.Beliefs, b)
+	}
+	return about, rows.Err()
 }
 
 func (s *Store) IdentityName() string {

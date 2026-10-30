@@ -14,7 +14,7 @@ func TestANameCarryingAiiOsIsTheIdentitys(t *testing.T) {
 	}
 	for _, c := range []struct{ home, file string }{
 		{filepath.Join(base, "plain"), "my-aii-os-notes.md"},
-		{filepath.Join(base, "aii-os-example"), "note.md"},
+		{filepath.Join(base, "aii-os-guest"), "note.md"},
 		{filepath.Join(base, "work", "aii-os"), filepath.Join("docs", "notes.md")},
 	} {
 		t.Run(filepath.Base(c.home)+"/"+c.file, func(t *testing.T) {

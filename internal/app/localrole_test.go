@@ -119,7 +119,7 @@ func TestLocalRoutingUsesProviderProbeCache(t *testing.T) {
 	// Expire the shared cache without a second routing-specific TTL.
 	a.providers.runtime.mu.Lock()
 	stale := a.providers.runtime.provStatus[entry.Name]
-	stale.checkedAt = time.Now().Add(-providerStatusTTL - time.Second)
+	stale.checkedAt = time.Now().Add(-defaultModelListCacheSeconds*time.Second - time.Second)
 	a.providers.runtime.provStatus[entry.Name] = stale
 	a.providers.runtime.mu.Unlock()
 	srv.Close()

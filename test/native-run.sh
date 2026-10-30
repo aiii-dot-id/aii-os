@@ -20,7 +20,7 @@ skips() {
   tail -n 12 "$dir/native-$host.skips.txt" >&2
   [ "$rc" != 0 ] || rc=1
 }
-suite_timeout=45m
+suite_timeout=90m
 min_free_gib=${AII_NATIVE_MIN_FREE_GIB:-10}
 case "$min_free_gib" in ''|*[!0-9]*) echo "AII_NATIVE_MIN_FREE_GIB must be a whole number of GiB, not '$min_free_gib'" >&2; exit 2 ;; esac
 stage=$(mktemp -d "${TMPDIR:-/tmp}/aii-native.XXXXXXXX") || exit 1

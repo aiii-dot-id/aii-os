@@ -161,6 +161,7 @@ func TestInteractionPhysicalFixture(t *testing.T) {
 		}
 		if r.URL.Path == "/" && r.URL.Query().Get("fixture_accept") == "1" {
 			rec := httptest.NewRecorder()
+			r.Header.Del("Accept-Encoding")
 			base.ServeHTTP(rec, r)
 			for k, v := range rec.Header() {
 				w.Header()[k] = v

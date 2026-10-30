@@ -342,6 +342,28 @@ func TestAProbeAloneRecordsNothing(t *testing.T) {
 	}
 }
 
+// THE PROBE SAYS WHICH MODEL ANSWERED when it is not the one chosen. The
+// probe is a newly chosen substrate's first call, so the client's line
+// (said once for each provider and name) is said there: the operator who
+// picked an alias reads the model the record will name.
+func TestAProbeSaysTheModelThatAnswered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		io.WriteString(w, `{"model":"probe-alias-2026-10-20","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}`)
+	}))
+	defer srv.Close()
+	logs := logsink.CaptureForTest(t)
+	a := probeApp(t)
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "probe-alias", Provider: "anthropic", Retries: -1}
+	if _, err := a.probeSubstrate(llm.New(&cc), cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	const line = `anthropic answered as model "probe-alias-2026-10-20" where "probe-alias" is configured — the record names "probe-alias-2026-10-20"`
+	if n := strings.Count(logs.String(), line); n != 1 {
+		t.Fatalf("the probe said the model that answered %d times, want once:\n%s", n, logs.String())
+	}
+}
+
 // A REFUSED DOOR COMMIT PUTS THE MEASUREMENT BACK too. The dashboard's Save
 // probes the candidate, which records it, and can still be refused at commit;
 // the substrate that runs keeps its measurement, as reload and changeProviders
@@ -448,16 +470,18 @@ func (a *App) substrateCapabilityRecord() substrateCapability {
 }
 
 // MAINTENANCE AND THE CATALOG'S ADDRESS APPLY LIVE, BY HAND EDIT AS BY THE
-// DOOR. The daily pass reads its three settings when it runs and the
-// catalog reads its address when it refreshes, so a reload that swaps them
-// in has applied them — it said they were saved for next boot.
+// DOOR. The daily pass reads its three settings when it runs, the restore
+// door its wait at each upload, and the catalog reads its address when it
+// refreshes, so a reload that swaps them in has applied them — it said they
+// were saved for next boot.
 func TestAReloadCountsMaintenanceAndTheCatalogAddressAsLive(t *testing.T) {
 	off := false
 	for name, edit := range map[string]func(*Config){
-		"maintenance.enabled":                   func(c *Config) { c.Maintenance.Enabled = &off },
-		"maintenance.backup_keep":               func(c *Config) { c.Maintenance.BackupKeep = 3 },
-		"maintenance.on_demand_spacing_seconds": func(c *Config) { c.Maintenance.OnDemandSpacingSeconds = 60 },
-		"plugins.catalog_url":                   func(c *Config) { c.Plugins.CatalogURL = "https://catalog.example/aiios-plugins.md" },
+		"maintenance.enabled":                     func(c *Config) { c.Maintenance.Enabled = &off },
+		"maintenance.backup_keep":                 func(c *Config) { c.Maintenance.BackupKeep = 3 },
+		"maintenance.on_demand_spacing_seconds":   func(c *Config) { c.Maintenance.OnDemandSpacingSeconds = 60 },
+		"maintenance.restore_upload_idle_seconds": func(c *Config) { c.Maintenance.RestoreUploadIdleSeconds = 600 },
+		"plugins.catalog_url":                     func(c *Config) { c.Plugins.CatalogURL = "https://catalog.example/aiios-plugins.md" },
 	} {
 		a, b := defaultConfig(), defaultConfig()
 		edit(b)

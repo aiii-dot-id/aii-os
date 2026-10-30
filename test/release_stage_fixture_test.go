@@ -216,7 +216,7 @@ func TestStagingUploadsExactlyTheCheckedPublicSet(t *testing.T) {
 		t.Fatal("the successful control did not create a draft")
 	}
 	guard, err := os.ReadFile(f.guardLog)
-	if err != nil || !strings.Contains(string(guard), "guard-release -repo "+f.root+" -remote-url https://github.com/example/aii-os.git -tag v9.9.9 -source-rev abc123 -target abc123") {
+	if err != nil || !strings.Contains(string(guard), "guard-release -repo "+resolvedRoot(t, f.root)+" -remote-url https://github.com/example/aii-os.git -tag v9.9.9 -source-rev abc123 -target abc123") {
 		t.Fatalf("the public source was not verified with its exact binding: %s (%v)", guard, err)
 	}
 	sort.Strings(uploaded)

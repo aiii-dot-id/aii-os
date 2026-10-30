@@ -22,7 +22,7 @@ func TestGrepWalkReachesAdmitsVerdictUnderAGrantedRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home := filepath.Join(base, "vega")
+	home := filepath.Join(base, "example")
 	data := filepath.Join(home, "data")
 	granted := filepath.Join(base, "grants", "aii-os")
 

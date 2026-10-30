@@ -97,7 +97,7 @@ func materialAnswer(res machine.NeedResult) error {
 	case machine.NeedWaiting:
 		return &pluginhost.MaterialWait{Cause: res.Cause, Remedy: res.Remedy, After: max(after, time.Second)}
 	case machine.NeedEnded:
-		return &pluginhost.MaterialEnded{Cause: res.Cause, Remedy: res.Remedy}
+		return &pluginhost.MaterialEnded{Cause: res.Cause, Remedy: res.Remedy, Network: res.WaitsOnNetwork}
 	case machine.NeedRefused:
 		return &pluginhost.MaterialRefused{Cause: res.Cause, Remedy: res.Remedy}
 	}

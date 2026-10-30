@@ -1,0 +1,43 @@
+{
+  "task": "safe-nothing-recorded-said",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "audit passed",
+        "steps": [
+          {
+            "text": "I am in safe mode: nothing I do now is recorded.\nRECORDED: no"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "SAFE: a refused write to the record is reported as recorded",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "audit passed",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "note",
+                "args": {
+                  "content": "The audit passed."
+                }
+              }
+            ]
+          },
+          {
+            "text": "Recorded.\nRECORDED: yes"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"regexp"
 	"time"
+	"unicode/utf8"
 )
 
 type Inbound struct {
@@ -18,6 +22,9 @@ func (s *Store) RecordInbound(id, channel, address, body string) (bool, error) {
 	if id == "" || channel == "" || address == "" {
 		return false, fmt.Errorf("an arrival needs an id, a channel and a sender")
 	}
+	if !arrivalIDForm.MatchString(id) {
+		return false, &ArrivalIDRefusal{ID: id}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.w().Exec(
@@ -29,6 +36,16 @@ func (s *Store) RecordInbound(id, channel, address, body string) (bool, error) {
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+const MaxArrivalIDChars = 192
+
+var arrivalIDForm = regexp.MustCompile(`^[A-Za-z0-9._:@+=/-]{1,192}$`)
+
+type ArrivalIDRefusal struct{ ID string }
+
+func (e *ArrivalIDRefusal) Error() string {
+	return fmt.Sprintf("inbound.id_form: an arrival's id is at most %d characters of letters, digits and . _ : @ + = / -; this one (%d bytes) is not", MaxArrivalIDChars, len(e.ID))
 }
 
 func (s *Store) InboundSince(sinceMs int64) ([]Inbound, error) {
@@ -114,4 +131,49 @@ func (s *Store) ArrivalsFrom(ctx context.Context, sinceMs int64, previewChars in
 		fn(m, chars)
 	}
 	return rows.Err()
+}
+
+func (s *Store) InboundByID(id string) (m Inbound, ok bool, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	err = scanInbound(s.db.QueryRow(`SELECT id, channel, address, body, received_ms FROM inbound WHERE id = ?`, id), &m)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Inbound{}, false, nil
+	}
+	return m, err == nil, err
+}
+
+type ListedArrival struct {
+	Seq uint64
+	Inbound
+}
+
+func (s *Store) ArrivalsBefore(beforeSeq uint64, limit, previewChars int) ([]ListedArrival, error) {
+	if previewChars < 0 || previewChars > int(^uint(0)>>1)/utf8.UTFMax {
+		return nil, fmt.Errorf("arrival preview character bound is out of range")
+	}
+	if beforeSeq == 0 {
+		beforeSeq = 1 << 62
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT rowid, id, channel, address, substr(CAST(body AS BLOB), 1, ?), received_ms FROM inbound
+		 WHERE rowid < ? ORDER BY rowid DESC LIMIT ?`, previewChars*utf8.UTFMax, int64(beforeSeq), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ListedArrival
+	for rows.Next() {
+		var a ListedArrival
+		if err := rows.Scan(&a.Seq, &a.ID, &a.Channel, &a.Address, &a.Body, &a.ReceivedMs); err != nil {
+			return nil, err
+		}
+		if runes := []rune(a.Body); len(runes) > previewChars {
+			a.Body = string(runes[:previewChars])
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

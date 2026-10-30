@@ -37,8 +37,9 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("the dashboard's page never loaded in the browser: %q %v", at, err)
 	}
 	// The person signs in as the page's own form does: the token to the
-	// login route, which writes the cookie; then the page loads again.
-	signIn, err := page.evalRetry(`fetch('/auth/token', { method: 'POST', credentials: 'same-origin', body: '`+old+`' }).then(r => String(r.status))`, true, 10*time.Second, 5)
+	// login route, which writes the cookie and answers the page key the page
+	// keeps (pagekey.js); then the page loads again.
+	signIn, err := page.evalRetry(`import('/pagekey.js').then(m => m.signIn('`+old+`')).then(r => String(r.status))`, true, 10*time.Second, 5)
 	if err != nil || signIn != "204" {
 		t.Fatalf("signing the browser in: %q %v", signIn, err)
 	}
@@ -79,7 +80,7 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 	}
 	sum := sha256.Sum256([]byte(old))
 	req, _ := http.NewRequest(http.MethodGet, origin+"/auth/token", nil)
-	req.Header.Set("Cookie", "aii_token_"+a.dashboard.BoundPort()+"="+hex.EncodeToString(sum[:]))
+	req.Header.Set("Cookie", "__Host-aii_token_"+a.dashboard.BoundPort()+"="+hex.EncodeToString(sum[:]))
 	res, err := tlsClient().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -89,15 +90,14 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("the old cookie still signs in after the rotation: %d", res.StatusCode)
 	}
 
-	if _, err := page.eval(`document.querySelector('[data-token-reveal]').click(); 'eye'`, false, 10*time.Second); err != nil {
-		t.Fatalf("eye: %v", err)
-	}
+	// The page shows neither token: it says where the token is read.
 	shown, err := page.evalRetry(awaitJS(`
-    const f = document.getElementById('cfg-dtoken');
-    last = 'field: ' + (f ? f.value.length + ' chars' : 'absent');
-    return f && f.value ? f.value : null;
+    const where = document.querySelector('[data-token-where]');
+    last = 'where: ' + !!where;
+    const html = document.documentElement.outerHTML;
+    return where ? (html.includes('`+rotated+`') || html.includes('`+old+`') ? 'SHOWN' : 'none') : null;
   `, 10000), true, 20*time.Second, 3)
-	if err != nil || shown != rotated {
-		t.Fatalf("the eye did not show the new token after the rotation (%d chars; %v)", len(shown), err)
+	if err != nil || shown != "none" {
+		t.Fatalf("after the rotation the page does not say where the token is read, or shows a token (%q; %v)", shown, err)
 	}
 }

@@ -50,10 +50,10 @@ func (o *standInOp) Execute(ctx context.Context, args map[string]any) (tools.Res
 // package that has been handed a memory could try to answer with text.
 func TestASourcesReplyIsOneVectorOfTheSignedLengthOrRefusedWhole(t *testing.T) {
 	e, _ := unitSource(t)
-	if got, err := e.ReadReply(`{"vector":[0.6,0.8]}`); err != nil || len(got) != 2 || got[0] != float32(0.6) || got[1] != float32(0.8) {
-		t.Fatalf("a vector of the signed length was not read: %v %v", got, err)
+	if got, err := e.ReadReply(`{"vector":[0.6,0.8]}`, 40); err != nil || len(got.Vector) != 2 || got.Vector[0] != float32(0.6) || got.Vector[1] != float32(0.8) || got.Read != 0 {
+		t.Fatalf("a vector of the signed length was not read, or read as saying how much of the text it read: %v %v", got, err)
 	}
-	if got, err := e.ReadReply(` { "vector" : [ -1e-3 , 2 ] } `); err != nil || len(got) != 2 {
+	if got, err := e.ReadReply(` { "vector" : [ -1e-3 , 2 ] } `, 40); err != nil || len(got.Vector) != 2 {
 		t.Fatalf("white space and a negative number are a vector all the same: %v %v", got, err)
 	}
 	const marker = "DISREGARD-WHAT-CAME-BEFORE"
@@ -79,11 +79,13 @@ func TestASourcesReplyIsOneVectorOfTheSignedLengthOrRefusedWhole(t *testing.T) {
 		{"a number no number can hold", `{"vector":[1e999,0.8]}`, "one member"},
 		{"all zeros", `{"vector":[0,0]}`, "all zeros"},
 		{"zeros too small to hold", `{"vector":[1e-60,-1e-60]}`, "all zeros"},
+		// Saying how much it read is @2's; a source of @1 has no such member.
+		{"how much was read, at @1", `{"vector":[0.6,0.8],"read":12}`, "one member"},
 	}
 	for _, c := range refused {
-		got, err := e.ReadReply(c.reply)
+		got, err := e.ReadReply(c.reply, 40)
 		var typed *EmbedReplyError
-		if got != nil || !errors.As(err, &typed) || typed.PluginID != e.PluginID {
+		if got.Vector != nil || !errors.As(err, &typed) || typed.PluginID != e.PluginID {
 			t.Errorf("%s: want the typed refusal and no vector, got %v %v", c.name, got, err)
 			continue
 		}
@@ -93,6 +95,61 @@ func TestASourcesReplyIsOneVectorOfTheSignedLengthOrRefusedWhole(t *testing.T) {
 		if strings.Contains(err.Error(), marker) {
 			t.Errorf("%s: the refusal repeats the reply's own text: %q", c.name, err)
 		}
+	}
+}
+
+func TestASourceOfVersionTwoSaysHowMuchOfTheTextItRead(t *testing.T) {
+	e, _ := unitSource(t)
+	e.Version = 2
+	for reply, read := range map[string]int{
+		`{"vector":[0.6,0.8],"read":12}`:     12,
+		`{"read":40,"vector":[0.6,0.8]}`:     40,
+		`{"vector":[0.6,0.8],"read":1}`:      1,
+		` { "vector":[0.6,0.8] , "read":7 }`: 7,
+	} {
+		got, err := e.ReadReply(reply, 40)
+		if err != nil || got.Read != read || len(got.Vector) != 2 {
+			t.Errorf("%s: want a vector read of %d characters, got %+v %v", reply, read, got, err)
+		}
+	}
+	const marker = "DISREGARD-WHAT-CAME-BEFORE"
+	for _, c := range []struct{ name, reply, want string }{
+		{"no word of how much", `{"vector":[0.6,0.8]}`, `does not say how much of the text it read ("read")`},
+		{"none read", `{"vector":[0.6,0.8],"read":0}`, "says 0 characters were read, of a text of 40"},
+		{"fewer than none", `{"vector":[0.6,0.8],"read":-3}`, "says -3 characters were read"},
+		{"more than the text", `{"vector":[0.6,0.8],"read":41}`, "says 41 characters were read, of a text of 40"},
+		{"part of a character", `{"vector":[0.6,0.8],"read":12.5}`, `"read", a whole number`},
+		{"a word for the number", `{"vector":[0.6,0.8],"read":"` + marker + `"}`, `"read", a whole number`},
+		{"said twice", `{"vector":[0.6,0.8],"read":12,"read":13}`, `"read", a whole number`},
+		{"a third member", `{"vector":[0.6,0.8],"read":12,"note":"` + marker + `"}`, `"read", a whole number`},
+		{"how much, and no vector", `{"read":12}`, "holds 0 numbers"},
+	} {
+		got, err := e.ReadReply(c.reply, 40)
+		var typed *EmbedReplyError
+		if got.Vector != nil || !errors.As(err, &typed) {
+			t.Errorf("%s: want the typed refusal and no vector, got %+v %v", c.name, got, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), marker) {
+			t.Errorf("%s: refused as %q, want it to say %q and nothing of the reply", c.name, err, c.want)
+		}
+	}
+	// Through the call, the text's length is its characters, not its
+	// bytes: four characters of Japanese are twelve bytes.
+	ap := &ActivePlugin{ID: e.PluginID, Embeddings: e}
+	reg := newRegistry(t)
+	read := 4
+	if err := reg.RegisterHostOp(&standInOp{name: e.Embed, owner: ap, run: func(context.Context, map[string]any) (tools.Result, error) {
+		return tools.Result{Output: fmt.Sprintf(`{"vector":[0.6,0.8],"read":%d}`, read)}, nil
+	}}, ap.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.Ask(context.Background(), reg, ap, EmbedKindCue, "港の予定"); err != nil || got.Read != 4 {
+		t.Fatalf("a source that read all four characters of a cue: %+v %v", got, err)
+	}
+	read = 5
+	if got, err := e.Ask(context.Background(), reg, ap, EmbedKindCue, "港の予定"); err == nil || got.Vector != nil {
+		t.Fatalf("five characters read of a text of four must be refused: %+v %v", got, err)
 	}
 }
 
@@ -175,7 +232,7 @@ func TestACallThatFailsSaysTheHostsSentenceAndNothingThePackageSaid(t *testing.T
 		got, err := e.Ask(ctx, reg, ap, EmbedKindCue, "where is the harbor")
 		cancel()
 		var typed *EmbedCallError
-		if got != nil || !errors.As(err, &typed) || typed.Kind != c.kind {
+		if got.Vector != nil || !errors.As(err, &typed) || typed.Kind != c.kind {
 			t.Errorf("%s: want the typed failure %s and no vector, got %v %v", c.name, c.kind, got, err)
 			continue
 		}
@@ -206,11 +263,11 @@ func TestTheCallReachesOnlyTheActivationItWasMadeFor(t *testing.T) {
 	}
 	got, err := e.Ask(context.Background(), reg, ap, EmbedKindCue, "where is the harbor")
 	var typed *EmbedCallError
-	if got != nil || !errors.As(err, &typed) || typed.Kind != EmbedReplaced || len(seen) != 0 {
+	if got.Vector != nil || !errors.As(err, &typed) || typed.Kind != EmbedReplaced || len(seen) != 0 {
 		t.Fatalf("a call for a replaced activation must reach nothing: %v %v, the successor saw %d calls", got, err, len(seen))
 	}
 	got, err = e.Ask(context.Background(), reg, successor, EmbedKindMemory, "the ship reached the harbor at dusk")
-	if err != nil || len(got) != 2 || len(seen) != 1 {
+	if err != nil || len(got.Vector) != 2 || len(seen) != 1 {
 		t.Fatalf("the call for the activation that holds the operation: %v %v", got, err)
 	}
 	if len(seen[0]) != 2 || seen[0]["kind"] != EmbedKindMemory || seen[0]["text"] != "the ship reached the harbor at dusk" {

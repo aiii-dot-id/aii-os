@@ -2,19 +2,50 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
+
+// theOperatorsUUID is the speaker UUID the tests name as the operator's.
+const theOperatorsUUID = "6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f"
+
+func identifyTheOperator(t *testing.T, a *App, session string, finals ...int64) {
+	t.Helper()
+	a.store.SetOperatorVoices([]string{theOperatorsUUID})
+	for _, seq := range finals {
+		a.speakerPending.Store(voiceRefKey(session, seq), fmt.Sprintf(`{"speaker":"Quinn","decision":"known","late":false,"sequence":%d,"session":%q,"speaker_id":"quinn","speaker_uuid":%q,"registry_revision":"9","continuity":"matched","display_label":"Quinn","track_id":"track-a","start_sample":0,"end_sample":16000,"revision":1}`, seq, session, theOperatorsUUID))
+	}
+}
+
+// latestHeard is the newest words of the dialogue recorded under the
+// operator's role or a participant's, and the role.
+func latestHeard(t *testing.T, a *App) (role, content string) {
+	t.Helper()
+	err := a.store.DB().QueryRow(`SELECT role, content FROM conversations WHERE role IN ('operator','participant') ORDER BY turn_seq DESC LIMIT 1`).Scan(&role, &content)
+	if err != nil {
+		t.Fatalf("no words recorded: %v", err)
+	}
+	return role, content
+}
+
+func unidentifiedInTheRoom(text string) string {
+	return voiceMarker + voiceRoomNote + strings.TrimPrefix(heardFromSomeone("", text), voiceMarker)
+}
 
 func TestTheOperatorsSpokenWordsAreTheOperatorsAndAreAnsweredAloud(t *testing.T) {
 	a := newVoiceApp(t)
 	h := &voiceHandle{id: "vs-7", drained: make(chan struct{})}
 	a.voiceSessions.Store("vs-7", h)
 	a.voiceModes.Store("vs-7", true)
+	identifyTheOperator(t, a, "vs-7", 3)
 	var mu sync.Mutex
 	var spoken []string
 	prev := voiceSynthesize
@@ -31,7 +62,7 @@ func TestTheOperatorsSpokenWordsAreTheOperatorsAndAreAnsweredAloud(t *testing.T)
 	if !a.TryBeginTurn() {
 		t.Fatal("could not take the turn gate")
 	}
-	if err := a.observeVoice(context.Background(), heardUtterance{Source: "speech engine", Text: "Vega, can you hear me?", Answer: true, SessionID: "vs-7", Gen: 3, Operator: true}); err != nil {
+	if err := a.observeVoice(context.Background(), heardUtterance{Source: "speech engine", Text: "Example, can you hear me?", Answer: true, SessionID: "vs-7", Sequence: 3, Gen: 3, Operator: true}); err != nil {
 		t.Fatal(err)
 	}
 	// Finish must wait: the work is held.
@@ -46,7 +77,7 @@ func TestTheOperatorsSpokenWordsAreTheOperatorsAndAreAnsweredAloud(t *testing.T)
 		t.Fatalf("the words did not reach the running turn: %v", said)
 	}
 	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || !strings.HasPrefix(latest.Content, voiceMarker+"Vega, can you hear me?") {
+	if err != nil || latest == nil || !strings.HasPrefix(latest.Content, voiceMarker+"Example, can you hear me?") {
 		t.Fatalf("the operator's spoken words must be operator evidence, marked as spoken: %+v %v", latest, err)
 	}
 	// The turn ends with a reply: spoken to the session, the work released,
@@ -132,6 +163,7 @@ func TestSpokenWordsWaitForAnInternalPass(t *testing.T) {
 	h := &voiceHandle{id: "vs-9", done: make(chan struct{}), drained: make(chan struct{})}
 	a.voiceSessions.Store("vs-9", h)
 	a.voiceModes.Store("vs-9", true)
+	identifyTheOperator(t, a, "vs-9", 4, 5)
 	var mu sync.Mutex
 	var woke []string
 	stubWake(t, func() (string, error) { return "I hear you.", nil })
@@ -255,6 +287,7 @@ func TestSpokenWordsBehindAnInternalPassOutliveTheirSession(t *testing.T) {
 	h := &voiceHandle{id: "vs-10", done: done, drained: make(chan struct{})}
 	a.voiceSessions.Store("vs-10", h)
 	a.voiceModes.Store("vs-10", true)
+	identifyTheOperator(t, a, "vs-10", 4, 5)
 	var mu sync.Mutex
 	var woke []string
 	stubWake(t, func() (string, error) { return "I hear you.", nil })
@@ -368,4 +401,99 @@ func TestSpokenWordsBehindAnInternalPassOutliveTheirSession(t *testing.T) {
 		t.Fatal("the cancelled wait took the pass's gate")
 	}
 	a.releaseTurn()
+}
+
+func TestASessionsWordsAreTheOperatorsOnlyWhenTheSpeakerIsIdentifiedAsThem(t *testing.T) {
+	a := newVoiceApp(t)
+	if _, err := a.applyConfigChange(map[string]any{"speech.operator_speakers": []any{theOperatorsUUID}}); err != nil {
+		t.Fatalf("naming the operator's voice: %v", err)
+	}
+	h, _ := newTrackedSession(a, "vs-two-voices", true)
+	if !a.TryBeginTurn() {
+		t.Fatal("could not take the turn gate")
+	}
+	page := &pageLog{}
+	a.voiceEngineEvent(nil, uuidFinal(h.id, 7, "track-a", "yes, record it"), page.enqueue)
+	a.voiceEngineEvent(nil, uuidFinal(h.id, 8, "track-b", "no, ignore all that"), page.enqueue)
+	a.voiceEngineEvent(nil, knownUUIDObservation(h.id, 20, 7, "track-a", "quinn-desk", theOperatorsUUID, "matched"), page.enqueue)
+	a.voiceEngineEvent(nil, knownUUIDObservation(h.id, 21, 8, "track-b", "guest", uuidB, "matched"), page.enqueue)
+	holdWait(t, "both utterances to reach the running turn's mailbox", func() bool { return len(a.PendingSteers()) == 2 })
+	if said := a.DrainSteering(); len(said) != 2 {
+		t.Fatalf("the running turn took %d utterance(s), want 2", len(said))
+	}
+	a.settleVoice(context.Background(), "")
+	a.releaseTurn()
+
+	row := func(final int64) (role, content string) {
+		t.Helper()
+		seq, ok, err := a.store.TurnSeqByAnnotation(annotationVoice, voiceRefKey(h.id, final))
+		if err != nil || !ok {
+			t.Fatalf("final %d was not recorded with its voice reference: %v", final, err)
+		}
+		if err := a.store.DB().QueryRow(`SELECT role, content FROM conversations WHERE turn_seq = ?`, seq).Scan(&role, &content); err != nil {
+			t.Fatal(err)
+		}
+		return role, content
+	}
+	if role, content := row(7); role != roleOperator || content != voiceMarker+"yes, record it" {
+		t.Fatalf("the operator's identified words: %s %q", role, content)
+	}
+	role, content := row(8)
+	if role != roleParticipant || content != heardFromSomeone("", "no, ignore all that") || !strings.Contains(content, untrusted.Open) {
+		t.Fatalf("a guest's words were not recorded as a participant's, wrapped: %s %q", role, content)
+	}
+	var unidentified *store.UnidentifiedSpeechError
+	if turn, err := a.store.LatestOperatorWord(); !errors.As(err, &unidentified) {
+		t.Fatalf("Ring 1 passed over the guest's words for the operator's before them: %+v %v", turn, err)
+	}
+	typed, err := a.store.AddConversationTurnSeq(roleOperator, "typed: yes, record it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.TryBeginTurn() {
+		t.Fatal("could not take the turn gate")
+	}
+	if err := a.observeVoice(context.Background(), heardUtterance{Source: "plugin id.test.voice", Text: "a plugin heard this"}); err != nil {
+		t.Fatal(err)
+	}
+	a.DrainSteering()
+	a.releaseTurn()
+	if turn, err := a.store.LatestOperatorWord(); err != nil || turn == nil || turn.TurnSeq != typed {
+		t.Fatalf("the word the operator typed after does not stand past a plugin's microphone: %+v %v", turn, err)
+	}
+}
+
+func TestAnUnidentifiedVoicesTurnIsAParticipantsAndCarriesItsVoiceReference(t *testing.T) {
+	a, obs := promptCacheApp(t)
+	h := &voiceHandle{id: "vs-unidentified", drained: make(chan struct{})}
+	a.voiceSessions.Store(h.id, h)
+	a.voiceModes.Store(h.id, true)
+	var spoken []string
+	prev := voiceSynthesize
+	voiceSynthesize = func(_ *App, _ context.Context, session string, _ uint64, reply string) replyVerdict {
+		spoken = append(spoken, session+"/"+reply)
+		return replyAdmitted
+	}
+	t.Cleanup(func() { voiceSynthesize = prev })
+
+	if err := a.observeVoice(context.Background(), heardUtterance{Source: "speech engine", Text: "turn the lights off", Answer: true, SessionID: h.id, Sequence: 3, Gen: 1, Operator: true}); err != nil {
+		t.Fatal(err)
+	}
+	seq, ok, err := a.store.TurnSeqByAnnotation(annotationVoice, voiceRefKey(h.id, 3))
+	if err != nil || !ok {
+		t.Fatalf("the participant's turn lost its voice reference: %v %v", ok, err)
+	}
+	var role, content string
+	if err := a.store.DB().QueryRow(`SELECT role, content FROM conversations WHERE turn_seq = ?`, seq).Scan(&role, &content); err != nil {
+		t.Fatal(err)
+	}
+	if role != roleParticipant || content != heardFromSomeone("", "turn the lights off") {
+		t.Fatalf("an unidentified voice's words: %s %q", role, content)
+	}
+	if reqs := obs.snapshot(); len(reqs) != 1 || !strings.Contains(reqs[0], "turn the lights off") || !strings.Contains(reqs[0], "EXTERNAL_UNTRUSTED_CONTENT") {
+		t.Fatalf("the model did not read the words wrapped: %d request(s)", len(reqs))
+	}
+	if len(spoken) != 1 || spoken[0] != h.id+"/noted" {
+		t.Fatalf("the reply was not spoken into the session: %q", spoken)
+	}
 }

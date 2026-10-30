@@ -152,6 +152,8 @@ func (a *App) armMemoryBackfill() error {
 type memoryState struct {
 	lastBackfill atomic.Pointer[backfillPass]
 
+	workRate atomic.Pointer[workRate]
+
 	checks sync.Map
 
 	gates sync.Map
@@ -174,6 +176,7 @@ func (a *App) rememberBackfill(rep memory.BackfillReport, err error) {
 	if err == nil && rep.Unavailable != "" {
 		return
 	}
+	a.noteWorkRate(rep)
 	pass := &backfillPass{at: time.Now().UTC(), embedded: rep.Embedded}
 	switch {
 	case err != nil:
@@ -185,6 +188,34 @@ func (a *App) rememberBackfill(rep memory.BackfillReport, err error) {
 	a.memory.lastBackfill.Store(pass)
 }
 
+func (a *App) meaningChanges(ctx context.Context, f *memory.Facility, stored string) ([]dashboard.MeaningChange, error) {
+	type option struct {
+		choice, sentTo string
+		source         memory.Embedder
+	}
+	var options []option
+	if entry := a.currentProvider(); entry.EmbeddingsModel != "" && stored != meaningChoiceProvider {
+		options = append(options, option{choice: meaningChoiceProvider, sentTo: entry.Name, source: memoryEmbedder{a}})
+	}
+	for _, ap := range a.embeddingsPlugins() {
+		if choice := meaningChoicePlugin + ap.ID; choice != stored {
+			options = append(options, option{choice: choice, source: a.pluginSourceOf(ap)})
+		}
+	}
+	var out []dashboard.MeaningChange
+	for _, o := range options {
+		change, unavailable, err := f.ChangeTo(ctx, o.source)
+		if err != nil {
+			return nil, err
+		}
+		if unavailable != "" {
+			continue
+		}
+		out = append(out, dashboard.MeaningChange{Choice: o.choice, Dropped: change.Dropped, ToEmbed: change.ToEmbed, SentTo: o.sentTo})
+	}
+	return out, nil
+}
+
 func (a *App) meaningState(ctx context.Context, f *memory.Facility, pick meaningPick) (*dashboard.MeaningState, error) {
 	state := &dashboard.MeaningState{
 		Choice: a.configSnapshot().Memory.MeaningSource, Plugin: pick.plugin, Question: pick.question,
@@ -192,6 +223,10 @@ func (a *App) meaningState(ctx context.Context, f *memory.Facility, pick meaning
 	}
 	for _, ap := range a.embeddingsPlugins() {
 		state.Plugins = append(state.Plugins, ap.ID)
+	}
+	var err error
+	if state.Changes, err = a.meaningChanges(ctx, f, state.Choice); err != nil {
+		return nil, err
 	}
 	if pick.off != nil {
 		state.Unavailable, state.Why = pick.off.Detail, pick.off.Kind
@@ -210,9 +245,14 @@ func (a *App) meaningState(ctx context.Context, f *memory.Facility, pick meaning
 	if y, yields := pick.source.(memory.Yielder); yields {
 		state.Waiting = !y.MayContinue()
 	}
+	if t, ok := pick.source.(memory.Teller); ok {
+		state.Tells = t.Tells()
+	}
+	state.HandedChars = memory.MaxEmbedChars
 	state.SetAside, state.SetAsideWhy = f.SetAside()
 	for _, c := range cov {
-		state.Coverage = append(state.Coverage, dashboard.MeaningCoverage{Store: c.Store, Rows: c.Rows, Embedded: c.Embedded, Beyond: c.Beyond, BeyondEmbedded: c.BeyondEmbedded})
+		state.Coverage = append(state.Coverage, dashboard.MeaningCoverage{Store: c.Store, Rows: c.Rows, Embedded: c.Embedded, Beyond: c.Beyond, BeyondEmbedded: c.BeyondEmbedded,
+			Partial: c.Partial, Untold: c.Untold})
 	}
 	if pass := a.memory.lastBackfill.Load(); pass != nil {
 		state.LastPass = &dashboard.MeaningPass{At: pass.at.Format(time.RFC3339), Embedded: pass.embedded, Stopped: pass.stopped}

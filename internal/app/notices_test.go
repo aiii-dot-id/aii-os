@@ -140,6 +140,23 @@ func openPage(t *testing.T, srv *dashboard.Server) *websocket.Conn {
 	return conn
 }
 
+// openReadingPage completes the connect-time outbox pass before a test holds
+// the pump. PageOpen alone observes registration, which precedes that pass;
+// holding the connect handler there would also prevent it from reading Close.
+func openReadingPage(t *testing.T, srv *dashboard.Server) *websocket.Conn {
+	t.Helper()
+	page := openPage(t, srv)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := wsjsonWrite(ctx, page, map[string]any{"type": "probe", "request_id": "notice-ready"}); err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, page, func(m *dashboard.ServerMessage) bool {
+		return m.Type == "probe" && m.RequestID == "notice-ready"
+	})
+	return page
+}
+
 // poked drains the walk's signal, reporting whether it was given.
 func poked(a *App) bool {
 	select {
@@ -466,7 +483,7 @@ func TestANoticeWrittenToAPageThatLeftBeforeItsMarkIsNotSentAgain(t *testing.T) 
 	hold, carried, letGo := stopAt("carried")
 	defer letGo()
 	srv := heldPageServer(t, a, hold)
-	page := openPage(t, srv)
+	page := openReadingPage(t, srv)
 	notice(t, a, "shown")
 	if frames := outboxFrames(t, page, 1); !framesHold(frames, "shown") {
 		t.Fatalf("the page was not written the notice: %v", frames)
@@ -500,7 +517,7 @@ func TestAWriteThatDidNotLandLeavesTheNoticeToTheNextCarrier(t *testing.T) {
 	go func() { defer close(looped); a.runOutbox(ctx) }()
 	defer func() { cancel(); <-looped }()
 
-	page := openPage(t, srv)
+	page := openReadingPage(t, srv)
 	notice(t, a, "unseen")
 	reached(t, taken, "the notice in hand")
 	page.Close(websocket.StatusNormalClosure, "")

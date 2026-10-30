@@ -40,10 +40,10 @@ func (g *Gate) SetMaxTokens(maxTokens int) {
 func (g *Gate) SetWindowKnown(known bool) { g.noWindow.Store(!known) }
 
 func (g *Gate) SystemWithIdentitySeam(callerContent, ring1, ring2 string) (string, int) {
-	return g.SystemWithin(callerContent, ring1, ring2, 0)
+	return g.SystemWithin(callerContent, ring1, "", ring2, 0)
 }
 
-func (g *Gate) SystemWithin(callerContent, ring1, ring2 string, reserve int) (string, int) {
+func (g *Gate) SystemWithin(callerContent, ring1, operator, ring2 string, reserve int) (string, int) {
 	var sections []Section
 	appendSection := func(source, name, text string, elastic bool) {
 		if strings.TrimSpace(text) != "" {
@@ -53,6 +53,9 @@ func (g *Gate) SystemWithin(callerContent, ring1, ring2 string, reserve int) (st
 	appendSection("ring0", "Ring 0", g.rings.Ring0(), false)
 	appendSection("ring5", "Ring 5", g.rings.Ring5(), false)
 	appendSection("ring1", "Ring 1", ring1, false)
+	if strings.TrimSpace(operator) != "" {
+		sections = append(sections, Section{Name: "Who You Work With", Content: operator, Source: "operator", Elastic: true, Whole: true})
+	}
 
 	appendSection("ring2", "Ring 2", ring2, true)
 	sections = append(sections, Section{Content: callerContent, Source: "caller"})

@@ -30,6 +30,9 @@ import (
 )
 
 func TestABootRefusedByItsRing5ServersCertificateSaysWhatWasSeen(t *testing.T) {
+	prev := ring5RetryFirst
+	t.Cleanup(func() { ring5RetryFirst = prev })
+	ring5RetryFirst = 50 * time.Millisecond
 	now := time.Now()
 	srv, _, handshakes := tlsfaulttest.Server(t, []string{"mail.example"}, now.Add(-90*24*time.Hour), now.Add(-3*time.Hour))
 	dir := t.TempDir()
@@ -47,6 +50,12 @@ func TestABootRefusedByItsRing5ServersCertificateSaysWhatWasSeen(t *testing.T) {
 	if !safe {
 		t.Fatal("the boot went on without Ring 5")
 	}
+	if trigger, _, _ := a.safeCause(); trigger != safeRing5Refused {
+		t.Fatalf("the trigger is %d, not a refused certificate's", trigger)
+	}
+	if c, err := a.continuityState(); err != nil || c.Mode != "safe" || c.SafeReason != reason || c.DegradedWhy != "" {
+		t.Fatalf("A REFUSED CERTIFICATE IS NOT SAID AS SAFE: mode=%q safe=%q why=%q err=%v", c.Mode, c.SafeReason, c.DegradedWhy, err)
+	}
 	for _, want := range []string{
 		"security_posture.verify_fail: required Ring 5 unavailable or unverifiable",
 		"the server 127.0.0.1 presented a certificate that",
@@ -58,25 +67,26 @@ func TestABootRefusedByItsRing5ServersCertificateSaysWhatWasSeen(t *testing.T) {
 	}
 	// The route is the one for a refused certificate, and only that: the
 	// network's route would send the operator to mend what is whole.
-	if !strings.HasPrefix(reason, ring5What+": ") || !strings.HasSuffix(reason, ". "+safePostures[safeRing5Refused].route+".") || strings.Contains(reason, "reachable Ring 5 server") || strings.Contains(reason, "network path") {
+	if !strings.HasPrefix(reason, ring5What+": ") || !strings.HasSuffix(reason, ". "+safePostures[safeRing5Refused].route+".") || strings.Contains(reason, "reachable Ring 5 server") || strings.Contains(reason, "network path") || strings.Contains(reason, "asks again by itself") {
 		t.Errorf("the SAFE notice's route is not the refused certificate's alone:\n%s", reason)
 	}
 	if strings.Contains(reason, "nothing on this machine is at fault") {
 		t.Errorf("the notice says whose the fault is, which this machine cannot know:\n%s", reason)
 	}
-	// The resident reads the paragraph every Ring 5 SAFE has, and the
-	// runtime's words.
-	if ring0 := a.rings.GetContent(ring.Ring0); !strings.Contains(ring0, ring5Why) || !strings.Contains(ring0, "As this runtime states it: security_posture.verify_fail: ") || !strings.Contains(ring0, "the server 127.0.0.1 presented a certificate that") {
+	// The resident reads the SAFE posture and the paragraph every Ring 5
+	// SAFE has, and the runtime's words.
+	if ring0 := a.rings.GetContent(ring.Ring0); !strings.HasPrefix(ring0, "# SAFE MODE") || !strings.Contains(ring0, ring5Why) || !strings.Contains(ring0, "As this runtime states it: security_posture.verify_fail: ") || !strings.Contains(ring0, "the server 127.0.0.1 presented a certificate that") {
 		t.Errorf("the posture:\n%s", ring0)
 	}
-	if n := handshakes.Load(); n != 1 {
-		t.Errorf("genesis.fetch_attempts is 1 and the server was asked %d times", n)
+	// Not asked again, and not made again: SAFE ends at the operator's act.
+	time.Sleep(400 * time.Millisecond)
+	if n := handshakes.Load(); n != 1 || a.restarting.Load() {
+		t.Errorf("genesis.fetch_attempts is 1 and the server was asked %d times, or the start was made again (%v)", n, a.restarting.Load())
 	}
 }
 
-// And a server that is not there is still said as that: the code and the
-// words of a failed fetch, and no certificate.
 func TestABootWhoseRing5ServerIsNotThereIsStillSaidAsThat(t *testing.T) {
+	holdRing5AsksOff(t)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -98,10 +108,10 @@ func TestABootWhoseRing5ServerIsNotThereIsStillSaidAsThat(t *testing.T) {
 	if !safe || !strings.Contains(reason, "security_posture.verify_fail: required Ring 5 unavailable or unverifiable") || strings.Contains(reason, "certificate") {
 		t.Fatalf("a Ring 5 server that does not answer: %q", reason)
 	}
-	// The route is the one it always was, word for word.
-	const route = "Point genesis.firewall_url in config.json at a reachable Ring 5 server, or restore the network path to it, and restart. The record verified."
-	if !strings.HasPrefix(reason, "The required Ring 5 security posture is absent or could not be verified: ") || !strings.HasSuffix(reason, ". "+route) {
-		t.Fatalf("a Ring 5 server that does not answer is not said in the words it was: %q", reason)
+	// The route is a server that may come back, word for word.
+	const route = "Nothing needs doing if the server comes back: this start asks again by itself and completes. If it stays away, restore the network path to it, or point genesis.firewall_url in config.json at a reachable Ring 5 server and restart. The record verified."
+	if !strings.HasPrefix(reason, "DEGRADED: this start is waiting for the required Ring 5 security posture, which it has not been able to fetch: ") || !strings.HasSuffix(reason, ". "+route) {
+		t.Fatalf("a Ring 5 server that does not answer is not said as one that may come back: %q", reason)
 	}
 }
 

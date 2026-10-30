@@ -37,9 +37,8 @@ func TestAMeetingEnteredAfterTheOpenRecordsTheConversationsFinalsAsTheRooms(t *t
 	if n := wakes.Load(); n != 0 {
 		t.Fatalf("a meeting entered after the open still woke %d turn(s) for the room's words", n)
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"words heard after the meeting began" {
-		t.Fatalf("the room's words must be recorded with the room note: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("words heard after the meeting began") {
+		t.Fatalf("the room's words must be recorded with the room note: %s %q", role, content)
 	}
 }
 
@@ -66,9 +65,8 @@ func TestAHeldFinalReleasedAfterAMeetingCommitIsTheRooms(t *testing.T) {
 	if n := wakes.Load(); n != 0 {
 		t.Fatalf("a held final released into a meeting still woke %d turn(s)", n)
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"held words" {
-		t.Fatalf("the released words must be recorded as the room's: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("held words") {
+		t.Fatalf("the released words must be recorded as the room's: %s %q", role, content)
 	}
 }
 
@@ -426,9 +424,8 @@ func TestAMeetingBegunWhileTheWordsWaitedForAPassIsTheRooms(t *testing.T) {
 	if n := wakes.Load(); n != 0 {
 		t.Fatalf("a meeting begun while the words waited still woke %d turn(s)", n)
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"words waiting behind the pass" {
-		t.Fatalf("the words must be recorded as the room's: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("words waiting behind the pass") {
+		t.Fatalf("the words must be recorded as the room's: %s %q", role, content)
 	}
 	if outcome, _ := h.replyOutcome.Load().(string); outcome != "recorded (meeting), no reply" {
 		t.Fatalf("the drain would not say why nothing was answered: %q", outcome)
@@ -466,9 +463,8 @@ func TestAMeetingBegunWhileTheWordsWaitedInTheSteerQueueIsTheRooms(t *testing.T)
 	if out := a.DrainSteering(); len(out) != 0 {
 		t.Fatalf("the room's words were delivered to the model: %q", out)
 	}
-	latest, err := a.store.GetLatestOperatorTurn()
-	if err != nil || latest == nil || latest.Content != voiceMarker+voiceRoomNote+"queued behind the running turn" {
-		t.Fatalf("the words must be recorded as the room's: latest=%+v err=%v", latest, err)
+	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("queued behind the running turn") {
+		t.Fatalf("the words must be recorded as the room's: %s %q", role, content)
 	}
 	if outcome, _ := h.replyOutcome.Load().(string); outcome != "recorded (meeting), no reply" {
 		t.Fatalf("the drain would not say why nothing was answered: %q", outcome)

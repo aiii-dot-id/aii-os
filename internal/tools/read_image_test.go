@@ -88,3 +88,30 @@ func TestReadAnswersAnImageFileAsAnImage(t *testing.T) {
 	}
 
 }
+
+func TestReadAnswersAPDFASoundOrAVideoAsWhatItIs(t *testing.T) {
+	home := t.TempDir()
+	write := func(name string, body []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("brief.pdf", []byte("%PDF-1.7\n%%EOF\n"))
+	write("note.wav", append([]byte("RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"), make([]byte, 32)...))
+	write("clip.bin", append([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), make([]byte, 32)...))
+	write("fake.mp4", []byte("one\ntwo\n"))
+	r := NewRegistry(home, nil, Timeouts{})
+	for _, c := range []struct{ name, noun, mediaType string }{
+		{"brief.pdf", "a PDF", "application/pdf"}, {"note.wav", "a sound", "audio/wav"}, {"clip.bin", "a video", "video/mp4"},
+	} {
+		res, err := r.Execute(context.Background(), "read", map[string]any{"file_path": c.name})
+		if err != nil || res.Image == nil || res.Image.MediaType != c.mediaType ||
+			!strings.Contains(res.Output, " is "+c.noun+": "+c.mediaType+", ") || !strings.HasSuffix(res.Output, " bytes.") {
+			t.Fatalf("%s: %+v %v", c.name, res, err)
+		}
+	}
+	if res, _ := r.Execute(context.Background(), "read", map[string]any{"file_path": "fake.mp4"}); res.Image != nil || !strings.Contains(res.Output, "one") {
+		t.Fatalf("text named like a video was not read as text: %+v", res)
+	}
+}

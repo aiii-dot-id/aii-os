@@ -108,7 +108,7 @@ func (in *inside) walk(place *Rule, root string) {
 	})
 }
 
-func (p *Policy) secondName(id fileID, names uint64) (string, *Rule) {
+func (p *Policy) secondName(id fileID, names uint64) (string, error) {
 	if names < 2 {
 		return "", nil
 	}
@@ -138,7 +138,7 @@ func Names(file os.FileInfo, by *os.File) uint64 {
 	return names
 }
 
-func unwalked(cannot []unchecked) *Rule {
+func unwalked(cannot []unchecked) *UncheckedError {
 	rule := unasked(cannot)
 	rule.Stops = nil
 	var stopped, errs []string

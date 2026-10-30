@@ -23,6 +23,13 @@ func (s *Store) SetSelfModelMaxTokens(n int) {
 
 func (s *Store) SelfModelMaxTokens() int { return s.selfModelBudget() }
 
+func (s *Store) SetRing2EvidenceChars(n int) {
+	if n < 0 {
+		n = 0
+	}
+	s.ring2EvidenceChars.Store(int64(n))
+}
+
 func (s *Store) selfModelBudget() int {
 	if n := s.selfModelMaxTokens.Load(); n > 0 {
 		return int(n)
@@ -404,17 +411,27 @@ func (s *Store) ring2MaterialLocked() ([]Ring2Belief, error) {
 			         (SELECT statement FROM beliefs WHERE beliefs.id = linked.id),
 			         (SELECT content FROM experiences WHERE experiences.id = linked.id),
 			         (SELECT statement FROM intentions WHERE intentions.id = linked.id),
-			         (SELECT charter_text FROM relationships WHERE relationships.id = linked.id),
+			         (SELECT CASE WHEN counterpart_name = '' THEN 'a relationship of yours'
+			                      ELSE 'your relationship with ' || counterpart_name END
+			          FROM relationships WHERE relationships.id = linked.id),
 			         (SELECT synthesis_text FROM self_model_synthesis WHERE self_model_synthesis.id = linked.id),
 			         id),
-			       COALESCE((SELECT provenance FROM experiences WHERE experiences.id = linked.id), 'self')
+			       COALESCE((SELECT provenance FROM experiences WHERE experiences.id = linked.id), 'self'),
+			       CASE
+			         WHEN (SELECT statement FROM beliefs WHERE beliefs.id = linked.id) IS NOT NULL THEN 'belief'
+			         WHEN (SELECT content FROM experiences WHERE experiences.id = linked.id) IS NOT NULL THEN 'experience'
+			         WHEN (SELECT statement FROM intentions WHERE intentions.id = linked.id) IS NOT NULL THEN 'intention'
+			         WHEN EXISTS (SELECT 1 FROM relationships WHERE relationships.id = linked.id) THEN 'relationship'
+			         WHEN (SELECT synthesis_text FROM self_model_synthesis WHERE self_model_synthesis.id = linked.id) IS NOT NULL THEN 'self_model'
+			         ELSE ''
+			       END
 			FROM linked ORDER BY created_seq, id`, belief.ID)
 		if err != nil {
 			return nil, err
 		}
 		for edges.Next() {
 			var evidence Ring2Evidence
-			if err := edges.Scan(&evidence.ID, &evidence.EdgeType, &evidence.Content, &evidence.Provenance); err != nil {
+			if err := edges.Scan(&evidence.ID, &evidence.EdgeType, &evidence.Content, &evidence.Provenance, &evidence.Kind); err != nil {
 				edges.Close()
 				return nil, err
 			}
@@ -450,8 +467,15 @@ func (s *Store) PromptIdentity() (PromptIdentity, error) {
 	if err != nil {
 		return PromptIdentity{}, err
 	}
+	about, err := s.aboutOperatorLocked()
+	if err != nil {
+		return PromptIdentity{}, err
+	}
 	return PromptIdentity{
 		Charter: charter, OperatorName: operatorName, HasOperatorRelationship: hasOperatorRelationship,
-		Ring2: ring2, SelfModel: selfModel, Priorities: priorities,
+		AboutOperator:    about.Beliefs,
+		CharterMaxTokens: s.CharterMaxTokens(),
+		Ring2:            ring2, Ring2EvidenceChars: int(s.ring2EvidenceChars.Load()),
+		SelfModel: selfModel, Priorities: priorities,
 	}, nil
 }

@@ -15,7 +15,10 @@ type fakeIntake struct {
 	runs    int
 }
 
-func (f *fakeIntake) OutcomesPending() bool { f.probes++; return f.pending }
+func (f *fakeIntake) OutcomesPendingSince() (bool, time.Time) {
+	f.probes++
+	return f.pending, time.Time{}
+}
 func (f *fakeIntake) ObserveOutcomes(ctx context.Context) error {
 	f.runs++
 	if f.err == nil {

@@ -3,17 +3,58 @@ import { startSignIn, signInProgress, wireSignInCompletion } from '../signin.js'
 import { S } from '../state.js';
 import { $, esc, bytes, loadingCard } from '../util.js';
 import { send } from '../ws.js';
-import { saveConfigSection, sendConfigChanges, configFeedbackHTML, savebarHTML, captureForm, restoreForm, forgetForm } from './settings.js';
+import { pendingSlot, pendingKeyed, notTaken, NOT_SENT, LOST } from '../pending.js';
+import { saveConfigSection, configFeedbackHTML, savebarHTML, captureForm, restoreForm, forgetForm } from './settings.js';
 import { settingHTML, shown, keyTyping, wireSettingControls } from './plugin-setting.js';
 
 const store = { q: '', cat: '', sort: 'name', open: {} };
+
+const revoking = pendingSlot();
+let revokeSaid = null;
+S.revokeAnswered = (requestID, text) => {
+  const asked = revoking.claim(requestID);
+  if (!asked) return false;
+  revokeSaid = text === null
+    ? { plugin: asked.plugin, kind: 'good', text: 'Revoked: ' + asked.operation + ' asks you again before it runs.' }
+    : { plugin: asked.plugin, kind: 'bad', text };
+  if (S.view === 'plugins') renderPlugins();
+  return true;
+};
+S.revokeLost = () => {
+  const asked = revoking.drop();
+  if (asked) revokeSaid = { plugin: asked.plugin, kind: 'bad', text: 'Connection lost — it is not known whether ' + asked.operation + ' was revoked. The card shows what the runtime last reported; nothing is retried.' };
+};
 
 const TIER = { T3: 'platform-signed', T2: 'reviewed', T1: 'signed', T0: 'unsigned' };
 function tierLabel(t) { return TIER[t] || (t ? esc(t) : 'unsigned'); }
 function metaHTML(e) {
   if (e.installed && e.installed_tier) return esc(e.installed_version || e.version) + ' · ' + tierLabel(e.installed_tier);
-  return esc(e.version) + ' · the catalog says ' + tierLabel(e.tier);
+  const build = buildLabel(e.build);
+  return esc(e.version) + ' · the catalog says ' + tierLabel(e.tier) + (build ? ', ' + build : '');
 }
+function buildLabel(b) {
+  return b === 'portable' ? 'portable' : b === 'system' ? 'built for this system' : '';
+}
+const START = 'Start';
+const startPending = pendingSlot();
+let startSaid = null;
+function startButton(id) {
+  const asked = startPending.waiting();
+  return '<button class="btn sm" data-plugin-start="' + esc(id) + '"' + (asked ? ' disabled' : '') + '>' +
+    (asked && asked.id === id ? 'Starting…' : START) + '</button>';
+}
+function startSaidHTML(id) {
+  return startSaid && startSaid.id === id ? '<div class="prep-err" data-start-said>' + esc(startSaid.text) + '</div>' : '';
+}
+S.pluginStartAnswered = requestID => { if (startPending.claim(requestID)) startSaid = null; };
+S.pluginStartRefused = (requestID, text) => {
+  const asked = startPending.claim(requestID);
+  if (!asked) return false;
+  startSaid = { id: asked.id, text: text };
+  if ($('plugins-stack')) renderPlugins();
+  return true;
+};
+S.pluginsConnectionLost = () => { startPending.drop(); };
 function titleOf(e) { return e.title || e.id; }
 function catOf(e) { return String(e.category || 'other').toLowerCase(); }
 function matches(e, q) {
@@ -57,6 +98,19 @@ function needsOf(e) {
   return '';
 }
 
+const REMAKE_WORDS = {
+  line: (n, about) => 'This update changes the model that makes the meaning layer\'s vectors: ' + n +
+    (n === 1 ? ' vector is' : ' vectors are') + ' made again' + (about ? ', about ' + about : '') + '.',
+};
+function aboutTime(seconds) {
+  const s = Number(seconds) || 0;
+  if (s <= 0) return '';
+  if (s < 90) return Math.max(1, Math.round(s)) + ' seconds';
+  if (s < 90 * 60) return Math.round(s / 60) + ' minutes';
+  const h = Math.round(s / 3600);
+  return h + (h === 1 ? ' hour' : ' hours');
+}
+
 let storedById = {};
 function storedCounts(s) {
   const count = (n, one, many) => (n === 1 ? '1 ' + one : n + ' ' + many);
@@ -69,12 +123,20 @@ function entryHTML(e) {
   let badge = '', btns = '';
   const install = label => '<button class="btn sm" data-plugin="install:' + id + '">' + label + '</button>';
   const uninstall = () => '<button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button>';
-  if (e.pending) {
+  if (e.pending === 'unstarted') {
+    badge = chip('provisional', 'not started');
+    btns = startButton(e.id) + ' ' + uninstall();
+  }
+  else if (e.pending) {
     const refused = e.pending === 'refused';
     badge = chip(refused ? 'unverified' : 'provisional', (refused ? 'refused — ' : e.pending === 'starting' ? 'starting — ' : e.pending === 'retiring' ? 'stopping — ' : e.pending === 'held' ? 'held — ' : 'preparing — ') + esc(e.pending_text || ''));
     btns = (refused ? '<button class="btn sm" data-plugin="retry:' + id + '">Try again</button> ' : '') + uninstall();
   }
-  else if (e.installed && e.update_available) { badge = chip('provisional', 'update to ' + esc(e.version)); btns = install('Update') + ' ' + uninstall(); }
+  else if (e.installed && e.update_available) {
+    const build = buildLabel(e.build);
+    badge = chip('provisional', 'update to ' + esc(e.version) + (build ? ' — the catalog says ' + build : ''));
+    btns = install('Update') + ' ' + uninstall();
+  }
   else if (e.installed) { badge = chip('active', 'installed ' + esc(e.installed_version || e.version)); btns = uninstall(); }
   else if (e.available) { btns = install('Install'); }
   else if (e.requires) { badge = chip('unverified', esc(e.requires)); }
@@ -88,6 +150,8 @@ function entryHTML(e) {
       '</div>' +
       (e.summary ? '<div class="store-summary">' + esc(e.summary) + '</div>' : '') +
       (e.needs ? '<div class="store-hint store-needs">' + esc(e.needs) + '</div>' : '') +
+      (e.remakes > 0 ? '<div class="store-hint" data-remakes="' + id + '">' + esc(REMAKE_WORDS.line(Number(e.remakes), aboutTime(e.remake_seconds))) + '</div>' : '') +
+      (e.pending === 'unstarted' ? '<div class="store-hint" data-unstarted>' + esc(e.pending_text || '') + '</div>' + startSaidHTML(e.id) : '') +
       (e.available && !e.installed && !e.pending ? '<div class="store-hint" data-install-grants="' + id + '">Install also grants what it asks of the identity\'s own storage, memory, records and embeddings; you can turn each off on its card.</div>' : '') +
       ((e.installed || e.pending) && storedById[e.id] ? '<div class="store-hint" data-stored-kept="' + id + '">Uninstall removes its package. What it stored here (' +
         esc(storedCounts(storedById[e.id])) + ') stays until you remove it under STORED BY PLUGINS.</div>' : '') +
@@ -286,7 +350,9 @@ function settingsHTML(c) {
     skipsHTML(c.plugins.skips) +
     '<label class="f">CATALOG URL' + (isDefault ? ' <span class="store-hint">— the platform\'s catalog, by default; leave empty to keep it</span>' : '') + '</label>' +
     '<input type="text" id="cfg-caturl" value="' + esc(url) + '" placeholder="https://…/aiios-plugins.md">' +
-    savebarHTML('catalog', 'saved — the index is fetched from here') +
+    '<label class="f sub">fetched every (minutes) <span class="store-hint">— a plugin download the network stopped is tried again by itself when the index is next fetched</span>' +
+    '<input type="number" id="cfg-catevery" min="15" max="1440" value="' + ((c.plugins && c.plugins.catalog_refresh_minutes) || 60) + '"></label>' +
+    savebarHTML('catalog', 'saved — the index is fetched from here now, and then this often') +
     runtimeLimitsHTML(c.plugins.runtime) +
     '</div>';
 }
@@ -310,12 +376,14 @@ function pendingHTML(pending) {
   return pending.map(p => {
     const id = esc(p.id);
     const refused = p.phase === 'refused', starting = p.phase === 'starting', retiring = p.phase === 'retiring', held = p.phase === 'held';
-    const label = refused ? 'refused' : starting ? 'starting' : retiring ? 'stopping' : held ? 'held' : 'preparing';
+    const unstarted = p.phase === 'unstarted';
+    const label = refused ? 'refused' : starting ? 'starting' : retiring ? 'stopping' : held ? 'held' : unstarted ? 'not started' : 'preparing';
     const when = p.retry_at ? ' at ' + esc(String(p.retry_at).slice(11, 19)) + ' UTC' : '';
     const stopped = !refused && !!p.remedy;
+    const again = p.resumes ? 'tried again by itself when the plugin catalog is next fetched' : 'nothing retries it on its own';
     const state = starting ? 'activation follows on its own'
       : p.phase === 'ready' ? 'present and verified — activating'
-      : stopped ? 'stopped — nothing retries it on its own'
+      : stopped ? 'stopped — ' + again
       : p.phase === 'waiting' ? 'waiting to retry' + when
       : 'downloading';
     let bar = '';
@@ -325,8 +393,11 @@ function pendingHTML(pending) {
     }
     const body = refused
       ? '<div class="prep-err">refused: ' + esc(p.summary) + '</div>' + refusalDetailHTML(p) +
-        '<div class="dim-note">' + (p.refusal && p.refusal.class === 'transient' && p.retry_at ? 'It is tried again on its own at ' + esc(p.retry_at) + '.' : 'Nothing is downloading and nothing retries on its own. Fix what the reason names and try again, or remove it.') + '</div>' +
+        '<div class="dim-note">' + (p.refusal && p.refusal.class === 'transient' && p.retry_at ? 'It is tried again on its own at ' + esc(p.retry_at) + '.' : p.resumes ? 'Nothing is downloading now; it is tried again by itself when the plugin catalog is next fetched. Try again to ask now, or remove it.' : 'Nothing is downloading and nothing retries on its own. Fix what the reason names and try again, or remove it.') + '</div>' +
         '<div class="savebar"><button class="btn sm" data-plugin="retry:' + id + '">Try again</button> <button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button></div>'
+      : unstarted
+      ? '<div class="dim-note" data-unstarted>' + esc(p.summary) + '</div>' + startSaidHTML(p.id) +
+        '<div class="savebar">' + startButton(p.id) + ' <button class="btn sm ghost" data-plugin="uninstall:' + id + '">Uninstall</button></div>'
       : held
       ? '<div class="dim-note">' + esc(p.summary) + '</div>' +
         '<div class="dim-note">Nothing to click: it is activated on its own when the hold ends.</div>'
@@ -495,6 +566,20 @@ function probesHTML(v) {
   return '<div class="dim-note checks-note" data-checks="probes" data-probes="' + esc(v.state) + '">the plugin declares no checks of its own; ' +
     'its signed probes are checked before memory uses its vectors \u2014 ' + tail + '</div>';
 }
+const actWaits = pendingKeyed();
+const actPressed = new Map();
+const actSaid = new Map();
+const deciding = decision => decision === 'deny' ? 'Dropping…' : 'Running…';
+S.actRefused = (requestID, text) => {
+  const id = actWaits.refused(requestID);
+  if (id === null) return false;
+  actPressed.delete(id);
+  actSaid.set(id, notTaken(text));
+  if (S.view === 'plugins') renderPlugins();
+  return true;
+};
+S.actsLost = () => { actWaits.lost().forEach(id => { actPressed.delete(id); actSaid.set(id, LOST); }); };
+
 function actsHTML(p) {
   const acts = p.acts || [];
   if (!acts.length) return '';
@@ -502,12 +587,15 @@ function actsHTML(p) {
   return '<div class="acts"><label class="f">AWAITING YOUR CONFIRMATION</label>' + acts.map(a => {
     const args = Object.keys(a.args || {}).sort().filter(k => k !== 'finals' && k !== 'sequences' || !(a.finals && a.finals.length)).map(k => argLine(k, a.args[k])).join('');
     const finals = (a.finals || []).map(f => '<div class="act-final">#' + esc(f.sequence) + ' ' + (f.heard ? '“' + esc(f.text) + '”' : '<span class="setting-stale">never heard on this session</span>') + '</div>').join('');
+    const quiet = actWaits.waiting(a.id) ? ' disabled' : '';
+    const label = (decision, text) => actWaits.waiting(a.id) && actPressed.get(a.id) === decision ? deciding(decision) : text;
     return '<div class="act" data-act-card="' + esc(a.id) + '"><div><b>' + esc(a.summary || a.operation) + '</b> <span class="store-hint">' + esc(a.operation) + (a.effects ? ' · ' + esc(a.effects) : '') + (a.session ? ' · session ' + esc(a.session) : '') + '</span></div>' +
       args + finals +
       '<div class="store-hint">proposed ' + esc(a.proposed) + ' · expires ' + esc(a.expires) + ' · runs once, with exactly these arguments, when you confirm; Always runs it now and every time from now on, until you revoke it below</div>' +
-      '<div class="savebar"><button class="btn" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="confirm">Confirm</button> ' +
-      '<button class="btn" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="always">Always</button> ' +
-      '<button class="btn ghost" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="deny">Deny</button></div></div>';
+      '<div class="savebar"><button class="btn" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="confirm"' + quiet + '>' + label('confirm', 'Confirm') + '</button> ' +
+      '<button class="btn" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="always"' + quiet + '>' + label('always', 'Always') + '</button> ' +
+      '<button class="btn ghost" data-act-plugin="' + esc(p.id) + '" data-act-id="' + esc(a.id) + '" data-act-decision="deny"' + quiet + '>' + label('deny', 'Deny') + '</button>' +
+      (actSaid.has(a.id) ? ' <span class="savesay" data-act-said data-announce>' + esc(actSaid.get(a.id)) + '</span>' : '') + '</div></div>';
   }).join('') + '</div>';
 }
 const GRANTS = [
@@ -531,7 +619,10 @@ function grantsHTML(p) {
     '<span><b>read only</b> <span class="store-hint">operations that write or execute are refused; the plugin may look, not act</span></span></label>');
   const lists = [];
   const standing = g.auto_confirm || [];
-  if (standing.length) lists.push('always confirmed, without asking: ' + standing.map(op => esc(op) + ' <button class="btn ghost" data-revoke-auto="' + esc(p.id) + '" data-op="' + esc(op) + '">revoke</button>').join(', '));
+  const held = revoking.waiting();
+  if (standing.length) lists.push('always confirmed, without asking: ' + standing.map(op => esc(op) + ' <button class="btn ghost" data-revoke-auto="' + esc(p.id) + '" data-op="' + esc(op) + '"' + (held ? ' disabled' : '') + '>' +
+    (held && held.plugin === p.id && held.operation === op ? 'Revoking…' : 'revoke') + '</button>').join(', '));
+  if (revokeSaid && revokeSaid.plugin === p.id) lists.push('<span class="config-result ' + revokeSaid.kind + '" data-revoke-said data-announce>' + esc(revokeSaid.text) + '</span>');
   if (caps.some(c => c === 'net.outbound' || c.startsWith('net.outbound:'))) lists.push('outbound hosts: ' + listed(g.hosts, 'none') + ' — granted with a key pasted or an account chosen on this card (the one host the package signs for), or set as ' + key('hosts') + ' in the config file');
   if (caps.includes('net.local')) lists.push('local network: ' + listed(g.local, 'none') + ' — a list, set as ' + key('local') + ' (an address, a range like 192.168.1.0/24, or a name on your own network, each with :port or :* for any); ' + (g.plaintext_credentials ? 'credentials may be sent in the clear to these devices' : 'a credential over plain http needs ' + key('plaintext_credentials') + ': true — anyone on your network could read it'));
   if ((p.settings || []).some(s => s.type === 'secret') || (g.handles && g.handles.length)) lists.push('credential handles: ' + listed(g.handles, 'none') + ' — granted with a key pasted or an account chosen on this card, or set as ' + key('credential_handles') + ' in the config file');
@@ -548,7 +639,11 @@ function operationsHTML(p) {
     '<div class="store-hint">Each summary below is what this plugin\'s author wrote, whole. The identity is given one quoted line of it, cut when it is long (Settings, Tools shows that line).</div>' +
     ops.map(o => '<div class="plugin-op"><b>' + esc(o.operation || o.tool) + '</b> <span class="store-hint">' + esc(o.tool) + '</span>' +
       (o.summary ? '<div class="pkg-desc author-words">' + esc(o.summary) + '</div>'
-        : '<div class="store-hint">the package declared no summary for it</div>') + '</div>').join('') +
+        : '<div class="store-hint">' + (o.published ? 'the plugin gave no summary for it' : 'the package declared no summary for it') + '</div>') +
+      (o.published ? '<div class="store-hint op-published">Published by the plugin while it runs, not declared in its package: the summary is what the plugin gave then.</div>' : '') +
+      (o.confirms ? '<div class="store-hint op-confirms">Each call waits for your confirmation here.</div>' : '') +
+      (o.unconfirmed_by_design ? '<div class="store-hint op-unconfirmed">It writes or runs a command, and its calls do not wait for your confirmation. The plugin says why:</div><div class="pkg-desc author-words op-unconfirmed-why">' + esc(o.unconfirmed_by_design) + '</div>' : '') +
+      '</div>').join('') +
     '</div>';
 }
 function detailHTML(p) {
@@ -644,6 +739,13 @@ function wireList(st) {
     if (requestID) btn.dataset.pluginRequest = requestID;
     else restorePluginAction(btn);
   }; });
+  st.querySelectorAll('[data-plugin-start]').forEach(btn => { btn.onclick = () => {
+    if (startPending.waiting()) return;
+    const id = btn.dataset.pluginStart;
+    const request = send({ type: 'plugin', plugin: { action: 'start', id: id } });
+    startSaid = startPending.arm({ id: id }, request) ? null : { id: id, text: 'not connected — try again' };
+    renderPlugins();
+  }; });
   const rf = st.querySelector('[data-catalog-refresh]');
   if (rf) rf.onclick = () => { rf.disabled = true; rf.textContent = 'Refreshing…'; send({ type: 'catalog_refresh' }); };
 }
@@ -712,18 +814,21 @@ export function renderPlugins() {
     a.onclick = e => { e.preventDefault(); if (S.openSettings) S.openSettings(a.dataset.openSection, 'sp-provider-stt'); };
   });
   st.querySelectorAll('[data-act-decision]').forEach(btn => { btn.onclick = () => {
-    const card = btn.closest('[data-act-card]');
-    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    btn.textContent = btn.dataset.actDecision === 'deny' ? 'Dropping…' : 'Running…';
-    send({ type: 'plugin', plugin: { action: btn.dataset.actDecision, id: btn.dataset.actPlugin, act: btn.dataset.actId } });
+    const act = btn.dataset.actId, decision = btn.dataset.actDecision;
+    const requestID = send({ type: 'plugin', plugin: { action: decision, id: btn.dataset.actPlugin, act } });
+    if (!actWaits.sent(act, requestID)) { actSaid.set(act, NOT_SENT); renderPlugins(); return; }
+    actPressed.set(act, decision); actSaid.delete(act);
+    btn.closest('[data-act-card]').querySelectorAll('button').forEach(b => { b.disabled = true; });
+    btn.textContent = deciding(decision);
+    btn.closest('[data-act-card]').querySelector('[data-act-said]')?.remove();
   }; });
   st.querySelectorAll('[data-revoke-auto]').forEach(btn => { btn.onclick = () => {
-    const id = btn.dataset.revokeAuto, op = btn.dataset.op;
-    const p = ((S.config && S.config.plugins && S.config.plugins.installed) || []).find(x => x.id === id);
-    const remaining = (((p && p.grants) || {}).auto_confirm || []).filter(x => x !== op);
-    btn.disabled = true; btn.textContent = 'Revoking…';
-    const ch = {}; ch['plugins.grants.' + id + '.auto_confirm'] = remaining;
-    sendConfigChanges('grants:' + id, ch);
+    if (revoking.waiting()) return;
+    const plugin = btn.dataset.revokeAuto, operation = btn.dataset.op;
+    const requestID = send({ type: 'plugin', plugin: { action: 'revoke', id: plugin, act: operation } });
+    revokeSaid = revoking.arm({ plugin, operation }, requestID) ? null
+      : { plugin, kind: 'bad', text: 'Not connected — ' + operation + ' was not revoked.' };
+    renderPlugins();
   }; });
   wireChoiceFilters(st);
   wireStore(st);

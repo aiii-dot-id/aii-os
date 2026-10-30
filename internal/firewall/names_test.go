@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -48,7 +49,7 @@ func TestASecondNameForAFileInsideAKeptDirectoryIsThatFile(t *testing.T) {
 	p := DefaultPolicy()
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data, Except: []string{filepath.Join(data, "ui")}, Reason: "kept", Enforced: true}})
 
-	byHandle := func(path string) *Rule {
+	byHandle := func(path string) (*Rule, error) {
 		t.Helper()
 		f, err := os.Open(path)
 		if err != nil {
@@ -90,14 +91,14 @@ func TestASecondNameForAFileInsideAKeptDirectoryIsThatFile(t *testing.T) {
 		"a file with one name":                           one,
 		"a file whose two names both lie in the home":    twinB,
 	} {
-		if rule := p.Covered(path); rule != nil {
-			t.Errorf("Covered: %s (%s) is open, and was held by %s", what, path, rule.ID)
+		if got := id(p.Covered(path)); got != "" {
+			t.Errorf("Covered: %s (%s) is open, and was held by %s", what, path, got)
 		}
 		if v := p.Check("read", path); !v.Allowed {
 			t.Errorf("Check: %s (%s) is open: %+v", what, path, v)
 		}
-		if rule := byHandle(path); rule != nil {
-			t.Errorf("KeptAs through a handle: %s (%s) is open, and was held by %s", what, path, rule.ID)
+		if got := id(byHandle(path)); got != "" {
+			t.Errorf("KeptAs through a handle: %s (%s) is open, and was held by %s", what, path, got)
 		}
 	}
 	f, err := os.Open(twinB)
@@ -130,16 +131,16 @@ func TestASecondNameForAFileInsideAKeptDirectoryIsThatFile(t *testing.T) {
 		t.Log("a directory at mode 000 is still read here: the walk that cannot read is not asked")
 		return
 	}
-	rule := p.Covered(twinB)
+	rule, err := p.Covered(twinB)
 	const said = "the host could not read " + "data/credentials/deep" + ", in a place it keeps (permission denied), so it cannot tell whether a file with more than one name is one of the files there, and refuses every such file until your operator makes " + "data/credentials/deep" + " readable to the host (removing it instead is the operator's own choice)"
-	if rule == nil || rule.Kind != KindUnasked || rule.ID != "sub.data.unasked" || rule.Reason != filepath.FromSlash(said) || len(rule.Stops) != 0 {
-		t.Errorf("a file with more than one name, while a kept directory cannot be walked whole: refused, naming the directory where the walk stopped and who clears it:\n got %+v\nwant %q", rule, filepath.FromSlash(said))
+	if u := uncheckedOf(err); rule != nil || u == nil || !slices.Equal(u.Places, []string{"sub.data"}) || u.Reason != filepath.FromSlash(said) || len(u.Stops) != 0 {
+		t.Errorf("a file with more than one name, while a kept directory cannot be walked whole: refused, naming the directory where the walk stopped and who clears it:\n got %+v %+v\nwant %q", rule, err, filepath.FromSlash(said))
 	}
-	if v := p.Check("read", twinB); v.Allowed || v.Rule.Kind != KindUnasked {
+	if v := p.Check("read", twinB); v.Allowed || uncheckedOf(v.Err) == nil {
 		t.Errorf("Check refuses it too: %+v", v)
 	}
-	if rule := p.Covered(one); rule != nil {
-		t.Errorf("a file with one name is open while a kept directory cannot be walked: %+v", rule)
+	if rule, err := p.Covered(one); holds(rule, err) {
+		t.Errorf("a file with one name is open while a kept directory cannot be walked: %+v %v", rule, err)
 	}
 }
 
@@ -175,7 +176,7 @@ func TestOneLookWalksTheKeptDirectoriesOnceForTheCall(t *testing.T) {
 	if look.Look() != look {
 		t.Fatal("a policy that is already one call's is answered as it is")
 	}
-	if look.Covered(twin) != nil {
+	if holds(look.Covered(twin)) {
 		t.Fatal("the twin is open")
 	}
 	made := filepath.Join(data, "made-later.key")
@@ -186,8 +187,8 @@ func TestOneLookWalksTheKeptDirectoriesOnceForTheCall(t *testing.T) {
 	if err := os.Link(made, second); err != nil {
 		t.Fatal(err)
 	}
-	if rule := look.Covered(second); rule != nil {
-		t.Fatalf("the limit has moved: the call's walk holds a file made after it (%+v); correct this test and the KNOWN_LIMITATIONS row together", rule)
+	if rule, err := look.Covered(second); holds(rule, err) {
+		t.Fatalf("the limit has moved: the call's walk holds a file made after it (%+v %v); correct this test and the KNOWN_LIMITATIONS row together", rule, err)
 	}
 	if id(p.Covered(second)) != "sub.data" {
 		t.Error("a policy that is no call's walks for the question, and knows the file made later")
@@ -237,8 +238,8 @@ func TestAnOpenNameDoesNotHideAKeptNameOfTheSameFile(t *testing.T) {
 	if got := id(p.Covered(filepath.Join(home, "k.txt"))); got != "sub.data" {
 		t.Errorf("a name in the home for a file kept in data, with an open name too, is held by %q, want sub.data", got)
 	}
-	if rule := p.Covered(filepath.Join(home, "f.html")); rule != nil {
-		t.Errorf("a name in the home for a file whose only name in data is open stays open: %+v", rule)
+	if rule, err := p.Covered(filepath.Join(home, "f.html")); holds(rule, err) {
+		t.Errorf("a name in the home for a file whose only name in data is open stays open: %+v %v", rule, err)
 	}
 }
 
@@ -268,8 +269,8 @@ func TestAWithoutOfOneCallsLookAsksTheSameWalk(t *testing.T) {
 	if id(look.Covered(second)) != "sub.data" {
 		t.Fatal("the look keeps the second name")
 	}
-	if rule := look.Without(data).Covered(second); rule != nil {
-		t.Errorf("a Without that takes the place as gone leaves its file's second name open: %+v", rule)
+	if rule, err := look.Without(data).Covered(second); holds(rule, err) {
+		t.Errorf("a Without that takes the place as gone leaves its file's second name open: %+v %v", rule, err)
 	}
 	if id(look.Without(filepath.Join(base, "elsewhere")).Covered(second)) != "sub.data" {
 		t.Error("a Without of something else keeps it")
@@ -315,11 +316,11 @@ func TestAFolderThatCannotBeReadUnderAGonePathRefusesNothingForTheWithout(t *tes
 	p := DefaultPolicy()
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data, Reason: "kept", Enforced: true}})
 	look := p.Look()
-	if rule := look.Covered(twin); rule == nil || rule.Kind != KindUnasked {
-		t.Fatalf("the look refuses a file with two names while a kept folder cannot be read: %+v", rule)
+	if rule, err := look.Covered(twin); rule != nil || uncheckedOf(err) == nil {
+		t.Fatalf("the look refuses a file with two names while a kept folder cannot be read: %+v %v", rule, err)
 	}
-	if rule := look.Without(gone).Covered(twin); rule != nil {
-		t.Errorf("for a Without that takes the folder's place as gone, the folder that cannot be read refuses nothing: %+v", rule)
+	if rule, err := look.Without(gone).Covered(twin); holds(rule, err) {
+		t.Errorf("for a Without that takes the folder's place as gone, the folder that cannot be read refuses nothing: %+v %v", rule, err)
 	}
 }
 
@@ -347,5 +348,65 @@ func TestAKeptNameOfAFileIsFoundPastOneUnderAGonePath(t *testing.T) {
 	p.SetPlaces([]*Rule{{ID: "sub.data", Kind: KindSubstrate, Path: data, Reason: "kept", Enforced: true}})
 	if got := id(p.Look().Without(filepath.Join(data, "a-gone")).Covered(filepath.Join(home, "k.txt"))); got != "sub.data" {
 		t.Errorf("the home's name is kept by the file's second kept name, past the first under a gone path: held by %q", got)
+	}
+}
+
+func TestAStemIsKeptAsWrittenNotAsWhatItsNameOpens(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := filepath.Join(home, "config.json")
+	put(file, "{}")
+	put(file+".before-update", "SECRET")
+	put(filepath.Join(home, "elsewhere", "note.txt"), "a note")
+	stem := file + "."
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(filepath.Join(home, "elsewhere"), stem); err != nil {
+			t.Skipf("symbolic links unavailable here: %v", err)
+		}
+	}
+	second := filepath.Join(home, "notes", "second.txt")
+	if err := os.MkdirAll(filepath.Dir(second), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(file+".before-update", second); err != nil {
+		t.Skipf("hard links unavailable here: %v", err)
+	}
+
+	if got := StemPath(stem); filepath.Base(got) != "config.json." {
+		t.Errorf("the stem %s is named %s", stem, got)
+	}
+	p := &Policy{}
+	p.SetPlaces([]*Rule{{ID: "sub.config", Kind: KindSubstrate, Path: stem, Stem: true, Reason: "kept", Enforced: true}})
+	if got := p.Rule("sub.config").Path; filepath.Base(got) != "config.json." {
+		t.Errorf("the stem %s is kept as %s", stem, got)
+	}
+	if got := id(p.Covered(second)); got != "sub.config" {
+		t.Errorf("a second name for config.json.before-update, by its path: held by %q", got)
+	}
+	if v := p.Check("read", second); v.Allowed {
+		t.Errorf("a second name for config.json.before-update is read")
+	}
+	f, err := os.Open(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := p.KeptAs(info, f); r == nil || r.ID != "sub.config" || err != nil {
+		t.Errorf("a second name for config.json.before-update, through a handle: %v %v", r, err)
 	}
 }

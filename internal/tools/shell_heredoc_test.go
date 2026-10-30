@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aiii-dot-id/aii-os/internal/firewall"
 )
 
 // heredocHome is a home laid out as an identity's is: the store in data/,
@@ -157,16 +159,16 @@ func TestHereDocsReadsTheBodiesAsBashDoes(t *testing.T) {
 		text string
 		docs []doc
 	}{
-		{"python3 - <<'PY'\nprint(*b)\nPY", "python3 - <<'PY'\n", []doc{{"print(*b)\n", true}}},
-		{"python3 - <<'PY' && echo ok\nx=1\nPY\nls *", "python3 - <<'PY' && echo ok\nls *", []doc{{"x=1\n", true}}},
-		{"cat <<A; python3 <<'B'\na*\nA\nb*\nB", "cat <<A; python3 <<'B'\n", []doc{{"a*\n", false}, {"b*\n", true}}},
-		{"python3 - <<-'PY'\n\tx\n\tPY", "python3 - <<-'PY'\n", []doc{{"x\n", true}}},
-		{"python3 - <<PY\nx\nPY", "python3 - <<PY\n", []doc{{"x\n", false}}},
-		{"bash <<'EOF'\nls *\nEOF", "bash <<'EOF'\n", []doc{{"ls *\n", false}}},
-		{"x=$(python3 - <<'PY'\nprint(1)\nPY\n)", "x=$(python3 - <<'PY'\n)", []doc{{"print(1)\n", false}}},
+		{"python3 - <<'PY'\nprint(*b)\nPY", "python3 - <<'PY'\n", []doc{{"print(*b)\n", true, "python"}}},
+		{"python3 - <<'PY' && echo ok\nx=1\nPY\nls *", "python3 - <<'PY' && echo ok\nls *", []doc{{"x=1\n", true, "python"}}},
+		{"cat <<A; python3 <<'B'\na*\nA\nb*\nB", "cat <<A; python3 <<'B'\n", []doc{{"a*\n", false, ""}, {"b*\n", true, "python"}}},
+		{"python3 - <<-'PY'\n\tx\n\tPY", "python3 - <<-'PY'\n", []doc{{"x\n", true, "python"}}},
+		{"python3 - <<PY\nx\nPY", "python3 - <<PY\n", []doc{{"x\n", false, ""}}},
+		{"bash <<'EOF'\nls *\nEOF", "bash <<'EOF'\n", []doc{{"ls *\n", false, ""}}},
+		{"x=$(python3 - <<'PY'\nprint(1)\nPY\n)", "x=$(python3 - <<'PY'\n)", []doc{{"print(1)\n", false, ""}}},
 		{"echo '<<X'\nls *", "echo '<<X'\nls *", nil},
 		// $$ is the process number; the quote after it is an ordinary one.
-		{"echo $$'\\'; python3 - <<'PY'\nprint(1)\nPY", "echo $$'\\'; python3 - <<'PY'\n", []doc{{"print(1)\n", true}}},
+		{"echo $$'\\'; python3 - <<'PY'\nprint(1)\nPY", "echo $$'\\'; python3 - <<'PY'\n", []doc{{"print(1)\n", true, "python"}}},
 		{"cat <<< '*'", "cat <<< '*'", nil},
 		// Left whole: a body with no end, an unbalanced parenthesis.
 		{"python3 - <<'PY'\nprint(1)", "python3 - <<'PY'\nprint(1)", nil},
@@ -213,5 +215,33 @@ func TestAnANSICStringIsReadAsBashDecodesIt(t *testing.T) {
 		if got := shellWords(in, bash5); !reflect.DeepEqual(got, want) {
 			t.Errorf("shellWords(%q, bash5) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestALiteralHereDocumentWordsRefusalNamesTheWayPast(t *testing.T) {
+	keepsPlaces(t, false)
+	_, home := heredocHome(t)
+	policy := firewall.DefaultPolicy()
+	policy.SetPlaces(stockPlaces(home, filepath.Join(home, "profile")))
+	r := NewRegistry(home, policy, Timeouts{})
+	look := r.policy.Look()
+	program := "python3 - <<'PY'\ndata = 1\nprint(data)\nPY"
+	why, _, literal := r.shellWallWord(look, home, program)
+	if why == "" || literal != "data" {
+		t.Fatalf("the inline program's data was not refused as a literal word: %q %q", why, literal)
+	}
+	if whyFrom, _ := r.shellWallFrom(look, home, program); whyFrom != why {
+		t.Fatalf("the rule's decision changed: %q, was %q", whyFrom, why)
+	}
+	res, err := r.Execute(t.Context(), "shell", map[string]any{"command": program})
+	if err != nil || !res.Refused || res.ReasonCode != ReasonShellWall || !strings.HasSuffix(res.Error, literalWordRelativeWords) {
+		t.Fatalf("the refusal of a relative literal word does not name the way past, a cwd among them: %+v %v", res, err)
+	}
+	plain, err := r.Execute(t.Context(), "shell", map[string]any{"command": "ls data"})
+	if err != nil || !plain.Refused || strings.Contains(plain.Error, "inline program") {
+		t.Fatalf("a word of the command itself was refused otherwise or told of an inline program: %+v %v", plain, err)
+	}
+	if _, _, literal := r.shellWallWord(look, home, "ls data"); literal != "" {
+		t.Fatal("a word of the command itself was read as a literal here-document's")
 	}
 }

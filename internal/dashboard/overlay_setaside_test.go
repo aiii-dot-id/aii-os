@@ -57,6 +57,7 @@ func (g *setAsideRig) do(method, urlPath, body string, edit func(*http.Request))
 	}
 	if g.token {
 		req.AddCookie(&http.Cookie{Name: dashboardCookieName(req), Value: g.s.accessHash()})
+		req.Header.Set(pageKeyHeader, pageKeyFor(g.s))
 	}
 	if edit != nil {
 		edit(req)
@@ -205,10 +206,10 @@ func TestSetAsideRenamesTheReplacementAndKeepsItsBytes(t *testing.T) {
 	}
 }
 
-// SET-ASIDE TOUCHES ONLY WHAT REPLACES THE SHIPPED FRAME, inside the
-// overlay. A path outside the directory, an absolute one, the additive
-// stubs, the identity's own new file and a non-frame file are refused, and a
-// request that names any of them renames nothing at all. A link that leaves
+// SET-ASIDE TOUCHES ONLY WHAT REPLACES THE SHIPPED FRAME, AND THE TWO
+// ADDITIVE FILES, inside the overlay. A path outside the directory, an
+// absolute one, the identity's own new file and a non-frame file are
+// refused, and a request that names any of them renames nothing at all. A link that leaves
 // the directory replaces nothing and is left where it is, as is its target.
 func TestSetAsideRefusesWhatDoesNotReplaceTheShippedFrame(t *testing.T) {
 	g := newSetAsideRig(t, false)
@@ -220,7 +221,7 @@ func TestSetAsideRefusesWhatDoesNotReplaceTheShippedFrame(t *testing.T) {
 	if err := os.WriteFile(sibling, []byte("outside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"../app.js", "/app.js", sibling, "views/../../app.js", "custom.js", "custom.css", "views/mine.js", "README.md", "", "."} {
+	for _, p := range []string{"../app.js", "/app.js", sibling, "views/../../app.js", "views/custom.css", "custom.css/", "views/mine.js", "README.md", "", "."} {
 		code, body := g.setAside("app.js", p)
 		if code != http.StatusBadRequest {
 			t.Errorf("set aside %q = %d %s; want 400", p, code, body)
@@ -301,5 +302,65 @@ func TestSetAsideIsWalledAsEveryDashboardWrite(t *testing.T) {
 		if code, got := g.do(http.MethodPost, "/overlay/set-aside", body, nil); code != http.StatusOK || g.exists("app.js") {
 			t.Errorf("token=%v: the page's own request = %d %s, file still there: %v", token, code, got, g.exists("app.js"))
 		}
+	}
+}
+
+func TestSetAsideTakesCustomCSSAndCustomJS(t *testing.T) {
+	g := newSetAsideRig(t, false)
+	writeOverlay(t, g.dir, "custom.css", "body{display:none}\n")
+	writeOverlay(t, g.dir, "custom.js", "document.body.remove();\n")
+	additions := func() []string {
+		t.Helper()
+		code, body := g.do(http.MethodGet, "/overlay/replacements", "", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET /overlay/replacements = %d %s", code, body)
+		}
+		var got struct {
+			Files     []OverlayReplacement `json:"files"`
+			Additions []OverlayReplacement `json:"additions"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("GET /overlay/replacements: %v in %s", err, body)
+		}
+		if len(got.Files) != 0 {
+			t.Errorf("the additive files are listed as replacements: %v", got.Files)
+		}
+		var names []string
+		for _, f := range got.Additions {
+			names = append(names, f.Path)
+		}
+		return names
+	}
+	// An unapproved custom.js is not served, so it adds nothing.
+	if got := strings.Join(additions(), " "); got != "custom.css" {
+		t.Errorf("additions before approval = %q; want custom.css", got)
+	}
+	approveOverlay(t, g.s, g.dir, "custom.js")
+	if got := strings.Join(additions(), " "); got != "custom.css custom.js" {
+		t.Errorf("additions = %q; want custom.css custom.js", got)
+	}
+
+	code, body := g.setAside("custom.css", "custom.js")
+	if code != http.StatusOK {
+		t.Fatalf("set aside custom.css and custom.js = %d %s", code, body)
+	}
+	for name, was := range map[string]string{"custom.css": "body{display:none}\n", "custom.js": "document.body.remove();\n"} {
+		if g.exists(name) {
+			t.Errorf("%s is still in place", name)
+		}
+		aside := name + ".set-aside-" + version.Authored()
+		if !strings.Contains(string(body), `"to":"`+aside+`"`) {
+			t.Errorf("the answer does not name %s: %s", aside, body)
+		}
+		if b, err := os.ReadFile(filepath.Join(g.dir, aside)); err != nil || string(b) != was {
+			t.Errorf("%s lost its bytes: %q %v", aside, b, err)
+		}
+		shipped, _ := staticFS.ReadFile("static/" + name)
+		if code, got := g.do(http.MethodGet, "/"+name, "", nil); code != 200 || !bytes.Equal(got, shipped) {
+			t.Errorf("after setting aside, /%s is not the shipped stub (%d %q)", name, code, got)
+		}
+	}
+	if got := additions(); len(got) != 0 {
+		t.Errorf("still listed after setting aside: %v", got)
 	}
 }

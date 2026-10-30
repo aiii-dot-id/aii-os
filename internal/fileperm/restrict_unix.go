@@ -2,7 +2,14 @@
 
 package fileperm
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
+
+func CreateTempForReplacement(path string) (*os.File, error) {
+	return os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+}
 
 func RestrictToOwner(f *os.File) error {
 	return f.Chmod(0o600)

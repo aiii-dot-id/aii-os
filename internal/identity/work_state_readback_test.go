@@ -275,9 +275,15 @@ func TestWorkStatusKeepsReadableStateWhenSAFEWorkerQueriesFail(t *testing.T) {
 func TestWorkStatusAdvertisesTheBoundedReadback(t *testing.T) {
 	props := lookupVerb("work").Params["properties"].(map[string]any)
 	action := props["action"].(map[string]any)["description"].(string)
-	for _, want := range []string{"without id", "authored working state whole", "rendezvous", "oversized reply refuses", "prompt.max_tool_result_chars", "restart", "id reads one delivered result"} {
+	for _, want := range []string{"status (your working state and sub-agents, whole", "with id, one delivered result", "never sleep-poll instead"} {
 		if !strings.Contains(action, want) {
-			t.Errorf("the advertised work status lost its bounded readback requirement %q: %s", want, action)
+			t.Errorf("the advertised work status lost %q: %s", want, action)
+		}
+	}
+	refusal := (&WorkStatusSizeError{Required: 9000, Limit: 6000}).Error()
+	for _, want := range []string{"prompt.max_tool_result_chars", "restart", "Nothing was clipped"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("the oversized status refusal does not say %q: %s", want, refusal)
 		}
 	}
 }

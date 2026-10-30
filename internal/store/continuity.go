@@ -40,6 +40,8 @@ type ContinuityStatus struct {
 	Encrypted   bool   `json:"encrypted,omitempty"`
 	Unencrypted string `json:"unencrypted,omitempty"`
 
+	Signed bool `json:"signed,omitempty"`
+
 	FailingSince string `json:"failing_since,omitempty"`
 }
 

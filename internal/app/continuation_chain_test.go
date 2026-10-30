@@ -15,18 +15,104 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 type contScript struct {
 	mu   sync.Mutex
 	reqs []string
+	// seen is when and where each request arrived, beside reqs, for the
+	// account a failed test logs (logOnFailure).
+	seen []contArrival
 }
 
-func (o *contScript) add(body string) int {
+// contArrival is one request's arrival: when, and the path it was sent to.
+type contArrival struct {
+	at   time.Time
+	path string
+}
+
+func (o *contScript) add(body string) int { return o.addAt("", body) }
+
+// addAt keeps a request's body with when it arrived and its path.
+func (o *contScript) addAt(path, body string) int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.reqs = append(o.reqs, body)
+	o.seen = append(o.seen, contArrival{at: time.Now(), path: path})
 	return len(o.reqs)
+}
+
+func (o *contScript) logOnFailure(t *testing.T) {
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		o.mu.Lock()
+		reqs, seen := append([]string(nil), o.reqs...), append([]contArrival(nil), o.seen...)
+		o.mu.Unlock()
+		t.Logf("the fixture model received %d request(s):", len(reqs))
+		for i, body := range reqs {
+			var at, path string
+			if i < len(seen) {
+				at, path = seen[i].at.Format("15:04:05.000000"), seen[i].path
+			}
+			t.Logf("  #%d %s %s %s", i+1, at, path, describeRequest(body))
+		}
+	})
+}
+
+// describeRequest is one request body as logOnFailure says it: the tools
+// it offered (a turn's, a facility's, or none), its tool_choice, the
+// top-level fields a caller may name itself by, and its last message's
+// role and first 200 bytes.
+func describeRequest(body string) string {
+	var req struct {
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+		ToolChoice json.RawMessage `json:"tool_choice"`
+		User       string          `json:"user"`
+		Metadata   json.RawMessage `json:"metadata"`
+		CacheKey   string          `json:"prompt_cache_key"`
+		Messages   []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		return fmt.Sprintf("(not a chat request: %v) %.200q", err, body)
+	}
+	var tools []string
+	for _, tl := range req.Tools {
+		tools = append(tools, tl.Function.Name)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "tools=%d%v", len(tools), tools)
+	if len(req.ToolChoice) > 0 {
+		fmt.Fprintf(&b, " tool_choice=%s", req.ToolChoice)
+	}
+	if req.User != "" {
+		fmt.Fprintf(&b, " user=%q", req.User)
+	}
+	if len(req.Metadata) > 0 {
+		fmt.Fprintf(&b, " metadata=%s", req.Metadata)
+	}
+	if req.CacheKey != "" {
+		fmt.Fprintf(&b, " prompt_cache_key=%q", req.CacheKey)
+	}
+	fmt.Fprintf(&b, " messages=%d", len(req.Messages))
+	if n := len(req.Messages); n > 0 {
+		last := req.Messages[n-1]
+		var text string
+		if json.Unmarshal(last.Content, &text) != nil {
+			text = string(last.Content) // structured content: as sent
+		}
+		fmt.Fprintf(&b, " last(%s)=%.200q", last.Role, text)
+	}
+	return b.String()
 }
 
 func (o *contScript) snapshot() []string {
@@ -68,20 +154,41 @@ func nothingContinues(calls int, why string) string {
 // with said: what the next turn's request, and recall, will read.
 func recordedReply(t *testing.T, a *App, said string) string {
 	t.Helper()
-	var content string
-	if err := a.store.DB().QueryRow(`SELECT content FROM conversations WHERE role='resident' AND substr(content,1,?)=? ORDER BY turn_seq DESC LIMIT 1`,
-		len(said), said).Scan(&content); err != nil {
+	var id, content string
+	if err := a.store.DB().QueryRow(`SELECT id, content FROM conversations WHERE role='resident' AND substr(content,1,?)=? ORDER BY turn_seq DESC LIMIT 1`,
+		len(said), said).Scan(&id, &content); err != nil {
 		t.Fatalf("the record holds no reply beginning %q: %v", said, err)
 	}
-	return content
+	return content + loopNotesBeside(t, a, id)
 }
 
-// promisesInTheRecord counts the identity's recorded replies that say the
+// loopNotesBeside is the loop's notes recorded beside the row id
+// (store.ReasonLoopNote), each after a blank line: the turn's ending as
+// these tests read it, the reply and then what the loop said of the turn.
+func loopNotesBeside(t *testing.T, a *App, id string) string {
+	t.Helper()
+	rows, err := a.store.DB().Query(`SELECT content FROM conversations WHERE role='system' AND related_id=? AND json_extract(details,'$.reason_code')=? ORDER BY turn_seq`, id, store.ReasonLoopNote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out string
+	for rows.Next() {
+		var note string
+		if err := rows.Scan(&note); err != nil {
+			t.Fatal(err)
+		}
+		out += "\n\n" + note
+	}
+	return out
+}
+
+// promisesInTheRecord counts the loop's notes in the record that say the
 // work continues in a fresh turn.
 func promisesInTheRecord(t *testing.T, a *App) int {
 	t.Helper()
 	var n int
-	if err := a.store.DB().QueryRow(`SELECT COUNT(*) FROM conversations WHERE role='resident' AND instr(content,'continues automatically in a fresh turn')>0`).Scan(&n); err != nil {
+	if err := a.store.DB().QueryRow(`SELECT COUNT(*) FROM conversations WHERE instr(content,'continues automatically in a fresh turn')>0 AND (role='resident' OR json_extract(details,'$.reason_code')=?)`, store.ReasonLoopNote).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -131,7 +238,7 @@ func TestCappedTurnContinuesInAFreshTurn(t *testing.T) {
 	// A leg was scheduled, so the loop's own sentence stands, to the byte
 	// (two setup calls and six reads), and it is what the record holds.
 	const said = "leg one checkpointed\n\n[This turn ended at its declared budget after 8 tool calls; the work continues automatically in a fresh turn.]"
-	if reply != said {
+	if recordedReply(t, app, reply) != said {
 		t.Errorf("the continued turn's reply = %q, want %q", reply, said)
 	}
 	if got := recordedReply(t, app, "leg one checkpointed"); got != said {
@@ -226,7 +333,7 @@ func TestATokenFencedTurnContinuesInAFreshTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turn failed: %v", err)
 	}
-	if !strings.Contains(reply, "token budget (500) is spent") {
+	if !strings.Contains(recordedReply(t, app, reply), "token budget (500) is spent") {
 		t.Fatalf("rig: the turn did not end at its token fence: %q", reply)
 	}
 
@@ -396,7 +503,7 @@ func TestDeliveredSessionDoesNotContinue(t *testing.T) {
 	// work continues automatically in a fresh turn", which the loop writes
 	// before the app has looked for a session to continue.
 	said := "delivered and capped\n\n" + nothingContinues(8, "no work session is active")
-	if reply != said {
+	if recordedReply(t, app, reply) != said {
 		t.Errorf("the reply of a capped turn that delivered its session = %q, want %q", reply, said)
 	}
 	if got := recordedReply(t, app, "delivered and capped"); got != said {
@@ -621,14 +728,11 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 				t.Fatalf("turn failed: %v", err)
 			}
 
-			// The identity's words, then the one line, at every ending: no
-			// promise, and nothing kept of the line it stands in place of.
-			if want := final + "\n\n" + nothingContinues(c.calls, c.why); reply != want {
-				t.Fatalf("the reply = %q, want %q", reply, want)
+			if reply != final {
+				t.Fatalf("the reply = %q, want the identity's words %q", reply, final)
 			}
-			// The record holds this reply, and no row holds the other line.
-			if got := recordedReply(t, app, final); got != reply {
-				t.Errorf("the record holds %q, want the reply as it was given: %q", got, reply)
+			if want, got := final+"\n\n"+nothingContinues(c.calls, c.why), recordedReply(t, app, final); got != want {
+				t.Errorf("the record holds %q, want %q", got, want)
 			}
 			if n := promisesInTheRecord(t, app); n != 0 {
 				t.Errorf("%d recorded reply(ies) promise a fresh turn nothing scheduled", n)
@@ -689,7 +793,7 @@ func TestALegThatDoesNotRunIsToldToTheOperator(t *testing.T) {
 			if err != nil {
 				t.Fatalf("turn failed: %v", err)
 			}
-			if !strings.HasSuffix(reply, "while its work session is still active, the work continues automatically in a fresh turn.]") {
+			if !strings.HasSuffix(recordedReply(t, app, reply), "while its work session is still active, the work continues automatically in a fresh turn.]") {
 				t.Fatalf("rig: the capped turn was not handed to a fresh turn: %q", reply)
 			}
 

@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/hostcap"
 	"github.com/aiii-dot-id/aii-os/internal/install"
@@ -63,6 +62,9 @@ func launch(aii string) error {
 	n, created, err := firstSlot(root, func() error {
 
 		out, err := exec.Command(aii, "init").CombinedOutput()
+		if started := notServing(err, out); started != nil {
+			return started
+		}
 		if err != nil {
 			return fmt.Errorf("create the first identity slot: %v: %s", err, out)
 		}
@@ -100,9 +102,9 @@ func launch(aii string) error {
 
 		return opened(waitServing(port, url, dir, open))
 	}
-	if serving(port) {
+	if install.Serving(port) {
 
-		if port, err = movePort(root, dir, port, ask, writePort(aii, dir), portFree); err != nil {
+		if port, err = movePort(root, dir, port, ask, writePort(aii, dir), install.PortFree); err != nil {
 			return err
 		}
 		url = fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -110,13 +112,32 @@ func launch(aii string) error {
 
 	slot := install.SlotName(n)
 	if err := startService(aii, slot); err != nil {
+		var started *startedNotServing
+		if errors.As(err, &started) {
+			return err
+		}
 		return fmt.Errorf("the service manager did not start %s: %w", slot, err)
 	}
 	return opened(waitServing(port, url, dir, open))
 }
 
+type startedNotServing struct{ words string }
+
+func (e *startedNotServing) Error() string { return e.words }
+
+func notServing(err error, out []byte) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == install.ExitNotServing {
+		return &startedNotServing{words: strings.TrimSpace(string(out))}
+	}
+	return nil
+}
+
 func startService(aii, slot string) error {
 	out, err := exec.Command(aii, "register", slot).CombinedOutput()
+	if started := notServing(err, out); started != nil {
+		return started
+	}
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -124,25 +145,15 @@ func startService(aii, slot string) error {
 }
 
 func waitServing(port int, url, dir string, open func(string) error) error {
-	deadline := time.After(60 * time.Second)
-	for {
-		select {
-		case <-deadline:
-			return fmt.Errorf("the identity did not start serving on port %d within 60s — see %s", port, filepath.Join(dir, "log", "aii.log"))
-		default:
-
-			if serving(port) {
-				present, err := slotRunning(dir)
-				if err != nil {
-					return fmt.Errorf("cannot determine whether this identity is running: %w", err)
-				}
-				if present {
-					return open(url)
-				}
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
+	err := install.WaitServing(port, dir, install.ConfiguredStartWait(dir))
+	var ns *install.NotServingError
+	if errors.As(err, &ns) {
+		return fmt.Errorf("%v — see %s", err, filepath.Join(dir, "log", "aii.log"))
 	}
+	if err != nil {
+		return err
+	}
+	return open(url)
 }
 
 func writePort(aii, dir string) func(port int) error {

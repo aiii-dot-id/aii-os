@@ -158,7 +158,7 @@ func TestConfigCompatibilityDoesNotHideInvalidValues(t *testing.T) {
 }
 
 func TestMissingConfigFieldsInheritWithoutRewriting(t *testing.T) {
-	path := unchangedConfigFile(t, "config.json", `{"agency":{"max_subagent_depth":0},"llm":{"api_key_env":""},"logs":{}}`)
+	path := unchangedConfigFile(t, "config.json", `{"agency":{"max_subagent_depth":0},"llm":{"api_key_env":""},"logs":{"dir":""}}`)
 	for range 2 {
 		cfg, err := LoadConfig(path)
 		if err != nil {

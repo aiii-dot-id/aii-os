@@ -46,7 +46,7 @@ func TestTheSandboxSwitchRefusesAMalformedRequestAndEchoesAWellFormedOne(t *test
 			var calls []bool
 			off := false
 			h := &WSHandler{
-				SetSandbox: func([]string) error {
+				ChangeSandbox: func(string, bool) error {
 					t.Error("a sandbox_switch reached the roots hook")
 					return nil
 				},
@@ -218,7 +218,7 @@ func TestTheSandboxSwitchTellsTheHostWhetherThePageSignedInWithTheToken(t *testi
 		t.Fatalf("the earlier connection was admitted under a policy that asked for nothing: %+v", early)
 	}
 
-	signed, err := dialWSToken(addr, s.accessHash())
+	signed, err := dialWSToken(addr, s.accessHash(), pageKeyFor(s))
 	if err != nil {
 		t.Fatalf("the right token was refused: %v", err)
 	}

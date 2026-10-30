@@ -208,3 +208,52 @@ run(() => {
 func TestTheHeardHistoryCardSavesOnlyWhatChanged(t *testing.T) {
 	runPageInEngines(t, heardHistorySettingsPage, substrateModules(t))
 }
+
+const myVoicePage = substratePageMarkup + `<script type="module">
+import { S } from './state.js';
+import { frames } from './ws.js';
+import { renderSettings, acceptSettingsConfig } from './views/settings.js';
+import { assert, run } from './__harness.js';
+
+run(() => {
+  const byId = id => document.getElementById(id);
+  const sets = () => frames.filter(f => f.type === 'config_set').map(f => f.config);
+  const theirs = '6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f', guest = '9078c44a-6fbe-4f24-a20e-bd212f520530';
+  S.identityExists = true; S.providersLoaded = true; S.providers = [];
+  S.config = { llm: { provider: 'OpenAI', model: 'm', resolved_provider: 'OpenAI', resolved_model: 'm', timeout_seconds: 120 },
+    speech: { stt: { provider: '' }, tts: { provider: '' }, services: [], speakers: { mode: 'all', uids: [], revision: 1 }, voices: [] } };
+  S.openSettings('speech');
+  const card = byId('sp-my-voice');
+  assert(card, 'the Your voice card is on the speech page');
+  const none = card.querySelectorAll('#sp-my-voice-none');
+  assert(none.length === 1 && none[0].textContent.includes("counts as a participant's words") && none[0].textContent.includes('Push-to-talk keeps your role'), 'with no voice named the card does not say so once: ' + card.textContent);
+  assert(byId('sp-my-voice-empty'), 'an empty list does not say that no voice was reported');
+  S.config.speech.voices = [
+    { uuid: guest, label: 'Same label', heard: true, enrolled: false, mine: false, why_not: 'This voice cannot count as yours: the speech engine has not identified it as an enrolled voice.' },
+    { uuid: theirs, label: 'Quinn', heard: true, enrolled: true, mine: false } ];
+  renderSettings();
+  const row = id => document.querySelector('[data-my-voice-row="' + id + '"]');
+  assert(row(theirs).textContent.includes('Quinn') && row(theirs).textContent.includes(theirs) && row(theirs).textContent.includes('an enrolled voice'), 'the enrolled voice is not listed with its label and UUID: ' + row(theirs).textContent);
+  assert(!row(guest).querySelector('[data-my-voice]') && row(guest).querySelector('[data-my-voice-why]').textContent.includes('cannot count as yours'), 'a voice that is not enrolled is offered, or does not say why it cannot count: ' + row(guest).innerHTML);
+  row(theirs).querySelector('[data-my-voice="name"]').click();
+  let sent = sets();
+  assert(sent.length === 1 && JSON.stringify(sent[0]['speech.operator_speakers']) === JSON.stringify([theirs]), 'naming the voice did not send the operator voices: ' + JSON.stringify(sent));
+  S.config.speech.operator_speakers = [theirs];
+  S.config.speech.voices[1] = { ...S.config.speech.voices[1], mine: true };
+  assert(acceptSettingsConfig(frames.filter(f => f.type === 'config_set').at(-1).request_id), 'the save of the voice was not claimed');
+  renderSettings();
+  assert(!byId('settings-stack').textContent.includes('Save could not be verified') && !byId('sp-my-voice-none'), 'a named voice was not confirmed, or the card still says none is named');
+  assert(row(theirs).textContent.includes('named as your voice') && row(theirs).querySelector('[data-my-voice="remove"]'), 'the named voice has no press to take it back');
+  row(theirs).querySelector('[data-my-voice="remove"]').click();
+  sent = sets();
+  assert(sent.length === 2 && sent[1]['speech.operator_speakers'] === null, 'taking the voice back did not send an empty list: ' + JSON.stringify(sent[1]));
+  delete S.config.speech.operator_speakers;
+  assert(acceptSettingsConfig(frames.filter(f => f.type === 'config_set').at(-1).request_id), 'taking the voice back was not claimed');
+  renderSettings();
+  assert(!byId('settings-stack').textContent.includes('Save could not be verified'), 'an empty list did not match its absent readback');
+});
+</script>`
+
+func TestTheYourVoiceCardNamesTheOperatorsVoice(t *testing.T) {
+	runPageInEngines(t, myVoicePage, substrateModules(t))
+}

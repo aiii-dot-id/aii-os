@@ -1,0 +1,71 @@
+{
+  "task": "dyad-store-without-hint",
+  "good": {
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "mentions the plumber",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "plumber",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "calls": [
+              {
+                "name": "pl_id_aiii_memory_store",
+                "args": {
+                  "text": "One grep over notes/ finds which file mentions a word."
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n2.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "failure": {
+    "drawn_from": "A4: the work is served and no lesson is kept",
+    "fails": [
+      1
+    ],
+    "greeting": "I am Quill.\nI have just begun, and I am glad to meet you.",
+    "exchanges": [
+      {
+        "on": "mentions the plumber",
+        "steps": [
+          {
+            "calls": [
+              {
+                "name": "grep",
+                "args": {
+                  "pattern": "plumber",
+                  "path": "notes",
+                  "literal": true
+                }
+              }
+            ]
+          },
+          {
+            "text": "FILE: notes/n2.txt"
+          }
+        ]
+      }
+    ]
+  },
+  "plugins": {
+    "memory": "memory-keeps",
+    "planning": "planning"
+  }
+}

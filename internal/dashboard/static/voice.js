@@ -1260,6 +1260,7 @@ const MIC_TITLES = {
   setup: 'Voice isn\'t set up — opens Speech settings',
   unreachable: 'Voice can\'t reach its service — opens Speech settings',
   safe: 'Voice is paused while this identity is in SAFE',
+  waiting: 'Voice is paused while this start waits for Ring 5',
 };
 
 export function render() {
@@ -1283,6 +1284,7 @@ export function render() {
   b.title = inputEndedWhy && !recording ? inputEndedWhy
     : state === 'cloud' ? micModeTitle(m, recording)
     : state === 'setup' && speaks ? 'Voice input isn\'t set up — opens Speech settings'
+    : state === 'safe' && S.cont && S.cont.mode === 'degraded_ring5' ? MIC_TITLES.waiting
     : MIC_TITLES[state] || MIC_TITLES.setup;
   b.setAttribute('aria-label', b.title);
 }

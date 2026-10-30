@@ -3,18 +3,19 @@ import { S } from '../state.js';
 import { $, esc, composing } from '../util.js';
 import { send } from '../ws.js';
 import { holdReloadWhile } from '../overlay.js';
+import { recordedHTML } from './work-recorded.js';
 
 export function workSectionHTML() {
   if (!(S.work && ((S.work.live || []).length || S.work.queued > 0 || (S.work.delivered || []).length))) return '';
   let html = '';
   html += '<div class="home-h">LIVE WORK — RING 4</div>';
   (S.work.live || []).forEach(w => {
-    html += '<div class="work-row live"><span class="work-dot"></span><b>' + esc(w.description) + '</b>' + (w.project ? '<span class="work-proj">' + esc(w.project) + '</span>' : '') + '<span class="work-st">running</span></div>';
+    html += '<div class="work-row live"><span class="work-dot"></span><b>' + esc(w.description) + '</b>' + (w.project ? '<span class="work-proj">' + esc(w.project) + '</span>' : '') + '<span class="work-st">running</span>' + recordedHTML(w) + '</div>';
   });
   if (S.work.queued > 0) html += '<div class="work-row"><span class="work-dot queued"></span>' + S.work.queued + ' queued</div>';
   (S.work.delivered || []).forEach(w => {
     html += '<div class="work-row done" data-work="' + esc(w.id) + '"><span class="work-dot done"></span><b>' + esc(w.description) + '</b>' + (w.project ? '<span class="work-proj">' + esc(w.project) + '</span>' : '') + '<span class="work-st">delivered</span>' +
-      (w.result ? '<div class="work-res">' + esc(w.result) + '</div>' : '') + gradeHTML(w) + '</div>';
+      (w.result ? '<div class="work-res">' + esc(w.result) + '</div>' : '') + recordedHTML(w) + gradeHTML(w) + '</div>';
   });
   return html;
 }

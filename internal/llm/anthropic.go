@@ -115,6 +115,7 @@ type anthToolChoice struct {
 
 type anthResponse struct {
 	ID          string          `json:"id"`
+	Model       reportedName    `json:"model"`
 	Diagnostics json.RawMessage `json:"diagnostics"`
 	Content     []anthContent   `json:"content"`
 	StopReason  string          `json:"stop_reason"`
@@ -296,7 +297,14 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 
 			content := make([]anthContent, 0, len(m.Images)+1)
 			for _, img := range m.Images {
-				content = append(content, anthContent{Type: "image", Source: &anthSource{Type: "base64", MediaType: img.MediaType, Data: base64.StdEncoding.EncodeToString(img.Data)}})
+				block := "image"
+				switch {
+				case !Writes(DialectAnthropic, img.MediaType):
+					return nil, unwritten(DialectAnthropic, img)
+				case img.MediaType == "application/pdf":
+					block = "document"
+				}
+				content = append(content, anthContent{Type: block, Source: &anthSource{Type: "base64", MediaType: img.MediaType, Data: base64.StdEncoding.EncodeToString(img.Data)}})
 			}
 			req.Messages = append(req.Messages, anthMessage{Role: "user", Content: append(content, anthContent{Type: "text", Text: m.Content})})
 		}
@@ -390,7 +398,7 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 	}
 	if ar.cutCall {
 
-		logsink.Warn("llm.return", "%s %s reached its output limit inside the arguments of a call to the tool %q — the incomplete call was left out and not run; the reply is returned as cut off", providerLabel(c.dialect), c.model, ar.cutTool)
+		logsink.Warn("llm.return", "%s %s reached its output limit inside the arguments of a call to the tool %q — the incomplete call was left out and not run; the reply is returned as cut off", c.providerLabel(), c.model, ar.cutTool)
 	}
 
 	var msg Message
@@ -448,7 +456,7 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 
 	return &Response{
 		Choices: []Choice{{Message: msg, FinishReason: finish, ReasoningAccount: strings.Join(account, "\n\n")}},
-		Usage:   usage, ID: ar.ID, RequestID: httpResp.Header.Get("request-id"), Diagnostics: ar.Diagnostics, StopDetails: ar.StopDetails,
+		Usage:   usage, ID: ar.ID, ModelID: string(ar.Model), RequestID: httpResp.Header.Get("request-id"), Diagnostics: ar.Diagnostics, StopDetails: ar.StopDetails,
 	}, nil
 }
 

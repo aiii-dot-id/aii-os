@@ -60,8 +60,8 @@ func TestTurnTokenBudgetFencesTheTurn(t *testing.T) {
 	if !client.opts[2].DisableTools {
 		t.Fatal("the wrap-up call did not disable tool invocation")
 	}
-	if !strings.Contains(res.Spoken, "token budget (500000) is spent") {
-		t.Fatalf("the turn did not declare its fence: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "token budget (500000) is spent") {
+		t.Fatalf("the turn did not declare its fence: %q", res.Said())
 	}
 }
 
@@ -83,13 +83,13 @@ func TestTheTokenFenceAsksForTheContinuation(t *testing.T) {
 	if res.ContinuedAtCap || res.ContinuedAtPressure || res.ExhaustedBudget || res.ExhaustedCallBudget {
 		t.Fatalf("the fence's ending was reported as another ending: %+v", res)
 	}
-	if !strings.Contains(res.Spoken, "while its work session is still active, the work continues automatically in a fresh turn") {
-		t.Fatalf("the fence promises more than the caller does: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "while its work session is still active, the work continues automatically in a fresh turn") {
+		t.Fatalf("the fence promises more than the caller does: %q", res.Said())
 	}
 	// When the caller schedules no fresh turn the reply closes on the one
 	// line that says so, in the fence's line's place.
 	const why = "no work session is active"
-	if got, want := res.NothingContinues(why), "wrapped up what I had\n\n"+nothingContinuesLine(res.ToolCallsUsed, why); got != want {
+	if got, want := said(res, res.NothingContinues(why)), "wrapped up what I had\n\n"+nothingContinuesLine(res.ToolCallsUsed, why); got != want {
 		t.Fatalf("the reply of a fenced turn nothing continues = %q, want %q", got, want)
 	}
 }
@@ -109,8 +109,8 @@ func TestSilentUsageCountsAgainstTheFence(t *testing.T) {
 	if len(client.opts) != 2 {
 		t.Fatalf("made %d calls, want 1 silent working call + 1 wrap-up", len(client.opts))
 	}
-	if !strings.Contains(res.Spoken, "is spent") {
-		t.Fatalf("silent spend did not trip the fence: %q", res.Spoken)
+	if !strings.Contains(res.Said(), "is spent") {
+		t.Fatalf("silent spend did not trip the fence: %q", res.Said())
 	}
 }
 
@@ -154,13 +154,13 @@ func TestTheFenceSaysAboutWhenACallDidNotReportItsSpend(t *testing.T) {
 			}
 			// <n> is the estimate's own digits: more than the fence, or the
 			// turn would not have ended there.
-			digits := regexp.MustCompile(`about (\d+) `).FindStringSubmatch(res.Spoken)
+			digits := regexp.MustCompile(`about (\d+) `).FindStringSubmatch(res.Said())
 			n := ""
 			if digits != nil {
 				n = digits[1]
 			}
-			if want := strings.ReplaceAll(c.spoken, "<n>", n); res.Spoken != want {
-				t.Errorf("the reply = %q, want %q", res.Spoken, want)
+			if want := strings.ReplaceAll(c.spoken, "<n>", n); res.Said() != want {
+				t.Errorf("the reply = %q, want %q", res.Said(), want)
 			}
 			if want := strings.ReplaceAll(c.logged, "<n>", n); !logs.Contains(want) {
 				t.Errorf("the log does not hold %q:\n%s", want, logs.String())
@@ -185,7 +185,7 @@ func TestUnderBudgetTurnsAreUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(res.Spoken, "token budget") {
-		t.Fatalf("an under-budget turn declared a fence: %q", res.Spoken)
+	if strings.Contains(res.Said(), "token budget") {
+		t.Fatalf("an under-budget turn declared a fence: %q", res.Said())
 	}
 }

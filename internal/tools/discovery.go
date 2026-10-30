@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"github.com/aiii-dot-id/aii-os/internal/hold"
+
 	"fmt"
 	"regexp"
 	"sort"
@@ -34,6 +36,9 @@ type Discovery struct {
 	Primary        bool
 
 	OperatorConfirms bool
+
+	Published           bool
+	UnconfirmedByDesign string
 
 	hostWords bool
 }
@@ -156,16 +161,15 @@ func quoteAuthor(s string) string {
 	return b.String()
 }
 
-func (r *Registry) Declared(name string) (operation, summary string, ok bool) {
+func (r *Registry) Declared(name string) (Discovery, bool) {
 	t, found, _, origin := r.lookupWithHostOnly(name)
 	if !found || origin == "builtin" {
-		return "", "", false
+		return Discovery{}, false
 	}
 	if d, is := t.(Discoverable); is {
-		disc := d.Discovery()
-		operation, summary = disc.Operation, disc.Summary
+		return d.Discovery(), true
 	}
-	return operation, summary, true
+	return Discovery{}, true
 }
 
 func FamilyOf(operation string) string {
@@ -307,11 +311,17 @@ func (r *Registry) HasDynamic() bool {
 }
 
 func (r *Registry) PromptNames(room int) (names []string, unlisted int) {
+
+	return r.PromptNamesIn(room, r.inSafe())
+}
+
+func (r *Registry) PromptNamesIn(room int, safe bool) (names []string, unlisted int) {
 	r.regMu.RLock()
 	var builtins, primaries []string
 	for name, t := range r.tools {
 		switch src := r.sources[name]; {
 		case r.hostOnly[name]:
+		case safe && !continuesInSafe(name, src):
 		case src == "builtin":
 			builtins = append(builtins, name)
 		case discoveryOf(name, t, src).Primary:
@@ -359,8 +369,11 @@ func (r *Registry) Unavailable(name string) (code, reason string, ok bool) {
 		return ReasonOperatorDisabled, "disabled by your operator", true
 	}
 	if r.safeSource != nil {
-		if why, safe := r.safeSource(); safe {
-			return ReasonSafeSuspended, "suspended in safe mode: " + why, true
+		if h, safe := r.safeSource(); safe {
+			if h.Waiting {
+				return ReasonSafeSuspended, "suspended " + hold.While + ": " + h.Reason, true
+			}
+			return ReasonSafeSuspended, "suspended in safe mode: " + h.Reason, true
 		}
 	}
 	return "", "", true
@@ -387,9 +400,65 @@ func (r *Registry) Resolve(ref string) (string, error) {
 	case 1:
 		return matches[0], nil
 	case 0:
+		if near := nearestOperations(ref, entries, 3); len(near) > 0 {
+			return "", fmt.Errorf(missNearestWords, ref, strings.Join(near, ", "))
+		}
 		return "", fmt.Errorf("%s is not a plugin operation installed beside you", ref)
 	}
 	return "", fmt.Errorf("%s is declared by more than one plugin — name one of %s", ref, strings.Join(matches, ", "))
+}
+
+const missNearestWords = "%s is not an installed operation. Nearest: %s. tools action=brief shows them all."
+
+func nearestOperations(ref string, entries []dynEntry, n int) []string {
+	type near struct {
+		op string
+		d  int
+	}
+	want := strings.ToLower(ref)
+	best := map[string]int{}
+	for _, e := range entries {
+		d := min(editDistance(want, strings.ToLower(e.disc.Operation)), editDistance(want, strings.ToLower(e.name)))
+		if old, ok := best[e.disc.Operation]; !ok || d < old {
+			best[e.disc.Operation] = d
+		}
+	}
+	all := make([]near, 0, len(best))
+	for op, d := range best {
+		all = append(all, near{op, d})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].d != all[j].d {
+			return all[i].d < all[j].d
+		}
+		return all[i].op < all[j].op
+	})
+	out := make([]string, 0, n)
+	for _, x := range all[:min(n, len(all))] {
+		out = append(out, x.op)
+	}
+	return out
+}
+
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
 }
 
 func (r *Registry) Brief() Brief {

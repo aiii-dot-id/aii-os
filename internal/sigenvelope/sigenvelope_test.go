@@ -301,3 +301,81 @@ func TestTheWindowIsAQuestionAboutAMoment(t *testing.T) {
 		t.Error("a window that does not parse passed the shape check")
 	}
 }
+
+// TestAMemberSpelledInAnotherCaseIsReadAsTheReferenceReadsIt pins the
+// reader to the reference's reading of a document that carries, beside a
+// member, the same name in another case: decoded from the canonical bytes
+// (Decode), so the order the members arrive in, which neither the
+// canonical form nor any signature sees, cannot change the verdict.
+//
+// The verdicts are the reference's (ai3-bundle strictUnmarshal decodes the
+// canonical bytes, where members sort by name and the last match a field
+// takes wins): "ARTIFACT_KIND" sorts before "artifact_kind", so the real
+// member is read and the bundle verifies, in either order; the Kelvin sign
+// (U+212A), which Go folds to "k", sorts after it, so the other spelling is
+// read and the bundle is refused, in either order. A reader that decodes
+// the bytes as received gives one verdict for one order and the other for
+// the other.
+func TestAMemberSpelledInAnotherCaseIsReadAsTheReferenceReadsIt(t *testing.T) {
+	s := newTestSigner(t)
+	payload := []byte(`{"n":1,"who":"sigenvelope-test"}`)
+	honest := s.signBundle(t, payload)
+	real := `"artifact_kind":"` + testKind + `"`
+	if bytes.Count(honest, []byte(real)) != 1 {
+		t.Fatalf("the honest bundle does not carry %s once", real)
+	}
+	with := func(t *testing.T, member string, before bool) []byte {
+		t.Helper()
+		joined := real + "," + member
+		if before {
+			joined = member + "," + real
+		}
+		return bytes.Replace(honest, []byte(real), []byte(joined), 1)
+	}
+	for _, c := range []struct {
+		name, member string
+		verifies     bool
+	}{
+		{"a member in capitals sorts before the real one", `"ARTIFACT_KIND":"wrong.kind"`, true},
+		{"a member with the Kelvin sign sorts after the real one", "\"artifact_Kind\":\"wrong.kind\"", false},
+	} {
+		for _, before := range []bool{false, true} {
+			order := "after the real member"
+			if before {
+				order = "before the real member"
+			}
+			t.Run(c.name+", "+order, func(t *testing.T) {
+				got, err := VerifyPayload(with(t, c.member, before), s.env, testKind, crypto.ProfileRoot)
+				switch {
+				case c.verifies && err != nil:
+					t.Fatalf("the reference reads the real artifact_kind and verifies this bundle; this reader refused it: %v", err)
+				case c.verifies && !bytes.Equal(got, payload):
+					t.Fatalf("verified, and returned another payload: %s", got)
+				case !c.verifies && err == nil:
+					t.Fatal("the reference reads the other spelling's artifact_kind and refuses this bundle; this reader verified it")
+				case !c.verifies && !strings.Contains(err.Error(), "artifact_kind must be"):
+					t.Fatalf("refused for another reason than the artifact_kind the reference reads: %v", err)
+				}
+			})
+		}
+	}
+
+	t.Run("a payload spelled in capitals beside the real one is never the payload returned", func(t *testing.T) {
+		other := `"PAYLOAD":{"n":2,"who":"another"}`
+		for _, before := range []bool{false, true} {
+			// First in the document, or last: before the real payload, or
+			// after it.
+			doc := append([]byte("{"+other+","), honest[1:]...)
+			if !before {
+				doc = append(append([]byte(nil), honest[:len(honest)-1]...), []byte(","+other+"}")...)
+			}
+			got, err := VerifyPayload(doc, s.env, testKind, crypto.ProfileRoot)
+			if err != nil {
+				t.Fatalf("before=%v: the reference reads the signed payload and verifies; this reader refused: %v", before, err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("before=%v: returned %s, not the signed payload", before, got)
+			}
+		}
+	})
+}

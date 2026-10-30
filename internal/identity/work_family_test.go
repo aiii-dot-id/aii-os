@@ -73,8 +73,8 @@ func TestMeasureFamilyShowsTheShortestServedAttemptAndItsCalls(t *testing.T) {
 	attempt("turn_short", "read", "shell")
 	out := work(map[string]any{"action": "measure", "family": "deploy-preview"})
 	for _, want := range []string{
-		"Kind deploy-preview: 2 delivered attempt(s), newest first: served 2, partial 0, unserved 0; graded 0 (served 0).",
-		"served, ungraded, 2 calls", "served, ungraded, 6 calls",
+		"Kind deploy-preview: 2 delivered attempt(s), newest first: served 2 (your own call); graded 0 (served 0).",
+		"served, ungraded, no check run, 2 calls", "served, ungraded, no check run, 6 calls",
 		"Its calls: 1 read, 2 shell.",
 		"Your playbook for this kind: playbooks/deploy-preview/SKILL.md in your home.",
 	} {
@@ -82,7 +82,7 @@ func TestMeasureFamilyShowsTheShortestServedAttemptAndItsCalls(t *testing.T) {
 			t.Fatalf("measure family lacks %q:\n%s", want, out)
 		}
 	}
-	if !regexp.MustCompile(`Shortest served attempt: ws_[0-9a-f-]+ in 2 calls\.`).MatchString(out) {
+	if !regexp.MustCompile(`Shortest served \(your own call, none confirmed\) attempt: ws_[0-9a-f-]+ in 2 calls\.`).MatchString(out) {
 		t.Fatalf("measure family must name the shortest served attempt:\n%s", out)
 	}
 	if _, err := engine.ExecuteAction(ctx, "verb", "work", map[string]any{"action": "measure", "family": "Not A Slug"}); err == nil {

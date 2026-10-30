@@ -114,25 +114,29 @@ func TestAMissingFileIsNoWayBackToAnOlderList(t *testing.T) {
 		}
 	}
 
-	newer := newFakeGuard()
-	newer.epochs[target], newer.shas[target] = epoch+1, "sha256:"+string(bytes.Repeat([]byte("a"), 64))
-	set := load(newer)
-	expectAbsent(t, set, target, "ROLLBACK refused")
-	others(set)
+	// The mark as this host records it (the root's own) and as a host
+	// before the per-root mark recorded it (the key type): each refuses.
+	for _, mark := range []string{EpochMark(rootForDomain(roots, target)), target} {
+		newer := newFakeGuard()
+		newer.epochs[mark], newer.shas[mark] = epoch+1, "sha256:"+string(bytes.Repeat([]byte("a"), 64))
+		set := load(newer)
+		expectAbsent(t, set, target, "ROLLBACK refused")
+		others(set)
 
-	forked := newFakeGuard()
-	forked.epochs[target], forked.shas[target] = epoch, "sha256:"+string(bytes.Repeat([]byte("b"), 64))
-	set = load(forked)
-	expectAbsent(t, set, target, "FORK refused")
-	others(set)
+		forked := newFakeGuard()
+		forked.epochs[mark], forked.shas[mark] = epoch, "sha256:"+string(bytes.Repeat([]byte("b"), 64))
+		set = load(forked)
+		expectAbsent(t, set, target, "FORK refused")
+		others(set)
 
-	same := newFakeGuard()
-	same.epochs[target], same.shas[target] = epoch, sha
-	set = load(same)
-	if _, ok := set.Epoch(target); !ok || same.accepts != 0 {
-		t.Fatalf("the list the identity accepted, put back, was refused or ledgered again: %v, accepts %d", set.Describe(), same.accepts)
-	}
-	if newer.accepts != 0 || forked.accepts != 0 {
-		t.Fatal("a refused list moved the identity's mark")
+		same := newFakeGuard()
+		same.epochs[mark], same.shas[mark] = epoch, sha
+		set = load(same)
+		if _, ok := set.Epoch(target); !ok || same.accepts != 0 {
+			t.Fatalf("%s: the list the identity accepted, put back, was refused or ledgered again: %v, accepts %d", mark, set.Describe(), same.accepts)
+		}
+		if newer.accepts != 0 || forked.accepts != 0 {
+			t.Fatalf("%s: a refused list moved the identity's mark", mark)
+		}
 	}
 }

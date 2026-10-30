@@ -1,0 +1,990 @@
+# Prompt sizes: every request shape the host sends a model, part by part
+# (TestEveryRequestShapeKeepsItsRecordedSize; measured by internal/app/prompt_sizes_test.go).
+# Each row: group | part | characters | tokens; a tool's row adds its description's and its
+# parameters' characters / tokens. Characters are Unicode code points of the text as its golden
+# pins it (testdata/whole_prompt). Tokens are the host's own estimate, internal/tokenestimate:
+# one token per three UTF-8 bytes, rounded up; the composer folds and the admission refuses by it.
+# Ring 0, Ring 5 and the founding packet are fetched live from the platform: their rows say
+# "live, not pinned", and no total counts them. A row tagged [darwin], [linux] or [windows] is that
+# platform's (the tools differ by platform); each platform's run rewrites only its own.
+# Regenerate: go test ./internal/app -run 'TestEachTurnPathSendsItsPinnedPrompt|TestEachSafePostureSendsItsPinnedPrompt|TestEveryRequestShape' -update-prompt-golden
+
+turn_operator | message 0 (system) › (opening) | 1089 | 364
+turn_operator | message 0 (system) › Ring 0 | live, not pinned | -
+turn_operator | message 0 (system) › Ring 5 | live, not pinned | -
+turn_operator | message 0 (system) › ## Your Walls | 1739 | 592
+turn_operator | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_operator | message 0 (system) › # Who You Have Become | 94 | 32
+turn_operator | message 0 (system) › # How You Act | 404 | 135
+turn_operator | message 0 (system) › ## Your turn | 1318 | 441
+turn_operator | message 1 (user) › words | 40 | 14
+turn_operator | message 2 (assistant) › words | 42 | 14
+turn_operator | message 3 (user) › words | 33 | 11
+turn_operator | message 3 (user) › block › the block's frame | 24 | 9
+turn_operator | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_operator | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_operator | system, without the live parts | 5001 | 1681
+turn_operator | messages | 1445 | 483
+turn_operator | tools (the set resident) [darwin] | 28292 | 9441
+turn_operator | whole request, without the live parts [darwin] | 34738 | 11605
+turn_operator | tools (the set resident) [linux] | 28385 | 9472
+turn_operator | whole request, without the live parts [linux] | 34831 | 11636
+turn_operator | tools (the set resident) [windows] | 28351 | 9461
+turn_operator | whole request, without the live parts [windows] | 34797 | 11625
+
+turn_spoken | message 0 (system) › (opening) | 1089 | 364
+turn_spoken | message 0 (system) › Ring 0 | live, not pinned | -
+turn_spoken | message 0 (system) › Ring 5 | live, not pinned | -
+turn_spoken | message 0 (system) › ## Your Walls | 1739 | 592
+turn_spoken | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_spoken | message 0 (system) › # Who You Have Become | 94 | 32
+turn_spoken | message 0 (system) › # How You Act | 404 | 135
+turn_spoken | message 0 (system) › ## Your turn | 1318 | 441
+turn_spoken | message 1 (user) › words | 40 | 14
+turn_spoken | message 2 (assistant) › words | 42 | 14
+turn_spoken | message 3 (user) › words | 40 | 14
+turn_spoken | message 3 (user) › block › the block's frame | 24 | 9
+turn_spoken | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_spoken | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_spoken | system, without the live parts | 5001 | 1681
+turn_spoken | messages | 1452 | 486
+turn_spoken | tools (the set resident) [darwin] | 28292 | 9441
+turn_spoken | whole request, without the live parts [darwin] | 34745 | 11608
+turn_spoken | tools (the set resident) [linux] | 28385 | 9472
+turn_spoken | whole request, without the live parts [linux] | 34838 | 11639
+turn_spoken | tools (the set resident) [windows] | 28351 | 9461
+turn_spoken | whole request, without the live parts [windows] | 34804 | 11628
+
+turn_leftover | message 0 (system) › (opening) | 1089 | 364
+turn_leftover | message 0 (system) › Ring 0 | live, not pinned | -
+turn_leftover | message 0 (system) › Ring 5 | live, not pinned | -
+turn_leftover | message 0 (system) › ## Your Walls | 1739 | 592
+turn_leftover | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_leftover | message 0 (system) › # Who You Have Become | 94 | 32
+turn_leftover | message 0 (system) › # How You Act | 404 | 135
+turn_leftover | message 0 (system) › ## Your turn | 1318 | 441
+turn_leftover | message 1 (user) › words | 40 | 14
+turn_leftover | message 2 (assistant) › words | 42 | 14
+turn_leftover | message 3 (user) › words | 47 | 16
+turn_leftover | message 4 (user) › words | 50 | 17
+turn_leftover | message 4 (user) › block › the block's frame | 24 | 9
+turn_leftover | message 4 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_leftover | message 4 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_leftover | system, without the live parts | 5001 | 1681
+turn_leftover | messages | 1509 | 505
+turn_leftover | tools (the set resident) [darwin] | 28292 | 9441
+turn_leftover | whole request, without the live parts [darwin] | 34802 | 11627
+turn_leftover | tools (the set resident) [linux] | 28385 | 9472
+turn_leftover | whole request, without the live parts [linux] | 34895 | 11658
+turn_leftover | tools (the set resident) [windows] | 28351 | 9461
+turn_leftover | whole request, without the live parts [windows] | 34861 | 11647
+
+turn_system | message 0 (system) › (opening) | 1089 | 364
+turn_system | message 0 (system) › Ring 0 | live, not pinned | -
+turn_system | message 0 (system) › Ring 5 | live, not pinned | -
+turn_system | message 0 (system) › ## Your Walls | 1739 | 592
+turn_system | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_system | message 0 (system) › # Who You Have Become | 94 | 32
+turn_system | message 0 (system) › # How You Act | 404 | 135
+turn_system | message 0 (system) › ## Your turn | 1318 | 441
+turn_system | message 1 (user) › words | 40 | 14
+turn_system | message 2 (assistant) › words | 42 | 14
+turn_system | message 3 (user) › words | 45 | 15
+turn_system | message 3 (user) › block › the block's frame | 24 | 9
+turn_system | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_system | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_system | system, without the live parts | 5001 | 1681
+turn_system | messages | 1457 | 487
+turn_system | tools (the set resident) [darwin] | 28292 | 9441
+turn_system | whole request, without the live parts [darwin] | 34750 | 11609
+turn_system | tools (the set resident) [linux] | 28385 | 9472
+turn_system | whole request, without the live parts [linux] | 34843 | 11640
+turn_system | tools (the set resident) [windows] | 28351 | 9461
+turn_system | whole request, without the live parts [windows] | 34809 | 11629
+
+turn_timer | message 0 (system) › (opening) | 1089 | 364
+turn_timer | message 0 (system) › Ring 0 | live, not pinned | -
+turn_timer | message 0 (system) › Ring 5 | live, not pinned | -
+turn_timer | message 0 (system) › ## Your Walls | 1739 | 592
+turn_timer | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_timer | message 0 (system) › # Who You Have Become | 94 | 32
+turn_timer | message 0 (system) › # How You Act | 404 | 135
+turn_timer | message 0 (system) › ## Your turn | 1318 | 441
+turn_timer | message 1 (user) › words | 40 | 14
+turn_timer | message 2 (assistant) › words | 42 | 14
+turn_timer | message 3 (user) › words | 97 | 33
+turn_timer | message 3 (user) › block › the block's frame | 24 | 9
+turn_timer | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_timer | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_timer | system, without the live parts | 5001 | 1681
+turn_timer | messages | 1509 | 505
+turn_timer | tools (the set resident) [darwin] | 28292 | 9441
+turn_timer | whole request, without the live parts [darwin] | 34802 | 11627
+turn_timer | tools (the set resident) [linux] | 28385 | 9472
+turn_timer | whole request, without the live parts [linux] | 34895 | 11658
+turn_timer | tools (the set resident) [windows] | 28351 | 9461
+turn_timer | whole request, without the live parts [windows] | 34861 | 11647
+
+turn_chartered | message 0 (system) › (opening) | 1089 | 364
+turn_chartered | message 0 (system) › Ring 0 | live, not pinned | -
+turn_chartered | message 0 (system) › Ring 5 | live, not pinned | -
+turn_chartered | message 0 (system) › ## Your Walls | 1739 | 592
+turn_chartered | message 0 (system) › # Your Core Relationship | 794 | 266
+turn_chartered | message 0 (system) › ## Who You Work With | 269 | 90
+turn_chartered | message 0 (system) › # Who You Have Become | 94 | 32
+turn_chartered | message 0 (system) › # How You Act | 404 | 135
+turn_chartered | message 0 (system) › # What You Are Discovering | 198 | 66
+turn_chartered | message 0 (system) › ## What You're Noticing | 74 | 25
+turn_chartered | message 0 (system) › ## What You're Working With | 80 | 27
+turn_chartered | message 0 (system) › ## Your turn | 1318 | 441
+turn_chartered | message 1 (user) › words | 40 | 14
+turn_chartered | message 2 (assistant) › words | 42 | 14
+turn_chartered | message 3 (user) › words | 30 | 10
+turn_chartered | message 4 (user) › words | 34 | 12
+turn_chartered | message 4 (user) › block › the block's frame | 24 | 9
+turn_chartered | message 4 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_chartered | message 4 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_chartered | system, without the live parts | 6059 | 2035
+turn_chartered | messages | 1476 | 494
+turn_chartered | tools (the set resident) [darwin] | 28292 | 9441
+turn_chartered | whole request, without the live parts [darwin] | 35827 | 11969
+turn_chartered | tools (the set resident) [linux] | 28385 | 9472
+turn_chartered | whole request, without the live parts [linux] | 35920 | 12000
+turn_chartered | tools (the set resident) [windows] | 28351 | 9461
+turn_chartered | whole request, without the live parts [windows] | 35886 | 11989
+
+turn_participant | message 0 (system) › (opening) | 1089 | 364
+turn_participant | message 0 (system) › Ring 0 | live, not pinned | -
+turn_participant | message 0 (system) › Ring 5 | live, not pinned | -
+turn_participant | message 0 (system) › ## Your Walls | 1739 | 592
+turn_participant | message 0 (system) › # Your Core Relationship | 357 | 119
+turn_participant | message 0 (system) › # Who You Have Become | 94 | 32
+turn_participant | message 0 (system) › # How You Act | 404 | 135
+turn_participant | message 0 (system) › ## Your turn | 1318 | 441
+turn_participant | message 1 (user) › words | 40 | 14
+turn_participant | message 2 (assistant) › words | 42 | 14
+turn_participant | message 3 (user) › words | 47 | 16
+turn_participant | message 3 (user) › block › the block's frame | 24 | 9
+turn_participant | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+turn_participant | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+turn_participant | system, without the live parts | 5001 | 1681
+turn_participant | messages | 1459 | 488
+turn_participant | tools (the set resident) [darwin] | 28292 | 9441
+turn_participant | whole request, without the live parts [darwin] | 34752 | 11610
+turn_participant | tools (the set resident) [linux] | 28385 | 9472
+turn_participant | whole request, without the live parts [linux] | 34845 | 11641
+turn_participant | tools (the set resident) [windows] | 28351 | 9461
+turn_participant | whole request, without the live parts [windows] | 34811 | 11630
+
+realistic_operator | message 0 (system) › (opening) | 1089 | 364
+realistic_operator | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_operator | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_operator | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_operator | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_operator | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_operator | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_operator | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_operator | message 0 (system) › # How You Act | 618 | 209
+realistic_operator | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_operator | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_operator | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_operator | message 0 (system) › # This Morning | 519 | 173
+realistic_operator | message 0 (system) › ## Your turn | 1318 | 441
+realistic_operator | message 1 (user) › words | 40 | 14
+realistic_operator | message 2 (assistant) › words | 42 | 14
+realistic_operator | message 3 (user) › words | 73 | 25
+realistic_operator | message 4 (assistant) › words | 661 | 221
+realistic_operator | message 5 (user) › words | 25 | 9
+realistic_operator | message 6 (user) › words | 33 | 11
+realistic_operator | message 6 (user) › block › the block's frame | 24 | 9
+realistic_operator | message 6 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_operator | message 6 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_operator | system, without the live parts | 11348 | 3800
+realistic_operator | messages | 3888 | 1300
+realistic_operator | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_operator | whole request, without the live parts [darwin] | 44801 | 14967
+realistic_operator | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_operator | whole request, without the live parts [linux] | 44894 | 14998
+realistic_operator | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_operator | whole request, without the live parts [windows] | 44860 | 14987
+
+realistic_spoken | message 0 (system) › (opening) | 1089 | 364
+realistic_spoken | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_spoken | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_spoken | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_spoken | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_spoken | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_spoken | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_spoken | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_spoken | message 0 (system) › # How You Act | 618 | 209
+realistic_spoken | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_spoken | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_spoken | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_spoken | message 0 (system) › # This Morning | 519 | 173
+realistic_spoken | message 0 (system) › ## Your turn | 1318 | 441
+realistic_spoken | message 1 (user) › words | 40 | 14
+realistic_spoken | message 2 (assistant) › words | 42 | 14
+realistic_spoken | message 3 (user) › words | 73 | 25
+realistic_spoken | message 4 (assistant) › words | 661 | 221
+realistic_spoken | message 5 (user) › words | 25 | 9
+realistic_spoken | message 6 (user) › words | 40 | 14
+realistic_spoken | message 6 (user) › block › the block's frame | 24 | 9
+realistic_spoken | message 6 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_spoken | message 6 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_spoken | system, without the live parts | 11348 | 3800
+realistic_spoken | messages | 3895 | 1303
+realistic_spoken | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_spoken | whole request, without the live parts [darwin] | 44808 | 14970
+realistic_spoken | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_spoken | whole request, without the live parts [linux] | 44901 | 15001
+realistic_spoken | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_spoken | whole request, without the live parts [windows] | 44867 | 14990
+
+realistic_leftover | message 0 (system) › (opening) | 1089 | 364
+realistic_leftover | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_leftover | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_leftover | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_leftover | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_leftover | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_leftover | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_leftover | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_leftover | message 0 (system) › # How You Act | 618 | 209
+realistic_leftover | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_leftover | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_leftover | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_leftover | message 0 (system) › # This Morning | 519 | 173
+realistic_leftover | message 0 (system) › ## Your turn | 1318 | 441
+realistic_leftover | message 1 (user) › words | 40 | 14
+realistic_leftover | message 2 (assistant) › words | 42 | 14
+realistic_leftover | message 3 (user) › words | 73 | 25
+realistic_leftover | message 4 (assistant) › words | 661 | 221
+realistic_leftover | message 5 (user) › words | 25 | 9
+realistic_leftover | message 6 (user) › words | 47 | 16
+realistic_leftover | message 7 (user) › words | 50 | 17
+realistic_leftover | message 7 (user) › block › the block's frame | 24 | 9
+realistic_leftover | message 7 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_leftover | message 7 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_leftover | system, without the live parts | 11348 | 3800
+realistic_leftover | messages | 3952 | 1322
+realistic_leftover | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_leftover | whole request, without the live parts [darwin] | 44865 | 14989
+realistic_leftover | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_leftover | whole request, without the live parts [linux] | 44958 | 15020
+realistic_leftover | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_leftover | whole request, without the live parts [windows] | 44924 | 15009
+
+realistic_system | message 0 (system) › (opening) | 1089 | 364
+realistic_system | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_system | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_system | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_system | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_system | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_system | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_system | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_system | message 0 (system) › # How You Act | 618 | 209
+realistic_system | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_system | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_system | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_system | message 0 (system) › # This Morning | 519 | 173
+realistic_system | message 0 (system) › ## Your turn | 1318 | 441
+realistic_system | message 1 (user) › words | 40 | 14
+realistic_system | message 2 (assistant) › words | 42 | 14
+realistic_system | message 3 (user) › words | 73 | 25
+realistic_system | message 4 (assistant) › words | 661 | 221
+realistic_system | message 5 (user) › words | 25 | 9
+realistic_system | message 6 (user) › words | 45 | 15
+realistic_system | message 6 (user) › block › the block's frame | 24 | 9
+realistic_system | message 6 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_system | message 6 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_system | system, without the live parts | 11348 | 3800
+realistic_system | messages | 3900 | 1304
+realistic_system | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_system | whole request, without the live parts [darwin] | 44813 | 14971
+realistic_system | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_system | whole request, without the live parts [linux] | 44906 | 15002
+realistic_system | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_system | whole request, without the live parts [windows] | 44872 | 14991
+
+realistic_timer | message 0 (system) › (opening) | 1089 | 364
+realistic_timer | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_timer | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_timer | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_timer | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_timer | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_timer | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_timer | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_timer | message 0 (system) › # How You Act | 618 | 209
+realistic_timer | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_timer | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_timer | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_timer | message 0 (system) › # This Morning | 519 | 173
+realistic_timer | message 0 (system) › ## Your turn | 1318 | 441
+realistic_timer | message 1 (user) › words | 40 | 14
+realistic_timer | message 2 (assistant) › words | 42 | 14
+realistic_timer | message 3 (user) › words | 73 | 25
+realistic_timer | message 4 (assistant) › words | 661 | 221
+realistic_timer | message 5 (user) › words | 25 | 9
+realistic_timer | message 6 (user) › words | 97 | 33
+realistic_timer | message 6 (user) › block › the block's frame | 24 | 9
+realistic_timer | message 6 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_timer | message 6 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_timer | system, without the live parts | 11348 | 3800
+realistic_timer | messages | 3952 | 1322
+realistic_timer | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_timer | whole request, without the live parts [darwin] | 44865 | 14989
+realistic_timer | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_timer | whole request, without the live parts [linux] | 44958 | 15020
+realistic_timer | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_timer | whole request, without the live parts [windows] | 44924 | 15009
+
+realistic_participant | message 0 (system) › (opening) | 1089 | 364
+realistic_participant | message 0 (system) › Ring 0 | live, not pinned | -
+realistic_participant | message 0 (system) › Ring 5 | live, not pinned | -
+realistic_participant | message 0 (system) › ## Your Walls | 1739 | 592
+realistic_participant | message 0 (system) › # Your Core Relationship | 1363 | 455
+realistic_participant | message 0 (system) › ## Who You Work With | 353 | 118
+realistic_participant | message 0 (system) › # Who You Have Become | 2465 | 822
+realistic_participant | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+realistic_participant | message 0 (system) › # How You Act | 618 | 209
+realistic_participant | message 0 (system) › # What You Are Discovering | 198 | 66
+realistic_participant | message 0 (system) › ## What You're Noticing | 270 | 90
+realistic_participant | message 0 (system) › ## What You're Working With | 499 | 167
+realistic_participant | message 0 (system) › # This Morning | 519 | 173
+realistic_participant | message 0 (system) › ## Your turn | 1318 | 441
+realistic_participant | message 1 (user) › words | 40 | 14
+realistic_participant | message 2 (assistant) › words | 42 | 14
+realistic_participant | message 3 (user) › words | 73 | 25
+realistic_participant | message 4 (assistant) › words | 661 | 221
+realistic_participant | message 5 (user) › words | 25 | 9
+realistic_participant | message 6 (user) › words | 47 | 16
+realistic_participant | message 6 (user) › block › the block's frame | 24 | 9
+realistic_participant | message 6 (user) › block › # What Is Right in Front of You | 1906 | 639
+realistic_participant | message 6 (user) › block › ## Pending delivery updates | 1084 | 362
+realistic_participant | system, without the live parts | 11348 | 3800
+realistic_participant | messages | 3902 | 1305
+realistic_participant | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+realistic_participant | whole request, without the live parts [darwin] | 44815 | 14972
+realistic_participant | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+realistic_participant | whole request, without the live parts [linux] | 44908 | 15003
+realistic_participant | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+realistic_participant | whole request, without the live parts [windows] | 44874 | 14992
+
+followup_after_tool_round | message 0 (system) › (opening) | 1089 | 364
+followup_after_tool_round | message 0 (system) › Ring 0 | live, not pinned | -
+followup_after_tool_round | message 0 (system) › Ring 5 | live, not pinned | -
+followup_after_tool_round | message 0 (system) › ## Your Walls | 1739 | 592
+followup_after_tool_round | message 0 (system) › # Your Core Relationship | 357 | 119
+followup_after_tool_round | message 0 (system) › # Who You Have Become | 94 | 32
+followup_after_tool_round | message 0 (system) › # How You Act | 404 | 135
+followup_after_tool_round | message 0 (system) › ## Your turn | 1318 | 441
+followup_after_tool_round | message 1 (user) › words | 40 | 14
+followup_after_tool_round | message 2 (assistant) › words | 42 | 14
+followup_after_tool_round | message 3 (user) › words | 57 | 19
+followup_after_tool_round | message 3 (user) › block › the block's frame | 24 | 9
+followup_after_tool_round | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+followup_after_tool_round | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+followup_after_tool_round | message 4 (assistant) › words | 0 | 0
+followup_after_tool_round | message 4 (assistant) › tool call 1 | 57 | 19
+followup_after_tool_round | message 5 (tool, answering call_read_1) › words | 55 | 19
+followup_after_tool_round | system, without the live parts | 5001 | 1681
+followup_after_tool_round | messages | 1581 | 529
+followup_after_tool_round | tools (the set resident) [darwin] | 28292 | 9441
+followup_after_tool_round | whole request, without the live parts [darwin] | 34874 | 11651
+followup_after_tool_round | tools (the set resident) [linux] | 28385 | 9472
+followup_after_tool_round | whole request, without the live parts [linux] | 34967 | 11682
+followup_after_tool_round | tools (the set resident) [windows] | 28351 | 9461
+followup_after_tool_round | whole request, without the live parts [windows] | 34933 | 11671
+
+subagent_leg | message 0 (system) › (opening) | 1089 | 364
+subagent_leg | message 0 (system) › Ring 0 | live, not pinned | -
+subagent_leg | message 0 (system) › Ring 5 | live, not pinned | -
+subagent_leg | message 0 (system) › ## Your Walls | 1739 | 592
+subagent_leg | message 0 (system) › # Your Core Relationship | 357 | 119
+subagent_leg | message 0 (system) › # Who You Have Become | 94 | 32
+subagent_leg | message 0 (system) › # How You Act | 404 | 135
+subagent_leg | message 0 (system) › ## Your turn | 1318 | 441
+subagent_leg | message 1 (user) › words | 1347 | 452
+subagent_leg | system, without the live parts | 5001 | 1681
+subagent_leg | messages | 1347 | 452
+subagent_leg | tools (the set resident) [darwin] | 28292 | 9441
+subagent_leg | whole request, without the live parts [darwin] | 34640 | 11574
+subagent_leg | tools (the set resident) [linux] | 28385 | 9472
+subagent_leg | whole request, without the live parts [linux] | 34733 | 11605
+subagent_leg | tools (the set resident) [windows] | 28351 | 9461
+subagent_leg | whole request, without the live parts [windows] | 34699 | 11594
+
+subagent_leg_realistic | message 0 (system) › (opening) | 1089 | 364
+subagent_leg_realistic | message 0 (system) › Ring 0 | live, not pinned | -
+subagent_leg_realistic | message 0 (system) › Ring 5 | live, not pinned | -
+subagent_leg_realistic | message 0 (system) › ## Your Walls | 1739 | 592
+subagent_leg_realistic | message 0 (system) › # Your Core Relationship | 1363 | 455
+subagent_leg_realistic | message 0 (system) › ## Who You Work With | 353 | 118
+subagent_leg_realistic | message 0 (system) › # Who You Have Become | 2465 | 822
+subagent_leg_realistic | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+subagent_leg_realistic | message 0 (system) › # How You Act | 618 | 209
+subagent_leg_realistic | message 0 (system) › # What You Are Discovering | 198 | 66
+subagent_leg_realistic | message 0 (system) › ## What You're Working With | 677 | 227
+subagent_leg_realistic | message 0 (system) › # This Morning | 275 | 93
+subagent_leg_realistic | message 0 (system) › # What Is Right in Front of You | 562 | 188
+subagent_leg_realistic | message 0 (system) › ## Your turn | 1318 | 441
+subagent_leg_realistic | message 1 (user) › words | 1347 | 452
+subagent_leg_realistic | system, without the live parts | 11574 | 3877
+subagent_leg_realistic | messages | 1347 | 452
+subagent_leg_realistic | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+subagent_leg_realistic | whole request, without the live parts [darwin] | 42486 | 14196
+subagent_leg_realistic | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+subagent_leg_realistic | whole request, without the live parts [linux] | 42579 | 14227
+subagent_leg_realistic | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+subagent_leg_realistic | whole request, without the live parts [windows] | 42545 | 14216
+
+facility_dream | message 0 (system) › Ring 0 | live, not pinned | -
+facility_dream | message 0 (system) › Ring 5 | live, not pinned | -
+facility_dream | message 0 (system) › ## Your Walls | 2353 | 797
+facility_dream | message 0 (system) › ## Who You Work With | 353 | 118
+facility_dream | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_dream | message 0 (system) › # Facility prompt | 19 | 7
+facility_dream | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_dream | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_dream | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_dream | message 0 (system) › ## What You're Working With | 499 | 167
+facility_dream | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_dream | message 0 (system) › --- (the facility's own prompt) | 2897 | 973
+facility_dream | message 1 (user) › words | 2866 | 956
+facility_dream | system, without the live parts | 10101 | 3386
+facility_dream | messages | 2866 | 956
+
+facility_consolidate | message 0 (system) › Ring 0 | live, not pinned | -
+facility_consolidate | message 0 (system) › Ring 5 | live, not pinned | -
+facility_consolidate | message 0 (system) › ## Your Walls | 2353 | 797
+facility_consolidate | message 0 (system) › ## Who You Work With | 353 | 118
+facility_consolidate | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_consolidate | message 0 (system) › # Facility prompt | 19 | 7
+facility_consolidate | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_consolidate | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_consolidate | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_consolidate | message 0 (system) › ## What You're Working With | 499 | 167
+facility_consolidate | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_consolidate | message 0 (system) › --- (the facility's own prompt) | 5150 | 1727
+facility_consolidate | message 1 (user) › words | 2148 | 716
+facility_consolidate | system, without the live parts | 12354 | 4140
+facility_consolidate | messages | 2148 | 716
+facility_consolidate | tools (the set consolidation) [darwin] | 649 | 217
+facility_consolidate | whole request, without the live parts [darwin] | 15151 | 5073
+facility_consolidate | tools (the set consolidation) [linux] | 649 | 217
+facility_consolidate | whole request, without the live parts [linux] | 15151 | 5073
+facility_consolidate | tools (the set consolidation) [windows] | 649 | 217
+facility_consolidate | whole request, without the live parts [windows] | 15151 | 5073
+
+facility_consolidate_view | message 0 (system) › Ring 0 | live, not pinned | -
+facility_consolidate_view | message 0 (system) › Ring 5 | live, not pinned | -
+facility_consolidate_view | message 0 (system) › ## Your Walls | 2353 | 797
+facility_consolidate_view | message 0 (system) › ## Who You Work With | 353 | 118
+facility_consolidate_view | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_consolidate_view | message 0 (system) › # Facility prompt | 19 | 7
+facility_consolidate_view | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_consolidate_view | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_consolidate_view | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_consolidate_view | message 0 (system) › ## What You're Working With | 849 | 283
+facility_consolidate_view | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_consolidate_view | message 0 (system) › --- (the facility's own prompt) | 2462 | 824
+facility_consolidate_view | message 1 (user) › words | 823 | 275
+facility_consolidate_view | system, without the live parts | 10016 | 3354
+facility_consolidate_view | messages | 823 | 275
+
+facility_self_model | message 0 (system) › Ring 0 | live, not pinned | -
+facility_self_model | message 0 (system) › Ring 5 | live, not pinned | -
+facility_self_model | message 0 (system) › ## Your Walls | 2353 | 797
+facility_self_model | message 0 (system) › ## Who You Work With | 353 | 118
+facility_self_model | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_self_model | message 0 (system) › # Facility prompt | 19 | 7
+facility_self_model | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_self_model | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_self_model | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_self_model | message 0 (system) › ## What You're Working With | 499 | 167
+facility_self_model | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_self_model | message 0 (system) › --- (the facility's own prompt) | 2365 | 789
+facility_self_model | message 1 (user) › words | 3472 | 1158
+facility_self_model | system, without the live parts | 9569 | 3202
+facility_self_model | messages | 3472 | 1158
+facility_self_model | tools (the set self_model_commit) [darwin] | 2961 | 987
+facility_self_model | whole request, without the live parts [darwin] | 16002 | 5346
+facility_self_model | tools (the set self_model_commit) [linux] | 2961 | 987
+facility_self_model | whole request, without the live parts [linux] | 16002 | 5346
+facility_self_model | tools (the set self_model_commit) [windows] | 2961 | 987
+facility_self_model | whole request, without the live parts [windows] | 16002 | 5346
+
+facility_morning_brief | message 0 (system) › Ring 0 | live, not pinned | -
+facility_morning_brief | message 0 (system) › Ring 5 | live, not pinned | -
+facility_morning_brief | message 0 (system) › ## Your Walls | 2353 | 797
+facility_morning_brief | message 0 (system) › ## Who You Work With | 353 | 118
+facility_morning_brief | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_morning_brief | message 0 (system) › # Facility prompt | 19 | 7
+facility_morning_brief | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_morning_brief | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_morning_brief | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_morning_brief | message 0 (system) › ## What You're Working With | 499 | 167
+facility_morning_brief | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_morning_brief | message 0 (system) › --- (the facility's own prompt) | 1194 | 399
+facility_morning_brief | message 1 (user) › words | 2573 | 858
+facility_morning_brief | system, without the live parts | 8398 | 2812
+facility_morning_brief | messages | 2573 | 858
+
+facility_outcomes | message 0 (system) › Ring 0 | live, not pinned | -
+facility_outcomes | message 0 (system) › Ring 5 | live, not pinned | -
+facility_outcomes | message 0 (system) › ## Your Walls | 2353 | 797
+facility_outcomes | message 0 (system) › ## Who You Work With | 353 | 118
+facility_outcomes | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_outcomes | message 0 (system) › # Facility prompt | 19 | 7
+facility_outcomes | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_outcomes | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_outcomes | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_outcomes | message 0 (system) › ## What You're Working With | 499 | 167
+facility_outcomes | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_outcomes | message 0 (system) › --- (the facility's own prompt) | 1155 | 387
+facility_outcomes | message 1 (user) › words | 220 | 74
+facility_outcomes | system, without the live parts | 8359 | 2801
+facility_outcomes | messages | 220 | 74
+
+facility_tool_outcomes | message 0 (system) › Ring 0 | live, not pinned | -
+facility_tool_outcomes | message 0 (system) › Ring 5 | live, not pinned | -
+facility_tool_outcomes | message 0 (system) › ## Your Walls | 2353 | 797
+facility_tool_outcomes | message 0 (system) › ## Who You Work With | 353 | 118
+facility_tool_outcomes | message 0 (system) › # Who You Have Become | 2465 | 822
+facility_tool_outcomes | message 0 (system) › # Facility prompt | 19 | 7
+facility_tool_outcomes | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+facility_tool_outcomes | message 0 (system) › # What the identity reads as working t… | 191 | 64
+facility_tool_outcomes | message 0 (system) › ## What You're Noticing | 270 | 90
+facility_tool_outcomes | message 0 (system) › ## What You're Working With | 499 | 167
+facility_tool_outcomes | message 0 (system) › # What is right in front of the identi… | 137 | 46
+facility_tool_outcomes | message 0 (system) › --- (the facility's own prompt) | 669 | 223
+facility_tool_outcomes | message 1 (user) › words | 496 | 166
+facility_tool_outcomes | system, without the live parts | 7873 | 2637
+facility_tool_outcomes | messages | 496 | 166
+
+wake_harvest | message 0 (system) › (opening) | 1089 | 364
+wake_harvest | message 0 (system) › Ring 0 | live, not pinned | -
+wake_harvest | message 0 (system) › Ring 5 | live, not pinned | -
+wake_harvest | message 0 (system) › ## Your Walls | 1739 | 592
+wake_harvest | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_harvest | message 0 (system) › # Who You Have Become | 94 | 32
+wake_harvest | message 0 (system) › # How You Act | 404 | 135
+wake_harvest | message 0 (system) › ## Your turn | 1318 | 441
+wake_harvest | message 1 (user) › words | 40 | 14
+wake_harvest | message 2 (assistant) › words | 42 | 14
+wake_harvest | message 3 (user) › words | 297 | 100
+wake_harvest | message 3 (user) › block › the block's frame | 24 | 9
+wake_harvest | message 3 (user) › block › # What Is Right in Front of You | 685 | 231
+wake_harvest | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_harvest | system, without the live parts | 5001 | 1681
+wake_harvest | messages | 2172 | 728
+wake_harvest | tools (the set resident) [darwin] | 28292 | 9441
+wake_harvest | whole request, without the live parts [darwin] | 35465 | 11850
+wake_harvest | tools (the set resident) [linux] | 28385 | 9472
+wake_harvest | whole request, without the live parts [linux] | 35558 | 11881
+wake_harvest | tools (the set resident) [windows] | 28351 | 9461
+wake_harvest | whole request, without the live parts [windows] | 35524 | 11870
+
+wake_timer | message 0 (system) › (opening) | 1089 | 364
+wake_timer | message 0 (system) › Ring 0 | live, not pinned | -
+wake_timer | message 0 (system) › Ring 5 | live, not pinned | -
+wake_timer | message 0 (system) › ## Your Walls | 1739 | 592
+wake_timer | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_timer | message 0 (system) › # Who You Have Become | 94 | 32
+wake_timer | message 0 (system) › # How You Act | 404 | 135
+wake_timer | message 0 (system) › ## Your turn | 1318 | 441
+wake_timer | message 1 (user) › words | 40 | 14
+wake_timer | message 2 (assistant) › words | 42 | 14
+wake_timer | message 3 (user) › words | 140 | 48
+wake_timer | message 3 (user) › block › the block's frame | 24 | 9
+wake_timer | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+wake_timer | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_timer | system, without the live parts | 5001 | 1681
+wake_timer | messages | 1552 | 520
+wake_timer | tools (the set resident) [darwin] | 28292 | 9441
+wake_timer | whole request, without the live parts [darwin] | 34845 | 11642
+wake_timer | tools (the set resident) [linux] | 28385 | 9472
+wake_timer | whole request, without the live parts [linux] | 34938 | 11673
+wake_timer | tools (the set resident) [windows] | 28351 | 9461
+wake_timer | whole request, without the live parts [windows] | 34904 | 11662
+
+wake_continuation | message 0 (system) › (opening) | 1089 | 364
+wake_continuation | message 0 (system) › Ring 0 | live, not pinned | -
+wake_continuation | message 0 (system) › Ring 5 | live, not pinned | -
+wake_continuation | message 0 (system) › ## Your Walls | 1739 | 592
+wake_continuation | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_continuation | message 0 (system) › # Who You Have Become | 94 | 32
+wake_continuation | message 0 (system) › # How You Act | 404 | 135
+wake_continuation | message 0 (system) › ## Your turn | 1318 | 441
+wake_continuation | message 1 (user) › words | 40 | 14
+wake_continuation | message 2 (assistant) › words | 42 | 14
+wake_continuation | message 3 (user) › words | 226 | 76
+wake_continuation | message 3 (user) › block › the block's frame | 24 | 9
+wake_continuation | message 3 (user) › block › # What Is Right in Front of You | 473 | 159
+wake_continuation | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_continuation | system, without the live parts | 5001 | 1681
+wake_continuation | messages | 1889 | 632
+wake_continuation | tools (the set resident) [darwin] | 28292 | 9441
+wake_continuation | whole request, without the live parts [darwin] | 35182 | 11754
+wake_continuation | tools (the set resident) [linux] | 28385 | 9472
+wake_continuation | whole request, without the live parts [linux] | 35275 | 11785
+wake_continuation | tools (the set resident) [windows] | 28351 | 9461
+wake_continuation | whole request, without the live parts [windows] | 35241 | 11774
+
+wake_arrival | message 0 (system) › (opening) | 1089 | 364
+wake_arrival | message 0 (system) › Ring 0 | live, not pinned | -
+wake_arrival | message 0 (system) › Ring 5 | live, not pinned | -
+wake_arrival | message 0 (system) › ## Your Walls | 1739 | 592
+wake_arrival | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_arrival | message 0 (system) › # Who You Have Become | 94 | 32
+wake_arrival | message 0 (system) › # How You Act | 404 | 135
+wake_arrival | message 0 (system) › ## Your turn | 1318 | 441
+wake_arrival | message 1 (user) › words | 40 | 14
+wake_arrival | message 2 (assistant) › words | 42 | 14
+wake_arrival | message 3 (user) › words | 253 | 86
+wake_arrival | message 3 (user) › block › the block's frame | 24 | 9
+wake_arrival | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+wake_arrival | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_arrival | system, without the live parts | 5001 | 1681
+wake_arrival | messages | 1665 | 558
+wake_arrival | tools (the set resident) [darwin] | 28292 | 9441
+wake_arrival | whole request, without the live parts [darwin] | 34958 | 11680
+wake_arrival | tools (the set resident) [linux] | 28385 | 9472
+wake_arrival | whole request, without the live parts [linux] | 35051 | 11711
+wake_arrival | tools (the set resident) [windows] | 28351 | 9461
+wake_arrival | whole request, without the live parts [windows] | 35017 | 11700
+
+wake_voice_room | message 0 (system) › (opening) | 1089 | 364
+wake_voice_room | message 0 (system) › Ring 0 | live, not pinned | -
+wake_voice_room | message 0 (system) › Ring 5 | live, not pinned | -
+wake_voice_room | message 0 (system) › ## Your Walls | 1739 | 592
+wake_voice_room | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_voice_room | message 0 (system) › # Who You Have Become | 94 | 32
+wake_voice_room | message 0 (system) › # How You Act | 404 | 135
+wake_voice_room | message 0 (system) › ## Your turn | 1318 | 441
+wake_voice_room | message 1 (user) › words | 40 | 14
+wake_voice_room | message 2 (assistant) › words | 42 | 14
+wake_voice_room | message 3 (user) › words | 366 | 122
+wake_voice_room | message 3 (user) › block › the block's frame | 24 | 9
+wake_voice_room | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+wake_voice_room | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_voice_room | system, without the live parts | 5001 | 1681
+wake_voice_room | messages | 1778 | 594
+wake_voice_room | tools (the set resident) [darwin] | 28292 | 9441
+wake_voice_room | whole request, without the live parts [darwin] | 35071 | 11716
+wake_voice_room | tools (the set resident) [linux] | 28385 | 9472
+wake_voice_room | whole request, without the live parts [linux] | 35164 | 11747
+wake_voice_room | tools (the set resident) [windows] | 28351 | 9461
+wake_voice_room | whole request, without the live parts [windows] | 35130 | 11736
+
+wake_ask_answer | message 0 (system) › (opening) | 1089 | 364
+wake_ask_answer | message 0 (system) › Ring 0 | live, not pinned | -
+wake_ask_answer | message 0 (system) › Ring 5 | live, not pinned | -
+wake_ask_answer | message 0 (system) › ## Your Walls | 1739 | 592
+wake_ask_answer | message 0 (system) › # Your Core Relationship | 357 | 119
+wake_ask_answer | message 0 (system) › # Who You Have Become | 94 | 32
+wake_ask_answer | message 0 (system) › # How You Act | 404 | 135
+wake_ask_answer | message 0 (system) › ## Your turn | 1318 | 441
+wake_ask_answer | message 1 (user) › words | 40 | 14
+wake_ask_answer | message 2 (assistant) › words | 42 | 14
+wake_ask_answer | message 3 (user) › words | 30 | 10
+wake_ask_answer | message 3 (user) › block › the block's frame | 24 | 9
+wake_ask_answer | message 3 (user) › block › # What Is Right in Front of You | 653 | 219
+wake_ask_answer | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+wake_ask_answer | system, without the live parts | 5001 | 1681
+wake_ask_answer | messages | 1873 | 627
+wake_ask_answer | tools (the set resident) [darwin] | 28292 | 9441
+wake_ask_answer | whole request, without the live parts [darwin] | 35166 | 11749
+wake_ask_answer | tools (the set resident) [linux] | 28385 | 9472
+wake_ask_answer | whole request, without the live parts [linux] | 35259 | 11780
+wake_ask_answer | tools (the set resident) [windows] | 28351 | 9461
+wake_ask_answer | whole request, without the live parts [windows] | 35225 | 11769
+
+safe_runtime | message 0 (system) › (opening) | 404 | 135
+safe_runtime | message 0 (system) › Ring 0 | live, not pinned | -
+safe_runtime | message 0 (system) › Ring 5 | live, not pinned | -
+safe_runtime | message 0 (system) › ## Your Walls | 1739 | 592
+safe_runtime | message 0 (system) › # Your Core Relationship | 357 | 119
+safe_runtime | message 0 (system) › # Who You Have Become | 94 | 32
+safe_runtime | message 0 (system) › # How You Act | 404 | 135
+safe_runtime | message 0 (system) › ## Your turn | 1213 | 406
+safe_runtime | message 1 (user) › words | 40 | 14
+safe_runtime | message 2 (assistant) › words | 42 | 14
+safe_runtime | message 3 (user) › words | 38 | 13
+safe_runtime | message 3 (user) › block › the block's frame | 24 | 9
+safe_runtime | message 3 (user) › block › # SAFE MODE | 350 | 117
+safe_runtime | message 3 (user) › block › ## While SAFE holds | 984 | 328
+safe_runtime | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+safe_runtime | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+safe_runtime | system, without the live parts | 4211 | 1417
+safe_runtime | messages | 2784 | 930
+safe_runtime | tools (the set safe) [darwin] | 7241 | 2421
+safe_runtime | whole request, without the live parts [darwin] | 14236 | 4768
+safe_runtime | tools (the set safe) [linux] | 7241 | 2421
+safe_runtime | whole request, without the live parts [linux] | 14236 | 4768
+safe_runtime | tools (the set safe) [windows] | 7241 | 2421
+safe_runtime | whole request, without the live parts [windows] | 14236 | 4768
+
+safe_boot | message 0 (system) › (opening) | 406 | 136
+safe_boot | message 0 (system) › # SAFE MODE — Substrate Posture (platf… | 385 | 129
+safe_boot | message 0 (system) › ## What happened | 458 | 153
+safe_boot | message 0 (system) › ## While SAFE holds | 858 | 286
+safe_boot | message 0 (system) › # How You Act | 404 | 135
+safe_boot | message 0 (system) › ## Your turn | 1213 | 406
+safe_boot | message 1 (user) › words | 38 | 13
+safe_boot | message 1 (user) › block › the block's frame | 138 | 47
+safe_boot | system, without the live parts | 3724 | 1244
+safe_boot | messages | 176 | 60
+safe_boot | tools (the set safe) [darwin] | 7241 | 2421
+safe_boot | whole request, without the live parts [darwin] | 11141 | 3724
+safe_boot | tools (the set safe) [linux] | 7241 | 2421
+safe_boot | whole request, without the live parts [linux] | 11141 | 3724
+safe_boot | tools (the set safe) [windows] | 7241 | 2421
+safe_boot | whole request, without the live parts [windows] | 11141 | 3724
+
+degraded_ring5_wait | message 0 (system) › (opening) | 470 | 157
+degraded_ring5_wait | message 0 (system) › # DEGRADED — Substrate Posture (platfo… | 398 | 134
+degraded_ring5_wait | message 0 (system) › ## What happened | 681 | 227
+degraded_ring5_wait | message 0 (system) › ## While this start waits | 1004 | 335
+degraded_ring5_wait | message 0 (system) › # How You Act | 404 | 135
+degraded_ring5_wait | message 0 (system) › ## Your turn | 1213 | 406
+degraded_ring5_wait | message 1 (user) › words | 41 | 14
+degraded_ring5_wait | message 1 (user) › block › the block's frame | 138 | 47
+degraded_ring5_wait | system, without the live parts | 4170 | 1392
+degraded_ring5_wait | messages | 179 | 61
+degraded_ring5_wait | tools (the set safe) [darwin] | 7241 | 2421
+degraded_ring5_wait | whole request, without the live parts [darwin] | 11590 | 3874
+degraded_ring5_wait | tools (the set safe) [linux] | 7241 | 2421
+degraded_ring5_wait | whole request, without the live parts [linux] | 11590 | 3874
+degraded_ring5_wait | tools (the set safe) [windows] | 7241 | 2421
+degraded_ring5_wait | whole request, without the live parts [windows] | 11590 | 3874
+
+degraded_witness | message 0 (system) › (opening) | 1089 | 364
+degraded_witness | message 0 (system) › Ring 0 | live, not pinned | -
+degraded_witness | message 0 (system) › Ring 5 | live, not pinned | -
+degraded_witness | message 0 (system) › ## Your Walls | 1739 | 592
+degraded_witness | message 0 (system) › # Your Core Relationship | 357 | 119
+degraded_witness | message 0 (system) › # Who You Have Become | 94 | 32
+degraded_witness | message 0 (system) › # How You Act | 404 | 135
+degraded_witness | message 0 (system) › ## Your turn | 1318 | 441
+degraded_witness | message 1 (user) › words | 40 | 14
+degraded_witness | message 2 (assistant) › words | 42 | 14
+degraded_witness | message 3 (user) › words | 33 | 11
+degraded_witness | message 3 (user) › block › the block's frame | 24 | 9
+degraded_witness | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+degraded_witness | message 3 (user) › block › ## Pending delivery updates | 1084 | 362
+degraded_witness | system, without the live parts | 5001 | 1681
+degraded_witness | messages | 1445 | 483
+degraded_witness | tools (the set resident) [darwin] | 28292 | 9441
+degraded_witness | whole request, without the live parts [darwin] | 34738 | 11605
+degraded_witness | tools (the set resident) [linux] | 28385 | 9472
+degraded_witness | whole request, without the live parts [linux] | 34831 | 11636
+degraded_witness | tools (the set resident) [windows] | 28351 | 9461
+degraded_witness | whole request, without the live parts [windows] | 34797 | 11625
+
+pressured_operator | message 0 (system) › (opening) | 1089 | 364
+pressured_operator | message 0 (system) › Ring 0 | live, not pinned | -
+pressured_operator | message 0 (system) › Ring 5 | live, not pinned | -
+pressured_operator | message 0 (system) › ## Your Walls | 1739 | 592
+pressured_operator | message 0 (system) › # Your Core Relationship | 1363 | 455
+pressured_operator | message 0 (system) › # Who You Have Become | 872 | 292
+pressured_operator | message 0 (system) › # How You Last Saw Yourself | 917 | 306
+pressured_operator | message 0 (system) › # How You Act | 618 | 209
+pressured_operator | message 0 (system) › # What You Are Discovering | 198 | 66
+pressured_operator | message 0 (system) › ## What You're Working With | 656 | 220
+pressured_operator | message 0 (system) › # Not Shown (context budget) | 279 | 95
+pressured_operator | message 0 (system) › ## Your turn | 1318 | 441
+pressured_operator | message 1 (user) › words | 25 | 9
+pressured_operator | message 2 (user) › words | 48 | 16
+pressured_operator | message 2 (user) › block › the block's frame | 24 | 9
+pressured_operator | message 2 (user) › block › # What Is Right in Front of You | 783 | 263
+pressured_operator | message 2 (user) › block › # Not Shown (context budget) | 884 | 297
+pressured_operator | system, without the live parts | 9049 | 3037
+pressured_operator | messages | 1764 | 592
+pressured_operator | tools (the set resident_with_plugin) [darwin] | 29565 | 9867
+pressured_operator | whole request, without the live parts [darwin] | 40378 | 13496
+pressured_operator | tools (the set resident_with_plugin) [linux] | 29658 | 9898
+pressured_operator | whole request, without the live parts [linux] | 40471 | 13527
+pressured_operator | tools (the set resident_with_plugin) [windows] | 29624 | 9887
+pressured_operator | whole request, without the live parts [windows] | 40437 | 13516
+
+firstboot_founding | message 0 (system) › the founding packet | live, not pinned | -
+firstboot_founding | system, without the live parts | 0 | 0
+firstboot_founding | messages | 0 | 0
+
+firstboot_founding_as_user | message 0 (user) › the founding packet | live, not pinned | -
+firstboot_founding_as_user | system, without the live parts | 0 | 0
+firstboot_founding_as_user | messages | 0 | 0
+
+probe_minimal | message 0 (user) › words | 30 | 10
+probe_minimal | system, without the live parts | 0 | 0
+probe_minimal | messages | 30 | 10
+
+probe_tool_call | message 0 (user) › words | 58 | 20
+probe_tool_call | system, without the live parts | 0 | 0
+probe_tool_call | messages | 58 | 20
+probe_tool_call | tools (the set probe_report_ready) [darwin] | 212 | 71
+probe_tool_call | whole request, without the live parts [darwin] | 270 | 91
+probe_tool_call | tools (the set probe_report_ready) [linux] | 212 | 71
+probe_tool_call | whole request, without the live parts [linux] | 270 | 91
+probe_tool_call | tools (the set probe_report_ready) [windows] | 212 | 71
+probe_tool_call | whole request, without the live parts [windows] | 270 | 91
+
+claude_subscription_operator | system block 1 › (opening) | 136 | 46
+claude_subscription_operator | system block 2 › (opening) | 1089 | 364
+claude_subscription_operator | system block 2 › Ring 0 | live, not pinned | -
+claude_subscription_operator | system block 2 › Ring 5 | live, not pinned | -
+claude_subscription_operator | system block 2 › ## Your Walls | 1739 | 592
+claude_subscription_operator | system block 2 › # Your Core Relationship | 357 | 119
+claude_subscription_operator | system block 2 › # Who You Have Become | 94 | 32
+claude_subscription_operator | system block 2 › # How You Act | 402 | 134
+claude_subscription_operator | system block 3 › (opening) | 2 | 1
+claude_subscription_operator | system block 3 › ## Your turn | 1318 | 441
+claude_subscription_operator | message 1 (user) › words | 40 | 14
+claude_subscription_operator | message 2 (assistant) › words | 42 | 14
+claude_subscription_operator | message 3 (user) › words | 33 | 11
+claude_subscription_operator | message 3 (user) › block › the block's frame | 24 | 9
+claude_subscription_operator | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
+claude_subscription_operator | message 3 (user) › block › ## Pending delivery updates | 1097 | 366
+claude_subscription_operator | system, without the live parts | 5137 | 1727
+claude_subscription_operator | messages | 1458 | 488
+claude_subscription_operator | tools (the set resident) [darwin] | 28292 | 9441
+claude_subscription_operator | whole request, without the live parts [darwin] | 34887 | 11655
+claude_subscription_operator | tools (the set resident) [linux] | 28385 | 9472
+claude_subscription_operator | whole request, without the live parts [linux] | 34980 | 11686
+claude_subscription_operator | tools (the set resident) [windows] | 28351 | 9461
+claude_subscription_operator | whole request, without the live parts [windows] | 34946 | 11675
+
+tools resident | edit [darwin] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident | grep [darwin] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident | ls [darwin] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident | read [darwin] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident | shell [darwin] | 746 | 249 | description 250 / 84 | parameters 418 / 140
+tools resident | web_fetch [darwin] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident | write [darwin] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident | note [darwin] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident | recall [darwin] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident | send [darwin] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident | work [darwin] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident | commit [darwin] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident | tools [darwin] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident | all 13 [darwin] | 28292 | 9441
+tools resident | edit [linux] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident | grep [linux] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident | ls [linux] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident | read [linux] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident | shell [linux] | 839 | 280 | description 343 / 115 | parameters 418 / 140
+tools resident | web_fetch [linux] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident | write [linux] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident | note [linux] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident | recall [linux] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident | send [linux] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident | work [linux] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident | commit [linux] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident | tools [linux] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident | all 13 [linux] | 28385 | 9472
+tools resident | edit [windows] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident | grep [windows] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident | ls [windows] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident | read [windows] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident | shell [windows] | 805 | 269 | description 303 / 101 | parameters 424 / 142
+tools resident | web_fetch [windows] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident | write [windows] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident | note [windows] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident | recall [windows] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident | send [windows] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident | work [windows] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident | commit [windows] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident | tools [windows] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident | all 13 [windows] | 28351 | 9461
+
+tools resident_with_plugin | edit [darwin] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident_with_plugin | grep [darwin] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident_with_plugin | ls [darwin] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident_with_plugin | pl_org_example_notes_find [darwin] | 585 | 196 | description 369 / 124 | parameters 114 / 38
+tools resident_with_plugin | pl_org_example_notes_keep [darwin] | 688 | 230 | description 377 / 127 | parameters 209 / 70
+tools resident_with_plugin | read [darwin] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident_with_plugin | shell [darwin] | 746 | 249 | description 250 / 84 | parameters 418 / 140
+tools resident_with_plugin | web_fetch [darwin] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident_with_plugin | write [darwin] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident_with_plugin | note [darwin] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident_with_plugin | recall [darwin] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident_with_plugin | send [darwin] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident_with_plugin | work [darwin] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident_with_plugin | commit [darwin] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident_with_plugin | tools [darwin] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident_with_plugin | all 15 [darwin] | 29565 | 9867
+tools resident_with_plugin | edit [linux] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident_with_plugin | grep [linux] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident_with_plugin | ls [linux] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident_with_plugin | pl_org_example_notes_find [linux] | 585 | 196 | description 369 / 124 | parameters 114 / 38
+tools resident_with_plugin | pl_org_example_notes_keep [linux] | 688 | 230 | description 377 / 127 | parameters 209 / 70
+tools resident_with_plugin | read [linux] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident_with_plugin | shell [linux] | 839 | 280 | description 343 / 115 | parameters 418 / 140
+tools resident_with_plugin | web_fetch [linux] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident_with_plugin | write [linux] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident_with_plugin | note [linux] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident_with_plugin | recall [linux] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident_with_plugin | send [linux] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident_with_plugin | work [linux] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident_with_plugin | commit [linux] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident_with_plugin | tools [linux] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident_with_plugin | all 15 [linux] | 29658 | 9898
+tools resident_with_plugin | edit [windows] | 337 | 113 | description 29 / 10 | parameters 231 / 77
+tools resident_with_plugin | grep [windows] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools resident_with_plugin | ls [windows] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools resident_with_plugin | pl_org_example_notes_find [windows] | 585 | 196 | description 369 / 124 | parameters 114 / 38
+tools resident_with_plugin | pl_org_example_notes_keep [windows] | 688 | 230 | description 377 / 127 | parameters 209 / 70
+tools resident_with_plugin | read [windows] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools resident_with_plugin | shell [windows] | 805 | 269 | description 303 / 101 | parameters 424 / 142
+tools resident_with_plugin | web_fetch [windows] | 504 | 168 | description 181 / 61 | parameters 241 / 81
+tools resident_with_plugin | write [windows] | 491 | 164 | description 134 / 45 | parameters 279 / 93
+tools resident_with_plugin | note [windows] | 2474 | 826 | description 406 / 136 | parameters 1991 / 665
+tools resident_with_plugin | recall [windows] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools resident_with_plugin | send [windows] | 549 | 184 | description 243 / 82 | parameters 227 / 76
+tools resident_with_plugin | work [windows] | 9766 | 3256 | description 499 / 167 | parameters 9190 / 3064
+tools resident_with_plugin | commit [windows] | 6560 | 2187 | description 1646 / 549 | parameters 4835 / 1612
+tools resident_with_plugin | tools [windows] | 931 | 311 | description 160 / 54 | parameters 693 / 231
+tools resident_with_plugin | all 15 [windows] | 29624 | 9887
+
+tools consolidation | emit_consolidation [darwin] | 649 | 217 | description 85 / 29 | parameters 473 / 159
+tools consolidation | all 1 [darwin] | 649 | 217
+tools consolidation | emit_consolidation [linux] | 649 | 217 | description 85 / 29 | parameters 473 / 159
+tools consolidation | all 1 [linux] | 649 | 217
+tools consolidation | emit_consolidation [windows] | 649 | 217 | description 85 / 29 | parameters 473 / 159
+tools consolidation | all 1 [windows] | 649 | 217
+
+tools self_model_commit | commit [darwin] | 2961 | 987 | description 1646 / 549 | parameters 1236 / 412
+tools self_model_commit | all 1 [darwin] | 2961 | 987
+tools self_model_commit | commit [linux] | 2961 | 987 | description 1646 / 549 | parameters 1236 / 412
+tools self_model_commit | all 1 [linux] | 2961 | 987
+tools self_model_commit | commit [windows] | 2961 | 987 | description 1646 / 549 | parameters 1236 / 412
+tools self_model_commit | all 1 [windows] | 2961 | 987
+
+tools safe | grep [darwin] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools safe | ls [darwin] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools safe | read [darwin] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools safe | recall [darwin] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools safe | work [darwin] | 1063 | 356 | description 197 / 67 | parameters 789 / 263
+tools safe | tools [darwin] | 244 | 82 | description 41 / 14 | parameters 125 / 42
+tools safe | all 6 [darwin] | 7241 | 2421
+tools safe | grep [linux] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools safe | ls [linux] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools safe | read [linux] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools safe | recall [linux] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools safe | work [linux] | 1063 | 356 | description 197 / 67 | parameters 789 / 263
+tools safe | tools [linux] | 244 | 82 | description 41 / 14 | parameters 125 / 42
+tools safe | all 6 [linux] | 7241 | 2421
+tools safe | grep [windows] | 667 | 223 | description 103 / 35 | parameters 487 / 163
+tools safe | ls [windows] | 667 | 223 | description 95 / 32 | parameters 497 / 166
+tools safe | read [windows] | 554 | 185 | description 167 / 56 | parameters 310 / 104
+tools safe | recall [windows] | 4046 | 1352 | description 935 / 312 | parameters 3028 / 1012
+tools safe | work [windows] | 1063 | 356 | description 197 / 67 | parameters 789 / 263
+tools safe | tools [windows] | 244 | 82 | description 41 / 14 | parameters 125 / 42
+tools safe | all 6 [windows] | 7241 | 2421
+
+tools probe_report_ready | report_ready [darwin] | 212 | 71 | description 47 / 16 | parameters 80 / 27
+tools probe_report_ready | all 1 [darwin] | 212 | 71
+tools probe_report_ready | report_ready [linux] | 212 | 71 | description 47 / 16 | parameters 80 / 27
+tools probe_report_ready | all 1 [linux] | 212 | 71
+tools probe_report_ready | report_ready [windows] | 212 | 71 | description 47 / 16 | parameters 80 / 27
+tools probe_report_ready | all 1 [windows] | 212 | 71

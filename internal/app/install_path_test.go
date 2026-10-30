@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -85,4 +86,68 @@ func TestAnEndedDownloadIsFinalOnThePageUntilTryAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.until(t, "Try again to bring the full set up", func() bool { return s.serving() == "full" })
+}
+
+func TestADownloadTheNetworkEndedStartsAgainWhenTheCatalogIsNextFetched(t *testing.T) {
+	roots, pkg := componentSetsPackage(t, "1.0.0", fullSet, smallSet)
+	models := newTestStore(t)
+	fetch := newSwapFetch()
+	fetch.pass = true
+	fetch.fail[fullURL] = &pluginhost.NetworkError{Cause: errors.New("dial tcp: connect: network is unreachable")}
+	s := bootSwap(t, roots, pkg, models, roomy, fetch)
+	s.until(t, "the refusal on the page", func() bool {
+		r := s.view().Refusal
+		return r != nil && r.Class == pluginfacility.ClassPermanent
+	})
+	if r := s.view().Refusal; r.Stage != pluginfacility.StageMaterial || !r.WaitsOn(pluginfacility.InputNetwork) || !strings.Contains(r.Remedy, "tried again by itself when the plugin catalog is next fetched") {
+		t.Fatalf("the network's end on the card: %+v", r)
+	}
+	s.a.applyFacilitySnapshot()
+	var row bool
+	for _, p := range s.a.pluginPendingViews() {
+		if p.ID == s.id {
+			row = p.Phase == lifeRefused && p.Resumes
+		}
+	}
+	if !row {
+		t.Fatalf("the page's row does not say the host asks again: %+v", s.a.pluginPendingViews())
+	}
+	if got := fetch.urls(); len(got) != pluginhost.MaxDownloadAttempts {
+		t.Fatalf("five attempts the network failed: fetched %v", got)
+	}
+	fetch.mu.Lock()
+	delete(fetch.fail, fullURL)
+	fetch.mu.Unlock()
+	s.a.catalogRefreshed(errors.New("fetching the index: no route to host"))
+	time.Sleep(200 * time.Millisecond)
+	if got := fetch.urls(); len(got) != pluginhost.MaxDownloadAttempts {
+		t.Fatalf("a refresh of the catalog that failed asked again: %v", got)
+	}
+	s.a.catalogRefreshed(nil)
+	s.until(t, "the catalog's fetch to bring the full set up", func() bool { return s.serving() == "full" })
+}
+
+func TestTheCatalogsSpacingIsSetAtTheDoor(t *testing.T) {
+	a := routeApp(t, true, serviceOffersRelays)
+	st, err := a.applyConfigChange(map[string]any{"plugins.catalog_refresh_minutes": float64(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.RestartRequired) != 0 {
+		t.Fatalf("held for a restart: %v", st.RestartRequired)
+	}
+	if got := a.catalogRefreshEvery(); got != 20*time.Minute {
+		t.Fatalf("the loop is spaced by %s", got)
+	}
+	if onDisk, err := LoadConfig(a.configSnapshot().SourcePath); err != nil || onDisk.Plugins.CatalogRefreshMinutes != 20 {
+		t.Fatalf("config.json does not hold it: %v", err)
+	}
+	for _, bad := range []any{float64(-1), float64(14), float64(1441), "often"} {
+		if _, err := a.applyConfigChange(map[string]any{"plugins.catalog_refresh_minutes": bad}); err == nil || !strings.Contains(err.Error(), "plugins.catalog_refresh_minutes") {
+			t.Fatalf("%v was taken, or refused without naming the key: %v", bad, err)
+		}
+	}
+	if _, err := a.applyConfigChange(map[string]any{"plugins.catalog_refresh_minutes": float64(0)}); err != nil || a.catalogRefreshEvery() != time.Hour {
+		t.Fatalf("zero takes the hour: %v, %s", err, a.catalogRefreshEvery())
+	}
 }

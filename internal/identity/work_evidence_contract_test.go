@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestWorkEvidenceClassIsAnEnum(t *testing.T) {
-	for _, verb := range VerbsAt(conversation.Checkpoint{}) {
+	for _, verb := range VerbsAt(conversation.Checkpoint{}, nil) {
 		if verb.Name != "work" {
 			continue
 		}
@@ -92,12 +93,20 @@ func TestWorkEvidenceDefaultsAndVerificationRemain(t *testing.T) {
 		{result: "served: done", worker: true, want: store.EvidenceWorkerReportOnly},
 		{result: "served: done", want: store.EvidenceCompletedLocally},
 		{class: store.EvidenceLocallyVerified, result: "served: checked", refused: true},
-		{class: store.EvidenceLocallyVerified, readback: "check passed", result: "served: checked", worker: true, refused: true},
 		{class: store.EvidenceLocallyVerified, readback: "check passed", result: "served: checked", want: store.EvidenceLocallyVerified},
 	} {
 		got, err := resolveDeliveryEvidence(tc.class, tc.readback, tc.result, tc.worker)
 		if (err != nil) != tc.refused || got != tc.want {
 			t.Fatalf("class=%q worker=%t: got %q, %v", tc.class, tc.worker, got, err)
 		}
+	}
+	// A worker seat's verified delivery is refused where the verb is
+	// dispatched (workerSeatTable), in the words the verb used to say.
+	e, _, _, _, _ := setupEngine(t)
+	worker := context.WithValue(context.Background(), SubagentWorkSession{}, "ws_worker")
+	_, err := e.ExecuteAction(worker, "verb", "work", map[string]any{"action": "deliver", "result": "served: checked", "evidence": store.EvidenceLocallyVerified, "evidence_readback": "check passed"})
+	var seat *SeatError
+	if !errors.As(err, &seat) || !strings.Contains(err.Error(), "a worker seat cannot declare") {
+		t.Fatalf("a worker seat's verified delivery: %v", err)
 	}
 }

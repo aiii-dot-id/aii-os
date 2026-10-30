@@ -38,6 +38,48 @@ run(async (assert) => {
   assert(ready.textContent.includes('relaunch'), 'an installed update asks for a relaunch');
   assert([...ready.querySelectorAll('button')].some(b => b.textContent.trim() === 'Relaunch now'), 'an installed update offers Relaunch now');
   assert(text({enabled:true, error:'release source unreachable'}).textContent.includes('Last check failed'), 'a failure is shown as one');
+  // The newest release announced and the day it was signed; no expiry,
+  // so the card says a date that stops moving is how a quiet channel shows.
+  const heard = text({enabled:true, current_version:'0.2.0', checked_at:'2026-10-20T10:00:00Z', announced_version:'0.2.1', announced_on:'2026-10-14'});
+  const row = heard.querySelector('[data-update-announced]');
+  assert(row !== null && row.textContent.includes('newest announced') && row.textContent.includes('0.2.1 (2026-10-14)'), 'the newest release announced is named with its date');
+  assert(heard.textContent.includes('Nothing marks an announcement as old'), 'the card says an announcement does not run out');
+  assert(!heard.textContent.includes(' at https://'), 'the default address is not named');
+  const moved = text({enabled:true, announced_version:'0.2.1', announced_on:'2026-10-14', announced_from:'https://mirror.example/aiios-plugins.md'});
+  assert(moved.textContent.includes('signed plugin catalog at https://mirror.example/aiios-plugins.md'), "an address the operator set is named as the announcement's source");
+  const none = text({enabled:true, checked_at:'2026-10-20T10:00:00Z'});
+  assert(none.querySelector('[data-update-announced]') === null && none.textContent.includes('No release announcement has reached this machine yet'), 'none received is said, with no row');
+  const held = text({enabled:true, current_version:'0.2.0', announced_version:'0.2.1', announced_on:'2026-10-14', announced_not_offered:true});
+  assert(held.querySelector('[data-update-unoffered]').textContent === '0.2.1 is announced, and the release source this machine checks offers nothing newer than 0.2.0, which is running. A newer release may be held back on the way here.', 'an announced release not offered is said: ' + held.querySelector('[data-update-unoffered]').textContent);
+  assert(text({enabled:true, current_version:'0.2.0', available_version:'0.2.1', announced_version:'0.2.2', announced_not_offered:true}).querySelector('[data-update-unoffered]').textContent.startsWith('0.2.2 is announced, and the release source this machine checks offers 0.2.1.'), 'with an older release offered, it is named');
+  const ahead = text({enabled:true, current_version:'0.2.1', announced_version:'0.2.0', announced_behind:true});
+  assert(ahead.querySelector('[data-update-behind]').textContent.startsWith('This program (0.2.1) is newer than the newest release announced (0.2.0).'), 'a program newer than the announcement is said');
+  assert(heard.querySelector('[data-update-unoffered]') === null && heard.querySelector('[data-update-behind]') === null, 'neither is said when neither is so');
+  // The newest release this program has verified, which no update
+  // goes below, with the day GitHub gives for it and the day it was
+  // verified here: a channel that stopped moving shows as days that stop.
+  const seen = text({enabled:true, current_version:'0.2.0', checked_at:'2026-10-31T10:00:00Z', highest_version:'0.2.1', highest_published:'2026-10-30', highest_verified:'2026-10-31'});
+  const seenRow = seen.querySelector('[data-update-highest]');
+  assert(seenRow !== null && seenRow.textContent === 'newest signed release seen0.2.1 (published 2026-10-30, as GitHub dates it; verified here 2026-10-31)', 'the newest release verified is named with its two days: ' + (seenRow && seenRow.textContent));
+  assert(text({enabled:true, highest_version:'0.2.1', highest_verified:'2026-10-31'}).querySelector('[data-update-highest] b').textContent === '0.2.1 (verified here 2026-10-31)', 'with no date from GitHub, the day it was verified only');
+  assert(text({enabled:true, highest_version:'<b>'}).querySelector('[data-update-highest] b').textContent === '<b>', 'the version is shown as written');
+  assert(none.querySelector('[data-update-highest]') === null, 'nothing is said where nothing was verified');
+  assert(text({enabled:true, error:'0.2.0 is older than 0.2.1, the newest release this program has verified, so it is not installed here. An older release is installed by hand'}).querySelector('[data-update-state]').textContent.includes('0.2.0 is older than 0.2.1'), 'a release refused below the newest verified is said where the card says why nothing was installed');
+  const noted = text({enabled:true, lists_note:'A note <x>\nB note'});
+  assert(noted.querySelector('[data-update-lists-note]').innerHTML === 'A note &lt;x&gt;<br>B note' && noted.querySelector('[data-update-lists]') === null, 'a note is shown as a note, not a refusal');
+  const gone = text({enabled:true, current_version:'0.2.0', running_withdrawn:true, available_version:'0.2.1'});
+  assert(gone.querySelector('[data-update-withdrawn]').textContent === 'The release this program came from (0.2.0) has been withdrawn by its publisher. 0.2.1 is offered here: install it.', 'a withdrawn running release is said, with what replaces it: ' + gone.querySelector('[data-update-withdrawn]').textContent);
+  assert(text({enabled:true, current_version:'0.2.0', running_withdrawn:true}).textContent.includes('No replacement is offered yet.'), 'with nothing offered, that is said');
+  assert(text({enabled:true, running_unknown:'the release 0.2.0 could not be read: offline.'}).querySelector('[data-update-withdrawn]').textContent.endsWith('could not be told: the release 0.2.0 could not be read: offline.'), 'what cannot be told is said, one full stop');
+  assert(text({enabled:true, current_version:'0.2.0'}).querySelector('[data-update-withdrawn]') === null, 'nothing is said of a release not withdrawn');
+  // The app an earlier release's update replaced is kept beside this one,
+  // and the card says where: the operator's way back to the release before.
+  const kept = text({enabled:true, current_version:'0.2.0', checked_at:'2026-10-21T10:00:00Z', previous_kept:'/Applications/.aii-os-previous.app'});
+  assert(kept.querySelector('[data-update-previous]').textContent === "The app this one replaced is kept beside it, at /Applications/.aii-os-previous.app, until the next update replaces it. To go back to it, quit AII OS and put that app in this one's place.", 'the app kept is said, with where it is: ' + kept.querySelector('[data-update-previous]').textContent);
+  assert(text({enabled:true, previous_kept:'/x/<b>.app'}).querySelector('[data-update-previous] code').textContent === '/x/<b>.app', 'the path is shown as written');
+  assert(text({enabled:true, current_version:'0.2.0', checked_at:'2026-10-21T10:00:00Z'}).querySelector('[data-update-previous]') === null, 'nothing is said where no app is kept');
+  const lists = text({enabled:true, lists:'A list <x>\nB list'});
+  assert(lists.querySelector('[data-update-lists]').innerHTML === 'A list &lt;x&gt;<br>B list', 'each list not brought here is its own line, escaped: ' + lists.querySelector('[data-update-lists]').innerHTML);
   const root = document.getElementById('root');
   root.innerHTML = updateCardHTML({enabled:true, current_version:'1.0.0'});
   const btns = [...root.querySelectorAll('button')].map(b => b.textContent.trim());

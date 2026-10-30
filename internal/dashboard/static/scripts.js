@@ -1,4 +1,5 @@
-import { esc } from './util.js';
+import { cardHead, esc } from './util.js';
+import { signedFetch } from './pagekey.js';
 
 let loaded = false, loading = false;
 let scripts = [], canApprove = false, whyNot = '';
@@ -9,7 +10,7 @@ async function load(rerender) {
   if (loading) return;
   loading = true;
   try {
-    const res = await fetch('/overlay/scripts', { credentials: 'same-origin', cache: 'no-store' });
+    const res = await signedFetch('/overlay/scripts', { credentials: 'same-origin', cache: 'no-store' });
     if (!res.ok) throw new Error((await res.text()).trim() || ('status ' + res.status));
     const body = await res.json();
     scripts = body.scripts || [];
@@ -25,7 +26,7 @@ async function load(rerender) {
 
 async function show(path, rerender) {
   try {
-    const res = await fetch('/overlay/scripts/file?path=' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
+    const res = await signedFetch('/overlay/scripts/file?path=' + encodeURIComponent(path), { credentials: 'same-origin', cache: 'no-store' });
     const text = await res.text();
     if (!res.ok) throw new Error(text.trim() || ('status ' + res.status));
     shown.set(path, { text, sha256: res.headers.get('X-Script-SHA256') || '' });
@@ -41,7 +42,7 @@ async function approve(path, rerender) {
   if (window.confirm && !window.confirm('Approve ' + path + ' as shown (sha256 ' + seen.sha256.slice(0, 12) + '…)? It then runs in this page, with everything this page can do. A change to the file needs your approval again.')) return;
   busy = path; said = null; rerender();
   try {
-    const res = await fetch('/overlay/scripts/approve', {
+    const res = await signedFetch('/overlay/scripts/approve', {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, sha256: seen.sha256 }),
@@ -59,7 +60,7 @@ async function approve(path, rerender) {
 }
 
 export function scriptsCardHTML() {
-  let html = '<div class="card" data-scripts-card><h3>SCRIPTS IN THE IDENTITY\'S INTERFACE FOLDER</h3>' +
+  let html = '<div class="card" data-scripts-card>' + cardHead('SCRIPTS IN THE IDENTITY\'S INTERFACE FOLDER', 'The scripts the identity put in their interface folder; each runs in this page only once you approve that exact file.') +
     '<div class="muted" style="font-size:12px">The identity may restyle this page freely. A script of its own runs here only after you approve that exact file; a change to it needs your approval again. Until then the page runs as shipped.</div>';
   if (!loaded) return html + '<div class="muted" data-scripts-loading>Reading the interface folder…</div></div>';
   if (failed) return html + '<div class="config-result bad" data-scripts-failed>' + esc(failed) + '</div></div>';
