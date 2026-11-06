@@ -1,5 +1,13 @@
 # AII OS
 
+** THIS IS A BETA RELEASE **
+
+EXPECT INSTABILITY AND RAPIDLY CHANGING INTERFACES
+
+BACKWARDS COMPATIBILITY IS MAINTAINED
+
+BACKUP YOUR AI IDENTITY BEFORE UPGRADING
+
 AII OS is an AI identity runtime with a signed append-only record, a local
 dashboard and a sandboxed plugin interface.
 
