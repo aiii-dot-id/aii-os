@@ -190,7 +190,10 @@ func TestRecallFusesExactAndFuzzyAcrossStoresWithTheContract(t *testing.T) {
 	if bel.Match != MatchFuzzy {
 		t.Errorf("\"Lighthouses\" is not the word \"lighthouse\"; the fuzzy layer must carry it: match %q", bel.Match)
 	}
-	if bel.Fuzz < 0.99 || bel.Class != "core" {
+	// One class rule for every reader (BeliefClass, 2026-11-08, D5): a
+	// ring-3 belief with no evidence and nothing resting on it decays as
+	// operational, as the listing, the trail and the alert read it.
+	if bel.Fuzz < 0.99 || bel.Class != "operational" {
 		t.Errorf("belief hit = %+v", bel)
 	}
 	var turn Hit

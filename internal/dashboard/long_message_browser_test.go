@@ -46,7 +46,8 @@ run(async assert=>{
  assert(body('resident').textContent===words+' resident','visible resident reply still requires a click');
  assert(!inner.textContent.includes('Long message, kept in full'),'transport placeholder is still shown');
  assert(!calls.some(c=>c.id==='tool'),'conversation hydration fetched tool details');
- assert(!inner.querySelector('.receipt').open,'conversation hydration expanded a receipt');
+ // A step with no result is open to its groups (step 4: what did not succeed stays open), never to its records.
+ assert(!inner.querySelector('.receipt-all').open&&!inner.querySelector('.tool-ev[open]'),'conversation hydration expanded a receipt\'s records');
  assert(peak===1,'visible messages opened parallel automatic reads');
  const copy=owner('resident').querySelector('.copyb');assert(!copy.hidden&&copy.dataset.copyText===words+' resident','loaded reply is not copyable as ordinary speech');
  const before=calls.length;draw(p);await new Promise(r=>requestAnimationFrame(r));
@@ -55,7 +56,7 @@ run(async assert=>{
  assert(getComputedStyle(body('resident')).overflowY!=='auto','reply has a nested scrolling pane');
  assert(t.scrollHeight-t.clientHeight-t.scrollTop<2,'following was lost when full text arrived');
  assert(!calls.some(c=>c.id==='operator'),'offscreen earlier message was fetched eagerly');
- inner.querySelector('.receipt > summary').click();inner.querySelector('.receipt-all > summary').click();
+ if(!inner.querySelector('.receipt').open)inner.querySelector('.receipt > summary').click();inner.querySelector('.receipt-all > summary').click();
  const toolRow=owner('tool');toolRow.querySelector('.tool-ev > summary').click();toolRow.querySelector('.detail-read button').click();
  await until(()=>toolRow.querySelector('.detail-read pre'));
  assert(toolRow.querySelector('.detail-read pre')?.textContent.includes('private tool details'),'explicit tool-detail reading no longer works');

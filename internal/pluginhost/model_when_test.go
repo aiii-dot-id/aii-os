@@ -102,7 +102,7 @@ func whenNames(models []ModelDecl) string {
 // stored value where it holds to the declaration, else the declared
 // default, else nothing.
 func TestAConditionalModelIsTakenWhileItsSettingHoldsAValueItNames(t *testing.T) {
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	language := SettingDecl{Key: "tts_language", Type: SettingEnum, Title: "Speaking language", Default: "en", Values: []string{"en", "fr", "de", "nl"}}
 	models := []ModelDecl{
 		whenModel("base", nil),
@@ -156,7 +156,7 @@ func TestAConditionalModelIsTakenWhileItsSettingHoldsAValueItNames(t *testing.T)
 // reads it; and a package with no conditional model reads no settings
 // here at all.
 func TestAConditionalModelIsHeldToThePackagesSettingsAndFloor(t *testing.T) {
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	language := SettingDecl{Key: "tts_language", Type: SettingEnum, Title: "Speaking language", Default: "en", Values: []string{"en", "fr"}}
 	speed := SettingDecl{Key: "speed", Type: SettingNumber, Title: "Speed"}
 	pack := func(setting string, values ...string) []ModelDecl {

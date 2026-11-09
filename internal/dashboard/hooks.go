@@ -2,12 +2,17 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/audio"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 )
+
+var ErrBeliefNotFound = errors.New("belief not found")
+
+var ErrRecordNotOpen = errors.New("the record is not open")
 
 type WSHandler struct {
 	Interactions interaction.Reader
@@ -21,6 +26,8 @@ type WSHandler struct {
 	RecordSettings func() RecordSettings
 
 	Sent SentSource
+
+	SettingsInForce func() SettingsInForce
 
 	WorkExport func(ctx context.Context, since time.Time, session, project string, w io.Writer) error
 
@@ -70,6 +77,8 @@ type WSHandler struct {
 	TurnActive func() bool
 	Steer      func(text string) (bool, error)
 
+	PassNow func(ctx context.Context) (PassNowResult, error)
+
 	AdmitChat func(ctx context.Context, text string) (bool, error)
 
 	AdmitRequest func(ctx context.Context, text string) error
@@ -102,6 +111,8 @@ type WSHandler struct {
 
 	Recall func(query string) (string, error)
 
+	BeliefTrail func(beliefID string) (*BeliefTrail, error)
+
 	GetProviders func() ProviderDirectory
 
 	SetProvider    func(ProviderEdit) error
@@ -112,6 +123,9 @@ type WSHandler struct {
 	RemoveBrokenProvider func(position int, sha256 string) error
 
 	SetSpeechService func(name, apiKey, baseURL string) error
+
+	LookForLocalServers func() []LocalServerFound
+	AddLocalServer      func(port int, model string) error
 
 	SpeechLists func(provider, direction, search, language, apiKey string) (SpeechLists, error)
 
@@ -195,6 +209,8 @@ type WSHandler struct {
 
 	GetConfig func() *ConfigState
 	SetConfig func(changes map[string]any) (*ConfigState, error)
+
+	SetThemeTokens func(tokens map[string]string) error
 
 	ListLogs func() ([]LogFileState, error)
 	TailLogs func(name string) (*LogTailState, error)

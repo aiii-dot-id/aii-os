@@ -24,7 +24,7 @@ func TestAnAlarmDueBeforeARestoreSaysItMayAlreadyHaveBeenDelivered(t *testing.T)
 		{"due_at", owner.RestoredMs, true},
 		{"due_after", owner.RestoredMs + 1000, false},
 	} {
-		if r := owner.OnAlarm(ctxBG(), tc.id, "wall", tc.deadline, encodeTimerPayload("", "call the plumber")); !r.Accepted {
+		if r := owner.OnAlarm(ctxBG(), tc.id, "wall", tc.deadline, encodeTimerPayload("", "call the plumber", "")); !r.Accepted {
 			t.Fatalf("%s: the floor did not land: %v", tc.id, r.Err)
 		}
 		var floor string
@@ -65,7 +65,7 @@ func TestAQueuedFiringKeepsItsIdentityAcrossRestore(t *testing.T) {
 	e, _ := timerEngine(t)
 	first := NewTimerDeliveryOwner(e)
 	defer first.Stop()
-	payload := encodeTimerPayload("proof", "call the plumber")
+	payload := encodeTimerPayload("proof", "call the plumber", "")
 	if r := first.OnAlarm(t.Context(), "queued", "wall", 42, payload); !r.Accepted {
 		t.Fatalf("first handoff: %+v", r)
 	}

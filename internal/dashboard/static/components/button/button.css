@@ -1,0 +1,16 @@
+.c-button {
+  min-width: var(--target); min-height: var(--target);
+  padding: var(--s-2) var(--s-4); border: 1px solid var(--control); border-radius: var(--r-control);
+  background: var(--surface); color: var(--text);
+  font-family: var(--font-page); font-size: var(--t-sm); line-height: var(--t-sm-lh); font-weight: 600;
+  cursor: pointer;
+}
+.c-button--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.c-button--quiet { background: transparent; border-color: transparent; color: var(--text-2); }
+.c-button--danger { color: var(--bad); border-color: var(--bad); }
+.c-button--icon { padding: var(--s-1); display: inline-grid; place-items: center; }
+.c-button:hover:not(:disabled) { background: var(--surface-2); }
+.c-button--primary:hover:not(:disabled) { background: var(--accent); }
+.c-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.c-button:disabled { cursor: not-allowed; color: var(--text-3); }
+@media (max-width: 767px) { .c-button { min-width: var(--target-phone); min-height: var(--target-phone); } }

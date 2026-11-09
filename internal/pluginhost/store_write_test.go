@@ -258,7 +258,7 @@ func TestARootIsPublishedFromAnAdoptedArchiveAndTheAskersCarrier(t *testing.T) {
 	w := openStore(t)
 	fx := newRuntimeFixture(t)
 	fx.decl.VariantID = hostVariantID()
-	_, role := platformRootsForTest(t)
+	_, role := sharedPlatformRoots(t)
 	pkg := nativePackage(t, "id.example.store", fx.entry.Bytes, role, nil)
 	cache := filepath.Join(t.TempDir(), "archives")
 	if err := os.MkdirAll(cache, 0o700); err != nil {
@@ -361,7 +361,7 @@ func TestADamagedRootIsRebuiltFromItsArchive(t *testing.T) {
 	w := openStore(t)
 	fx := newRuntimeFixture(t)
 	fx.decl.VariantID = hostVariantID()
-	_, role := platformRootsForTest(t)
+	_, role := sharedPlatformRoots(t)
 	pkg := nativePackage(t, "id.example.store", fx.entry.Bytes, role, nil)
 	key := plugstore.RootKey(fx.decl.VariantID, fx.decl.InventorySHA256, fx.entry.Name, fx.entry.Digest)
 	work := StoreWork{Entry: "r/" + key, Root: &RootWork{Runtime: fx.decl, Package: pkg, Member: "variants/" + hostVariantID() + "/child", Name: fx.entry.Name, Digest: fx.entry.Digest}}

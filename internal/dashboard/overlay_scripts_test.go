@@ -212,7 +212,7 @@ func TestAnApprovalIsTakenOnlyFromTheOperatorsSignedInBrowser(t *testing.T) {
 
 	// No token asked for: the identity's shell is as good as a browser here,
 	// so nothing is taken.
-	if code, body := post(nil, site, "application/json", good); code != http.StatusForbidden || !strings.Contains(body, "ask for its access token") {
+	if code, body := post(nil, site, "application/json", good); code != http.StatusForbidden || !strings.Contains(body, "first turn on") {
 		t.Fatalf("an approval was taken from a dashboard that asks for no token: %d %q", code, body)
 	}
 
@@ -284,5 +284,32 @@ func TestAnUnapprovedReplacementIsNotListed(t *testing.T) {
 	approveOverlay(t, s, dir, "views/plugin-setting.js")
 	if got := strings.Join(paths(), ","); got != "theme.css,views/plugin-setting.js" {
 		t.Fatalf("listed %q once approved; want theme.css,views/plugin-setting.js", got)
+	}
+}
+
+// THE REFUSAL SAYS WHO MUST SIGN IN AND NAMES ITS BUTTON, NEVER THE TOKEN.
+// A person does not see the access token and could not act on it; they
+// see the Access card's button, so the refusal quotes its own words.
+func TestTheApprovalRefusalNamesTheSignInButtonNotTheToken(t *testing.T) {
+	raw, err := staticFS.ReadFile("static/strings/settings-access.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const button = `turnOn: "Ask every device to sign in"`
+	if !strings.Contains(string(raw), button) {
+		t.Fatalf("the Access card's button is no longer %s; the refusal quotes it", button)
+	}
+	s := &Server{}
+	s.SetAccessToken(false, "")
+	off := s.canApprove(httptest.NewRequest(http.MethodGet, "/overlay/scripts", nil))
+	s.SetAccessToken(true, "a-token-of-twenty-chars")
+	out := s.canApprove(httptest.NewRequest(http.MethodGet, "/overlay/scripts", nil))
+	for _, why := range []string{off, out} {
+		if why == "" || strings.Contains(strings.ToLower(why), "token") {
+			t.Errorf("the refusal speaks of the token, or says nothing: %q", why)
+		}
+	}
+	if !strings.Contains(off, `"Ask every device to sign in"`) || !strings.Contains(off, "Settings → Access") {
+		t.Errorf("with nobody asked to sign in, the refusal does not say where to turn that on: %q", off)
 	}
 }

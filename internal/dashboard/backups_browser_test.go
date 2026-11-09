@@ -30,13 +30,14 @@ const view = over => Object.assign({ enabled: true, backup_keep: 8, next_pass: '
 
 run(async () => {
   applyBackups({ action: 'status', view: view() });
-  assert(/through record 1402/.test(text('[data-snapshot]')) && /daily/.test(text('[data-snapshot]')) && /not encrypted/.test(text('[data-snapshot]')), 'the snapshot row: ' + text('[data-snapshot]'));
+  assert(/through record 1402/.test(text('[data-snapshot]')) && !/asked for/.test(text('[data-snapshot]')) && /not encrypted/.test(text('[data-snapshot]')), 'the snapshot row: ' + text('[data-snapshot]'));
   assert(/proved to restore/.test(text('[data-lastpass]')), 'the last pass: ' + text('[data-lastpass]'));
-  assert(/NOT encrypted/.test(text('[data-encrypting]')) && text('[data-why]') === view().unencrypted_text, 'encryption status is shown factually');
-  assert(!/aii |\/data\/|\.sec|command/i.test(st.textContent), 'the page tells nobody to use a terminal: ' + st.textContent);
+  assert(/not encrypted/.test(text('[data-encrypting]')) && text('[data-why]') === view().unencrypted_text, 'encryption status is shown factually');
+  // The aii command is lower case; AII OS, the name the page says, is not one.
+  assert(!/\baii\s/.test(st.textContent) && !/\/data\/|\.sec|command/i.test(st.textContent), 'the page tells nobody to use a terminal: ' + st.textContent);
 
   document.getElementById('bk-take').click();
-  assert(last().type === 'backups' && last().backups.action === 'take', 'Back up now sends take: ' + JSON.stringify(last()));
+  assert(last().type === 'backups' && last().backups.action === 'take', 'Make a backup now sends take: ' + JSON.stringify(last()));
   assert(document.getElementById('bk-take').disabled && /Taking/.test(document.getElementById('bk-take').textContent), 'the button waits while the snapshot is taken');
   applyBackups({ action: 'take', view: view({ snapshots: [{ name: 'ledger-20260920T181500Z-seq1410-ondemand', at: '2026-09-20T18:15:00Z', record: 1410, on_demand: true }, { name: 'ledger-20260920T080005Z-seq1402', at: '2026-09-20T08:00:05Z', record: 1402 }] }) });
   assert(st.querySelectorAll('[data-snapshot]').length === 2 && /asked for/.test(text('[data-snapshot]')), 'the new snapshot is listed first and marked asked for');
@@ -72,7 +73,7 @@ run(async () => {
   assert(st.querySelector('[data-step="2"]') && /pick the file you just saved/i.test(text('[data-step="2"]')), 'the card moves to step 2 and says why');
   assert(!st.innerHTML.includes('correct horse battery'), 'THE PASSPHRASE IS NEVER RENDERED');
   assert(backupsHolding().holding, 'the page holds the passphrase for step 2, in memory only');
-  assert(!/encrypted before/.test(text('[data-encrypting]')), 'making the file turns nothing on: no receipt is signed until the saved file is picked back');
+  assert(/not encrypted/.test(text('[data-encrypting]')), 'making the file turns nothing on: no receipt is signed until the saved file is picked back');
 
   const pick = (id, bytes) => { const dt = new DataTransfer(); dt.items.add(new File([bytes], 'escrow.age')); document.getElementById(id).files = dt.files; };
   pick('bk-file2', new Uint8Array([1, 2, 3, 250]));
@@ -86,10 +87,14 @@ run(async () => {
   document.getElementById('bk-check2').click();
   await until(() => acts('escrow_check').length === 2, 'the retry with the right file');
   applyBackups({ action: 'escrow_check', view: view({ encrypting: true, unencrypted: '', unencrypted_text: '', escrow_covers: true, escrow_checked_at: '2026-09-20T18:20:00Z' }) });
-  assert(/encrypted before they can leave/.test(text('[data-encrypting]')) && /Checked:/.test(text('[data-said]')), 'checked, and the page says snapshots are now encrypted');
+  assert(!st.querySelector('[data-encrypting]') && /holds the key that encrypts snapshots here/.test(text('[data-escrow-line]')) && /Checked:/.test(text('[data-said]')), 'checked, and the page says snapshots are now encrypted: ' + text('[data-escrow-line]'));
+  assert(!document.getElementById('bk-pass') && !document.getElementById('bk-file'), 'a check answered closes its form');
   assert(!backupsHolding().holding && backupsHolding().step === 1, 'THE PASSPHRASE IS FORGOTTEN once the check is answered');
   assert(st.querySelector('[data-card="escrow"] [data-said]') && !st.querySelector('[data-card="kept"] [data-said]'), 'the answer to an escrow act is said in the escrow card, where the person is looking');
 
+  // LATER: check a file again, typing its passphrase, from the button that opens its form.
+  st.querySelector('[data-escrow-open="check"]').click();
+  assert(document.activeElement === document.getElementById('bk-file'), 'the form it opens takes the focus');
   pick('bk-file', new Uint8Array([9, 9]));
   document.getElementById('bk-pass2').value = 'correct horse battery';
   document.getElementById('bk-check').click();
@@ -101,16 +106,19 @@ run(async () => {
   forgetBackupsSecrets();
   applyBackups({ action: 'status', view: view({ secrets_ok: false }) });
   assert(st.querySelector('[data-nosecrets]') && !document.getElementById('bk-pass') && !document.getElementById('bk-pass2'), 'no passphrase field on a connection that is not private');
-  assert(/TLS/.test(text('[data-nosecrets]')), 'and the page says what to change');
+  assert(/Serve over HTTPS/.test(text('[data-nosecrets]')), 'and the page says what to change');
 
-  const whyNot = 'Exporting the identity\'s keys requires this dashboard to ask for its access token. Turn that on in Settings.';
+  // A PAGE THE HOST DOES NOT LET EXPORT THE KEYS: no make-the-file form, the host's own words on how
+  // to turn the token on, and checking a file already made, which exports nothing, still offered.
+  const whyNot = 'Exporting the identity\'s keys needs every device to sign in first, so that only someone signed in can export them. Turn on "Ask every device to sign in" in Settings → Access.';
   applyBackups({ action: 'status', view: view({ export_ok: false, export_why_not: whyNot }) });
   assert(st.querySelector('[data-noexport]') && !document.getElementById('bk-pass') && !document.getElementById('bk-create'), 'the make-the-file form is not offered to a page that may not export the keys');
   assert(text('[data-noexport]').includes(whyNot), 'the page says why, in the host\'s words: ' + text('[data-noexport]'));
+  st.querySelector('[data-escrow-open="check"]').click();
   assert(document.getElementById('bk-pass2') && document.getElementById('bk-check'), 'checking a file already made is still offered');
 
   applyBackups({ action: 'status', view: view({ enabled: false }) });
-  assert(st.querySelector('[data-off]') && document.getElementById('bk-take').disabled, 'a switched-off pass is said, and Back up now waits for it');
+  assert(st.querySelector('[data-off]') && document.getElementById('bk-take').disabled, 'a switched-off pass is said, and Make a backup now waits for it');
 });
 </script>`
 	modules := map[string][]byte{}
@@ -128,36 +136,45 @@ run(async () => {
 	runPageInEngines(t, page, modules)
 }
 
-func TestTheIdentityPageSaysWhetherThereIsAWayBack(t *testing.T) {
+// VERIFICATION SAYS WHETHER THERE IS A WAY BACK, in two lines, and takes the
+// operator to the page that does something about it, by its address. (The
+// state of their record was beside Who they are on About; it is Technical →
+// Verification's now.)
+func TestVerificationSaysWhetherThereIsAWayBack(t *testing.T) {
 	page := `<!doctype html>
-<div id="identity-stack"></div>
+<div data-record-state></div>
 <script type="module">
 import { S } from './state.js';
 import { frames } from './ws.js';
-import { went } from './app.js';
-import { opened } from './views/settings.js';
-import { renderIdentity } from './views/identity.js';
+import { recordStateHTML, readRecordState } from './views/settings/technical/record-state.js';
 import { applyBackups } from './views/backups.js';
 import { assert, run } from './__harness.js';
 run(() => {
-  const st = document.getElementById('identity-stack');
-  S.view = 'identity'; S.identity = { brief: 'b' }; S.cont = { mode: 'normal', ledger_seq: 9, lifetime_ticks: 3 };
-  renderIdentity();
-  assert(frames.length === 1 && frames[0].backups.action === 'status', 'the page asks for the view once: ' + JSON.stringify(frames));
-  renderIdentity();
-  assert(frames.length === 1, 'and only once');
+  const st = document.querySelector('[data-record-state]');
+  S.cont = { mode: 'normal', ledger_seq: 9, lifetime_ticks: 3 };
+  readRecordState();
+  assert(frames.length === 1 && frames[0].backups.action === 'status', 'entering the panel does not ask for the view: ' + JSON.stringify(frames));
+  st.innerHTML = recordStateHTML();
+  st.innerHTML = recordStateHTML();
+  assert(frames.length === 1, 'a draw asked for the view: ' + JSON.stringify(frames));
   applyBackups({ action: 'status', view: { enabled: true, snapshots: [{ name: 'n', at: '2026-09-20T08:00:05Z', record: 1402 }], escrow_covers: false, last_pass: { outcome: 'failed', at: '2026-09-20T08:00:10Z' } } });
   const snap = st.querySelector('[data-id-snapshot]').textContent, esc = st.querySelector('[data-id-escrow]').textContent;
   assert(/record 1402/.test(snap) && /not encrypted/.test(snap) && /FAILED/.test(snap), 'the last snapshot line: ' + snap);
   assert(/no/.test(esc), 'keys escrowed: ' + esc);
-  st.querySelector('[data-open-backups]').click();
-  assert(opened.length === 1 && went[0] === 'settings', 'the link opens Settings at Backups & Keys');
+  assert(st.querySelector('[data-open-backups]').getAttribute('href') === '#/settings/backups', 'the link does not open Settings at Backups');
   applyBackups({ action: 'status', view: { enabled: false, snapshots: [], escrow_covers: true, escrow_checked_at: '2026-09-20T18:20:00Z' } });
   assert(/switched off/.test(st.querySelector('[data-id-snapshot]').textContent) && /checked/.test(st.querySelector('[data-id-escrow]').textContent), 'a switched-off pass and a checked escrow are said');
 });
 </script>`
+	runPageInEngines(t, page, recordStateModules(t))
+}
+
+// recordStateModules serves Technical → Verification's record-state part with
+// what it reads: Backups' view and the strings real, the rest stood in.
+func recordStateModules(t *testing.T) map[string][]byte {
+	t.Helper()
 	modules := map[string][]byte{}
-	for _, path := range []string{"static/views/backups.js", "static/views/identity.js"} {
+	for _, path := range []string{"static/views/backups.js", "static/views/settings/technical/record-state.js", "static/strings/settings-technical-forms.js"} {
 		data, err := staticFS.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -165,11 +182,11 @@ run(() => {
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
 	modules["/state.js"] = []byte(`export const S = {};`)
-	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '');`)
+	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');`)
 	modules["/ws.js"] = []byte(`export const frames = []; export function send(f) { frames.push(f); return 'r'; }`)
 	modules["/app.js"] = []byte(`export const went = []; export function go(v) { went.push(v); }`)
 	modules["/views/settings.js"] = []byte(`export const opened = []; export function openBackups() { opened.push(1); }`)
-	runPageInEngines(t, page, modules)
+	return modules
 }
 
 func TestAPersonRestoresFromThePageAndCanFindWhatWasSetAside(t *testing.T) {
@@ -189,7 +206,7 @@ const view = over => Object.assign({ enabled: true, backup_keep: 8, secrets_ok: 
   snapshots: [{ name: 'ledger-20260918T080005Z-seq1300', at: '2026-09-18T08:00:05Z', record: 1300 }] }, over || {});
 run(() => {
   applyBackups({ action: 'status', view: view() });
-  assert(!st.querySelector('[data-card="restore"]'), 'no restore card until there is something to say');
+  assert(!st.querySelector('[data-card="restore"]').open && st.querySelector('[data-restore-none]'), 'what a restore does stays folded until there is something to say, and says none was made');
 
   st.querySelector('[data-restore="ledger-20260918T080005Z-seq1300"]').click();
   assert(last().backups.action === 'restore_plan' && last().backups.source === 'snapshot' && last().backups.name === 'ledger-20260918T080005Z-seq1300', 'the plan is asked for: ' + JSON.stringify(last()));
@@ -408,14 +425,14 @@ run(async () => {
   const button = form.querySelector('button[type="submit"][data-download]');
   assert(button && button.name === 'name' && button.value === sealed && !form.querySelector('input'), 'the form\'s button names the snapshot, and no input the page keeps across renders does');
   assert(!st.querySelector('[data-snapshot="' + plain + '"] [data-download]'), 'A SNAPSHOT IN THE CLEAR IS OFFERED FOR DOWNLOAD');
-  assert(/escrow file, its passphrase and a snapshot kept somewhere else/.test(st.querySelector('[data-offsite]').textContent), 'the page does not say what the way back is: ' + st.querySelector('[data-offsite]').textContent);
+  assert(/its passphrase and one snapshot kept elsewhere/.test(st.querySelector('#bk-way-what').textContent) && /^Keep a recent snapshot somewhere other than this computer/.test(st.querySelector('[data-offsite]').textContent), 'the page does not say what the way back is: ' + st.querySelector('[data-offsite]').textContent);
   assert(!/only way back/.test(st.textContent), 'the page still says the escrow alone is the way back');
   const sent = new FormData(form, button);
   assert(sent.get('name') === sealed, 'pressing Download does not send the snapshot\'s name: ' + sent.get('name'));
   const response = await fetch(form.action, { method: 'POST', body: sent });
   assert(await response.text() === 'snapshot-fixture', 'the shipped policy blocks the page\'s own download POST');
   applyBackups({ action: 'status', view: view([{ name: plain, at: '2026-10-19T04:00:05Z', record: 1390 }]) });
-  assert(!st.querySelector('[data-download]') && /make or check an escrow file/.test(st.querySelector('[data-offsite]').textContent), 'with nothing encrypted, the page does not say how to get a snapshot that can leave: ' + st.querySelector('[data-offsite]').textContent);
+  assert(!st.querySelector('[data-download]') && /Make or check an escrow file below/.test(st.querySelector('[data-offsite]').textContent) && st.querySelector('[data-offsite]').compareDocumentPosition(st.querySelector('[data-escrow-open]')) & Node.DOCUMENT_POSITION_FOLLOWING, 'with nothing encrypted, the page does not say how to get a snapshot that can leave: ' + st.querySelector('[data-offsite]').textContent);
 });`
 	data, err := staticFS.ReadFile("static/views/backups.js")
 	if err != nil {

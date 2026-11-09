@@ -63,7 +63,7 @@ func TestSpokenWordsQueuedBehindARunningTurnAreShownWaitingOnEveryScreen(t *test
 
 	// The turn takes its mailbox at the next tool call: the words are the
 	// turn's, and every screen sees the queue empty.
-	if taken := a.DrainSteering(); len(taken) != 1 || !strings.HasPrefix(taken[0], "[voice") || !strings.HasSuffix(taken[0], "] "+said) {
+	if taken := steeredWords(a.DrainSteering()); len(taken) != 1 || !strings.HasPrefix(taken[0], "[voice") || !strings.HasSuffix(taken[0], "] "+said) {
 		t.Fatalf("the running turn took %q", taken)
 	}
 	for i, page := range pages {

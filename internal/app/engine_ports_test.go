@@ -56,7 +56,7 @@ func requirePorts(t *testing.T, boot string, got, want map[string]string) {
 	}
 }
 
-// The SAFE boot's engine: the read-only conversation's parts, and the eight
+// The SAFE boot's engine: the read-only conversation's parts, and the
 // ports the minimal posture leaves unwired, each nil.
 func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 	dir := t.TempDir()
@@ -88,11 +88,13 @@ func TestTheSafeBootsEngineHoldsExactlyItsPorts(t *testing.T) {
 		"reachable":            "nil",
 		"askProposer":          "nil",
 		"workStarted":          "nil", // SAFE starts no work
+		"voiceAsker":           "nil", // SAFE puts no question about a voice to the operator
 		"askFits":              "nil", // SAFE puts no decision to the operator
 		"workDelivered":        "nil", // SAFE delivers no work and runs no check
 		"confirmWord":          "nil",
 		"workWake":             "nil",
 		"yieldGate":            "nil",
+		"ceilingGate":          "nil",
 		"routeLimits":          "nil",
 		"alarmFirings":         "set",
 		"workLineMaxChars":     "set",
@@ -113,6 +115,7 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		t.Fatalf("the fixture booted SAFE (%s): the probe is not looking at the LIVE boot", reason)
 	}
 	requirePorts(t, "LIVE", enginePorts(a.engine), map[string]string{
+		"voiceAsker":           "set",
 		"store":                "*store.Store",
 		"ledger":               "*app.ledgerAdapter",
 		"rings":                "set",
@@ -134,6 +137,7 @@ func TestTheLiveBootsEngineHoldsEveryPort(t *testing.T) {
 		"confirmWord":          "set",
 		"workWake":             "set",
 		"yieldGate":            "set",
+		"ceilingGate":          "set",
 		"routeLimits":          "set",
 		"alarmFirings":         "set",
 		"workLineMaxChars":     "set",

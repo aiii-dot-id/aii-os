@@ -26,7 +26,13 @@ try {
 
   const { S } = await import('/state.js');
   const { connect } = await import('/ws.js');
-  const { createPending } = await import('/views/projects.js');
+  const projects = await import('/views/projects.js');
+  const { createPending } = projects;
+  // ws.js reaches Projects through later(); the page offers the module
+  // when Projects is first opened (views.js), so it is offered here the
+  // same way, and the refusal and the answer travel the page's path.
+  const { offer } = await import('/shell/later.js');
+  offer(projects);
   S.identityExists = true;
   connect();
   sock.readyState = 1;

@@ -51,9 +51,11 @@ if (r.view !== 'section:pm') {
           'THE SECTION VIEW WENT BLANK one tick after opening — go("") turned every view off');
         assert(location.hash === '#/section:pm',
           'the section address was rewritten to ' + location.hash);
-        S.connected = true; S.view = 'home';
+        // Foreground readback requests fresh data without navigating or
+        // rebuilding the operator's current form.
+        S.connected = true; S.view = 'chat';
         S.refreshCurrentView();
-        assert(['status','continuity','projects','work'].every(q => (window.__queries||[]).includes(q)),
+        assert(['status','continuity','projects','work','identity'].every(q => (window.__queries||[]).includes(q)),
           'foreground refresh omitted a current-view readback: ' + JSON.stringify(window.__queries));
         assert(view.classList.contains('on'), 'foreground readback rebuilt the current view');
         report('OK');
@@ -86,29 +88,31 @@ export function query(q) { (window.__queries ||= []).push(q); }
 export function connect() {}
 export function wake() {}
 `),
-		"/sections.js":       stub("export function initSections() {}\nexport function sectionTitle(v) { return v; }\nexport function publish() {}\nexport function onSections() {}\nexport function onLayout() {}\nexport function onTokensChanged() {}\n"),
-		"/voice.js":          stub("export function wireMic() {}\nexport function bindTransport() {}\nexport function speak() {}\nexport function render() {}\nexport function connectionLost() {}\n"),
-		"/views/chat.js":     stub("export function scrollThread() {}\nexport function addMsg() {}\nexport function attachSpeaker() {}\nexport function sysLine() {}\n"),
-		"/views/home.js":     stub("export function renderHome() {}\n"),
-		"/views/memory.js":   stub("export function renderMemory() {}\n"),
-		"/views/identity.js": stub("export function renderIdentity() {}\n"),
-		"/views/plugins.js":  stub("export function renderPlugins() {}\nexport function rejectPluginAction() { return false; }\nexport function applyPluginStored() {}\n"),
-		"/views/settings.js": stub("export function renderSettings() {}\n"),
-		"/views/projects.js": stub("export function renderProjects() {}\nexport function renderProjPill() {}\nexport function viewProject() {}\n"),
-		"/panel.js":          stub("export function renderPanel() {}\n"),
-		"/overlay.js":        stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\nexport function reloadForTheOverlay() {}\n"),
-		"/theme.js":          stub("export function onTheme() {}\n"),
-		"/presence.js":       stub("export function renderPresence() {}\nexport function setThinking() {}\n"),
+		"/sections.js":               stub("export function initSections() {}\nexport function sectionTitle(v) { return v; }\nexport function publish() {}\nexport function onSections() {}\nexport function onLayout() {}\nexport function onTokensChanged() {}\n"),
+		"/voice.js":                  stub("export function wireMic() {}\nexport function bindTransport() {}\nexport function speak() {}\nexport function render() {}\nexport function connectionLost() {}\n"),
+		"/views/chat.js":             stub("export function scrollThread() {}\nexport function addMsg() {}\nexport function attachSpeaker() {}\nexport function sysLine() {}\n"),
+		"/views/home.js":             stub("export function renderHome() {}\n"),
+		"/views/memory.js":           stub("export function renderMemory() {}\n"),
+		"/views/identity.js":         stub("export function renderIdentity() {}\n"),
+		"/views/identity/between.js": stub("export function renderBetween() {}\n"),
+		"/views/plugins.js":          stub("export function renderPlugins() {}\nexport function rejectPluginAction() { return false; }\nexport function applyPluginStored() {}\n"),
+		"/views/settings.js":         stub("export function renderSettings() {}\n"),
+		"/views/projects.js":         stub("export function renderProjects() {}\nexport function renderProjPill() {}\nexport function viewProject() {}\n"),
+		"/panel.js":                  stub("export function renderPanel() {}\n"),
+		"/overlay.js":                stub("export function holdReloadWhile() {}\nexport function restoreDraft() {}\nexport function onOverlayChanged() {}\nexport function reloadForTheOverlay() {}\n"),
+		"/theme.js":                  stub("export function onTheme() {}\n"),
+		"/presence.js":               stub("export function renderPresence() {}\nexport function setThinking() {}\n"),
 	})
 }
 
 func TestPluginSectionNavigationUsesFocusableButtons(t *testing.T) {
 	page := `<!doctype html><div id="nav"></div><div id="views"></div><div id="slot-rail"></div><div id="slot-panel"></div><div id="slot-home"></div><div id="slot-project"></div>
 <script type="module">
-import {onSections,onLayout} from '/sections.js';import {S} from '/state.js';import {run} from '/__harness.js';
-run(assert=>{
+import {onSections,onLayout} from '/sections.js';import {S} from '/state.js';import {run,until} from '/__harness.js';
+run(async assert=>{
  const slots={'main-tabs':['fixture']};onLayout({profiles:{desktop:slots,mobile:slots,phone:slots,tablet:slots}});
  onSections([{id:'fixture',title:'Fixture plugin',slot:'main-tabs',entry:'index.html'}]);
+ await until(()=>document.querySelector('[data-view="section:fixture"]'));
  const nav=document.querySelector('[data-view="section:fixture"]');assert(nav,'plugin destination not mounted');
  assert(nav.tagName==='BUTTON'&&nav.type==='button','plugin destination is not a native keyboard button');
  nav.focus();assert(document.activeElement===nav,'plugin destination cannot receive focus');nav.click();

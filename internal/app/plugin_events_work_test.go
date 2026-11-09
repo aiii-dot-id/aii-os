@@ -38,7 +38,7 @@ func TestWorkBoundariesAndActorsReachSubscribers(t *testing.T) {
 	if err := a.store.DeliverWorkSession(t.Context(), "ws_main", "served: the report", store.EvidenceCompletedLocally, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.store.MarkHarvested("ws_main", 7); err != nil {
+	if _, err := a.store.TakeInDelivery(context.Background(), "ws_main", 7, "taken in"); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

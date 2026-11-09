@@ -111,10 +111,10 @@ func TestNamingTheOperatorsVoiceReachesTheStore(t *testing.T) {
 			t.Fatalf("a %s UUID stood as the operator's voice, or an earlier word was cited past it", continuity)
 		}
 	}
-
-	anonymous := say("and one more", 10, uuidObservation("vs-1", 23, 10, "t1", atDesk))
-	if stands(anonymous) || stands(seq) {
-		t.Fatal("an anonymous speaker's UUID stood as the operator's identified voice, or an earlier word was cited past it")
+	// An anonymous speaker whose UUID is the one the operator named is theirs:
+	// the engine's decision is not read. The press is still asked for.
+	if why := a.store.OperatorVoiceWhyNot(`{"decision":"uncertain","speaker_id":"","speaker_uuid":"` + atDesk + `","continuity":"matched"}`); why != "" {
+		t.Fatalf("a named voice, anonymous to the engine, does not count: %s", why)
 	}
 	if _, err := a.applyConfigChange(map[string]any{"speech.operator_speakers": nil}); err != nil {
 		t.Fatalf("un-naming the operator's voice: %v", err)
@@ -128,6 +128,11 @@ func TestNamingTheOperatorsVoiceReachesTheStore(t *testing.T) {
 	}
 }
 
+// THE YOUR VOICE CARD'S LIST. The
+// readback lists each voice the record heard with its label and whether
+// it is an enrolled voice, marks the ones the operator named, and lists a named UUID the record never
+// heard. Naming one is the settings door's own change, so a voice named
+// on the card is the voice the Ring 1 rule and heardAs read.
 func TestTheYourVoiceCardListsTheVoicesHeardAndTheOnesNamed(t *testing.T) {
 	const (
 		theirs  = "6f0c2c1e-8a41-4f6e-9a55-0d1c2b3a4e5f"
@@ -156,8 +161,8 @@ func TestTheYourVoiceCardListsTheVoicesHeardAndTheOnesNamed(t *testing.T) {
 	if v := voices[1]; !v.Enrolled || v.Mine || v.WhyNot != "" || v.Label != "Label op-desk" || !v.Heard {
 		t.Fatalf("an enrolled voice: %+v", v)
 	}
-	if v := voices[0]; v.Enrolled || v.WhyNot != voiceNotEnrolled {
-		t.Fatalf("a voice that is not enrolled does not say why it cannot count: %+v", v)
+	if v := voices[0]; v.Enrolled || v.WhyNot != "" || !v.Heard {
+		t.Fatalf("a voice that is not enrolled is one it has heard, and can be named: %+v", v)
 	}
 	if _, err := a.applyConfigChange(map[string]any{"speech.operator_speakers": []any{theirs, unheard}}); err != nil {
 		t.Fatalf("naming the operator's voices through the settings door: %v", err)

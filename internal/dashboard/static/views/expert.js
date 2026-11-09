@@ -1,23 +1,25 @@
 import { S } from '../state.js';
-import { esc } from '../util.js';
-import { renderInto } from '../announce.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 
-export const EXPERT_WORDS = 'Show technical controls';
-export const EXPERT_TIP = 'Shows the technical operator\u2019s controls: on Chat, the switch that sends your notices to you off the dashboard while no page is open; in Settings \u2192 Dashboard, the public name\u2019s route, its relay and port, and the direct addresses. Showing or hiding them changes nothing else.';
+export const EXPERT_WORDS = '';
+export const EXPERT_TIP = '';
+export function expertShown() { return true; }
+export function expertBoxState() { return ''; }
+export function expertBoxHTML() { return ''; }
+export function wireExpertBoxes() {}
 
-const KEYS = { expert: 'dashboard.expert', route: 'dashboard.notices_off_dashboard' };
-const slots = { expert: pendingSlot(), route: pendingSlot() };
-const said = { expert: '', route: '' };
-const confirmed = { expert: null, route: null };
+const KEY = 'dashboard.notices_off_dashboard';
+const slot = pendingSlot();
+let said = '';
+let confirmed = null;
 
-function inForce(which) {
-  const held = slots[which].waiting();
+function inForce() {
+  const held = slot.waiting();
   if (held) return held.value;
-  if (confirmed[which] !== null) return confirmed[which];
-  const st = S.stats || {};
-  return which === 'expert' ? !!st.expert : !!(st.notices && st.notices.on);
+  if (confirmed !== null) return confirmed;
+  const n = S.stats && S.stats.notices;
+  return !!(n && n.on);
 }
 
 const thenList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ', then ' + xs[xs.length - 1];
@@ -32,99 +34,51 @@ export function routeLine(n) {
   return 'Your notices also go to ' + carried[0].name + ' on ' + thenList(carried.map(l => l.channel)) + ' when no page is open.';
 }
 
-function linesHTML(n) {
-  const lines = (n && n.lines) || [];
-  if (!lines.length) return '<p data-notice-lines>No contact line is marked as you.</p>';
-  return '<ul data-notice-lines>' + lines.map(l => '<li>' + esc(l.name) + ' on ' + esc(l.channel) +
-    (l.carried ? '' : ' — no installed channel carries it now') + '</li>').join('') + '</ul>';
+export function noticeRouteState() {
+  const n = (S.stats && S.stats.notices) || null;
+  return JSON.stringify([inForce(), !!slot.waiting(), said, n]);
 }
 
-function panelHTML() {
-  const n = (S.stats && S.stats.notices) || null;
-  const busy = slots.route.waiting() ? ' disabled' : '';
-  return '<label class="expert-control"><input type="checkbox" data-notice-route' + (inForce('route') ? ' checked' : '') + busy + '> Send my notices to me off the dashboard</label>' +
-    '<p class="muted">When no page is open, your notices go to the contact lines marked as you, in your order. This page keeps every one either way.</p>' +
-    linesHTML(n) +
-    '<p class="muted">Which lines are you is set in <a href="#/settings/messages">Settings → Messages</a>, under Contacts: This is me.</p>' +
-    '<p class="config-result bad" data-notice-said data-announce' + (said.route ? '' : ' hidden') + '>' + esc(said.route) + '</p>';
+export function noticeRouteDrawn() {
+  return { on: inForce(), busy: !!slot.waiting(), said, notices: (S.stats && S.stats.notices) || null };
+}
+
+export function wireNoticeRoute(root) {
+  root.querySelectorAll('[data-notice-route-switch]').forEach(box => { box.onchange = () => save(box.checked); });
 }
 
 export function renderExpert() {
-  renderBar();
-  if (S.renderExpertPlaces) S.renderExpertPlaces();
+  if (S.renderNoticeRoute) S.renderNoticeRoute();
 }
 
-function renderBar() {
-  const bar = document.getElementById('expert-bar');
-  if (!bar) return;
-  if (!S.stats || !S.identityExists) { bar.hidden = true; return; }
-  bar.hidden = false;
-  const expert = inForce('expert');
-  const label = bar.querySelector('[data-expert-label]');
-  label.title = EXPERT_TIP;
-  label.querySelector('[data-expert-words]').textContent = EXPERT_WORDS;
-  const box = bar.querySelector('[data-expert]');
-  box.checked = expert;
-  box.disabled = !!slots.expert.waiting();
-  const expertSaid = bar.querySelector('[data-expert-said]');
-  expertSaid.textContent = said.expert;
-  expertSaid.hidden = !said.expert;
-  const line = bar.querySelector('[data-route-line]');
-  const words = routeLine(S.stats.notices);
-  line.textContent = words;
-  line.hidden = !words;
-  const panel = bar.querySelector('[data-expert-panel]');
-  renderInto(panel, expert ? panelHTML() : '', panel.hidden);
-  panel.hidden = !expert;
-  const route = panel.querySelector('[data-notice-route]');
-  if (route) route.onchange = () => save('route', route.checked);
-  box.onchange = () => save('expert', box.checked);
-}
-
-export function expertShown() { return inForce('expert'); }
-
-export function expertBoxState() { return JSON.stringify([inForce('expert'), !!slots.expert.waiting(), said.expert]); }
-
-export function expertBoxHTML() {
-  return '<label class="expert-toggle" data-expert-here-label title="' + esc(EXPERT_TIP) + '"><input type="checkbox" data-expert-here' +
-    (inForce('expert') ? ' checked' : '') + (slots.expert.waiting() ? ' disabled' : '') + '> ' + esc(EXPERT_WORDS) + '</label>' +
-    (said.expert ? ' <span class="config-result bad" data-expert-here-said data-announce>' + esc(said.expert) + '</span>' : '');
-}
-
-export function wireExpertBoxes(root) {
-  root.querySelectorAll('[data-expert-here]').forEach(box => { box.onchange = () => save('expert', box.checked); });
-}
-
-function save(which, value) {
-  said[which] = '';
-  const id = send({ type: 'config_set', config: { [KEYS[which]]: value } });
-  if (!slots[which].arm({ value }, id)) said[which] = 'Not connected; nothing was saved.';
+function save(value) {
+  said = '';
+  const id = send({ type: 'config_set', config: { [KEY]: value } });
+  if (!slot.arm({ value }, id)) said = 'Not connected; nothing was saved.';
   renderExpert();
 }
 
 export function acceptExpertConfig(requestID) {
-  for (const which of Object.keys(slots)) {
-    const held = slots[which].claim(requestID);
-    if (held) { confirmed[which] = held.value; renderExpert(); return true; }
-  }
-  return false;
+  const held = slot.claim(requestID);
+  if (!held) return false;
+  confirmed = held.value;
+  renderExpert();
+  return true;
 }
 
 export function rejectExpertConfig(requestID, text) {
-  for (const which of Object.keys(slots)) {
-    if (slots[which].claim(requestID)) { said[which] = text; renderExpert(); return true; }
-  }
-  return false;
+  if (!slot.claim(requestID)) return false;
+  said = text;
+  renderExpert();
+  return true;
 }
 
 export function expertStatus() {
-  confirmed.expert = confirmed.route = null;
+  confirmed = null;
   renderExpert();
 }
 
 export function expertConnectionLost() {
-  for (const which of Object.keys(slots)) {
-    if (slots[which].drop()) said[which] = 'Connection lost before the answer. What is shown is the host’s last word.';
-  }
+  if (slot.drop()) said = 'Connection lost before the answer. What is shown is the host’s last word.';
   renderExpert();
 }

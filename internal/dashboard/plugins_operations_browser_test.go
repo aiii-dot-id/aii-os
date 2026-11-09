@@ -103,10 +103,10 @@ run(() => {
     contacts: [], channels: [],
   };
   renderSettings();
-  document.querySelector('[data-sec="tools"]').click();
-  const rows = Array.from(document.querySelectorAll('#settings-stack .tool-row'));
+  S.settingsSection('tools'); S.requestSettingsSection(); renderSettings();
+  const rows = Array.from(document.querySelectorAll('#settings-stack [data-tools] li'));
   assert(rows.length === 2, 'two tools listed: ' + rows.length);
-  const row = name => rows.find(r => r.querySelector('.tn').textContent === name).textContent;
+  const row = name => rows.find(r => r.querySelector('[data-tool]').dataset.tool === name).textContent;
   assert(row('pl_org_example_judge_query').includes('An operation of plugin org.example.judge, shown as the identity is given it. Its author\'s summary is on that plugin\'s card on the Plugins page, whole.'),
     'a plugin operation\'s row does not say where the operator reads the summary whole: ' + row('pl_org_example_judge_query'));
   assert(!row('read').includes('Plugins page'), 'a builtin\'s row speaks of a plugin: ' + row('read'));

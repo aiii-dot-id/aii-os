@@ -27,18 +27,18 @@ run(async()=>{
  assert(panel.textContent.includes('full text'),'complete text absent');
  panel.querySelector('select').value='0';panel.querySelector('[data-mail-repair]').click();
  assert(last().mail_repair.sha256==='observed'&&last().mail_repair.recipient==='quinn'&&last().mail_repair.channel==='signal','correction not bound to selected route and observed message');
- assert(panel.querySelector('[data-mail-repair]').disabled&&!panel.textContent.includes('Correction saved'),'success before acknowledgment');
+ assert(panel.querySelector('[data-mail-repair]').disabled&&!panel.textContent.includes('Queued to'),'success before acknowledgment');
  const before=frames.length;mailRepairDisconnected();
  assert(frames.length===before&&panel.textContent.includes('nothing is automatically retried'),'disconnect retried or hid uncertainty');
  requestHeldMail();acceptMailRepair({request_id:last().request_id,mail_repair:state});
  panel.querySelector('select').value='0';panel.querySelector('[data-mail-repair]').click();
  rejectMailRepair(last().request_id,'stale view; refresh');
- assert(panel.textContent.includes('stale view')&&!panel.textContent.includes('Correction saved'),'refusal rendered as success');
+ assert(panel.textContent.includes('stale view')&&!panel.textContent.includes('Queued to'),'refusal rendered as success');
  requestHeldMail();acceptMailRepair({request_id:last().request_id,mail_repair:{messages:null,routes:null,queued:'held'}});
- assert(panel.textContent.includes('Delivery is not yet confirmed'),'queue receipt claimed delivery');
+ assert(panel.textContent.includes('Queued to quinn, by signal.')&&!/delivered/i.test(panel.textContent),'queue receipt claimed delivery');
 });</script>`
 	modules := map[string][]byte{"/state.js": []byte(`export const S={};`), "/ws.js": []byte(`export const frames=[];export function send(f){const request_id='r'+(frames.length+1);frames.push({...f,request_id});return request_id;}`)}
-	for _, file := range []string{"views/mail-repair.js", "pending.js", "util.js"} {
+	for _, file := range []string{"views/mail-repair.js", "views/settings/people-say.js", "strings/settings-people.js", "pending.js", "util.js"} {
 		raw, err := staticFS.ReadFile("static/" + file)
 		if err != nil {
 			t.Fatal(err)

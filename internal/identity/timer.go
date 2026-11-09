@@ -12,6 +12,7 @@ import (
 	"uuid"
 
 	"github.com/aiii-dot-id/aii-os/internal/cognitive"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -35,19 +36,42 @@ type timerPayload struct {
 	Tag     string `json:"tag,omitempty"`
 	Message string `json:"message,omitempty"`
 	FiredMs int64  `json:"fired_ms,omitempty"`
+
+	SetIn string `json:"set_in,omitempty"`
 }
 
-func encodeTimerPayload(tag, message string) string {
-	b, _ := json.Marshal(timerPayload{Tag: tag, Message: message})
+const HeldWordsTag = "held"
+
+func HeldWordsPayload(words, setIn string) string {
+	return encodeTimerPayload(HeldWordsTag, words, setIn)
+}
+
+func encodeTimerPayload(tag, message, setIn string) string {
+	b, _ := json.Marshal(timerPayload{Tag: tag, Message: message, SetIn: setIn})
 	return string(b)
 }
 
 func decodeTimerPayload(s string) (tag, message string) {
+	p := decodeTimerPayloadWhole(s)
+	return p.Tag, p.Message
+}
+
+func decodeTimerPayloadWhole(s string) timerPayload {
 	var p timerPayload
 	if json.Unmarshal([]byte(s), &p) == nil {
-		return p.Tag, p.Message
+		return p
 	}
-	return "", s
+	return timerPayload{Message: s}
+}
+
+func DecodeTimerPayload(s string) (tag, message string) { return decodeTimerPayload(s) }
+
+func TimerFiringAlarmID(outboxID string) string {
+	id := strings.TrimPrefix(outboxID, "timer_")
+	if i := strings.LastIndexByte(id, '_'); i > 0 {
+		id = id[:i]
+	}
+	return id
 }
 
 const DefaultAlarmFirings = 20
@@ -68,7 +92,7 @@ func alarmsAsk(query string, after int) string {
 	return fmt.Sprintf("recall source=alarms query=%q after_seq=%d", query, after)
 }
 
-func (e *Engine) verbTimer(_ context.Context, args map[string]any) (string, error) {
+func (e *Engine) verbTimer(ctx context.Context, args map[string]any) (string, error) {
 	if err := e.ensureTimer(); err != nil {
 		return "", err
 	}
@@ -79,7 +103,7 @@ func (e *Engine) verbTimer(_ context.Context, args map[string]any) (string, erro
 
 	switch action {
 	case "set":
-		return e.timerSet(args)
+		return e.timerSet(ctx, args)
 	case "cancel":
 		id, _ := args["id"].(string)
 		if id == "" {
@@ -168,8 +192,9 @@ func (e *Engine) verbTimer(_ context.Context, args map[string]any) (string, erro
 	}
 }
 
-func (e *Engine) timerSet(args map[string]any) (string, error) {
+func (e *Engine) timerSet(ctx context.Context, args map[string]any) (string, error) {
 	id, _ := args["id"].(string)
+	setIn := interaction.TurnSource(ctx)
 	message, _ := args["message"].(string)
 	tag, _ := args["tag"].(string)
 
@@ -218,10 +243,10 @@ func (e *Engine) timerSet(args map[string]any) (string, error) {
 		id = "t_" + shortID()
 	}
 	if every != nil {
-		if err := e.timers.SetRepeating(id, encodeTimerPayload(tag, message), deadline, every.Milliseconds()); err != nil {
+		if err := e.timers.SetRepeating(id, encodeTimerPayload(tag, message, setIn), deadline, every.Milliseconds()); err != nil {
 			return "", err
 		}
-	} else if err := e.timers.SetTimer(id, encodeTimerPayload(tag, message), deadline); err != nil {
+	} else if err := e.timers.SetTimer(id, encodeTimerPayload(tag, message, setIn), deadline); err != nil {
 		return "", err
 	}
 
@@ -486,6 +511,8 @@ type TimerWake struct {
 	Deadline int64  `json:"deadline"`
 	Tag      string `json:"tag"`
 	Message  string `json:"message"`
+
+	SetIn string `json:"set_in,omitempty"`
 }
 
 func (w TimerWake) DeliveryID() string { return fmt.Sprintf("timer_%s_%d", w.AlarmID, w.Deadline) }
@@ -502,7 +529,8 @@ func (o *TimerDeliveryOwner) OnAlarm(ctx context.Context, alarmID, clock string,
 	o.wakeWG.Add(1)
 	o.wakeMu.Unlock()
 	defer o.wakeWG.Done()
-	tag, message := decodeTimerPayload(payload)
+	decoded := decodeTimerPayloadWhole(payload)
+	tag, message := decoded.Tag, decoded.Message
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[timer %s", alarmID)
 	if tag != "" {
@@ -512,7 +540,7 @@ func (o *TimerDeliveryOwner) OnAlarm(ctx context.Context, alarmID, clock string,
 	if message != "" {
 		fmt.Fprintf(&sb, " %s", message)
 	}
-	wake := TimerWake{AlarmID: alarmID, Deadline: deadline, Tag: tag, Message: message}
+	wake := TimerWake{AlarmID: alarmID, Deadline: deadline, Tag: tag, Message: message, SetIn: decoded.SetIn}
 	raw, err := json.Marshal(wake)
 	if err != nil {
 		return cognitive.AlarmResult{Err: err}

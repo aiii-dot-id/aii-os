@@ -17,7 +17,7 @@ import (
 // App. Child launch is substituted: nothing executes here.
 func TestSignedRuntimeContradictionReachesFacilityAndCorrectedPackageServes(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, signer := platformRootsForTest(t)
+	roots, signer := sharedPlatformRoots(t)
 	fx := newRuntimeFixture(t)
 	const id = "org.example.runtime-refusal"
 	store := openStore(t)

@@ -34,7 +34,7 @@ func TestTheWorkBoundsAreTheOperatorsFromTheDoorAtTheNextWrite(t *testing.T) {
 	if _, err := work(map[string]any{"action": "update", "standing": at}); err != nil {
 		t.Fatalf("a standing state at the default bound (%d) was refused: %v", identity.DefaultStandingMaxChars, err)
 	}
-	facts, err := app.buildWorkState()
+	facts, err := app.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

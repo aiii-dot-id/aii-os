@@ -55,9 +55,12 @@ const CREDENTIAL_REFUSED = ['no_credential', 'credential_expired'];
 export function signInWanted(p, skipWithValidToken = true) {
   if (p.signin && p.signin.status === 'pending') return true;
   if (!skipWithValidToken) return true;
-  if (p.credential && CREDENTIAL_REFUSED.includes(p.status)) return true;
+  return !credentialInHand(p);
+}
+export function credentialInHand(p) {
+  if (p.credential && CREDENTIAL_REFUSED.includes(p.status)) return false;
   const ci = p.credential_info;
-  return !ci || !!ci.error || credentialExpired(ci);
+  return !!ci && !ci.error && !credentialExpired(ci);
 }
 
 export function signInUnmetRow(p) {

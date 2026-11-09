@@ -6,23 +6,46 @@ import (
 	"testing"
 )
 
+// THE BIRTH FORM SAYS WHAT A BIRTH COPIES. A birth copies the notes other
+// AI agents kept on this machine into the identity's home. Those
+// notes are the operator's own, and what the identity reads goes to the
+// model's provider: first run says that it happens, whose notes, what is
+// left alone, and offers the box that stops it ("Copy those notes", saved
+// as genesis.agent_memory.off before the birth, spec step 7), all before
+// Begin, on the one screen.
 func TestTheBirthFormSaysWhatABirthCopies(t *testing.T) {
-	frame, err := staticFS.ReadFile("static/index.html")
+	words, err := staticFS.ReadFile("static/strings/firstrun.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	html := string(frame)
-	form := html[strings.Index(html, `id="firstboot"`):strings.Index(html, `id="fb-result"`)]
-	said := regexp.MustCompile(`<p class="fb-meet" data-fb-notes>([^<]*)</p>`).FindStringSubmatch(form)
+	said := regexp.MustCompile(`beginStep2: "([^"]*)"`).FindStringSubmatch(string(words))
 	if said == nil {
-		t.Fatal("the birth form does not say that other agents' notes are copied, above its result line")
+		t.Fatal("first run's words do not say that other agents' notes are copied (beginStep2)")
 	}
-	if strings.Index(form, "data-fb-notes") > strings.Index(form, `id="fb-birth"`) {
-		t.Fatal("the form says it below the Birth button")
-	}
-	for _, want := range []string{"other AI agents kept on this machine", "by default Claude Code, the Claude desktop app and Codex", "the stores set in genesis.agent_memory", "copied into your identity&rsquo;s home at birth", "you are told what was copied", "Nothing else in those folders is copied", "looks like a key or a token is left out", "genesis.agent_memory.off"} {
+	for _, want := range []string{"Claude Code, the Claude app and Codex", "copied for them to read", "Nothing else is", "a note that seems to hold a key is left out"} {
 		if !strings.Contains(said[1], want) {
-			t.Errorf("the form does not say %q: %s", want, said[1])
+			t.Errorf("first run does not say %q: %s", want, said[1])
 		}
+	}
+	if !strings.Contains(string(words), `copyNotes: "Copy those notes"`) {
+		t.Error("first run's words have no box to leave the notes out")
+	}
+	screen, err := staticFS.ReadFile("static/views/firstrun/start.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(screen)
+	at := func(s string) int {
+		i := strings.Index(src, s)
+		if i < 0 {
+			t.Fatalf("the screen draws no %s", s)
+		}
+		return i
+	}
+	if !(at("W.beginStep2") < at("id: 'fb-notes'") && at("id: 'fb-notes'") < at("id: 'fb-birth'")) {
+		t.Error("the screen must say what is copied, then offer the box, before Begin")
+	}
+	if !strings.Contains(src, "'genesis.agent_memory.off': off") {
+		t.Error("the box is not what Begin saves as genesis.agent_memory.off")
 	}
 }

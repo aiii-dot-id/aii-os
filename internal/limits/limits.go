@@ -90,25 +90,26 @@ func (c *Ceiling) UnmarshalJSON(b []byte) error {
 }
 
 const (
-	DefaultTurnTokens         = 600_000
-	DefaultRounds             = 30
-	DefaultCheckpointCalls    = 32
-	DefaultGraceRounds        = 4
-	DefaultSlack              = 2
-	DefaultContinuations      = 8
-	DefaultSubRounds          = 30
-	DefaultSubCalls           = 64
-	DefaultSubLegs            = 4
-	DefaultSubWallSeconds     = 1200
-	DefaultSubWallLocal       = 1800
-	DefaultContinuationWall   = 45 * 60
-	DefaultAlarmWall          = 15 * 60
-	DefaultHarvestWall        = 15 * 60
-	DefaultToolSchemaRefusals = 3
-	DefaultToolResultChars    = 32_000
-	DefaultTimeoutSeconds     = 120
-	DefaultRetries            = 1
-	DefaultRetryBackoffMS     = 2000
+	DefaultTurnTokens          = 600_000
+	DefaultRounds              = 30
+	DefaultCheckpointCalls     = 32
+	DefaultGraceRounds         = 4
+	DefaultSlack               = 2
+	DefaultContinuations       = 8
+	DefaultWideningCompletions = 3
+	DefaultSubRounds           = 30
+	DefaultSubCalls            = 64
+	DefaultSubLegs             = 4
+	DefaultSubWallSeconds      = 1200
+	DefaultSubWallLocal        = 1800
+	DefaultContinuationWall    = 45 * 60
+	DefaultAlarmWall           = 15 * 60
+	DefaultHarvestWall         = 15 * 60
+	DefaultToolSchemaRefusals  = 3
+	DefaultToolResultChars     = 32_000
+	DefaultTimeoutSeconds      = 120
+	DefaultRetries             = 1
+	DefaultRetryBackoffMS      = 2000
 )
 
 const DefaultTurnSecondsLocal = DefaultContinuationWall
@@ -122,7 +123,7 @@ func WithToolResultChars(ctx context.Context, n int) context.Context {
 }
 
 func ToolResultChars(ctx context.Context) int {
-	if n, ok := ctx.Value(toolResultCharsKey{}).(int); ok && n > 0 {
+	if n, ok := ctx.Value(toolResultCharsKey{}).(int); ok && n >= 0 {
 		return n
 	}
 	return DefaultToolResultChars
@@ -130,5 +131,5 @@ func ToolResultChars(ctx context.Context) int {
 
 func CarriedToolResultChars(ctx context.Context) (int, bool) {
 	n, ok := ctx.Value(toolResultCharsKey{}).(int)
-	return n, ok && n > 0
+	return n, ok && n >= 0
 }

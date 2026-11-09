@@ -30,6 +30,7 @@ run(assert=>{
 func TestPluginActionFailureRestoresOnlyItsCurrentControl(t *testing.T) {
 	page := formRecoveryMarkup + `<button id="send-btn"></button><button id="mic"></button><script type="module">
 import {S} from '/state.js';import {connect} from '/ws.js';import {renderPlugins} from '/views/plugins.js';import {run} from '/__harness.js';
+` + offerSettingsJS + `
 run(assert=>{
  const sockets=[];window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class{constructor(){this.readyState=0;this.frames=[];sockets.push(this);}send(bytes){this.frames.push(JSON.parse(bytes));}recv(frame){this.onmessage({data:JSON.stringify(frame)});}};

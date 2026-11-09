@@ -230,6 +230,8 @@ func (s *Server) BroadcastConfig() {
 	if h == nil || h.GetConfig == nil {
 		return
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	state := h.GetConfig()
 	if state == nil {
 		return
@@ -256,7 +258,7 @@ func (s *Server) BroadcastSystemLine(text string) {
 func providersMessage(requestID string, d ProviderDirectory) ServerMessage {
 	skip := d.SkipSignInWithValidToken
 	return ServerMessage{RequestID: requestID, Type: "providers", Providers: d.Providers,
-		BrokenProviders: d.Broken, SkipSignInWithValidToken: &skip}
+		BrokenProviders: d.Broken, SkipSignInWithValidToken: &skip, LocalModels: d.Local}
 }
 
 func (s *Server) replyConfig(ctx context.Context, conn carrier, reqID string, h *WSHandler) {

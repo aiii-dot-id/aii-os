@@ -129,7 +129,7 @@ func (s *Server) keyless(r *http.Request) {
 
 func refuseSignIn(w http.ResponseWriter, r *http.Request, missing signInMissing) {
 	w.Header().Set(missingHeader, string(missing))
-	words := "dashboard access token required"
+	words := "this page isn't signed in. Sign in, then try again"
 	if missing == missingPageKey {
 		words = refusedKeyless
 		if r.URL.Query().Has(ticketParam) {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -22,9 +23,25 @@ var keychainLookup = func(ctx context.Context, service string) ([]byte, error) {
 		return nil, errors.New(cap.Reason)
 	}
 
-	return exec.CommandContext(ctx, "/usr/bin/security",
+	out, err := exec.CommandContext(ctx, "/usr/bin/security",
 		"find-generic-password", "-s", service, "-w").Output()
+	var xe *exec.ExitError
+	if errors.As(err, &xe) {
+		if xe.ExitCode() == 44 {
+
+			return nil, errKeychainItemNotFound
+		}
+		if msg := bytes.TrimSpace(xe.Stderr); len(msg) > 0 {
+
+			return nil, fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return out, err
 }
+
+var errKeychainItemNotFound = errors.New("the Keychain holds no such item")
+
+var ErrKeychainUnavailable = errors.New("the macOS Keychain item could not be read")
 
 const keychainFresh = time.Minute
 
@@ -37,6 +54,7 @@ type keychainEntry struct {
 	bytes  []byte
 	at     time.Time
 	missed bool
+	err    error
 	done   chan struct{}
 }
 
@@ -76,7 +94,11 @@ func adoptedBytes(ctx context.Context, service, path string) ([]byte, error) {
 		lookupKeychain(ctx, service, e)
 	}
 	if e.missed {
-		return nil, err
+		if errors.Is(e.err, errKeychainItemNotFound) {
+			return nil, err
+		}
+
+		return nil, fmt.Errorf("%w (%s): %v", ErrKeychainUnavailable, strconv.Quote(service), e.err)
 	}
 	return e.bytes, nil
 }
@@ -91,6 +113,7 @@ func lookupKeychain(ctx context.Context, service string, e *keychainEntry) {
 	if kerr != nil {
 
 		e.missed = true
+		e.err = kerr
 	} else {
 		e.bytes = bytes.TrimSpace(out)
 	}

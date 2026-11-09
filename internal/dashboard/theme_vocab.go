@@ -2,12 +2,24 @@ package dashboard
 
 import "strings"
 
+var themeStylesheets = []string{"static/tokens/tokens.css", "static/theme.css"}
+
 func DeclaredThemeTokens() map[string]bool {
-	raw, err := staticFS.ReadFile("static/theme.css")
-	if err != nil {
-		return map[string]bool{}
+	out := map[string]bool{}
+	for _, name := range themeStylesheets {
+		raw, err := staticFS.ReadFile(name)
+		if err != nil {
+			return map[string]bool{}
+		}
+		declared := declaredTokensIn(string(raw))
+		if len(declared) == 0 {
+			return map[string]bool{}
+		}
+		for token := range declared {
+			out[token] = true
+		}
 	}
-	return declaredTokensIn(string(raw))
+	return out
 }
 
 func declaredTokensIn(css string) map[string]bool {

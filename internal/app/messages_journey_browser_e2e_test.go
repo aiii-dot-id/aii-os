@@ -50,7 +50,7 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
 	}
 
 	origin := a.dashboard.Origin()
-	page := openInChrome(t, chrome, origin, "/#/settings/messages")
+	page := openInChrome(t, chrome, origin, "/#/settings/people")
 	await := func(what, predicate string) string {
 		t.Helper()
 		got, err := page.evalRetry(awaitJS(predicate, 20000), true, 30*time.Second, 5)
@@ -85,7 +85,7 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
     if (!row) return null;
     last = row.innerHTML;
     if (s.querySelector('img') || row.querySelector('b') || document.title === 'owned') return 'FAIL markup: ' + last;
-    if (!row.textContent.includes('<img src=x') || !row.textContent.includes('Not in your contacts: <b>999</b>')) return null;
+    if (!row.textContent.includes('<img src=x') || !row.textContent.includes('<b>999</b>') || !row.textContent.includes('Not in your contacts, so it did not wake')) return null;
     const words = s.querySelector('[data-delivered-sends]').textContent + s.querySelector('[data-open-sends]').textContent;
     return /repl/i.test(words) ? 'FAIL reply: ' + words : 'ok';
   `)
@@ -93,11 +93,11 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
 	// ---- The book, edited on the page and kept by the door.
 	if _, err := page.eval(`(() => {
     const s = document.getElementById('settings-stack');
-    const line = s.querySelector('[data-contact-line="2"]');
-    line.querySelector('[data-contact-field="address"]').value = '4242';
-    const me = line.querySelector('[data-contact-field="operator"]');
-    me.checked = true;
-    me.dispatchEvent(new Event('input', { bubbles: true }));
+    s.querySelector('[data-contact-edit="1"]').click();
+    const box = s.querySelector('[data-contact-editor] [data-contact-line="0"] [data-contact-field="address"]');
+    box.value = '4242';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    s.querySelector('[data-contact-editor] [data-contact-field="operator"]').click();
     s.querySelector('[data-save="contacts"]').click();
     return 'saved';
   })()`, false, 10*time.Second); err != nil {
@@ -106,7 +106,7 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
 	await("the door's answer", `
     const said = document.querySelector('#settings-stack [data-said="contacts"]');
     last = said ? said.textContent : 'no answer yet';
-    return said && said.textContent === 'Saved — the contacts are in force now.' ? 'ok' : null;
+    return said && said.textContent === 'Saved. The contacts are in force now.' ? 'ok' : null;
   `)
 	got := a.configSnapshot().Contacts
 	if len(got) != 3 || !got[2].Operator || got[2].Address != "4242" || got[0].Operator || !got[0].Wake {
@@ -123,13 +123,14 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("the file holds %+v (%v)", file.Contacts, err)
 	}
 
-	// ---- Two people marked as the operator: the door refuses, the page
-	// says so beside Save, and nothing changes.
+	// ---- A line with no address: the door refuses, the page says so beside
+	// Save, the edit stays, and nothing changes.
 	if _, err := page.eval(`(() => {
     const s = document.getElementById('settings-stack');
-    const me = s.querySelector('[data-contact-line="0"] [data-contact-field="operator"]');
-    me.checked = true;
-    me.dispatchEvent(new Event('input', { bubbles: true }));
+    s.querySelector('[data-contact-edit="0"]').click();
+    const box = s.querySelector('[data-contact-editor] [data-contact-line="0"] [data-contact-field="address"]');
+    box.value = '';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
     s.querySelector('[data-save="contacts"]').click();
     return 'saved';
   })()`, false, 10*time.Second); err != nil {
@@ -139,10 +140,10 @@ func TestTheMessagesJourneyInARealBrowser(t *testing.T) {
     const s = document.getElementById('settings-stack');
     const said = s.querySelector('[data-said="contacts"]');
     last = said ? said.textContent : 'no answer yet';
-    const kept = s.querySelector('[data-contact-line="0"] [data-contact-field="operator"]').checked;
-    return said && said.textContent.includes('the operator is one person') && kept ? 'ok' : null;
+    const kept = s.querySelector('[data-contact-editor] [data-contact-line="0"] [data-contact-field="address"]').value;
+    return said && said.textContent.includes('an address is required') && kept === '' ? 'ok' : null;
   `)
-	if got := a.configSnapshot().Contacts; got[0].Operator || !got[2].Operator {
+	if got := a.configSnapshot().Contacts; got[0].Address != "111" || !got[2].Operator {
 		t.Fatalf("a refused book changed the contacts: %+v", got)
 	}
 }

@@ -65,10 +65,24 @@ func (b *Binding) memorySelection(kind string) (store.PluginMemorySelection, err
 		}
 		s.WorkSession, s.Project = ws.ID, ws.Project
 	}
+	if (kind == "project" || kind == "task") && s.WorkSession == "" {
+
+		return s, fmt.Errorf("%s", b.noSessionWords(kind))
+	}
 	if kind == "task" && s.WorkSession == "" || kind == "project" && s.Project == "" {
 		return s, fmt.Errorf("memory %s selection requires a resolvable executing work session", kind)
 	}
 	return s, nil
+}
+
+func (b *Binding) noSessionWords(kind string) string {
+	closed := ""
+	if st := b.host.cfg.Store; st != nil {
+		if any, err := st.HasWorkSessions(); err == nil && any {
+			closed = " (the last one is closed)"
+		}
+	}
+	return "No work session is open" + closed + ", so this note can't be tied to a " + kind + ". Open a work session, or save it with applicability=reusable."
 }
 
 func (b *Binding) memoryWriteContext(kind string) (memoryContext, error) {

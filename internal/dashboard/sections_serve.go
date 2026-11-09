@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -245,18 +246,26 @@ func (s *Server) sectionStates() ([]SectionState, string) {
 	if reg == nil {
 		return nil, ""
 	}
-	if reason, safe := reg.Safe(); safe {
-		return nil, reason
+	reason, safe := reg.Safe()
+	if !safe {
+		reason = ""
 	}
 	var out []SectionState
 	for _, sec := range reg.List() {
+		if safe && !sec.BuiltIn {
+			continue
+		}
 		out = append(out, SectionState{
 			ID: sec.Decl.ID, Title: sec.Decl.Title, Slot: sec.Decl.Slot,
 			Commands: sec.Decl.Commands, Topics: sec.Decl.Topics,
-			Entry: sec.Decl.Entry, Dev: sec.Dev,
+			Entry: sec.Decl.Entry, Dev: sec.Dev, Plugin: sec.PackageID,
+			BuiltIn: sec.BuiltIn, Views: sec.Views,
 		})
+		if sec.BuiltIn {
+			out[len(out)-1].Address = "/built-in-sections/" + sec.Decl.ID + "/" + s.sectionCapability(sec.Decl.ID) + "/"
+		}
 	}
-	return out, ""
+	return out, reason
 }
 
 func (s *Server) sectionsMessage() ServerMessage {
@@ -302,6 +311,8 @@ const uiCSP = "default-src 'none'; " +
 	"style-src-attr 'unsafe-inline'; " +
 	"img-src 'self'; " +
 
+	"font-src 'self'; " +
+
 	"media-src 'self' blob:; " +
 	"connect-src 'self'; " +
 	"frame-src 'self'; " +
@@ -312,12 +323,19 @@ const uiCSP = "default-src 'none'; " +
 	"object-src 'none'"
 
 func sectionCSP(scheme, host, id string) string {
+	return sectionPolicy(scheme, host, "/sections/"+id+"/")
+}
 
-	own := scheme + "://" + host + "/sections/" + id + "/"
+func sectionPolicy(scheme, host, base string) string {
+
+	own := scheme + "://" + host + base
 	api := scheme + "://" + host + "/section-api.js"
+
+	fonts := scheme + "://" + host + "/fonts/"
 	return "default-src 'none'; " +
 		"script-src 'self' " + own + " " + api + "; " +
-		"style-src 'self' " + own + "; " +
+		"style-src 'self' " + own + " " + fonts + "; " +
+		"font-src " + fonts + "; " +
 		"img-src 'self' " + own + " data:; " +
 		"connect-src 'none'; " +
 		"frame-ancestors 'self'; " +
@@ -338,7 +356,8 @@ func (s *Server) handleSectionFile(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	sec, ok := reg.Get(id)
-	if !ok {
+	if !ok || sec.BuiltIn {
+
 		http.NotFound(w, r)
 		return
 	}
@@ -398,5 +417,74 @@ func (s *Server) handleSectionFile(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Cache-Control", "no-store")
 	}
+	w.Write(data)
+}
+
+func (s *Server) handleBuiltInSectionFile(w http.ResponseWriter, r *http.Request) {
+	reg := s.sectionsRegistry()
+	if reg == nil {
+		http.NotFound(w, r)
+		return
+	}
+	id := r.PathValue("id")
+	sec, ok := reg.Get(id)
+	if !ok || !sec.BuiltIn || sec.FS == nil {
+		http.NotFound(w, r)
+		return
+	}
+	rel := r.PathValue("path")
+	base := "/built-in-sections/" + id + "/"
+	minted := false
+	if first, rest, ok := strings.Cut(rel, "/"); ok && strings.HasPrefix(first, sectionCapabilityMark) {
+		if !s.sectionCapabilityHolds(id, first) {
+			http.NotFound(w, r)
+			return
+		}
+		rel, base, minted = rest, base+first+"/", true
+	}
+	if rel == "" || strings.Contains(rel, "\\") || path.Clean("/"+rel) != "/"+rel || !fs.ValidPath(rel) {
+		http.NotFound(w, r)
+		return
+	}
+	ctype, ok := sectionServableTypes[path.Ext(rel)]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var data []byte
+	if t, ok := sec.FS.(interface{ overlaid(string) bool }); ok && minted && t.overlaid(rel) {
+		data, _ = s.overlayAsset("/" + rel)
+	}
+	if data == nil {
+		f, err := sec.FS.Open(rel)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil || !st.Mode().IsRegular() {
+			http.NotFound(w, r)
+			return
+		}
+		if st.Size() > maxSectionAssetBytes {
+			http.Error(w, "section asset too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if data, err = readAssetBounded(f, maxSectionAssetBytes); err != nil {
+			http.Error(w, "section asset too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Security-Policy", sectionPolicy(requestScheme(r), r.Host, base))
+	if minted {
+
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+	}
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(data)
 }

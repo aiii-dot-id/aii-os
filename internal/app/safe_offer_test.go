@@ -409,7 +409,7 @@ func TestASafePromptOpensAsSafeAndPointsAtItsSection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		work, err := a.buildWorkState()
+		work, err := a.buildWorkState(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}

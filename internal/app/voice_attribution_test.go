@@ -156,6 +156,7 @@ func newVoiceApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = st.Close() })
 	a := newBareApp(t, &Config{SourcePath: filepath.Join(dir, "config.json")})
 	a.store = st
 	a.engine = identity.NewEngine(st, nil, ring.NewManager(), nil, identity.Ports{})

@@ -18,7 +18,7 @@ import (
 
 const BeliefPromotionRule = "belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted; so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on."
 
-const OperatorWordRule = "relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (an enrolled voice, matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place."
+const OperatorWordRule = "relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (a voice matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place."
 
 var outcomeForm = regexp.MustCompile(`^(served|partial|unserved):\s*\S.*`)
 
@@ -207,7 +207,7 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		var unidentified *store.UnidentifiedSpeechError
 		if errors.As(err, &unidentified) {
 
-			return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it: %v. A spoken word is cited only when the speech engine identified its speaker as your primary human operator: an enrolled voice, matched to the speaker UUID they named as their own. Ask them to type their affirmation, then record it", err)
+			return "", fmt.Errorf("Ring 1 requires the operator's own word, and the latest words under their name cannot stand as it: %v. A spoken word is cited only when the speech engine identified its speaker as your primary human operator: a voice matched to the speaker UUID they named as their own. Ask them to type their affirmation, then record it", err)
 		}
 		var unconfirmed *store.UnconfirmedSpeechError
 		if errors.As(err, &unconfirmed) {
@@ -228,6 +228,20 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		}
 		args["operator_approval_excerpt"] = turn.Content
 		args["operator_approval_turn"] = turn.TurnSeq
+
+		delete(args, "approval_digest")
+		delete(args, "approval_press_turn")
+		if level, _ := args["autonomy_level"].(string); level != "" {
+			digest := store.AutonomyApprovalDigest(relID, level)
+			press, perr := e.store.LatestOperatorPress(digest)
+			if perr != nil {
+				return "", fmt.Errorf("the operator's press could not be read: %w", perr)
+			}
+			if press != nil {
+				args["approval_digest"] = digest
+				args["approval_press_turn"] = press.TurnSeq
+			}
+		}
 		args["approval_basis"] = "conversation_turn"
 		ring1.word, ring1.id, ring1.role = turn, relID, role
 		ring1.name, _ = args["counterpart_name"].(string)
@@ -294,6 +308,10 @@ func (e *Engine) verbCommit(ctx context.Context, args map[string]any) (string, e
 		}
 		if desc, _ := args["description"].(string); desc == "" {
 			return "", fmt.Errorf("commitment.promised requires description")
+		}
+		counterpart, _ := args["counterpart_id"].(string)
+		if err := e.counterpartRule(counterpart); err != nil {
+			return "", err
 		}
 	case "commitment.state_change":
 		eventType = ledger.EventCommitmentStateChange

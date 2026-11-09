@@ -84,7 +84,7 @@ async function signedFetch(url, init) {
 
 async function refusal(r) {
   try { const said = await r.json(); if (said && said.error) return said.error; } catch (e) { }
-  return 'the dashboard answered ' + r.status;
+  return 'the server answered ' + r.status;
 }
 
 async function nameTheCause(into) {
@@ -97,7 +97,7 @@ async function nameTheCause(into) {
   const files = (listed && Array.isArray(listed.files) ? listed.files : [])
     .map(f => f && f.path).filter(p => typeof p === 'string' && /\.(js|html)$/.test(p));
   if (!files.length) return;
-  for (const p of files) line(into, 'Your ' + p + ' replaces a shipped dashboard file and may not match this version.');
+  for (const p of files) line(into, 'Your ' + p + ' overrides a built-in file and may not match this version.');
   const act = button('Set aside and reload');
   act.title = 'Renames ' + (files.length === 1 ? 'it' : 'them') + ' to <name>.set-aside-<version> (nothing is deleted) and reloads; your other customizations stay';
   into.appendChild(act);
@@ -128,7 +128,7 @@ function link(text, href) {
 }
 
 function backLink() {
-  const back = link('Back to your dashboard', '/' + location.hash);
+  const back = link('Leave safe mode', '/' + location.hash);
   back.style.whiteSpace = 'nowrap';
   return back;
 }
@@ -136,7 +136,7 @@ function backLink() {
 function plainNamed(into) {
   const p = line(into, 'If a change to this page has hidden it, open ');
   p.appendChild(link(location.origin + PLAIN, PLAIN));
-  p.append(': it shows the page as shipped, with nothing of the changes applied.');
+  p.append(': it shows the page with none of your changes, styles included.');
 }
 
 async function setAsideAll(said) {
@@ -184,7 +184,7 @@ function started() {
   if (onPlain) { startedPlain(); return; }
   if (!onShipped || remembered(SHIPPED_NOTE_DISMISSED)) return;
   const words = bar('boot-shipped', 'status', () => remember(SHIPPED_NOTE_DISMISSED));
-  const head = line(words, 'As shipped: your scripts are not loaded here; your styles are. ');
+  const head = line(words, 'Safe mode: your custom scripts are off. Your identity is unchanged. ');
   head.appendChild(backLink());
   plainNamed(words);
 }
@@ -193,18 +193,37 @@ function failed(err) {
   const why = (err && err.message) ? err.message : String(err);
   const words = bar('boot-failure', 'alert');
   if (onShipped || onPlain) {
-    line(words, 'The dashboard as shipped did not start.', true);
+    line(words, 'Even safe mode could not load.', true);
     line(words, why);
     actions(words, [['Try again', () => location.reload()]]);
     return;
   }
-  line(words, 'The dashboard did not start.', true);
+  line(words, 'This page could not load.', true);
   line(words, why);
   const cause = document.createElement('div');
   words.appendChild(cause);
-  line(words, 'The dashboard as shipped runs none of your scripts (your styles still apply), with your identity as it is.');
-  actions(words, [['Open the dashboard as shipped', SHIPPED + location.hash], ['Try again', () => location.reload()]]);
+  line(words, 'Safe mode: your custom scripts are off. Your identity is unchanged.');
+  actions(words, [['Open safe mode', SHIPPED + location.hash], ['Try again', () => location.reload()]]);
   return nameTheCause(cause);
+}
+
+export function partFailed(title, err) {
+  if (document.getElementById('part-failure')) return;
+  const why = (err && err.message) ? err.message : String(err);
+  const words = bar('part-failure', 'alert');
+  line(words, title + ' did not open.', true);
+  line(words, why);
+  if (onShipped || onPlain) { actions(words, [['Try again', () => location.reload()]]); return; }
+  const cause = document.createElement('div');
+  words.appendChild(cause);
+  line(words, 'Safe mode: your custom scripts are off. Your identity is unchanged.');
+  actions(words, [['Open safe mode', SHIPPED + location.hash], ['Try again', () => location.reload()]]);
+  return nameTheCause(cause);
+}
+
+export function startFailed(err) {
+  if (document.getElementById('boot-failure')) return;
+  return failed(err);
 }
 
 export const ready = import('./app.js').then(started, failed);

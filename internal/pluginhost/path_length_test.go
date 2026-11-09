@@ -16,7 +16,7 @@ import (
 
 func TestANativeRuntimeThatCannotFitIsRefusedBeforeAnyFetch(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	fx := newRuntimeFixture(t)
 	const id = "org.example.longpath"
 	pkg := nativePackage(t, id, []byte("#!carrier\n"), role, runtimesJSON(t, fx))

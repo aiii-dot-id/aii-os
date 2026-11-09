@@ -117,18 +117,14 @@ func (a *App) pluginStoredViews() ([]dashboard.PluginStoredView, string) {
 }
 
 func (a *App) markStoredInstalled(views []dashboard.PluginStoredView, pending []dashboard.PluginPendingView) {
-	a.pluginMu.Lock()
-	active := make(map[string]bool, len(a.plugins))
-	for _, p := range a.plugins {
-		active[p.ID] = true
-	}
-	a.pluginMu.Unlock()
+	active := a.installedReleases()
 	phase := make(map[string]string, len(pending))
 	for _, p := range pending {
 		phase[p.ID] = p.Phase
 	}
 	for i := range views {
-		views[i].Installed, views[i].Pending = active[views[i].ID], phase[views[i].ID]
+		_, on := active[views[i].ID]
+		views[i].Installed, views[i].Pending = on, phase[views[i].ID]
 	}
 }
 
@@ -224,6 +220,29 @@ func (a *App) catalogUpdateCount() int { return countUpdates(a.catalogViews()) }
 
 type installedRelease struct{ version, tier, needs string }
 
+func (a *App) installedReleases() map[string]installedRelease {
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	out := make(map[string]installedRelease, len(a.plugins)+len(a.activeMeta))
+	for _, p := range a.plugins {
+		out[p.ID] = installedRelease{version: p.Version, tier: p.Tier.String()}
+	}
+	for _, act := range a.assetActivationsLocked() {
+		out[act.ID] = installedRelease{version: act.Version, tier: act.Asset.Tier.String()}
+	}
+	return out
+}
+
+func (a *App) assetActivationsLocked() []*pluginhost.Activation {
+	var out []*pluginhost.Activation
+	for _, m := range a.activeMeta {
+		if act := m.owner; act != nil && act.Plugin == nil && act.Asset != nil {
+			out = append(out, act)
+		}
+	}
+	return out
+}
+
 func (a *App) catalogViews() []dashboard.CatalogEntryView {
 	cat := a.catalog.Current()
 	if cat == nil {
@@ -236,12 +255,11 @@ func (a *App) catalogViews() []dashboard.CatalogEntryView {
 			needs[v.ID] = s.Needs
 		}
 	}
-	a.pluginMu.Lock()
-	installed := make(map[string]installedRelease, len(a.plugins))
-	for _, p := range a.plugins {
-		installed[p.ID] = installedRelease{version: p.Version, tier: p.Tier.String(), needs: needs[p.ID]}
+	installed := a.installedReleases()
+	for id, ir := range installed {
+		ir.needs = needs[id]
+		installed[id] = ir
 	}
-	a.pluginMu.Unlock()
 	pending := a.pendingSummaries()
 
 	for id, mark := range a.safeBootHeld() {

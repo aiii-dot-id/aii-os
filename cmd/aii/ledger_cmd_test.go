@@ -421,7 +421,18 @@ func TestLedgerShowStopsAtTheLastCompleteLineOfAFileBeingWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.WriteString(`{"entry":{"content":"0b1f`); err != nil {
+	// THE MARKER IS NOT HEX, ON PURPOSE. It was "0b1f", and this test
+	// failed about once in sixty runs on a loaded machine. The assertion
+	// below scans the whole output for those four characters, and every
+	// row carries a 64-character hex proof and hash, so the scan was
+	// searching hex for a hex string. A probe found the marker at byte
+	// 75383, inside
+	// "ledger_hash":"d74de957ddc9c9c011f1dca86c00b1fc94...", straddling
+	// two bytes of one hash. The partial line was never printed; the
+	// assertion was reading a hash. Hex is [0-9a-f], so a marker
+	// carrying 'z' cannot collide with one, and the assertion now means
+	// what it says.
+	if _, err := w.WriteString(`{"entry":{"content":"zz-partial-line-qq`); err != nil {
 		t.Fatal(err)
 	}
 	w.Close()
@@ -441,7 +452,7 @@ func TestLedgerShowStopsAtTheLastCompleteLineOfAFileBeingWritten(t *testing.T) {
 			t.Fatalf("row %d marked:\n%s", r.seq, out)
 		}
 	}
-	if strings.Contains(out, "0b1f") {
+	if strings.Contains(out, "zz-partial-line-qq") {
 		t.Fatal("the partial line was printed")
 	}
 }

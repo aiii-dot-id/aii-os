@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -36,20 +37,24 @@ func TestEveryFrameElementIsReachableOrDeclaredInert(t *testing.T) {
 		modules.Write(b)
 		read++
 	}
-	views, err := staticFS.ReadDir("static/views")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range views {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".js") {
-			continue
-		}
-		b, err := staticFS.ReadFile("static/views/" + e.Name())
+	// The views, with the folders a rebuilt view lives in (views/chat/,
+	// views/firstrun/), and the shell's own modules and the components.
+	for _, root := range []string{"static/views", "static/shell", "static/components"} {
+		err := fs.WalkDir(staticFS, root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".js") {
+				return err
+			}
+			b, err := staticFS.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			modules.Write(b)
+			read++
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		modules.Write(b)
-		read++
 	}
 	// Guard: with no modules read, every id below is "unreachable" and
 	// the failure would be this test, not the frame.

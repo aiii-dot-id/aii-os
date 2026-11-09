@@ -1,0 +1,8 @@
+.c-mark__life { stroke-dasharray: 48 1080; stroke-dashoffset: 1128; animation: c-mark var(--t, 14s) linear infinite var(--way, normal); }
+.c-mark[data-state="answering"] { --t: 3s; }
+.c-mark[data-state="listening"] { --t: 4s; --way: reverse; }
+.c-mark[data-state="speaking"] { --t: 1.6s; }
+.c-mark[data-state="offline"] { opacity: .42; }
+.c-mark[data-state="offline"] .c-mark__life { visibility: hidden; }
+@keyframes c-mark { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) { .c-mark__life { animation-play-state: paused; visibility: hidden; } }

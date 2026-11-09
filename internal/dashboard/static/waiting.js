@@ -18,7 +18,7 @@ export function titleOf(open, name) {
 
 let place = '';
 export function titlePlace(name) { place = name || ''; renderTitle(); }
-function identityName() { return (S.identityExists && S.stats && S.stats.name) || ''; }
+function identityName() { const n = (S.identityExists && S.stats && S.stats.name) || ''; return n === 'Unnamed' ? '' : n; }
 
 export function renderTitle() {
   if (typeof document === 'undefined') return;

@@ -41,7 +41,7 @@ func (r *Runtime) EnsureSnapshotKey(cfg Settings) {
 		logsink.Warn("snapshot.refusal", "the key could not be written (%v) — snapshots stay unencrypted", err)
 		return
 	}
-	logsink.Info("snapshot.end", "key made %s. Snapshots are encrypted to it once an escrow holding it has been checked: Settings → Backups & Keys in the dashboard.", path)
+	logsink.Info("snapshot.end", "key made %s. Snapshots are encrypted to it once an escrow holding it has been checked: Settings → Backups in the dashboard.", path)
 }
 
 func (r *Runtime) snapshotEncryption(cfg Settings) (key []byte, recipient, reason, whyNot string) {
@@ -60,12 +60,12 @@ func (r *Runtime) snapshotEncryption(cfg Settings) (key []byte, recipient, reaso
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, "", store.UnencryptedNoEscrow, "no checked recovery copy of the snapshot key is recorded"
 		}
-		return nil, "", store.UnencryptedReceiptUnread, fmt.Sprintf("the escrow receipt could not be read: %v — check Settings → Backups & Keys", err)
+		return nil, "", store.UnencryptedReceiptUnread, fmt.Sprintf("the escrow receipt could not be read: %v — check Settings → Backups", err)
 	}
 	var receipt escrow.Receipt
 	if err := json.Unmarshal(raw, &receipt); err != nil {
 		escrow.Wipe(key)
-		return nil, "", store.UnencryptedReceiptUnread, fmt.Sprintf("the escrow receipt does not read: %v — check your escrow file again in Settings → Backups & Keys", err)
+		return nil, "", store.UnencryptedReceiptUnread, fmt.Sprintf("the escrow receipt does not read: %v — check your escrow file again in Settings → Backups", err)
 	}
 	if r.w.DoorKey() == nil {
 		escrow.Wipe(key)
@@ -73,7 +73,7 @@ func (r *Runtime) snapshotEncryption(cfg Settings) (key []byte, recipient, reaso
 	}
 	if err := receipt.Verify(r.w.DoorKey().PublicKeyBytes(), recipient); err != nil {
 		escrow.Wipe(key)
-		return nil, "", store.UnencryptedReceiptMismatch, fmt.Sprintf("%v — the snapshot key on this host is not the one whose escrow was checked. Make and check a new escrow file in Settings → Backups & Keys", err)
+		return nil, "", store.UnencryptedReceiptMismatch, fmt.Sprintf("%v — the snapshot key on this host is not the one whose escrow was checked. Make and check a new escrow file in Settings → Backups", err)
 	}
 	return key, recipient, "", ""
 }

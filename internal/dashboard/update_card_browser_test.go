@@ -10,15 +10,18 @@ func TestUpdateCardRendersTheStatesAndCheckNow(t *testing.T) {
 import { run } from '/__harness.js';
 import { S } from '/state.js';
 import { sent } from '/ws.js';
-import { updateCardHTML, wireUpdateCheck } from '/views/settings.js';
+import { updatesHTML, wireApp } from '/views/settings/app.js';
 run(async (assert) => {
-  const text = (u) => { const d = document.createElement('div'); d.innerHTML = updateCardHTML(u); return d; };
-  assert(text(null).textContent.includes('Unavailable'), 'no checker renders as unavailable');
-  assert(text({enabled:false, current_version:'dev'}).textContent.includes('Unavailable'), 'an unarmed build renders as unavailable');
+  // Settings → App's Updates part since step 18 (views/settings/app.js).
+  const text = (u) => { const d = document.createElement('div'); d.innerHTML = updatesHTML(u); return d; };
+  const noVersion = 'This build carries no version, so it does not check for updates.';
+  assert(text(null).querySelector('[data-update-state]').textContent === noVersion, 'no checker says it does not check');
+  assert(text({enabled:false, current_version:'dev'}).querySelector('[data-update-state]').textContent === noVersion, 'an unarmed build says it does not check');
   assert(text({enabled:true, checking:true}).textContent.includes('Checking'), 'in flight renders as checking');
-  assert(text({enabled:true, checked_at:'2026-09-02T10:00:00Z'}).textContent.includes('Up to date'), 'current renders as up to date');
+  assert(/^AII OS 0\.2\.0 · up to date, checked .+\.$/.test(text({enabled:true, current_version:'0.2.0', checked_at:'2026-09-02T10:00:00Z'}).querySelector('[data-update-state]').textContent), 'current renders as up to date, with when: ' + text({enabled:true, current_version:'0.2.0', checked_at:'2026-09-02T10:00:00Z'}).querySelector('[data-update-state]').textContent);
+  assert(text({enabled:true, checked_at:'today'}).querySelector('[data-update-state]').textContent === 'AII OS dev · up to date, checked today.', 'a time this browser cannot read is said as the host said it');
   const avail = text({enabled:true, current_version:'1.0.0', available_version:'1.1.0'});
-  assert(avail.textContent.includes('Update available: 1.1.0'), 'an available version is named');
+  assert(avail.querySelector('[data-update-state]').textContent.startsWith('AII OS 1.0.0 · Update available: 1.1.0'), 'an available version is named after the one running: ' + avail.querySelector('[data-update-state]').textContent);
   assert(avail.textContent.includes('automatic apply is off'), 'with automatic off the card says so');
   assert(avail.querySelector('#cfg-uauto') !== null && !avail.querySelector('#cfg-uauto').checked, 'automatic apply is a switch on the card, off here');
   const verified = text({enabled:true, available_version:'1.1.0', stage_refusal:'/usr/bin is not writable', release_url:'https://github.com/aiii-dot-id/aii-os/releases/tag/v1.1.0',
@@ -32,8 +35,11 @@ run(async (assert) => {
   assert(refused.textContent.includes('is not offered: its signature did not verify. Nothing was verified') && !refused.textContent.includes('dpkg'), 'a package that did not verify is refused with its reason, one full stop and no command');
   const managed = text({enabled:true, available_version:'1.1.0', stage_refusal:'/usr/local/bin is not writable', release_url:'https://github.com/aiii-dot-id/aii-os/releases/tag/v1.1.0'});
   assert(managed.textContent.includes('cannot replace itself') && !managed.textContent.includes('dpkg'), 'a program no package installed is given no package command');
-  const rel = managed.querySelector('a[href="https://github.com/aiii-dot-id/aii-os/releases/tag/v1.1.0"]');
-  assert(rel !== null && rel.getAttribute('rel') === 'noopener', 'the release is a safe link');
+  const rel = managed.querySelectorAll('a[href="https://github.com/aiii-dot-id/aii-os/releases/tag/v1.1.0"]');
+  assert(rel.length === 1 && rel[0].getAttribute('rel') === 'noopener', 'the release is one safe link, in the state, not again beside Check now');
+  const notes = text({enabled:true, current_version:'1.0.0', available_version:'1.1.0', release_url:'https://github.com/aiii-dot-id/aii-os/releases/tag/v1.1.0'}).querySelector('a.settings-app__link');
+  assert(notes !== null && notes.textContent === 'What changed in 1.1.0' && notes.getAttribute('rel') === 'noopener', 'an offered version links what changed in it: ' + (notes && notes.textContent));
+  assert(text({enabled:true, current_version:'1.0.0', checked_at:'today'}).querySelector('a.settings-app__link') === null, 'with no release page there is no link');
   const ready = text({enabled:true, installed_version:'1.1.0', needs_restart:true});
   assert(ready.textContent.includes('relaunch'), 'an installed update asks for a relaunch');
   assert([...ready.querySelectorAll('button')].some(b => b.textContent.trim() === 'Relaunch now'), 'an installed update offers Relaunch now');
@@ -81,19 +87,19 @@ run(async (assert) => {
   const lists = text({enabled:true, lists:'A list <x>\nB list'});
   assert(lists.querySelector('[data-update-lists]').innerHTML === 'A list &lt;x&gt;<br>B list', 'each list not brought here is its own line, escaped: ' + lists.querySelector('[data-update-lists]').innerHTML);
   const root = document.getElementById('root');
-  root.innerHTML = updateCardHTML({enabled:true, current_version:'1.0.0'});
+  root.innerHTML = updatesHTML({enabled:true, current_version:'1.0.0'});
   const btns = [...root.querySelectorAll('button')].map(b => b.textContent.trim());
-  assert(btns.length === 2 && btns[0] === 'Save' && btns[1] === 'Check now', 'up to date, the controls are Save and Check now: ' + JSON.stringify(btns));
+  assert(btns.length === 1 && btns[0] === 'Check now', 'up to date and before the configuration, the one control is Check now (Save is under Details with the cadence field): ' + JSON.stringify(btns));
   assert(!/\bApply\b/.test(root.textContent), 'the card never offers an apply');
-  wireUpdateCheck(root);
+  wireApp(root);
   const check = [...root.querySelectorAll('button')].find(b => b.textContent.trim() === 'Check now');
   check.click();
   assert(sent.length === 1 && sent[0].type === 'update_check' && Object.keys(sent[0]).length === 1, 'the click sends the fixed verb with no argument');
   assert(check.disabled === true, 'the button disarms until the state comes back');
   const checking = [...text({enabled:true, checking:true}).querySelectorAll('button')].find(b => b.textContent.trim() === 'Check now');
   assert(checking.disabled === true, 'while checking the control is disabled');
-  root.innerHTML = updateCardHTML({enabled:true, installed_version:'1.1.0', needs_restart:true});
-  wireUpdateCheck(root);
+  root.innerHTML = updatesHTML({enabled:true, installed_version:'1.1.0', needs_restart:true});
+  wireApp(root);
   const relaunch = [...root.querySelectorAll('button')].find(b => b.textContent.trim() === 'Relaunch now');
   relaunch.click();
   assert(sent.length === 2 && sent[1].type === 'restart' && Object.keys(sent[1]).length === 1, 'Relaunch sends the fixed restart verb');
@@ -108,10 +114,12 @@ run(async (assert) => {
 		"/pending.js":            []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`),
 		"/views/model-picker.js": stubModule("providerModels"),
 	}
-	real, err := staticFS.ReadFile("static/views/settings.js")
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"views/settings.js", "views/settings/app.js"} {
+		real, err := staticFS.ReadFile("static/" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modules["/"+path] = real
 	}
-	modules["/views/settings.js"] = real
 	runPageInEngines(t, page, modules)
 }

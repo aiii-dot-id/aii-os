@@ -28,20 +28,22 @@ run(async assert=>{
  const p={identity:'fixture',incarnation:'disk',rows,has_older:false,has_newer:false};
  const pages=new Map([['recorded',p],['transient',{identity:'fixture',incarnation:'memory',rows:[]}]]);
  const shape=()=>foldTurns(displayInteractions(pages).get('recorded'),p).map(x=>x.receipt?'R['+x.items.map(e=>e.anchor.row.id).join('+')+']':x.anchor.row.id).join();
- assert(shape()==='q,R[c1+c2],a,R[n]','fold: '+shape()+' — the speaker note split the stretch, or an annotation about a row became an item');
+ assert(shape()==='q,a,R[c1+c2],R[n]','fold: '+shape()+' — the speaker note split the stretch, an annotation about a row became an item, or the stretch is not under the reply');
  const q=displayInteractions(pages).get('recorded').find(x=>x.anchor.row.id==='q');
  assert(q.records.map(e=>e.row.id).join()==='q,voice,speaker','the message does not carry its annotations: '+q.records.map(e=>e.row.id).join());
  renderInteractionPages(pages,()=>{},false);
  const inner=document.getElementById('thread-inner');
  assert(!inner.textContent.includes('Recorded annotation'),'an empty annotation line is drawn in the thread');
  const top=Array.from(inner.children).filter(el=>el.dataset.interactionKey);
- assert(top.length===4,'thread rows: '+top.length+' (want 4: the message, one receipt, the reply, the note)');
+ assert(top.length===4,'thread rows: '+top.length+' (want 4: the message, the reply, one receipt, the note)');
  const message=inner.querySelector('[data-turn-id="q"]');
  assert(message.dataset.voiceRef==='v1/4','the message lost its own voice fact');
- const details=message.querySelector('.message-context');
- assert(details&&!details.open,'the message has no closed details');
- const kinds=Array.from(details.querySelectorAll('.record-detail .interaction-meta')).map(e=>e.textContent.split(' · ')[0]);
- assert(kinds.join()==='message,annotation,annotation','the message\'s details: '+kinds.join());
+ // Its record entries are About → Record's; the row keeps their keys, which
+ // the reader pages and bookmarks by, and draws none of them.
+ assert(!message.querySelector('.message-context'),'the message still carries the "⋯" menu');
+ const held=message.querySelector('.interaction-records');
+ const ids=Array.from(held.querySelectorAll('[data-record-key]')).map(e=>JSON.parse(e.dataset.recordKey)[3]);
+ assert(held.hidden&&ids.join()==='q,voice,speaker','the message does not keep its records\' keys, or draws them: '+ids.join());
 });</script>`
 	css, err := staticFS.ReadFile("static/layout.css")
 	if err != nil {

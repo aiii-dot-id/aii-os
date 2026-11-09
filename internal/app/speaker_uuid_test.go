@@ -303,7 +303,7 @@ func TestSpeakerUUIDIsPresentAtTheLiveSteeringBoundary(t *testing.T) {
 	a.voiceEngineEvent(nil, uuidFinal(h.id, 21, "track-b", "second voice words"), page.enqueue)
 	a.voiceEngineEvent(nil, uuidObservation(h.id, 22, 21, "track-b", uuidB), page.enqueue)
 	holdWait(t, "UUID steer", func() bool { a.turnMu.Lock(); defer a.turnMu.Unlock(); return len(a.steers) == 1 })
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != 1 || !strings.Contains(said[0], uuidB) || strings.Contains(said[0], uuidA) || !strings.Contains(said[0], "second voice words") {
 		t.Fatalf("live model input lost exact speaker: %q", said)
 	}

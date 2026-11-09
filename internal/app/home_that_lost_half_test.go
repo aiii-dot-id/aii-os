@@ -38,7 +38,7 @@ func TestAHomeThatLostOnlyItsRecordStartsAtItsRestoreDoor(t *testing.T) {
 		t.Fatalf("A HOME THAT HOLDS ITS KEY AND A PROVED SNAPSHOT WAS REFUSED A START, so there is no page to restore on: %v", err)
 	}
 	reason, isSafe := safe.SafeMode()
-	if !isSafe || !strings.Contains(reason, safePostures[safeRecordMissing].what) || !strings.Contains(reason, "Backups & Keys") {
+	if !isSafe || !strings.Contains(reason, safePostures[safeRecordMissing].what) || !strings.Contains(reason, "Settings → Backups") {
 		stopApp(t, safe)
 		t.Fatalf("the start is not SAFE at the restore door: safe=%v %q", isSafe, reason)
 	}

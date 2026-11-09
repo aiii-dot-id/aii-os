@@ -42,42 +42,52 @@ run(async assert=>{
  const p={identity:'fixture',incarnation:'disk',rows,has_older:false,has_newer:false};
  const pages=new Map([['recorded',p],['transient',{identity:'fixture',incarnation:'memory',rows:[]}]]);
  const shape=()=>foldTurns(displayInteractions(pages).get('recorded'),p).map(x=>x.receipt?'R['+x.items.map(e=>e.anchor.row.id).join('+')+']':x.anchor.row.id).join();
- assert(shape()==='q,R[c1+n1],steer,R[c2+spawn+s1+c3],a,cut,R[n2],legacy,q2,R[c4]','fold: '+shape());
- const second=foldTurns(displayInteractions(pages).get('recorded'),p)[3];
+ // One receipt per unbroken stretch of work: the steer splits the turn; the sub-agent's rows and the turnless notice fold with the stretch; the stretch that ended in the reply is drawn under the reply and its notice; imported history keeps its row.
+ assert(shape()==='q,R[c1+n1],steer,a,cut,R[c2+spawn+s1+c3],R[n2],legacy,q2,R[c4]','fold: '+shape());
+ const second=foldTurns(displayInteractions(pages).get('recorded'),p)[5];
  assert(second.steps===3&&second.failed===1&&second.replied&&second.notes===1&&second.turns.join()==='t1,sub','second stretch: '+JSON.stringify([second.steps,second.failed,second.replied,second.notes,second.turns]));
  renderInteractionPages(pages,()=>{},false);
  const inner=document.getElementById('thread-inner');
  const keys=()=>Array.from(inner.querySelectorAll('[data-record-key]')).map(el=>JSON.parse(el.dataset.recordKey)[3]).join();
- assert(keys()==='q,c1,r1,n1,steer,c2,r2,spawn,s1,sr1,c3,r3,a,cut,n2,legacy,q2,c4','drawn order is not recorded order: '+keys());
+ assert(keys()==='q,c1,r1,n1,steer,a,cut,c2,r2,spawn,s1,sr1,c3,r3,n2,legacy,q2,c4','drawn order: '+keys());
  const top=Array.from(inner.children).filter(el=>el.dataset.interactionKey);
  assert(top.length===10,'thread rows: '+top.length+' (want 10)');
  const loose=top.filter(el=>!el.classList.contains('turn-receipt')&&el.querySelector(':scope > .tool-ev')).map(el=>el.dataset.turnId);
  assert(loose.join()==='cut,legacy','compact rows loose in the thread: '+loose.join()+' (only the reply\'s own notice and the imported line)');
  const receipts=()=>inner.querySelectorAll('.turn-receipt'), line=i=>receipts()[i].querySelector('.receipt > summary').textContent;
- assert(line(0)==='1 step','a stretch a steer message follows claimed a span: '+line(0));
- assert(line(1)==='Worked 15 min · 3 steps · 1 failed','second stretch: '+line(1));
+ // The outcome row's line (the board OutcomeRow): who, what, and Done or how it ended.
+ assert(line(0)==='Fixture · ran 1 command · Done','a stretch a steer message follows claimed a span: '+line(0));
+ assert(line(1)==='Fixture · read 1 file · 2 other steps · Failed','second stretch: '+line(1));
  assert(line(2)==='1 recorded note','the note after the reply: '+line(2));
- assert(line(3)==='1 step · 1 unfinished','work at rest with no result: '+line(3));
+ assert(line(3)==='Fixture · recalled 1 thing · 1 unfinished','work at rest with no result: '+line(3));
  assert(receipts()[1].classList.contains('trouble')&&!receipts()[0].classList.contains('trouble')&&receipts()[3].classList.contains('partial'),'marks: '+Array.from(receipts()).map(e=>e.className).join('|'));
  assert(!receipts()[1].classList.contains('record-failed')&&!inner.querySelector('[data-turn-id="c3"]').classList.contains('record-failed')&&inner.querySelector('[data-turn-id="c3"] .tool-outcome').textContent==='Done','a failed stretch painted its succeeded step as failed');
- assert(receipts()[1].nextElementSibling?.dataset.turnId==='a','the second stretch is not beside the reply');
- assert(!Array.from(inner.querySelectorAll('details.receipt, details.receipt-all')).some(d=>d.open),'a receipt is open by default');
+ assert(receipts()[1].previousElementSibling?.dataset.turnId==='cut'&&receipts()[1].previousElementSibling.previousElementSibling?.dataset.turnId==='a','the second stretch is not under the reply and its notice');
+ // Nothing opens by itself, a failure or a step with no result included: its line says so.
+ const opened=Array.from(receipts()).map(r=>r.querySelector('.receipt').open);
+ assert(opened.join()==='false,false,false,false'&&!inner.querySelector('details.receipt-all[open]'),'open by default: '+opened.join());
  const names=Array.from(receipts()[1].querySelectorAll('.receipt-groups .g-name')).map(e=>e.textContent);
- assert(names.join('|')==='pl_id_example_planning_plan|Work queued: sub-agent|read|pl_id_aiii_codequality_scan','groups: '+names.join('|'));
+ assert(names.join('|')==='pl_id_example_planning_plan|Work queued: sub-agent|Reading a file|pl_id_aiii_codequality_scan','groups: '+names.join('|'));
  assert(receipts()[1].querySelector('.g-count.bad').textContent.includes('1 failed'),'the failed group is not marked');
  const before=inner.querySelector('[data-turn-id="c2"]');
  let mutations=0;const observer=new MutationObserver(list=>mutations+=list.length);observer.observe(inner,{subtree:true,childList:true,attributes:true,characterData:true});
  renderInteractionPages(pages,()=>{},false);await Promise.resolve();observer.disconnect();
  assert(mutations===0,'identical snapshot did DOM work: '+mutations);
  assert(inner.querySelector('[data-turn-id="c2"]')===before,'a step inside a receipt was remounted');
+ // Depth by click: a click opens the failed stretch to its groups; every record needs its own click; a re-render keeps both; the reader can fold it.
  const box=receipts()[1].querySelector('.receipt'), every=receipts()[1].querySelector('.receipt-all');
- box.querySelector('summary').click();assert(box.open&&!every.open,'the first click did not stop at the groups');
+ box.querySelector('summary').click();
+ assert(box.open&&!every.open,'the failed stretch did not open to its groups, or opened deeper');
  renderInteractionPages(pages,()=>{},false);assert(box.open&&!every.open,'a re-render changed what was open');
  every.querySelector('summary').click();assert(every.open&&!every.querySelector('.tool-ev').open,'the second click opened more than the list');
  box.querySelector('summary').click();assert(!box.open,'the receipt did not close');
+ renderInteractionPages(pages,()=>{},false);assert(!box.open,'a render opened again a stretch the reader folded');
+ // The window moves, in the real shape: the top stretch is cut by the window, its receipt and every record are open, the reader is on a step
+ // inside it; an older page arrives with a words row and more of the stretch's work. The same element carries over, still open, the
+ // records inside it are reused, and the step the reader was on holds its place.
  const thread=document.getElementById('thread');
  p.has_older=true;p.rows=rows.slice(5);renderInteractionPages(pages,()=>{},false,'latest');
- const cut=receipts()[0];assert(cut.querySelector('.receipt-label').textContent==='3 steps in view · 1 failed','the cut stretch: '+cut.querySelector('.receipt-label').textContent);
+ const cut=receipts()[0];assert(cut.querySelector('.receipt-label').textContent==='Fixture · read 1 file · 2 other steps · Failed · in view','the cut stretch: '+cut.querySelector('.receipt-label').textContent);
  cut.querySelector('.receipt').open=true;cut.querySelector('.receipt-all').open=true;
  const step=inner.querySelector('[data-turn-id="c3"]');thread.scrollTop=step.offsetTop-thread.offsetTop;
  const stepBefore=step.getBoundingClientRect().top, keyBefore=cut.dataset.interactionKey;
@@ -88,7 +98,7 @@ run(async assert=>{
  assert(cut.querySelector('.receipt').open&&cut.querySelector('.receipt-all').open,'the carried receipt lost its open state');
  assert(inner.querySelector('[data-turn-id="c3"]')===step,'a record inside the carried receipt was remounted');
  assert(Math.abs(step.getBoundingClientRect().top-stepBefore)<1,'a moved window jumped the reader off the step: '+(step.getBoundingClientRect().top-stepBefore));
- assert(line(1)==='Worked 15 min · 4 steps · 1 failed','the carried receipt did not take the new record: '+line(1));
+ assert(line(1)==='Fixture · searched once · read 1 file · 2 other steps · Failed','the carried receipt did not take the new record: '+line(1));
  cut.querySelector('.receipt').open=false;cut.querySelector('.receipt-all').open=false;p.rows=rows;renderInteractionPages(pages,()=>{},false,'latest');
  thread.scrollTop=0;thread.dispatchEvent(new WheelEvent('wheel',{deltaY:-80,bubbles:true}));const readerAt=thread.scrollTop;
  let touched=[];const watcher=new MutationObserver(list=>list.forEach(m=>{const dots=[...m.addedNodes,...m.removedNodes].every(n=>n.classList?.contains('thinking-row'));if(!(m.type==='childList'&&m.target===inner&&dots))touched.push(m.target);}));
@@ -97,22 +107,30 @@ run(async assert=>{
  assert(line(3)==='Working · 1 step'&&receipts()[3].classList.contains('live'),'running work: '+line(3));
  assert(touched.length&&touched.every(n=>receipts()[3].contains(n))&&thread.scrollTop===readerAt,'a thinking toggle rendered or scrolled: '+touched.length+' mutations outside the dots, scrollTop '+thread.scrollTop);
  watcher.disconnect();
- S.thinking=false;toggleThinkingDots(false);assert(line(3)==='1 step · 1 unfinished'&&!receipts()[3].classList.contains('live'),'stale Working after the turn ended: '+line(3));
+ S.thinking=false;toggleThinkingDots(false);assert(line(3)==='Fixture · recalled 1 thing · 1 unfinished'&&!receipts()[3].classList.contains('live'),'stale Working after the turn ended: '+line(3));
+ // A turn that pauses and goes on, again and again, opens nothing; one the reader opened stays open.
+ const r3=receipts()[3].querySelector('.receipt'), flips=()=>{for(let i=0;i<3;i++){S.thinking=true;toggleThinkingDots(true);S.thinking=false;toggleThinkingDots(false);}};
+ flips();assert(!r3.open,'the receipt opened by itself as the turn paused and went on');
+ r3.querySelector('summary').click();flips();assert(r3.open,'a receipt the reader opened closed by itself');
+ r3.querySelector('summary').click();assert(!r3.open,'the receipt did not fold again');
  p.has_newer=true;S.thinking=true;renderInteractionPages(pages,()=>{},false);
- assert(line(3)==='1 step in view'&&!receipts()[3].classList.contains('live')&&!receipts()[3].classList.contains('partial'),'earlier history claimed the running turn or marked it: '+line(3)+' '+receipts()[3].className);
+ assert(line(3)==='Fixture · recalled 1 thing · in view'&&!receipts()[3].classList.contains('live')&&!receipts()[3].classList.contains('partial'),'earlier history claimed the running turn or marked it: '+line(3)+' '+receipts()[3].className);
+ // The operator's words begin a turn the newest receipt cannot belong to: a send says nothing on it.
  p.has_newer=false;S.thinking=false;renderInteractionPages(pages,()=>{},false);
  assert(sendChat('a new question'),'send refused');
- assert(line(3)==='1 step · 1 unfinished'&&!receipts()[3].classList.contains('live'),'a send made finished work say Working: '+line(3));
+ assert(line(3)==='Fixture · recalled 1 thing · 1 unfinished'&&!receipts()[3].classList.contains('live'),'a send made finished work say Working: '+line(3));
  S.thinking=false;toggleThinkingDots(false);
  p.has_newer=false;p.has_older=true;S.thinking=false;p.rows=rows.slice(1);renderInteractionPages(pages,()=>{},false);
- assert(line(0)==='1 step in view','a stretch cut by the window claimed a whole turn: '+line(0));
+ assert(line(0)==='Fixture · ran 1 command · in view'&&!receipts()[0].querySelector('.receipt').open,'a stretch cut by the window claimed a whole turn, or opened for being cut: '+line(0));
+ // Where the running turn writes is decided by the mode. Frozen (SAFE): the transient tail works, the durable tail never says so.
+ // Normal, with a transient row kept after a failed write: the durable tail works, the kept row says nothing.
  p.rows=rows;p.has_older=false;S.thinking=true;
  pages.get('transient').rows=[{id:'sc',sequence:'1',kind:'tool_call',role:'system',turn_id:'safe',content:'{}',details:{tool:'read'}}];
  const tail=()=>Array.from(receipts()).at(-1).querySelector('.receipt > summary').textContent;
  S.cont={mode:'safe'};renderInteractionPages(pages,()=>{},false);
- assert(line(3)==='1 step · 1 unfinished'&&tail()==='Working · 1 step · not saved','SAFE: '+line(3)+' | '+tail());
+ assert(line(3)==='Fixture · recalled 1 thing · 1 unfinished'&&tail()==='Working · 1 step · not saved','SAFE: '+line(3)+' | '+tail());
  S.cont={mode:'normal'};renderInteractionPages(pages,()=>{},false);
- assert(line(3)==='Working · 1 step'&&tail()==='1 step · 1 unfinished · not saved','normal mode with a kept row: '+line(3)+' | '+tail());
+ assert(line(3)==='Working · 1 step'&&tail()==='Fixture · read 1 file · 1 unfinished · not saved','normal mode with a kept row: '+line(3)+' | '+tail());
  pages.get('transient').rows=[];S.thinking=false;S.cont=null;renderInteractionPages(pages,()=>{},false);
  renderInteractionPages(pages,()=>{},false,'latest');
  const message=inner.querySelector('[data-turn-id="q2"]'),body=message.querySelector('.body');
@@ -151,24 +169,31 @@ run(async assert=>{
  const reply={id:'a',sequence:'200',kind:'message',role:'resident',content:'Done.',turn_id:'t1',recorded_at:at(100),details:{}};
  const question={id:'q',sequence:'39',kind:'message',role:'operator',content:'Read the tree',turn_id:'t1',recorded_at:at(19),details:{}};
  const tick=()=>new Promise(r=>setTimeout(r,0));
+ // A screen this short would be filled (TestAReloadRedrawsTheConversationThePageHeld): here it is full.
+ document.getElementById('thread').style.height='40px';
  const asked=[];const navigate=(s,a)=>asked.push(s+':'+a);
  const p={identity:'fixture',incarnation:'disk',rows:[...pairs(50,69),reply],has_older:true,has_newer:false};
  const pages=new Map([['recorded',p],['transient',{identity:'fixture',incarnation:'memory',rows:[]}]]);
  renderInteractionPages(pages,navigate,false,'latest');await tick();
  assert(asked.length===0,'the latest window asked for older history: '+asked.join());
  const inner=document.getElementById('thread-inner'), top=()=>Array.from(inner.children).find(el=>el.dataset.interactionKey);
- const first=top();
+ const first=top(), work=inner.querySelector('.turn-receipt');
+ assert(first.dataset.turnId==='a'&&first.nextElementSibling===work,'the stretch is not under the reply at the top');
+ // An older page that folds wholly into the receipt under the reply at the top: nothing new is drawn, so the next page is asked for.
+ document.getElementById('thread').scrollTop=0;
  p.rows=[...pairs(30,49),...p.rows];renderInteractionPages(pages,navigate,false,'hold');await tick();
- assert(top()===first&&first.querySelector('.receipt-label').textContent==='40 steps in view','fixture: the older page did not fold into the top receipt: '+first.querySelector('.receipt-label').textContent);
+ assert(top()===first&&inner.querySelector('.turn-receipt')===work&&work.querySelector('.receipt-label').textContent==='Fixture · read 40 files · in view','fixture: the older page did not fold into the top receipt: '+work.querySelector('.receipt-label').textContent);
  assert(asked.join()==='recorded:older','an older page that drew nothing new waited for another gesture: '+asked.join());
  renderInteractionPages(pages,navigate,false,'hold');await tick();
  assert(asked.length===1,'a refresh of the same window paged: '+asked.join());
- first.querySelector('.receipt').open=true;first.querySelector('.receipt-all').open=true;
+ // Expanded receipts already add scroll space; do not walk through and
+ // evict a reader's step. This was the missing case in the first fix.
+ work.querySelector('.receipt').open=true;work.querySelector('.receipt-all').open=true;
  const h=document.getElementById('thread').scrollHeight;
  p.rows=[...pairs(25,29),...p.rows];renderInteractionPages(pages,navigate,false,'hold');await tick();
  assert(document.getElementById('thread').scrollHeight>h,'expanded fixture added no space');
  assert(asked.length===1,'expanded receipt caused automatic history traversal');
- first.querySelector('.receipt').open=false;first.querySelector('.receipt-all').open=false;
+ work.querySelector('.receipt').open=false;work.querySelector('.receipt-all').open=false;
 
  p.rows=[question,...pairs(20,24),...p.rows];renderInteractionPages(pages,navigate,false,'hold');await tick();
  assert(top()!==first&&top().dataset.turnId==='q','the question was not drawn at the top');
@@ -203,6 +228,7 @@ run(async assert=>{
   }
   throw Error('unbounded reader');
  }
+ document.getElementById('thread').style.height='40px';
  S.interactionChanged();await pump();
  const receipt=document.querySelector('.receipt');receipt.open=true;receipt.querySelector('.receipt-all').open=true;
  const anchor=document.querySelector('[data-turn-id="c280"]'), thread=document.getElementById('thread');thread.scrollTop=0;

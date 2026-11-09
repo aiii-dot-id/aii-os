@@ -11,8 +11,8 @@ import (
 
 func TestCacheInterruptedMeterDoesNotRequireSpeech(t *testing.T) {
 	a := &App{turn: turnState{lastTurn: "previous-turn gauge"}}
-	a.recordInterruptedTurnContext(t.Context(), conversation.Result{Usage: conversation.TurnUsage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010, CachedPromptTokens: 900, Calls: 2, Silent: 1}, Interrupted: "substrate failed"})
-	if got := a.lastTurnCost(); !strings.Contains(got, "1010") {
+	a.recordInterruptedTurnContext(t.Context(), conversation.Result{Usage: conversation.TurnUsage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010, CachedPromptTokens: 900, Calls: 2, Silent: 1}, Interrupted: "substrate failed"}, "")
+	if got := a.lastTurnCost(); !strings.Contains(got, "1,010") {
 		t.Fatalf("known partial usage was supplied, but last-turn gauge stayed %q because Spoken was empty", got)
 	}
 }

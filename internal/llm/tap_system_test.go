@@ -136,3 +136,111 @@ func TestTheSystemTextIsReplacedInEveryShape(t *testing.T) {
 		t.Errorf("a body that is not JSON is written as %q", got)
 	}
 }
+
+// SYSTEM TEXTS JOINED BY A DIALECT ARE NOT WRITTEN EITHER. A turn of two system
+// messages and nothing else: the Responses and Gemini dialects join them with a
+// blank line and send that as the user's, at no system path and equal to
+// neither. With the prompt tap on, no file holds a byte run of either; the
+// capture holds the joined text's size and SHA-256 where it went. With the tap
+// stopped, a later call writes nothing at all (a review's read of the host stack,
+// 2026-11-05).
+func TestSystemTextsJoinedByADialectAreNotWritten(t *testing.T) {
+	answers := map[string]string{
+		"":          `{"id":"c","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+		"anthropic": `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+		"gemini":    `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}`,
+		"chatgpt":   streamOneItem + "\n" + streamTerminal,
+	}
+	first := "FIRST-SYSTEM-SENTINEL-4b1e the constitution, never stored"
+	second := "SECOND-SYSTEM-SENTINEL-9c2d the charter, never stored"
+	joined := first + "\n\n" + second
+	sum := sha256.Sum256([]byte(joined))
+	inPlace := "[system text: " + strconv.Itoa(len(joined)) + " bytes, sha256 " + hex.EncodeToString(sum[:]) + "]"
+	for provider, answer := range answers {
+		t.Run("provider "+provider, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				if provider != "chatgpt" {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				io.WriteString(w, answer)
+			}))
+			defer srv.Close()
+			dir := t.TempDir()
+			logsink.SetCaptureDir(dir)
+			logsink.SetTaps(map[string]time.Time{"llm.prompt": {}})
+			t.Cleanup(func() { logsink.CloseCaptures(); logsink.SetCaptureDir(""); logsink.SetTaps(nil) })
+			c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true})
+			if _, err := c.Chat(context.Background(), []Message{{Role: "system", Content: first}, {Role: "system", Content: second}}, ChatOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			logsink.CloseCaptures()
+			for _, cut := range []string{first, second, "SYSTEM-SENTINEL", "never stored"} {
+				if found := filesHolding(t, dir, cut); len(found) > 0 {
+					t.Fatalf("%q is on disk in %v", cut, found)
+				}
+			}
+			if provider == "chatgpt" || provider == "gemini" {
+				if len(filesHolding(t, dir, inPlace)) == 0 {
+					t.Fatalf("no capture holds the joined system text's size and hash, %q", inPlace)
+				}
+			}
+			logsink.SetTaps(nil)
+			if _, err := c.Chat(context.Background(), []Message{{Role: "system", Content: first}, {Role: "user", Content: "WORDS-AFTER-THE-STOP"}}, ChatOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			logsink.CloseCaptures()
+			if found := filesHolding(t, dir, "WORDS-AFTER-THE-STOP"); len(found) > 0 {
+				t.Fatalf("a call after the tap stopped was written: %v", found)
+			}
+		})
+	}
+}
+
+// A SYSTEM TEXT WITH AN INVALID BYTE IS STILL KNOWN (a review's read of the host
+// stack, 2026-11-05). encoding/json writes each byte that is not valid UTF-8 as
+// U+FFFD, so on a system-only turn the Responses and Gemini dialects send the
+// user's text as that, not as the string remembered. Alone and joined, with
+// invented bytes, no word around the invalid byte reaches a capture.
+func TestASystemTextWithAnInvalidByteIsStillKnown(t *testing.T) {
+	answers := map[string]string{
+		"gemini":  `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}`,
+		"chatgpt": streamOneItem + "\n" + streamTerminal,
+	}
+	bad := "INVALID-BYTE-HEAD before \xff\xfe after INVALID-BYTE-TAIL"
+	other := "SECOND-SYSTEM-WORDS the charter"
+	for provider, answer := range answers {
+		for name, messages := range map[string][]Message{
+			"alone":  {{Role: "system", Content: bad}},
+			"joined": {{Role: "system", Content: bad}, {Role: "system", Content: other}},
+		} {
+			t.Run(provider+" "+name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					io.Copy(io.Discard, r.Body)
+					if provider != "chatgpt" {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					io.WriteString(w, answer)
+				}))
+				defer srv.Close()
+				dir := t.TempDir()
+				logsink.SetCaptureDir(dir)
+				logsink.SetTaps(map[string]time.Time{"llm.prompt": {}})
+				t.Cleanup(func() { logsink.CloseCaptures(); logsink.SetCaptureDir(""); logsink.SetTaps(nil) })
+				c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true})
+				if _, err := c.Chat(context.Background(), messages, ChatOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				logsink.CloseCaptures()
+				for _, cut := range []string{"INVALID-BYTE-HEAD", "INVALID-BYTE-TAIL", "SECOND-SYSTEM-WORDS"} {
+					if found := filesHolding(t, dir, cut); len(found) > 0 {
+						t.Fatalf("%q is on disk in %v", cut, found)
+					}
+				}
+				if len(filesHolding(t, dir, "[system text: ")) == 0 {
+					t.Fatal("no capture says where the system text was")
+				}
+			})
+		}
+	}
+}

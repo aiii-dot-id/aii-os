@@ -487,6 +487,18 @@
       "local": true
     },
     {
+      "name": "Ollama",
+      "api_type": "openai",
+      "url": "http://127.0.0.1:11434/v1",
+      "local": true
+    },
+    {
+      "name": "LM Studio",
+      "api_type": "openai",
+      "url": "http://127.0.0.1:1234/v1",
+      "local": true
+    },
+    {
       "name": "ElevenLabs",
       "chat": false,
       "url": "https://api.elevenlabs.io",

@@ -1,0 +1,17 @@
+.c-trail { display:flex; flex-direction:column; gap:var(--s-4); padding:var(--s-4) var(--s-5); border:1px solid var(--line); border-radius:var(--r-object); background:var(--surface); }
+.c-trail__statement { margin:0; font-family:var(--font-voice); font-size:var(--v-md); line-height:var(--v-md-lh); color:var(--text); overflow-wrap:anywhere; }
+.c-trail__part { display:flex; flex-direction:column; gap:var(--s-2); }
+.c-trail__heading { margin:0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); font-weight:600; color:var(--text-2); }
+.c-trail__stands, .c-trail__recall { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); }
+.c-trail__gloss, .c-trail__source, .c-trail__cut, .c-trail__none, .c-trail__wait { margin:0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-3); }
+.c-trail__refused { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--bad); }
+.c-trail__links { display:flex; flex-direction:column; gap:var(--s-3); margin:0; padding:0; list-style:none; }
+.c-trail__link { display:flex; flex-direction:column; gap:2px; padding-left:var(--s-3); border-left:2px solid var(--line); }
+.c-trail__text { margin:0; font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); overflow-wrap:anywhere; white-space:pre-wrap; }
+.c-trail__text--theirs { font-family:var(--font-voice); font-size:var(--v-sm); line-height:var(--v-sm-lh); }
+.c-trail__text--quoted { font-family:var(--font-page); }
+.c-trail__text--quoted::before { content:"“"; } .c-trail__text--quoted::after { content:"”"; }
+.c-trail__acts { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-2); }
+.c-trail__record { font-family:var(--font-page); font-size:var(--t-sm); color:var(--accent); }
+.c-trail__record:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:var(--r-control); }
+@media (max-width: 767px) { .c-trail { padding:var(--s-4); } }

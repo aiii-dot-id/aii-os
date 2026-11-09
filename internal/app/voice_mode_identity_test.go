@@ -167,12 +167,9 @@ func TestTheVoiceModeRefusesUnderSafeAndWithNoMicrophone(t *testing.T) {
 // change, so it renders beside the standing state — and only where there
 // is a voice at all, because a mode nothing can act on is machinery the
 // identity would have to learn to discount.
-func TestTheWorkingStateCarriesTheVoiceMode(t *testing.T) {
+func TestTheTurnCarriesTheVoiceMode(t *testing.T) {
 	a := newVoiceApp(t)
-	ws, err := a.buildWorkState()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ws := a.voicesForTurn()
 	if strings.Contains(ws, "### Voice") {
 		t.Fatalf("a host with no microphone and no reply voice named a voice mode:\n%s", ws)
 	}
@@ -180,10 +177,7 @@ func TestTheWorkingStateCarriesTheVoiceMode(t *testing.T) {
 	// A REPLY VOICE IS A VOICE: the identity is heard even where nothing
 	// hears it.
 	a.cfg.Speech.TTS.Provider = "local-speech"
-	ws, err = a.buildWorkState()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ws = a.voicesForTurn()
 	if !strings.Contains(ws, "### Voice — interactive (listen: interactive, speak: auto)") {
 		t.Fatalf("the unset mode did not render:\n%s", ws)
 	}
@@ -218,12 +212,9 @@ func TestTheWorkingStateCarriesTheVoiceMode(t *testing.T) {
 		if n := len(line); n >= 300 {
 			t.Errorf("(%q, %q) is %d bytes, over the 300-byte budget: %q", tc.listen, tc.speak, n, line)
 		}
-		ws, err := a.buildWorkState()
-		if err != nil {
-			t.Fatal(err)
-		}
+		ws := a.voicesForTurn()
 		if !strings.Contains(ws, line) {
-			t.Errorf("(%q, %q) did not reach the working state:\n%s", tc.listen, tc.speak, ws)
+			t.Errorf("(%q, %q) did not reach the turn:\n%s", tc.listen, tc.speak, ws)
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/pluginworker"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 	"slices"
 	"strings"
@@ -115,8 +116,7 @@ func readOnlyShellCommand(command string) bool {
 	}
 }
 
-func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs conversation.Observation) {
-	seat := a.callSeat(ctx)
+func (a *App) executeSeated(ctx context.Context, tc llm.ToolCall, seat callSeat) (obs conversation.Observation) {
 	defer func() {
 		if obs.WorkSession == "" && obs.SessionReason == "" {
 			obs.WorkSession, obs.SessionReason = seat.session, seat.reason
@@ -181,7 +181,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		if seat.actor == actorSubagent {
 
 			if name == "work" {
-				a.noteSubagentWorkCall(seat.session, args, tc.EmissionOrdinal)
+				a.noteSubagentWorkCall(seat.leg, args, tc.EmissionOrdinal)
 			}
 			return
 		}
@@ -212,6 +212,12 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 		result, err := a.engine.ExecuteAction(ctx, "verb", name, args)
 		if err != nil {
 			obs := conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true, ReasonCode: identity.ReasonCode(name, args, err)}
+
+			var rejection *identity.Rejection
+			var refusal interface{ RefusedBeforeEffect() bool }
+			if errors.As(err, &rejection) || errors.As(err, &refusal) && refusal.RefusedBeforeEffect() {
+				obs.Refused = true
+			}
 			var size *identity.WorkStatusSizeError
 			if errors.As(err, &size) {
 				obs.Refused, obs.ReasonCode = true, "status.size"
@@ -283,7 +289,7 @@ func (a *App) executeToolCall(ctx context.Context, tc llm.ToolCall) (obs convers
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 
-		return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true, Refused: errors.Is(err, tools.ErrUnknownTool)}
+		return conversation.Observation{Text: fmt.Sprintf("Error: %v", err), Failed: true, Refused: errors.Is(err, tools.ErrUnknownTool), ReasonCode: pluginFailureCode(err)}
 	}
 	if result.ReasonCode == tools.ReasonHostOnly {
 		return conversation.Observation{Text: result.Text(), Failed: true, Refused: true, ReasonCode: result.ReasonCode}
@@ -306,7 +312,9 @@ const (
 )
 
 type callSeat struct {
-	actor   string
+	actor string
+
+	leg     string
 	session string
 	reason  string
 	lookup  error
@@ -314,9 +322,52 @@ type callSeat struct {
 	delivered string
 }
 
+func (a *App) startedSeat(ctx context.Context, tc llm.ToolCall) callSeat {
+	turn := interaction.TurnID(ctx)
+	var (
+		rec   store.CallSeat
+		found bool
+		err   error
+	)
+
+	if a.safeTools != nil {
+		rec, found = a.safeTools.seat(turn, tc.EmissionOrdinal)
+	}
+	if !found && a.store != nil {
+		rec, found, err = a.store.ToolCallSeat(turn, tc.EmissionOrdinal)
+	}
+	seat := callSeat{actor: actorMain}
+	if _, child := ctx.Value(identity.SubagentWorkSession{}).(string); child {
+		seat.actor = actorSubagent
+	}
+	switch {
+	case err != nil:
+		seat.reason, seat.lookup = "session_lookup_failed", err
+		return seat
+	case !found:
+		seat.reason, seat.lookup = "session_lookup_failed", fmt.Errorf("no record holds the start of call %d of turn %s", tc.EmissionOrdinal, turn)
+		return seat
+	}
+
+	switch rec.Actor {
+	case "main":
+		seat.actor = actorMain
+	case "safe":
+		seat.actor = actorSafe
+	default:
+		seat.actor, seat.leg = actorSubagent, rec.Actor
+	}
+	seat.session, seat.reason = rec.Session, rec.Reason
+	if seat.reason == "session_lookup_failed" {
+		seat.lookup = errors.New("the session lookup failed when this call started")
+	}
+	a.readDelivered(ctx, &seat)
+	return seat
+}
+
 func (a *App) callSeat(ctx context.Context) callSeat {
 	if child, ok := ctx.Value(identity.SubagentWorkSession{}).(string); ok {
-		seat := callSeat{actor: actorSubagent, session: child}
+		seat := callSeat{actor: actorSubagent, session: child, leg: child}
 		if child == "" {
 			seat.reason = "no_session"
 		}
@@ -325,6 +376,11 @@ func (a *App) callSeat(ctx context.Context) callSeat {
 	seat := callSeat{actor: actorMain}
 	if a.currentMode() == ModeSafe {
 		seat.actor = actorSafe
+	}
+
+	if id := interaction.ResumeSession(ctx); id != "" {
+		seat.session = id
+		return seat
 	}
 	if a.store != nil {
 
@@ -340,16 +396,21 @@ func (a *App) callSeat(ctx context.Context) callSeat {
 	}
 	if seat.session == "" && seat.reason == "" {
 		seat.reason = "no_session"
-		if a.store != nil {
-
-			delivered, err := a.store.SessionDeliveredInTurn(interaction.TurnID(ctx))
-			if err != nil {
-				seat.reason, seat.lookup = "session_lookup_failed", err
-			}
-			seat.delivered = delivered
-		}
 	}
+	a.readDelivered(ctx, &seat)
 	return seat
+}
+
+func (a *App) readDelivered(ctx context.Context, seat *callSeat) {
+	if seat.session != "" || seat.reason != "no_session" || a.store == nil {
+		return
+	}
+
+	delivered, err := a.store.SessionDeliveredInTurn(interaction.TurnID(ctx))
+	if err != nil {
+		seat.reason, seat.lookup = "session_lookup_failed", err
+	}
+	seat.delivered = delivered
 }
 
 var errCallArgs = errors.New("args must be an object: the operation's arguments")
@@ -415,4 +476,31 @@ func (a *App) callCard(name string) string {
 		return ""
 	}
 	return "\n\n" + identity.ToolCardText(card, false)
+}
+
+const (
+	ReasonPluginTimeout          = "PLUGIN_TIMEOUT"
+	ReasonPluginTrap             = "PLUGIN_TRAP"
+	ReasonPluginResponseContract = "PLUGIN_RESPONSE_CONTRACT"
+	ReasonPluginFault            = "PLUGIN_FAULT"
+)
+
+func pluginFailureCode(err error) string {
+	var timeout *pluginworker.TimeoutError
+	var trap *pluginworker.TrapError
+	var limit *pluginworker.ResourceLimitError
+	var contract *pluginhost.ResponseContractError
+	switch {
+	case errors.Is(err, tools.ErrUnknownTool):
+		return ""
+	case errors.Is(err, context.Canceled):
+		return ""
+	case errors.As(err, &timeout), errors.Is(err, context.DeadlineExceeded):
+		return ReasonPluginTimeout
+	case errors.As(err, &trap), errors.As(err, &limit):
+		return ReasonPluginTrap
+	case errors.As(err, &contract):
+		return ReasonPluginResponseContract
+	}
+	return ReasonPluginFault
 }

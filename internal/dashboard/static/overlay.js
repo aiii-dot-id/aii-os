@@ -46,14 +46,15 @@ function showUpdate() {
   box.className = 'update-notice';
   box.setAttribute('role', 'status');
   const text = document.createElement('span');
-  text.textContent = 'The dashboard was updated. It reloads once your unsaved changes are saved or cancelled.';
+  text.textContent = 'AII OS was updated. The page reloads after you save or discard your changes.';
   const now = document.createElement('button');
   now.type = 'button';
   now.className = 'btn ghost sm';
   now.textContent = 'Reload now, discarding them';
   now.onclick = draftSafeReload;
   box.append(text, now);
-  document.body.appendChild(box);
+  const bar = document.querySelector('.c-top-bar');
+  if (bar) bar.after(box); else document.body.prepend(box);
 }
 
 let lastToken = 0;

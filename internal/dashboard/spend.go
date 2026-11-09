@@ -3,8 +3,9 @@ package dashboard
 import "context"
 
 type SpendView struct {
-	Zone string     `json:"zone"`
-	Days []SpendDay `json:"days"`
+	Zone  string     `json:"zone"`
+	Today string     `json:"today"`
+	Days  []SpendDay `json:"days"`
 }
 
 type SpendDay struct {

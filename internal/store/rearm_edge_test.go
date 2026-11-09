@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestHarvestMarkerRearmsOnRedelivery(t *testing.T) {
 	if err != nil || len(unh0) != 1 {
 		t.Fatalf("first delivery must surface: %v %d", err, len(unh0))
 	}
-	if err := s.MarkHarvested(unh0[0].ID, time.Now().UTC().UnixMilli()); err != nil {
+	if _, err := s.TakeInDelivery(context.Background(), unh0[0].ID, time.Now().UTC().UnixMilli(), "taken in"); err != nil {
 		t.Fatal(err)
 	}
 

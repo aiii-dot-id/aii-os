@@ -770,7 +770,16 @@ func (s *Store) validateLiveOnlyLocked(evt *ledger.Event) error {
 			return nil
 		}
 
-		return s.citedOperatorTurnLocked(p.ApprovalTurn, "operator approval", "verify approval turn", true)
+		if err := s.citedOperatorTurnLocked(p.ApprovalTurn, "operator approval", "verify approval turn", true); err != nil {
+			return err
+		}
+
+		if p.ApprovalDigest != "" {
+			if err := s.pressTurnLocked(p.ApprovalPressTurn, p.ApprovalDigest); err != nil {
+				return fmt.Errorf("%w: %w", ErrOperatorRelationshipUnapproved, err)
+			}
+		}
+		return nil
 	case ledger.EventConsolidationRun, ledger.EventDreamRun:
 		var p FacilityRunPayload
 		if json.Unmarshal(evt.Payload, &p) != nil || len(p.Inputs) == 0 || s.runOutputsPrecedeLocked(evt, p.Outputs) != nil {
@@ -1308,13 +1317,16 @@ func (s *Store) materializeFacilityRun(evt *ledger.Event) error {
 }
 
 type relationshipInvariants struct {
-	ID               string
-	CounterpartRole  string
-	RelationshipType string
-	Supersedes       string
-	OperatorApproval string
-	ApprovalTurn     uint64
-	ApprovalBasis    string
+	ID                string
+	CounterpartRole   string
+	RelationshipType  string
+	Supersedes        string
+	OperatorApproval  string
+	ApprovalTurn      uint64
+	ApprovalBasis     string
+	AutonomyLevel     string
+	ApprovalDigest    string
+	ApprovalPressTurn uint64
 }
 
 func (p relationshipInvariants) approvalShape() error {
@@ -1330,6 +1342,13 @@ func (p relationshipInvariants) approvalShape() error {
 
 	if p.ApprovalTurn <= 0 {
 		return fmt.Errorf("conversation_turn basis requires operator_approval_turn")
+	}
+
+	if p.ApprovalDigest != "" && p.ApprovalDigest != AutonomyApprovalDigest(p.ID, p.AutonomyLevel) {
+		return fmt.Errorf("approval_digest does not bind autonomy_level %q of %q", p.AutonomyLevel, p.ID)
+	}
+	if p.ApprovalDigest != "" && p.ApprovalPressTurn == 0 {
+		return fmt.Errorf("approval_digest cites no press (approval_press_turn)")
 	}
 	return nil
 }
@@ -1381,17 +1400,19 @@ func (s *Store) validateRelationshipLocked(p relationshipInvariants) error {
 }
 
 type relationshipPayload = struct {
-	ID               string `json:"id"`
-	CounterpartName  string `json:"counterpart_name"`
-	CounterpartRole  string `json:"counterpart_role"`
-	TrustLevel       string `json:"trust_level"`
-	AutonomyLevel    string `json:"autonomy_level"`
-	RelationshipType string `json:"relationship_type"`
-	Supersedes       string `json:"supersedes"`
-	CharterText      string `json:"charter_text"`
-	OperatorApproval string `json:"operator_approval_excerpt"`
-	ApprovalTurn     uint64 `json:"operator_approval_turn"`
-	ApprovalBasis    string `json:"approval_basis"`
+	ID                string `json:"id"`
+	CounterpartName   string `json:"counterpart_name"`
+	CounterpartRole   string `json:"counterpart_role"`
+	TrustLevel        string `json:"trust_level"`
+	AutonomyLevel     string `json:"autonomy_level"`
+	RelationshipType  string `json:"relationship_type"`
+	Supersedes        string `json:"supersedes"`
+	CharterText       string `json:"charter_text"`
+	OperatorApproval  string `json:"operator_approval_excerpt"`
+	ApprovalTurn      uint64 `json:"operator_approval_turn"`
+	ApprovalBasis     string `json:"approval_basis"`
+	ApprovalDigest    string `json:"approval_digest"`
+	ApprovalPressTurn uint64 `json:"approval_press_turn"`
 }
 
 func invariantsOf(p relationshipPayload) relationshipInvariants {
@@ -1399,6 +1420,7 @@ func invariantsOf(p relationshipPayload) relationshipInvariants {
 		ID: p.ID, CounterpartRole: p.CounterpartRole, RelationshipType: p.RelationshipType,
 		Supersedes: p.Supersedes, OperatorApproval: p.OperatorApproval,
 		ApprovalTurn: p.ApprovalTurn, ApprovalBasis: p.ApprovalBasis,
+		AutonomyLevel: p.AutonomyLevel, ApprovalDigest: p.ApprovalDigest, ApprovalPressTurn: p.ApprovalPressTurn,
 	}
 }
 
@@ -1435,12 +1457,14 @@ func (s *Store) materializeRelationshipLocked(evt *ledger.Event) error {
 
 	_, err = s.h().Exec(`
 		INSERT INTO relationships (id, counterpart_name, counterpart_role, trust_level,
-		                           autonomy_level, relationship_type, charter_text, operator_approval, created_seq, updated_seq)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		                           autonomy_level, relationship_type, charter_text, operator_approval, approval_digest, approved_level, created_seq, updated_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? != '' THEN ? ELSE '' END, ?, NULL)
 		ON CONFLICT(id) DO UPDATE SET
 			counterpart_name = excluded.counterpart_name,
 			trust_level = excluded.trust_level,
 			autonomy_level = excluded.autonomy_level,
+			approval_digest = CASE WHEN excluded.approval_digest != '' THEN excluded.approval_digest ELSE relationships.approval_digest END,
+			approved_level = CASE WHEN excluded.approval_digest != '' THEN excluded.autonomy_level ELSE relationships.approved_level END,
 			charter_text = CASE WHEN excluded.charter_text != ''
 			                   THEN excluded.charter_text
 			                   ELSE relationships.charter_text END,
@@ -1449,7 +1473,7 @@ func (s *Store) materializeRelationshipLocked(evt *ledger.Event) error {
 			                        ELSE relationships.operator_approval END,
 			updated_seq = ?
 	`, p.ID, p.CounterpartName, p.CounterpartRole, p.TrustLevel,
-		p.AutonomyLevel, p.RelationshipType, p.CharterText, p.OperatorApproval, evt.Seq, evt.Seq)
+		p.AutonomyLevel, p.RelationshipType, p.CharterText, p.OperatorApproval, p.ApprovalDigest, p.ApprovalDigest, p.AutonomyLevel, evt.Seq, evt.Seq)
 	if err != nil {
 		return err
 	}

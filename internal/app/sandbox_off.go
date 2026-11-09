@@ -41,13 +41,15 @@ func (a *App) sandboxHeldInPosture() *SandboxHeldError {
 	return errSandboxHeldInSafe
 }
 
-const sandboxNeedsToken = "turning it off requires this dashboard to ask for its access token, so that only a browser signed in with it can, and it does not now. Turn that on in Settings, under Dashboard, with Ask for an access token"
+const signInFirst = "first turn on \"Ask every device to sign in\" in Settings → Access"
+
+const sandboxNeedsToken = "to turn it off, " + signInFirst
 
 var (
 	errSandboxHeldNoToken = &SandboxHeldError{Why: sandboxHeldToken, Require: sandboxNeedsToken}
 
 	errSandboxHeldUnsigned = &SandboxHeldError{Why: sandboxHeldToken,
-		Require: "turning it off requires the page that asks to be signed in with this dashboard's access token, and this one is not. Sign in, then tick the box again"}
+		Require: "this page isn't signed in. Sign in, then try again"}
 )
 
 func (a *App) accessTokenInForce() bool {
@@ -316,9 +318,9 @@ func (a *App) sandboxHeld(cfg Config) (why, sentence string) {
 	if !a.accessTokenInForce() {
 
 		if cfg.Tools.SandboxOff {
-			return sandboxHeldToken, "The saved setting is off, but the sandbox stays on: " + sandboxNeedsToken + ", then tick the box."
+			return sandboxHeldToken, "The saved setting is off, but the sandbox stays on. To turn it off, " + signInFirst + ", then tick the box."
 		}
-		return sandboxHeldToken, "The sandbox stays on: " + sandboxNeedsToken + "."
+		return sandboxHeldToken, "The sandbox stays on. To turn it off, " + signInFirst + "."
 	}
 	if !cfg.Tools.SandboxOff || a.toolReg == nil || a.toolReg.SandboxOff() {
 		return "", ""

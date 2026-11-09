@@ -141,7 +141,7 @@ func componentSetsFor(t *testing.T, version string) componentSets {
 	s.Lock()
 	defer s.Unlock()
 	if s.role == nil {
-		s.roots, s.role = platformRootsForTest(t)
+		s.roots, s.role = sharedPlatformRoots(t)
 	}
 	c, ok := s.sets[version]
 	if !ok {

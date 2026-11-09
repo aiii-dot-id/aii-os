@@ -60,7 +60,7 @@ func (a *App) ensureDashboardToken() error {
 
 		if n := len(cfg.Dashboard.AccessToken); n < shortAccessToken {
 			if mode, _ := publicname.RouteMode(cfg.Certificate); mode == publicname.RouteRelay {
-				logsink.Warn("dashboard.refusal", "the access token in %s is %d characters long and a relay exposes this dashboard's sign-in to the internet; Rotate access token (Settings → Dashboard) makes a new one, or clear dashboard.access_token to mint one at the next start", cfg.SourcePath, n)
+				logsink.Warn("dashboard.refusal", "the access token in %s is %d characters long and a relay exposes this dashboard's sign-in to the internet; Sign out all devices (Settings → Phone and other devices) makes a new one, or clear dashboard.access_token to mint one at the next start", cfg.SourcePath, n)
 			} else if !dashboard.IsLoopback(cfg.Dashboard.Host) {
 				logsink.Warn("dashboard.refusal", "the access token in %s is %d bytes long on a network bind; clear dashboard.access_token to mint a strong one", cfg.SourcePath, n)
 			}
@@ -264,8 +264,8 @@ func (a *App) installDashboardToken(token string) error {
 }
 
 var (
-	errNoTokenToRotate      = errors.New("this dashboard is not asking for an access token, so there is none to rotate — turn it on with Settings → Dashboard → Ask for an access token")
-	errTokenAlreadyRequired = errors.New("this dashboard already asks for an access token — there is nothing to turn on; Rotate access token replaces it")
+	errNoTokenToRotate      = errors.New("no device has to sign in yet. Turn on \"Ask every device to sign in\" in Settings → Access")
+	errTokenAlreadyRequired = errors.New("every device already has to sign in")
 	errDashboardNotServing  = errors.New("the dashboard is not serving, so there is no running server to put a token in force on")
 )
 

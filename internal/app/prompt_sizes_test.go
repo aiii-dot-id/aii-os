@@ -15,6 +15,31 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
 
+// prompt_sizes_test.go — HOW LARGE EACH PART OF EVERY REQUEST IS, written
+// down (the instrument's second part, design 0.1.24 part M). Size is the
+// largest lever on a prompt, and nothing showed it: a description could
+// double and every test stay green. This measures each shape's requests
+// as the whole-request goldens render them (renderShapes): each section
+// of the system text, each message, each tool, and the totals, and holds
+// them to testdata/prompt_sizes.txt. A change that moves a size carries
+// its new number in the same commit; regenerate with the prompt goldens'
+// command (whole_prompt_test.go).
+//
+// CHARACTERS AND THE HOST'S OWN TOKEN ESTIMATE. A character is a Unicode
+// code point of the text as the golden pins it (a normalised clock or
+// path counts as its marker). Tokens are internal/tokenestimate.Estimate,
+// one token per three UTF-8 bytes rounded up: the estimate the composer
+// folds by and the admission refuses by, so a number here is the number
+// the host decides with. No tokenizer is in the tree, and characters/4 is
+// not used. A tool is measured as the request carries it, its definition
+// marshalled as JSON.
+//
+// Ring 0, Ring 5 and the founding packet are the platform's, fetched live:
+// their rows say so and carry no number, and no total counts them. The
+// tools differ by platform, so their rows, and each total that includes
+// them, are tagged with the platform they were measured on; a run checks
+// and rewrites its own platform's rows and keeps the others as they are.
+
 // promptSizesFile is the size report.
 var promptSizesFile = testdataPath("prompt_sizes.txt")
 
@@ -257,7 +282,7 @@ func readSizeRows() ([]sizeRow, error) {
 func sizeReport(rows, recorded []sizeRow) string {
 	var b strings.Builder
 	b.WriteString(`# Prompt sizes: every request shape the host sends a model, part by part
-# (TestEveryRequestShapeKeepsItsRecordedSize; measured by internal/app/prompt_sizes_test.go).
+# (TestEveryRequestShapeSendsItsPinnedWholeRequest/keeps_its_recorded_size; measured by internal/app/prompt_sizes_test.go).
 # Each row: group | part | characters | tokens; a tool's row adds its description's and its
 # parameters' characters / tokens. Characters are Unicode code points of the text as its golden
 # pins it (testdata/whole_prompt). Tokens are the host's own estimate, internal/tokenestimate:

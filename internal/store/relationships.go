@@ -31,7 +31,7 @@ type CharterBudgetRefusal struct {
 }
 
 func (e *CharterBudgetRefusal) Error() string {
-	return fmt.Sprintf("relationship.upsert refused: bounded charter: charter_text is approximately %d tokens; maximum is %d (prompt.charter_max_tokens). Your charter rides whole in every prompt. Shorten it, say the shorter charter to your operator, and record it once they have affirmed it; or ask them to raise the budget (Settings → Identity → Cognition). The charter you hold now, sent again unchanged, is admitted", e.Tokens, e.Max)
+	return fmt.Sprintf("relationship.upsert refused: bounded charter: charter_text is approximately %d tokens; maximum is %d (prompt.charter_max_tokens). Your charter rides whole in every prompt. Shorten it, say the shorter charter to your operator, and record it once they have affirmed it; or ask them to raise the budget (Settings → Technical → Reflection). The charter you hold now, sent again unchanged, is admitted", e.Tokens, e.Max)
 }
 
 func (s *Store) admitCharterBudgetLocked(payload []byte) error {
@@ -65,12 +65,12 @@ func (s *Store) CurrentOperatorRelationship() (*Relationship, error) {
 	var updatedSeq sql.NullInt64
 	err := s.db.QueryRow(`
 		SELECT id, counterpart_name, counterpart_role, trust_level, autonomy_level,
-		       relationship_type, charter_text, created_seq, updated_seq
+		       relationship_type, charter_text, approval_digest, approved_level, created_seq, updated_seq
 		FROM relationships
 		WHERE counterpart_role = 'operator' AND superseded_by IS NULL
 		ORDER BY created_seq DESC LIMIT 1
 	`).Scan(&r.ID, &r.CounterpartName, &r.CounterpartRole, &r.TrustLevel,
-		&r.AutonomyLevel, &r.RelationshipType, &r.CharterText, &r.CreatedSeq, &updatedSeq)
+		&r.AutonomyLevel, &r.RelationshipType, &r.CharterText, &r.ApprovalDigest, &r.ApprovedLevel, &r.CreatedSeq, &updatedSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

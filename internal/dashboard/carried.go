@@ -154,7 +154,7 @@ func carriedRecover(h http.Handler) http.Handler {
 				return
 			}
 			if v != http.ErrAbortHandler {
-				logsink.Error("dashboard.error", "a request carried %s for %s panicked: %v\n%s", cameFrom(r), peerSaid(r.URL.Path, refusalPeerTextBytes), v, debug.Stack())
+				logsink.Error("dashboard.error", "a request carried %s for %s panicked: %v\n%s", cameFrom(r), peerSaid(pathToLog(r.URL.Path), refusalPeerTextBytes), v, debug.Stack())
 			}
 			panic(http.ErrAbortHandler)
 		}()

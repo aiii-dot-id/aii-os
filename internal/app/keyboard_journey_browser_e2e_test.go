@@ -16,6 +16,17 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 )
 
+// HOME → PROJECT → FILE → CLOSE, BY KEYBOARD (design review DR10), in a real
+// Chrome on a born identity's own dashboard, with real keystrokes: the
+// debugger's Input.dispatchKeyEvent, which the page receives as trusted
+// keys, so Enter presses a button only if it is one. Tab reaches the
+// project in Projects' list and Enter opens it (Home has no project cards
+// since step 6); Tab reaches the file on the project's page;
+// Enter opens the viewer with focus inside it, and Tab keeps focus there;
+// Escape closes it and gives focus back to the file.
+//
+// COVERAGE LIMIT, NAMED: Blink only, as the other journeys; the structure
+// each engine lands on is the dashboard's TestTheFileViewerIsAModalThatGivesFocusBack.
 func TestTheProjectFileJourneyByKeyboard(t *testing.T) {
 	chrome := needChrome(t)
 	dir := t.TempDir()
@@ -43,7 +54,7 @@ func TestTheProjectFileJourneyByKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page := openInChrome(t, chrome, origin, "/#/home")
+	page := openInChrome(t, chrome, origin, "/#/projects")
 	await := func(what, predicate string) {
 		t.Helper()
 		got, err := page.evalRetry(awaitJS(predicate, 20000), true, 30*time.Second, 5)
@@ -100,16 +111,15 @@ func TestTheProjectFileJourneyByKeyboard(t *testing.T) {
 		t.Fatalf("%s never landed on %s: the page took focus from it every time", key, what)
 	}
 
-	await("the project's card on Home", `last = location.hash; return document.querySelector('.proj-card .proj-open') ? 'ok' : null;`)
-	keyOn("the project's card", ".proj-card .proj-open", "Enter")
+	await("the project in Projects' list", `last = location.hash; return document.querySelector('#dock .dock-item[data-id]') ? 'ok' : null;`)
+	keyOn("the project in the list", "#dock .dock-item[data-id]", "Enter")
 	await("the project opened", `
     const head = document.querySelector('#proj-space');
     last = location.hash + ' ' + (head ? head.textContent.slice(0, 80) : 'no space');
     return location.hash.startsWith('#/projects/') && head && head.textContent.includes('keyboard-room') ? 'ok' : null;`)
-	keyOn("the Files tab", `#proj-space [data-tab="files"]`, "Enter")
 	await("the file listed", `
-    const tab = document.querySelector('#proj-space .tab.sel'), card = document.querySelector('#proj-space .card');
-    last = 'tab=' + (tab ? tab.dataset.tab : 'none') + ' card=' + (card ? card.textContent.slice(0, 60) : 'none');
+    const files = document.querySelector('#proj-space [aria-labelledby="pj-files"]');
+    last = 'files=' + (files ? files.textContent.slice(0, 60) : 'none');
     return document.querySelector('#proj-space .fl-file[data-name="notes.md"] .fl-name') ? 'ok' : null;`)
 	keyOn("the file", `#proj-space .fl-file[data-name="notes.md"] .fl-name`, "Enter")
 	await("the viewer, with focus inside", `

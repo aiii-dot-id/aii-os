@@ -12,7 +12,7 @@ const firstbootNeedsKeyPage = `<!DOCTYPE html><html><head><title>needs key</titl
 </body></html>`
 
 const firstbootNeedsKeyProbeJS = `
-import { report } from '/__harness.js';
+import { report, until } from '/__harness.js';
 try {
   const assert = (ok, why) => { if (!ok) throw new Error(why); };
   const sockets = [];
@@ -30,6 +30,8 @@ try {
   const socket = sockets[0];
   socket.open();
   socket.say({ type: 'status', stats: { name: '(not born)' } });
+  // First run is fetched by the socket that finds no identity (step 22).
+  await until(() => window.__fb && S.later && S.later.fbHint, 3000);
   S.providers = [{ name: 'Acme' }];
   const hints = window.__fb.hints, results = window.__fb.results;
 
@@ -47,9 +49,14 @@ try {
 
 func TestTheBirthFormAsksForAKeyOnlyWhenTheServerSaysOneIsNeeded(t *testing.T) {
 	modules := wsProbeModules(t, firstbootNeedsKeyProbeJS)
-	modules["/firstboot.js"] = []byte(`window.__fb = { hints: [], results: [] };
+	modules["/views/firstrun/start.js"] = []byte(`window.__fb = { hints: [], results: [] };
+export const acceptFirstRunConfig = () => false;
+export const refuseFirstRunConfig = () => false;
+export const firstRunConfigArrived = () => {};
 export const fbHint = t => { window.__fb.hints.push(t); };
 export const fbResult = (kind, text) => { window.__fb.results.push(kind + ':' + text); };
+// A refusal ends the start: said, and Begin as it was (start.js beginAgain).
+export const beginAgain = why => { if (why) window.__fb.results.push('err:' + why); document.getElementById('fb-birth').disabled = false; };
 export const acceptDiscoveryResponse = () => true;
 export const discoveryFailed = () => false;
 export const renderProviderOptions = () => {};

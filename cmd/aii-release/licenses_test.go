@@ -240,3 +240,29 @@ func TestTheDataTheProgramsCarryCarriesItsLicence(t *testing.T) {
 		t.Fatalf("the tree's copy of gitleaks' licence: %q", text)
 	}
 }
+
+// A FACE THE PAGE CARRIES CARRIES ITS LICENCE. Every font file the
+// dashboard embeds belongs to a family whose SIL Open Font License, with
+// the family's copyright notice, is among the shipped data's licences, so
+// a face added without one stops here rather than shipping without it.
+func TestEveryFaceThePageCarriesCarriesItsLicence(t *testing.T) {
+	faces, err := filepath.Glob(filepath.Join("..", "..", "internal", "dashboard", "static", "fonts", "*.woff2"))
+	if err != nil || len(faces) == 0 {
+		t.Fatalf("no faces found under internal/dashboard/static/fonts: %v", err)
+	}
+	for _, face := range faces {
+		name := filepath.Base(face)
+		i := slices.IndexFunc(shippedData, func(d struct{ title, file string }) bool {
+			family := strings.TrimSuffix(strings.TrimPrefix(d.file, "third_party/"), "/OFL.txt")
+			return strings.HasSuffix(d.file, "/OFL.txt") && strings.HasPrefix(name, family+"-")
+		})
+		if i < 0 {
+			t.Errorf("%s: no licence of its family is among the shipped data's", name)
+			continue
+		}
+		text := repoFile(t, strings.Split(shippedData[i].file, "/")...)
+		if !strings.HasPrefix(text, "Copyright ") || !strings.Contains(text, "SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007") {
+			t.Errorf("%s: the tree's copy of its licence is not its notice and the SIL Open Font License 1.1: %.80q", shippedData[i].file, text)
+		}
+	}
+}

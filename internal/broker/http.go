@@ -594,14 +594,18 @@ type hopPolicy struct {
 }
 
 func (h hopPolicy) admit(ctx context.Context, rawURL string) error {
-	if err := h.guard(ctx, rawURL); err != nil {
-		return err
-	}
 	hu, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("%w: unparseable redirect target", firewall.ErrEgressBlocked)
 	}
 	hh, hp := urlHostPort(hu)
+
+	if err := h.reach(hh, hp); err != nil {
+		return err
+	}
+	if err := h.guard(ctx, rawURL); err != nil {
+		return err
+	}
 	if h.oauth {
 		pinned := false
 		for _, allowed := range h.oauthHosts {
@@ -620,7 +624,7 @@ func (h hopPolicy) admit(ctx context.Context, rawURL string) error {
 			return fmt.Errorf("%w: redirect violates the auth profile host:port or HTTPS requirement", firewall.ErrEgressBlocked)
 		}
 	}
-	return h.reach(hh, hp)
+	return nil
 }
 
 func (h hopPolicy) admitDial(ctx context.Context, host string, addr netip.AddrPort) error {

@@ -16,21 +16,24 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/workrecord"
 )
 
+// several_active_test.go — a call made while more than one main work
+// session is active is counted to the newest and says so (the
+// learning-readiness critique's C3, 2026-10-27; no new column, R243): the
+// call row resolves the seat once (RecordToolStart) and the call is run,
+// completed and read from it (F1, 2026-11-01), so the reason survives the
+// call's completion into every reader of the record. Falsifier: a call row names a session without several_active
+// while two main sessions were active at its start.
+
 // seatCall runs one tool call as the loop does: its start recorded, then
-// the call, then its completion, and answers the observation.
+// between, then the call from its start's seat, then its completion, and
+// answers the observation.
 func seatCall(t *testing.T, a *App, ctx context.Context, actor, turn, dir string, between func()) conversation.Observation {
 	t.Helper()
 	args := `{"path":` + strconv.Quote(dir) + `}`
-	tr := appTranscript{st: a.store, safe: a.safeTools, actor: actor}
-	if err := tr.RecordToolStart(turn, 1, "c_"+turn, "ls", args, "m"); err != nil {
-		t.Fatal(err)
-	}
 	var tc llm.ToolCall
 	tc.ID, tc.Function.Name, tc.Function.Arguments = "c_"+turn, "ls", args
-	obs := a.executeToolCall(ctx, tc)
-	if between != nil {
-		between()
-	}
+	obs := startedExecute(t, a, ctx, actor, turn, tc, between)
+	tr := appTranscript{st: a.store, safe: a.safeTools, actor: actor}
 	if err := tr.RecordToolDone(turn, 1, "ls", args, obs); err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +95,8 @@ func TestTheRecordAndTheSeatAgreeWhenSeveralAreActive(t *testing.T) {
 	}
 	agree("t_after", "ws_older", "", seatCall(t, a, ctx, "", "t_after", dir, nil))
 
-	// A focus change while the call runs: a start between the seat's read
-	// and the call's end moves neither row; the call is counted as it began.
+	// Work started after the call's start and before it runs moves nothing:
+	// the call runs, is recorded and is read from its start's seat (F1).
 	agree("t_focus", "ws_older", "", seatCall(t, a, ctx, "", "t_focus", dir, func() {
 		if err := a.store.StartWorkSession(ctx, "ws_during", "work started mid-call"); err != nil {
 			t.Fatal(err)
@@ -141,8 +144,8 @@ func TestSeveralActiveSurvivesCompletionRecallAndExport(t *testing.T) {
 		}
 	}
 	seatCall(t, a, ctx, "", "t_seat", dir, nil)
-	// A completion that names the session and no reason inherits the start
-	// row's reason (store.appendToolOutcome).
+	// A completion carries no session of its own: the start row's seat is
+	// written whatever the observation says (store.appendToolOutcome, F1).
 	tr := appTranscript{st: a.store, safe: a.safeTools}
 	if err := tr.RecordToolStart("t_bare", 1, "c_bare", "ls", "{}", "m"); err != nil {
 		t.Fatal(err)

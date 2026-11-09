@@ -64,7 +64,7 @@ func (s *Store) NextConversation(budget int, exclude string) (ConversationBatch,
 	}
 
 	rows, err := s.h().Query(
-		`SELECT c.id, v.attribution, c.content, c.turn_id FROM conversations_searchable v JOIN conversations c ON c.rowid = v.rowid
+		`SELECT c.id, v.attribution, c.content, c.turn_id, `+speakerPayload+` FROM conversations_searchable v JOIN conversations c ON c.rowid = v.rowid
 		 WHERE c.turn_seq > ? ORDER BY c.turn_seq ASC LIMIT ?`, afterSeq, MaxTurnsPerPass)
 	if err != nil {
 		return ConversationBatch{}, fmt.Errorf("conversation intake: %w", err)
@@ -72,8 +72,8 @@ func (s *Store) NextConversation(budget int, exclude string) (ConversationBatch,
 	defer rows.Close()
 	left := budget
 	for rows.Next() {
-		var id, role, content, turnID string
-		if err := rows.Scan(&id, &role, &content, &turnID); err != nil {
+		var id, role, content, turnID, observation string
+		if err := rows.Scan(&id, &role, &content, &turnID, &observation); err != nil {
 			return ConversationBatch{}, fmt.Errorf("conversation intake: %w", err)
 		}
 		length := cursor.TurnLength(content)
@@ -84,6 +84,18 @@ func (s *Store) NextConversation(budget int, exclude string) (ConversationBatch,
 		from := 0
 		if id == inside.Turn {
 			from = inside.Position
+		}
+
+		if read, named := s.SpokenAsRead(content, observation); named && from == 0 {
+			size := cursor.TurnLength(read)
+			if size > left && len(batch.Parts) > 0 {
+				break
+			}
+			batch.Parts = append(batch.Parts, TurnPart{ID: id, Role: "operator", Text: read, Whole: true, TurnID: turnID,
+				AsRecorded: &TurnPart{ID: id, Role: role, Text: content, Whole: true, TurnID: turnID}})
+			batch.Through = TurnCursor{Turn: id, Position: length}
+			left -= min(size, left)
+			continue
 		}
 		rest := length - from
 		switch {

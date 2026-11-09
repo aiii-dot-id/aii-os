@@ -8,9 +8,9 @@ func TestTheUpdatesCardNamesThePluginsAnOfferedVersionWouldStrand(t *testing.T) 
 	page := `<!doctype html><html><body><div id="root"></div>
 <script type="module">
 import { run } from '/__harness.js';
-import { updateCardHTML } from '/views/settings.js';
+import { updatesHTML } from '/views/settings/app.js';
 run(async (assert) => {
-  const card = (u) => { const d = document.createElement('div'); d.innerHTML = updateCardHTML(u); return d; };
+  const card = (u) => { const d = document.createElement('div'); d.innerHTML = updatesHTML(u); return d; };
   const two = card({enabled:true, current_version:'0.2.4', available_version:'0.3.0', stranded:[
     {id:'org.example.gone', version:'1.4.0', reason:'the AII OS 0.3 catalog does not carry it'},
     {id:'org.example.<b>', version:'1.0.0', reason:"the AII OS 0.3 catalog's 2.0.0 needs AII OS 0.3.1 or newer"}]});
@@ -36,10 +36,12 @@ run(async (assert) => {
 		"/pending.js":            []byte(`export function pendingSlot() { return { arm(){ return true; }, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`),
 		"/views/model-picker.js": stubModule("providerModels"),
 	}
-	real, err := staticFS.ReadFile("static/views/settings.js")
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"views/settings.js", "views/settings/app.js"} {
+		real, err := staticFS.ReadFile("static/" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modules["/"+path] = real
 	}
-	modules["/views/settings.js"] = real
 	runPageInEngines(t, page, modules)
 }

@@ -236,3 +236,27 @@ func TestRetiredBeliefsRefuseAnUnreadableStore(t *testing.T) {
 		t.Fatalf("an unreadable store answered: %v more=%d", got, more)
 	}
 }
+
+// AN ARCHIVE IS DATED BY ITS OWN EVENT, not by last_seq, which any later
+// evidence edge on the archived belief advances: b_oil archived at 09:05,
+// then supported by new evidence the next day, is still retired at 09:05
+// and still older than a retirement after it (a review, 2026-10-31 20:30Z).
+func TestAnArchivedBeliefKeepsItsArchiveDateUnderLaterEvidence(t *testing.T) {
+	l := newRetiredLedger(t)
+	l.belief("b_oil", "Olive oil is the only oil.", 3)
+	l.belief("b_tea", "Tea before noon.", 3)
+	l.mat("2026-09-28T09:05:00Z", ledger.EventBeliefArchive, map[string]any{"id": "b_oil", "reason": "overstated"})
+	l.mat("2026-09-28T12:00:00Z", ledger.EventBeliefArchive, map[string]any{"id": "b_tea", "reason": "a habit, not a belief"})
+	l.mat("2026-09-29T07:00:00Z", ledger.EventExperienceCreate, map[string]any{"id": "exp_late", "content": "oil again", "category": "observation"})
+	l.mat("2026-09-29T07:00:01Z", ledger.EventEdgeCreate, map[string]any{"id": "edge_late", "from_id": "exp_late", "to_id": "b_oil", "edge_type": "SUPPORTS"})
+	got, more, err := l.s.RetiredBeliefs(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if more != 0 || !sameIDs(got, "b_tea", "b_oil") {
+		t.Fatalf("the later evidence moved the archived belief ahead of a newer retirement: %v (more %d)", retiredIDs(got), more)
+	}
+	if got[1].RetiredAt != "2026-09-28T09:05:00Z" {
+		t.Fatalf("the archive is dated by its own event, not by later evidence: %s", got[1].RetiredAt)
+	}
+}

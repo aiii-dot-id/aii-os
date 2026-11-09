@@ -18,21 +18,6 @@ import (
 // writer (store_harness_test.go) is the desktop rows' alone, and these are
 // also what tests that only verify, select and prepare read.
 
-func platformRootsForTest(t *testing.T) (packagefmt.TrustRoots, *packagetest.Role) {
-	t.Helper()
-	root, status, err := packagetest.NewPlatformRelease("aiii_test_platform_release")
-	if err != nil {
-		t.Fatal(err)
-	}
-	trust := t.TempDir()
-	if err := os.WriteFile(filepath.Join(trust, packagetest.StatusFilePlatform), status, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	roots := packagefmt.TrustRoots{PlatformRelease: root.Env}
-	roots.Revocation = packagefmt.LoadRevocationStatus(trust, roots, nil)
-	return roots, root
-}
-
 func hostVariantID() string {
 	return packagefmt.HostPlatform() + "-" + packagefmt.HostArch() + "-native"
 }
@@ -120,9 +105,13 @@ func requireActivationStorage(t *testing.T, ap *ActivePlugin, id string) {
 }
 
 // sharedPlatform is one platform-release role and its trust roots for
-// every native package this file signs: minting a role is seconds of
-// signature work under the race detector, and these tests need nothing
-// of a fresh one.
+// every package these tests sign: minting a role is seconds of signature
+// work under the race detector, and these tests need nothing of a fresh
+// one — none holds a package to a root other than the one that signed it,
+// and the revocation status is loaded here once, keeping no path. A
+// per-test twin of this (platformRootsForTest) stood beside it at 25 call
+// sites, some in seven-row loops; it was the same throwaway root minted
+// again, about 120 s of every gate.
 var sharedPlatform struct {
 	once  sync.Once
 	roots packagefmt.TrustRoots

@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -69,5 +70,25 @@ func TestWorkUpdateDecisionNeededReachesTheAskProposer(t *testing.T) {
 	ws, _ = st.ActiveWorkSession()
 	if ws.DecisionNeeded != "One or five years?" {
 		t.Fatalf("the decision is stored before the card is placed: %q", ws.DecisionNeeded)
+	}
+}
+
+// A QUESTION ABOUT A VOICE OPENS NO SESSION. It is not a work decision, and no reply
+// waits on it: the verb hands the host the voice and the words, and returns.
+func TestWorkAskOpensNoSession(t *testing.T) {
+	engine, st, _, _, _ := setupEngine(t)
+	var uuid, question string
+	engine.voiceAsker = func(u, q string) (string, error) { uuid, question = u, q; return "asked", nil }
+	ask := map[string]any{"action": "ask", "voice_uuid": "a-voice", "question": "Was that you?"}
+	out, err := engine.ExecuteAction(context.Background(), "verb", "work", ask)
+	if err != nil || !strings.Contains(out, "asked") || uuid != "a-voice" || question != "Was that you?" {
+		t.Fatalf("out %q, err %v, voice %q, question %q", out, err, uuid, question)
+	}
+	if ws, err := st.ActiveWorkSession(); err != nil || ws != nil {
+		t.Fatalf("a question about a voice opened a session: %+v, %v", ws, err)
+	}
+	engine.voiceAsker = nil
+	if _, err := engine.ExecuteAction(context.Background(), "verb", "work", ask); err == nil {
+		t.Fatal("asked with no host to ask")
 	}
 }

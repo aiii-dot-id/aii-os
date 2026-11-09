@@ -269,7 +269,7 @@ func TestARelayIsNotChosenBehindAShortToken(t *testing.T) {
 	if !errors.As(err, &short) {
 		t.Fatalf("a relay behind a fifteen-character token: want the typed refusal, got %v", err)
 	}
-	if short.Length != 15 || short.Line != dashboard.ShortAccessToken || !strings.Contains(err.Error(), "Rotate access token") || strings.Contains(err.Error(), "generated") {
+	if short.Length != 15 || short.Line != dashboard.ShortAccessToken || !strings.Contains(err.Error(), "Sign out all devices") || strings.Contains(err.Error(), "generated") {
 		t.Fatalf("the refusal does not say the length, the line and the way out, or claims to know how the token was made: %v", err)
 	}
 	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
@@ -832,9 +832,9 @@ func TestTheRelayRouteIsChosenThroughTheConfigDoor(t *testing.T) {
 
 	open := routeApp(t, false, serviceOffersRelays)
 	unchanged(open, choose, "a relay while the running dashboard asks for no token", errRelayNeedsToken)
-	// The refusal points at the page's own way to the token, not a terminal.
-	if _, err := open.applyConfigChange(choose); err == nil || !strings.Contains(err.Error(), "Settings → Dashboard → Ask for an access token") || strings.Contains(err.Error(), "aii dashboard-token") || strings.Contains(err.Error(), "config.json") {
-		t.Fatalf("the relay refusal does not send the person to Ask for an access token: %v", err)
+	// The refusal points at the page's own button, not a terminal or a token.
+	if _, err := open.applyConfigChange(choose); err == nil || !strings.Contains(err.Error(), "\"Ask every device to sign in\" in Settings → Access") || strings.Contains(err.Error(), "aii dashboard-token") || strings.Contains(err.Error(), "config.json") || strings.Contains(err.Error(), "token") {
+		t.Fatalf("the relay refusal does not send the person to Ask every device to sign in: %v", err)
 	}
 	if _, err := open.applyConfigChange(map[string]any{"certificate.route_mode": "direct"}); err != nil {
 		t.Fatalf("the way back to direct is open without a token: %v", err)

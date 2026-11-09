@@ -114,7 +114,7 @@ func windowedPackage(t *testing.T, id string, root *packagetest.Role, models []b
 // something else entirely — a missing symbol, an engine that never
 // reported ready — after gigabytes had been downloaded for it.
 func TestAnActivationOutsideTheHostWindowRefusesBeforeAnyMaterial(t *testing.T) {
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	fx := newModelFixture(t, "stt.bin", 4096)
 	models, err := json.Marshal([]ModelDecl{fx.decl})
 	if err != nil {

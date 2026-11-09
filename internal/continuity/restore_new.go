@@ -178,7 +178,7 @@ func (r *Runtime) NewMachineKeys(sealed, pass []byte) (dashboard.RestoreNewKeys,
 	}
 
 	if _, published, err := escrow.WriteReceipt(kp, wantRecipient, keyPath, time.Now()); err != nil && !published {
-		logsink.Error("restore.error", "the keys are in place and the escrow receipt could NOT be written (%v): snapshots made here are not encrypted until the escrow file is checked in Settings → Backups & Keys", err)
+		logsink.Error("restore.error", "the keys are in place and the escrow receipt could NOT be written (%v): snapshots made here are not encrypted until the escrow file is checked in Settings → Backups", err)
 	} else {
 		if err != nil {
 			logsink.Warn("restore.error", "the escrow receipt is in place and its write could not be confirmed durable: %v", err)

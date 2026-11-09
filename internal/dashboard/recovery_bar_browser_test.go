@@ -80,8 +80,8 @@ async function panelLeavesThePageUsable(id) {
   document.getElementById('mic').hidden = false;
   reachable('the composer', document.getElementById('msg-input'));
   reachable('the microphone', document.getElementById('mic'));
-  const nav = [...document.querySelectorAll('#nav .nav-item')].filter(el => !el.hidden);
-  assert(nav.length >= 7, 'the bottom navigation has ' + nav.length + ' destinations');
+  const nav = [...document.querySelectorAll('#nav .nav-item')].filter(el => el.getClientRects().length);
+  assert(nav.length >= 4, 'the bottom navigation has ' + nav.length + ' destinations');
   for (const el of nav) reachable('the ' + el.textContent.trim() + ' destination', el);
   const close = [...box.querySelectorAll('button')].find(b => b.getAttribute('aria-label'));
   assert(close, 'the panel has no labelled control that dismisses it');
@@ -105,7 +105,9 @@ func TestTheShippedNoteLeavesAPhonePageUsable(t *testing.T) {
 	page := recoveryShell(t, "/shipped/", unobstructed+`
 run(async () => {
   await panelLeavesThePageUsable('boot-shipped');
-  const again = await import('./recovery.js?again');
+  // By its absolute path: WebKit resolves an inline module's import
+  // against the address the page moved to (/shipped/), not its <base>.
+  const again = await import('/recovery.js?again');
   await again.ready;
   assert(!document.getElementById('boot-shipped'), 'the dismissed note came back in the same tab');
 });`)
@@ -124,6 +126,18 @@ func runDashboardInEngines(t *testing.T, s *Server, startPath, driver string) {
 // runDashboardInEachEngine is runDashboardInEngines with a server made for
 // each engine's run, for a journey that changes what the server holds.
 func runDashboardInEachEngine(t *testing.T, serverFor func(*testing.T) *Server, startPath, driver string) {
+	t.Helper()
+	runDashboardSized(t, serverFor, startPath, driver, 0, 0)
+}
+
+// runDashboardInEnginesAtSize is runDashboardInEngines in a window of w by
+// h, for what the page draws only at that width (the phone's bottom bar).
+func runDashboardInEnginesAtSize(t *testing.T, s *Server, startPath, driver string, w, h int) {
+	t.Helper()
+	runDashboardSized(t, func(*testing.T) *Server { return s }, startPath, driver, w, h)
+}
+
+func runDashboardSized(t *testing.T, serverFor func(*testing.T) *Server, startPath, driver string, w, h int) {
 	t.Helper()
 	engines := resolveEngines()
 	if len(engines) == 0 {
@@ -172,7 +186,7 @@ func runDashboardInEachEngine(t *testing.T, serverFor func(*testing.T) *Server, 
 			}))
 			defer srv.Close()
 			s.AllowHost(strings.TrimPrefix(srv.URL, "http://"))
-			runServerInOneEngine(t, found.engine, found.path, srv.URL+startPath, results, 0, 0, 0)
+			runServerInOneEngine(t, found.engine, found.path, srv.URL+startPath, results, w, h, 0)
 		})
 	}
 }
@@ -223,17 +237,27 @@ func staleCopy(t *testing.T) string {
 const customDriver = `
 const report = text => fetch('/__result', { method: 'POST', body: text, keepalive: true });
 const fail = m => report('FAIL: ' + m);
+const until = (cond, ms) => new Promise(r => { const end = Date.now() + (ms || 5000); const tick = () => (cond() || Date.now() > end) ? r() : setTimeout(tick, 15); tick(); });
 (async () => {
   const { ready } = await import('./recovery.js');
   await ready;
-  const box = document.getElementById('boot-failure');
+  const booted = document.getElementById('boot-failure');
+  if (booted) return fail('the page did not start: ' + booted.textContent);
   const mark = (id, prop) => getComputedStyle(document.getElementById(id))[prop];
   const listed = await (await fetch('/overlay/replacements', { cache: 'no-store' })).json();
   const inPlace = listed.files.some(f => f.path === 'views/plugin-setting.js');
+  // Settings is fetched when first opened (step 21): the copy stops it, not
+  // the page.
+  location.hash = '#/settings/all';
   if (inPlace) {
-    if (!box) return fail('the stale copy did not stop the page');
+    // The alert names the files once the server has listed them: its own
+    // dismiss button is there before that, so the wait is for the set-aside.
+    await until(() => { const b = document.getElementById('part-failure'); return b && [...b.querySelectorAll('button')].some(x => x.textContent === 'Set aside and reload'); });
+    const box = document.getElementById('part-failure');
+    if (!box) return fail('the stale copy did not stop the part it replaces');
     const said = box.textContent;
-    if (!said.includes('Your views/plugin-setting.js replaces a shipped dashboard file and may not match this version.')) return fail('the alert does not name the file: ' + said);
+    if (!said.includes('Settings did not open.')) return fail('the alert does not name the part: ' + said);
+    if (!said.includes('Your views/plugin-setting.js overrides a built-in file and may not match this version.')) return fail('the alert does not name the file: ' + said);
     for (const innocent of ['custom.css', 'custom.js', 'mine.js', 'theme.css']) {
       if (said.includes(innocent)) return fail('the alert names ' + innocent + ', which cannot stop the page: ' + said);
     }
@@ -242,13 +266,26 @@ const fail = m => report('FAIL: ' + m);
     act.click();
     return;
   }
-  if (box) return fail('after setting aside, the page still did not start: ' + box.textContent);
+  await until(() => document.getElementById('view-settings').classList.contains('on') && document.getElementById('settings-stack') && document.getElementById('settings-stack').children.length);
+  const part = document.getElementById('part-failure');
+  if (part) return fail('after setting aside, Settings still did not open: ' + part.textContent);
+  if (!document.getElementById('view-settings').classList.contains('on')) return fail('after setting aside, Settings is not shown');
   if (mark('p-name', 'outlineColor') !== 'rgb(1, 2, 3)') return fail('custom.css no longer applies: ' + mark('p-name', 'outlineColor'));
   if (mark('p-state', 'outlineColor') !== 'rgb(4, 5, 6)') return fail('the replaced theme.css no longer applies: ' + mark('p-state', 'outlineColor'));
   report('OK');
 })().catch(e => fail((e && e.message) || String(e)));
 `
 
+// A STALE COPY STOPS WHAT IT REPLACES, THE PAGE SAYS WHICH, AND ONE CLICK
+// PUTS IT ASIDE (T72), as it happened live: an identity kept a copy of a
+// shipped view from an older build, the shipped modules around it moved
+// on, and the page never started. Settings is fetched when first opened
+// (step 21), so its copy now stops Settings rather than the page. On the
+// dashboard's own server, in a real browser: the page starts; opening
+// Settings, the alert says it did not open and names the file and nothing
+// that cannot stop it; "Set aside and reload" renames it and Settings
+// opens, with the identity's custom.css, its replaced theme.css and its own
+// new view where they were.
 func TestAStaleCopyIsNamedAndSetAsideAndThePageStarts(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ui")
 	theme, err := staticFS.ReadFile("static/theme.css")
@@ -307,7 +344,7 @@ const fail = m => report('FAIL: ' + m);
   if (mark('p-state') !== 'rgb(4, 5, 6)') return fail('the replaced theme.css does not apply under /shipped/: ' + mark('p-state'));
   if (window.__customRan || document.documentElement.dataset.custom) return fail('custom.js ran under /shipped/');
   const note = document.getElementById('boot-shipped');
-  if (!note || !note.textContent.includes('your scripts are not loaded')) return fail('the note does not say what is not loaded: ' + (note && note.textContent));
+  if (!note || !note.textContent.includes('your custom scripts are off')) return fail('the note does not say what is not loaded: ' + (note && note.textContent));
   report('OK');
 })().catch(e => fail((e && e.message) || String(e)));
 `)

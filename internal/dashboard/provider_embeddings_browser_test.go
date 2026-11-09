@@ -19,7 +19,7 @@ run(() => {
  S.providers=[{name:'Local',api_type:'openai',endpoint:'http://127.0.0.1:8080/v1',default_model:'m',configured_models:[],embeddings_model:'bge-m3'},
               {name:'Other',api_type:'openai',endpoint:'https://example.test/v1',default_model:'m',configured_models:[]}];
  renderSettings();
- document.querySelector('[data-sec="providers"]').click();
+ S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
  const last=()=>frames.findLast(f=>f.type==='provider_set');
  const editor=(i)=>{
   if(!document.getElementById('pv-embed-'+i)) document.querySelector('[data-prov-row="'+i+'"]').click();

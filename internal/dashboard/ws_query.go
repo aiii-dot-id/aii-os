@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
 
@@ -148,7 +149,8 @@ func (s *Server) queryLogs(ctx context.Context, conn carrier, h *WSHandler, msg 
 	if msg.Name != "" {
 		tail, err := h.TailLogs(msg.Name)
 		if err != nil {
-			s.sendError(ctx, conn, err.Error())
+
+			s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
 			return
 		}
 		s.sendMsg(ctx, conn, ServerMessage{Type: "logs", LogsTail: tail})
@@ -156,8 +158,34 @@ func (s *Server) queryLogs(ctx context.Context, conn carrier, h *WSHandler, msg 
 	}
 	files, err := h.ListLogs()
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "logs", LogsList: files})
+}
+
+func (s *Server) queryBeliefTrail(ctx context.Context, conn carrier, h *WSHandler, msg ClientMessage) {
+	if h.BeliefTrail == nil {
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
+		return
+	}
+	id := strings.TrimSpace(msg.BeliefID)
+	if id == "" {
+		s.sendErrorFor(ctx, conn, msg.RequestID, "belief_trail needs a belief id")
+		return
+	}
+	trail, err := h.BeliefTrail(id)
+	if err != nil {
+
+		m := ServerMessage{Type: "error", RequestID: msg.RequestID, Message: err.Error()}
+		switch {
+		case errors.Is(err, ErrBeliefNotFound):
+			m.RequestErrorCode = "belief.not_found"
+		case errors.Is(err, ErrRecordNotOpen):
+			m.RequestErrorCode = "record.not_open"
+		}
+		s.sendMsg(ctx, conn, m)
+		return
+	}
+	s.sendMsg(ctx, conn, ServerMessage{Type: "belief_trail", RequestID: msg.RequestID, BeliefTrail: trail})
 }

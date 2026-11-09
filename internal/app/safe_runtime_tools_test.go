@@ -650,7 +650,7 @@ func TestARuntimeSafeTurnCarriesItsTriggersSection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, err := app.buildWorkState()
+	work, err := app.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

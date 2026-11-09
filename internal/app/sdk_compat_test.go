@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
@@ -177,6 +178,20 @@ func compatPublisherProven(t *testing.T, b compatBuild) {
 
 	t.Run("interactions", func(t *testing.T) {
 		h.seedHistory(t, compatSaid, 55, compatPrivate)
+		// A WAIT IN THE HISTORY: a session given a promise and a condition,
+		// then met. Its work changes carry the promise and the wait, which
+		// the version 1 contract does not; the plugin reads the history whole.
+		work := interaction.WithTurn(context.Background(), "sdk-compat-work")
+		promise, resumes := "the figures by noon", "now"
+		if err := h.app.store.StartWorkSession(work, "ws_compat", "add up the figures"); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.app.store.SetWorkPromise(work, "ws_compat", &promise, &resumes, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.app.store.MeetWorkCondition(work, "ws_compat", "delivery:ws_compat_child", "A delivery came"); err != nil {
+			t.Fatal(err)
+		}
 		if reply := h.turn(t, "SDKCOMPATTURN", "remember", map[string]any{"text": compatTurnText}, "Kept."); !strings.Contains(reply, "Kept.") {
 			t.Fatalf("the scripted turn ends with its answer: %q", reply)
 		}

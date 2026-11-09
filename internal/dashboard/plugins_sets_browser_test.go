@@ -4,6 +4,12 @@ package dashboard
 
 import "testing"
 
+// EVERY COMPONENT SET, IN WORDS, ON THE CARD, rendered from the
+// shipped module: the set chosen and why, each one passed over with every
+// reason and what would admit it, the disk, the download and this
+// machine's resources of each; a refused attempt with no set that fits
+// says so and still shows each set; a module with no sets shows nothing;
+// and the byte ceilings, unset, are empty boxes that say they are not set.
 const pluginsSetsPage = `<!doctype html>
 <div class="app"><div class="stack" id="plugins-stack"></div></div>
 <script type="module">
@@ -55,7 +61,7 @@ run(() => {
   const module = card('org.example.module');
   assert(module && !module.querySelector('.sets') && !module.textContent.includes('COMPONENT SETS'), 'a module shows nothing passed over: ' + (module && module.textContent));
   const archive = document.getElementById('cfg-rt-archive');
-  assert(archive && archive.value === '' && archive.placeholder.includes('free disk decides'), 'an unset byte ceiling is an empty box that says free disk decides: ' + (archive && archive.outerHTML));
+  assert(archive && archive.value === '' && archive.placeholder === 'Not set', 'an unset byte ceiling is an empty box that says it is not set disk decides: ' + (archive && archive.outerHTML));
   assert(document.getElementById('cfg-rt-files').value === '32768', 'the structural ceiling shows its value');
 });
 </script>`

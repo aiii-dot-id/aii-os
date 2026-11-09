@@ -141,7 +141,7 @@ func init() {
 				"to":      str("Who to send it to: \"operator\" (default), or a name from your address book"),
 			}, "message")},
 		{Name: "work",
-			Description: "Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a session's state with start, update and deliver. Spawn for independent work that can run concurrently, or for one independent review after a failure, ambiguity or material consequence; keep a tightly coupled loop in your own turn. Working state is not memory: note what should outlast it, and complete a commitment a delivery fulfils. Commands go to shell, not here." + workRecallClause,
+			Description: "Your work: sessions, sub-agents, and what you schedule or keep for later. A session with a promise and resumes_on is kept by the host: your work resumes when its condition is met, and the card says so. An alarm is how you keep a promise to come back: to a slow task instead of polling, to your operator at an hour you choose, to something you want to think about again. It survives restarts, wakes you with your own words, and tells your operator. When you set a reminder for your operator, say when it will reach them and where: here, or by their notice route if one is on. Keep a session's state with start, update and deliver. Spawn for independent work that can run concurrently, or for one independent review after a failure, ambiguity or material consequence; keep a tightly coupled loop in your own turn. Working state is not memory: note what should outlast it, and complete a commitment a delivery fulfils. Commands go to shell, not here." + workRecallClause,
 			Handler:     (*Engine).verbWork,
 			InSafe:      true,
 
@@ -153,7 +153,9 @@ func init() {
 				"hours":  integer(workHours),
 			}, "action"),
 			Params: obj(map[string]any{
-				"action":            strEnum("start (open a session, with any of update's fields); update (record where it stands); deliver (close it with its verdict); "+workStatus+"; "+workYield+"; spawn (a copy of you, same constitution, charter and self, on one sub-goal; its outcome returns to your working state); "+workMeasure+"; alarm.set / alarm.cancel (wakes you with its message, survives restarts; recall source=alarms); project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; recall source=curiosity); voice.mode (what the microphone does and whether your replies are spoken); backup.take / backup.verify (a snapshot of your record and memory, or proof a kept one restores; recall source=continuity)", "spawn", "status", "yield", "start", "update", "deliver", "measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear", "voice.mode", "backup.take", "backup.verify"),
+				"action":            strEnum("start (open a session, with any of update's fields); update (record where it stands); deliver (close it with its verdict); "+workStatus+"; "+workYield+"; "+workSay+"; spawn (a copy of you, same constitution, charter and self, on one sub-goal; its outcome returns to your working state); "+workMeasure+"; alarm.set / alarm.cancel (wakes you with its message, survives restarts; recall source=alarms); project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; recall source=curiosity); voice.mode (what the microphone does and whether your replies are spoken); ask (whether a voice nobody has named was your operator); backup.take / backup.verify (a snapshot of your record and memory, or proof a kept one restores; recall source=continuity)", "spawn", "status", "yield", "start", "update", "deliver", "measure", "alarm.set", "alarm.cancel", "project.create", "project.update", "project.close", "project.select", "project.deselect", "project.evidence", "project.waive", "curiosity", "curiosity.clear", "voice.mode", "ask", "backup.take", "backup.verify"),
+				"voice_uuid":        str("(ask) the speaker_uuid of a voice nobody has named, when you are asking your operator whether it was them"),
+				"question":          str("(ask) your question to your operator, in your own words"),
 				"goal":              str("(spawn) one bounded, falsifiable deliverable, not a research program: if you cannot name the single artifact it returns, the goal is too broad"),
 				"thinking_budget":   integer("(spawn) the sub-agent's reasoning tokens, at your level or lower"),
 				"role":              str(roleUnrouted),
@@ -163,8 +165,13 @@ func init() {
 				"focus":             str("(update) one line: what the session is about now; (project.update) what you are doing in that project, restored when it is selected again"),
 				"family":            str(workFamilyParam),
 				"next_move":         str("(update) one line: the step to resume from if interrupted"),
+				"promise":           str("(update, yield) the id of the intention or commitment this session carries"),
+				"choice":            strEnum("(say) speak | hold | go_on", "speak", "hold", "go_on"),
+				"until":             str("(say, hold) unix ms, else when your operator is usually back"),
+				"resumes_on":        str("(update, yield) what resumes this work: delivery:<child session id> (a sub-agent's result), word (your operator's next message), time:<unix ms> (a moment; the host keeps it as your alarm), now (a fresh turn of yours follows at once)"),
 				"standing":          str("(update) what outlasts any session: a wait you hold, where you are between things. Needs no session; shown every turn until you change it; empty clears it"),
 				"plan":              str("(update) your plan in markdown, shown back to you verbatim; subgoal lines may cite spawned session ids"),
+				"plan_step":         str(workPlanStepParam),
 				"expected_evidence": str("(update) one line: the result that would confirm your next move"),
 				"falsifier":         str("(update) one line: the result that would show your next move wrong"),
 				"check":             str(workCheckParam),
@@ -172,6 +179,7 @@ func init() {
 				"choices":           strArray("(update, with decision_needed) two to six short options your operator picks from"),
 				"connector":         str("(update, with decision_needed) what you need connected: a plugin id, or a kind (email, calendar, a device); your operator is pointed to their Plugins page"),
 				"steps":             integer(stepsDescription(defaultCheckpoint())),
+				"reflect_every":     integer("(update) your own cadence for stepping back: after every N calls of a turn the status line asks you for one line of reflection (METHOD.md, step 3) before the next call; 0 is none"),
 				"independent":       integer("(update) how many remaining steps could run as concurrent sub-agents; recorded, and nothing acts on it"),
 				"result":            str("(deliver) one line beginning served:, partial: or unserved:, then what happened"),
 				"evidence":          strEnum("(deliver) the evidence class; omitted, a sub-agent's delivery is worker_report_only. locally_verified and host_receipted need evidence_readback and your own seat", evidenceClasses...),
@@ -248,8 +256,12 @@ func init() {
 				"cites":                 citesArg("(belief.upsert, edge.create) the records this act rests on, yours or another identity's: which record, not that it stands"),
 				"state":                 str("(state_change) the new state"),
 				"outcome":               str("(intention.state_change to completed or abandoned; required) one line beginning served:, partial: or unserved:, then what happened"),
-				"old_id":                str("(belief.supersede) the superseded belief id"),
-				"new_id":                str("(belief.supersede) the replacing belief id"),
+
+				"result":       str("(commitment.state_change to completed, abandoned or repaired) how it came out, one line beginning served:, partial: or unserved:, then what happened"),
+				"repair_state": str("(commitment.state_change to abandoned or repaired) what making good takes, or took"),
+				"note":         str("(commitment.state_change) a line beside the state, e.g. why it is in_progress but blocked"),
+				"old_id":       str("(belief.supersede) the superseded belief id"),
+				"new_id":       str("(belief.supersede) the replacing belief id"),
 			}, "variant")},
 		{Name: "tools",
 			Description: "Discovery: your organs and sandbox tools; and the plugin operations installed beside you, the primary ones in your tool list and any other run with action=call.",
@@ -414,9 +426,10 @@ const workInSafe = "Work sessions — reading where they stand: status (your wor
 
 const (
 	workStatus      = "status (your working state and sub-agents, whole; with id, one delivered result; never sleep-poll instead)"
-	workYield       = "yield (end this turn while sub-agents run; a delivery wakes you; the move when only waiting remains)"
+	workYield       = "yield (end this turn; the move when the next step is not now; say what resumes this work with resumes_on, and the promise it waits under with promise=, else the newest on this session)"
 	workYieldInSafe = "yield (end this turn; the move when only waiting remains)"
 	workMeasure     = "measure (your outcome ratios, observational)"
+	workSay         = "say (your choice on an unprompted word: speak now, hold until your operator is usually back, or go on without them; required once in an unprompted turn)"
 	workStatusID    = "(status) a sub-agent's ws_ id: reads its delivered result whole"
 	workAnswer      = "(yield) your best current answer: what is established, what is missing, what would change it. Required once a sub-agent ended unfinished or failed since your operator last spoke, or on the third yield against one ask"
 	workHours       = "(measure) window in hours; default 48"

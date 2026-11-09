@@ -42,7 +42,7 @@ run(() => {
   assert(input.value === '', 'sending did not clear the submitted draft');
   assert(S.thinking && btn.classList.contains('stopping') && /stop/i.test(btn.getAttribute('aria-label')),
     'the same button did not become Stop immediately while awaiting a reply');
-  assert(btn.textContent.trim() === '■', 'Stop does not show the square motif');
+  assert(btn.querySelector('svg rect') && btn.title === 'Stop', 'Stop does not show the square motif, or is not named Stop');
 
   input.value = 'keep this draft'; btn.click();
   assert(sent.length === 2 && sent[1].type === 'cancel' && input.value === 'keep this draft',

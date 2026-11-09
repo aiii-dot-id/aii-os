@@ -1,15 +1,16 @@
 import { S } from './state.js';
 import { send, wsReady } from './ws.js';
 import { renderInteractionPages } from './views/chat.js';
+import { ownsThread } from './registry.js';
 
 const sources = ['recorded', 'transient'], maxRows = 200, maxBytes = 1024 * 1024;
 const pages = new Map(), intents = new Map(), dirty = new Set(), resetSources = new Set();
 let pending = null, serial = 0, ready = false, jumping = new Set();
-const visible = () => document.visibilityState !== 'hidden' && (!S.view || S.view === 'chat');
+const visible = () => document.visibilityState !== 'hidden' && (!S.view || ownsThread(S.view));
 const render = (position = '', reading = null) => {
   if (!visible()) return;
   if (jumping.size) position = 'hold';
-  if (!reading && restored && !Object.keys(restored.windows).length) {
+  if (!reading && restoring() && !Object.keys(restored.windows).length) {
     reading = restored.reading; restored = null; position = 'restore';
   }
   renderInteractionPages(pages, navigate, !!pending, position, reading);
@@ -27,7 +28,7 @@ try {
       Number.isFinite(saved.reading.offset) && Array.isArray(saved.reading.open) &&
       saved.reading.open.every(e => typeof e.key === 'string' && Array.isArray(e.indices) && e.indices.every(Number.isInteger))) restored = saved;
 } catch (_) {}
-function saveReading() {
+function saveReading(next) {
   if (restored) return;
   const reading = S.interactionBookmark?.();
   if (!reading || (S.view && S.view !== 'chat')) return;
@@ -36,18 +37,20 @@ function saveReading() {
     windows[source] = { identity: page.identity, incarnation: page.incarnation, ...bounds(page.rows) };
   }
   if (!Object.keys(windows).length) return;
-  const raw = JSON.stringify({ version: 1, reading, windows });
+  const saved = { version: 1, reading, windows }, raw = JSON.stringify(saved);
   try {
     if (raw.length <= 32768) sessionStorage.setItem(bookmarkKey, raw);
     else sessionStorage.removeItem(bookmarkKey);
   } catch (_) {}
+  if (typeof next === 'string' && next !== 'chat') restored = saved;
 }
-window.addEventListener('pagehide', saveReading);
+window.addEventListener('pagehide', () => { saveReading(); });
 S.saveInteractionPosition = saveReading;
+S.readingGivenUp = () => { restored = null; };
+const restoring = () => !!restored;
 function refresh(source) {
   const saved = restored?.windows[source];
-  if (!pages.has(source) && saved && restored.reading.following) return { mode: 'latest' };
-  if (!pages.has(source) && saved && typeof saved.incarnation === 'string' && typeof saved.anchor_id === 'string' && typeof saved.end_id === 'string') {
+  if (saved && typeof saved.incarnation === 'string' && typeof saved.anchor_id === 'string' && typeof saved.end_id === 'string') {
     return { mode: 'range', incarnation: saved.incarnation, anchor_id: saved.anchor_id, end_id: saved.end_id };
   }
 
@@ -71,7 +74,7 @@ function drain() {
   if (!ready || pending || !visible() || !wsReady()) return;
   if (!intents.size) for (const source of dirty) {
     const window = refresh(source);
-    if (window) { dirty.delete(source); intents.set(source, { window, cursor: '', rows: [], follow: !restored && window.mode === 'range' && !!S.interactionFollowing?.() }); break; }
+    if (window) { dirty.delete(source); intents.set(source, { window, cursor: '', rows: [], restore: restoring() && !!restored.windows[source], follow: (!restored || restored.reading.following) && window.mode === 'range' && !!S.interactionFollowing?.() }); break; }
   }
   if (!intents.size) return;
   const [source, intent] = intents.entries().next().value;
@@ -83,7 +86,7 @@ function drain() {
 }
 S.interactionChanged = () => {
   ready = true;
-  if (restored && !Object.keys(restored.windows).length) render('restore');
+  if (restoring() && !Object.keys(restored.windows).length) render('restore');
   for (const source of sources) {
     const page = pages.get(source);
     if (page) page.invalidated = new Set(page.rows.map(r => r.id));
@@ -99,8 +102,7 @@ S.interactionLost = () => {
   render();
 };
 S.interactionLatest = () => {
-  S.cancelReadingRestore?.();
-  restored = null;
+  S.cancelReadingRestore?.(); restored = null;
   jumping = new Set(sources);
   for (const source of sources) {
     intents.set(source, { window: { mode: 'latest' }, cursor: '', rows: [] }); dirty.delete(source);
@@ -108,8 +110,7 @@ S.interactionLatest = () => {
   drain();
 };
 S.interactionHold = () => {
-  S.cancelReadingRestore?.();
-  restored = null;
+  S.cancelReadingRestore?.(); restored = null;
   jumping.clear();
   for (const [source, intent] of intents) {
     if (intent.window.mode === 'latest' || intent.follow) {
@@ -165,7 +166,7 @@ S.interactionPage = (page, id, window) => {
   }
   intents.delete(source);
   let rows = intent.rows, older = window.has_older, newer = window.has_newer;
-  if (mode === 'range' && previous?.rows.length) {
+  if (mode === 'range' && previous?.rows.length && !intent.restore) {
     const first = previous.rows.find(r => r.id === intent.window.anchor_id), last = previous.rows.find(r => r.id === intent.window.end_id);
     rows = [...previous.rows.filter(r => sequence(r) < sequence(first)), ...rows, ...previous.rows.filter(r => sequence(r) > sequence(last))];
     older = previous.has_older; newer = previous.has_newer || intent.hasNewer && previous.rows.at(-1).id === last.id;
@@ -189,11 +190,11 @@ S.interactionPage = (page, id, window) => {
     intents.set(source, { window: { mode: 'newer', incarnation: page.incarnation, anchor_id: rows.at(-1).id }, cursor: '', rows: [], follow: true });
   }
   const jumped = jumping.delete(source) && !jumping.size;
-  if (restored?.windows[source]) {
+  if (intent.restore && restored?.windows[source]) {
     if (restored.windows[source].identity !== page.identity) restored = null;
     else delete restored.windows[source];
   }
-  const reading = visible() && restored && !Object.keys(restored.windows).length ? restored.reading : null;
+  const reading = visible() && restoring() && !Object.keys(restored.windows).length ? restored.reading : null;
   if (reading) restored = null;
   render(reading ? 'restore' : jumped ? 'latest' : mode === 'older' || mode === 'range' ? 'hold' : '', reading); drain();
 };

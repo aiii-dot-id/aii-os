@@ -41,10 +41,13 @@ func TestStaticServingModuleLayout(t *testing.T) {
 	}
 
 	wantType := map[string]string{
-		".html": "text/html; charset=utf-8",
-		".js":   "text/javascript; charset=utf-8",
-		".css":  "text/css; charset=utf-8",
-		".png":  "image/png", // the tab's icons, served from the embed only
+		".html":  "text/html; charset=utf-8",
+		".js":    "text/javascript; charset=utf-8",
+		".css":   "text/css; charset=utf-8",
+		".png":   "image/png", // the tab's icons, served from the embed only
+		".svg":   "image/svg+xml",
+		".md":    "text/markdown; charset=utf-8", // a component's README, from the embed only
+		".woff2": "font/woff2",                   // the page's own faces, from the embed only
 	}
 
 	// The shell at both its addresses (pinned pre-split behavior), and it

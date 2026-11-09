@@ -24,7 +24,7 @@ run(() => {
   assert(card, 'the Speakers card is on the speech page');
   assert(byId('sp-speakers-mode').value === 'ignore' && byId('sp-speakers-uids').value === 'visitor' && byId('sp-speakers-unid').value === 'withhold', 'the policy in force is drawn');
   const rb = byId('sp-speakers-readback').textContent;
-  assert(rb.includes('Everyone but 1 listed speaker') && rb.includes('revision 4') && rb.includes('2 finals, 7 partials'), 'the readback names the rule, the revision and the counts: ' + rb);
+  assert(rb.includes('Everyone but 1 listed speaker') && !rb.includes('revision') && rb.includes('2 finals, 7 partials'), 'the readback names the rule and the counts: ' + rb);
   assert(!byId('sp-speakers-list-row').hidden && !byId('sp-speakers-unid-row').hidden, 'ignore shows the list and the unidentified rule');
   byId('sp-speakers-mode').value = 'all'; byId('sp-speakers-mode').onchange();
   assert(byId('sp-speakers-list-row').hidden && byId('sp-speakers-unid-row').hidden, 'all hides both rows');
@@ -87,7 +87,7 @@ run(async () => {
     speech: { stt: { provider: '' }, tts: { provider: '' }, services: [], speakers: { mode: 'only', uids: ['quinn-one'], revision: 2, withheld_finals: 1 },
       heard_history: { capacity: 256, retention_seconds: 600, text_bytes: 8192, page_rows: 20 } } };
   S.openSettings('speech');
-  assert(byId('sp-heard-says').textContent === 'The identity can read what was heard in the last 10 minutes, withheld words included, when they ask to. You can read the same here.', 'the card does not say the retention in force: ' + byId('sp-heard-says').textContent);
+  assert(byId('sp-heard-says').textContent === 'Your identity can read what was heard in the last 10 minutes, withheld words included, when they ask to. You can read the same here.', 'the card does not say the retention in force: ' + byId('sp-heard-says').textContent);
   const box = () => byId('sp-heard');
   assert(byId('sp-heard-show') && box() && box().hidden && asked.length === 0, 'heard speech was asked for, or shown, before the operator asked');
   byId('sp-heard-show').click();
@@ -117,7 +117,7 @@ run(async () => {
   plain = 'forbidden host\n';
   byId('sp-heard-show').click();
   await until(() => box().textContent.includes('forbidden host'));
-  assert(box().textContent === 'What was heard cannot be shown: forbidden host', 'a refusal that is not JSON is not shown in the host words: ' + box().textContent);
+  assert(box().textContent === "What was heard can't be shown: forbidden host", 'a refusal that is not JSON is not shown in the host words: ' + box().textContent);
 });
 </script>`
 
@@ -180,7 +180,7 @@ run(() => {
   S.openSettings('speech');
   const card = byId('sp-heard-history');
   assert(card, 'the Heard history card is on the speech page');
-  assert(card.querySelector('h3') && card.querySelector('h3').title, 'the card heading carries its sentence');
+  assert(card.querySelector('h4') && card.querySelector('.settings-voice__hint').textContent.includes('what did they say'), 'the part does not say what it does');
   assert(byId('sp-heard-capacity').value === '256' && byId('sp-heard-retention').value === '1800' && byId('sp-heard-text').value === '8192' && byId('sp-heard-rows').value === '20', 'the numbers in force are drawn');
   const rb = byId('sp-heard-readback').textContent;
   assert(rb === 'In force: the last 256 finals, up to 8192 text bytes each, for 30 minutes; a read returns 20 rows unless the identity asks for another number.', 'the readback: ' + rb);
@@ -229,12 +229,12 @@ run(() => {
   assert(none.length === 1 && none[0].textContent.includes("counts as a participant's words") && none[0].textContent.includes('Push-to-talk keeps your role'), 'with no voice named the card does not say so once: ' + card.textContent);
   assert(byId('sp-my-voice-empty'), 'an empty list does not say that no voice was reported');
   S.config.speech.voices = [
-    { uuid: guest, label: 'Same label', heard: true, enrolled: false, mine: false, why_not: 'This voice cannot count as yours: the speech engine has not identified it as an enrolled voice.' },
+    { uuid: guest, label: 'Same label', heard: true, enrolled: false, mine: false },
     { uuid: theirs, label: 'Quinn', heard: true, enrolled: true, mine: false } ];
   renderSettings();
   const row = id => document.querySelector('[data-my-voice-row="' + id + '"]');
   assert(row(theirs).textContent.includes('Quinn') && row(theirs).textContent.includes(theirs) && row(theirs).textContent.includes('an enrolled voice'), 'the enrolled voice is not listed with its label and UUID: ' + row(theirs).textContent);
-  assert(!row(guest).querySelector('[data-my-voice]') && row(guest).querySelector('[data-my-voice-why]').textContent.includes('cannot count as yours'), 'a voice that is not enrolled is offered, or does not say why it cannot count: ' + row(guest).innerHTML);
+  assert(row(guest).querySelector('[data-my-voice="name"]') && row(guest).textContent.includes('a voice it has heard') && !row(guest).querySelector('[data-my-voice-why]'), 'a voice it has heard is not offered to be named: ' + row(guest).textContent);
   row(theirs).querySelector('[data-my-voice="name"]').click();
   let sent = sets();
   assert(sent.length === 1 && JSON.stringify(sent[0]['speech.operator_speakers']) === JSON.stringify([theirs]), 'naming the voice did not send the operator voices: ' + JSON.stringify(sent));

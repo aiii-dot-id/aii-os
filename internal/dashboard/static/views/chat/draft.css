@@ -1,0 +1,6 @@
+.reply-draft__more { font-size: var(--t-xs); line-height: var(--t-xs-lh); color: var(--text-2); }
+.reply-draft__more:empty, .reply-draft__withdrawn:empty { display: none; }
+.reply-draft__withdrawn { display: flex; flex-direction: column; gap: var(--s-1); margin-top: var(--s-2); }
+.reply-draft__withdrawn del { color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply-draft__why { margin: 0; font-size: var(--t-xs); line-height: var(--t-xs-lh); color: var(--text-2); }
+.reply-draft__settled { margin: var(--s-2) 0; }

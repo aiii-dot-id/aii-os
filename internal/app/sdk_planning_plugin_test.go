@@ -99,7 +99,7 @@ func TestSDKPlanningPlugin(t *testing.T) {
 			t.Fatal(err)
 		}
 		ms := int64(7)
-		if err := st.RecordToolDoneMeasured(turn, 1, tool, "{}", content, outcome, false, store.ToolMeasurement{DurationMS: &ms, WorkSession: session}); err != nil {
+		if err := st.RecordToolDoneMeasured(turn, 1, tool, "{}", content, outcome, false, store.ToolMeasurement{DurationMS: &ms}); err != nil {
 			t.Fatal(err)
 		}
 		return store.ToolCallRecordID(turn, 1)
@@ -154,7 +154,7 @@ func TestSDKPlanningPlugin(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), out); err != nil {
 			t.Fatalf("decode %s: %v: %s", op, err, obs.Text)
 		}
-		if err := st.RecordToolDoneMeasured(turn, 1, h.tool(op), string(raw), obs.Text, interaction.Succeeded, obs.Truncated, store.ToolMeasurement{WorkSession: obs.WorkSession, DurationMS: obs.DurationMS}); err != nil {
+		if err := st.RecordToolDoneMeasured(turn, 1, h.tool(op), string(raw), obs.Text, interaction.Succeeded, obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS}); err != nil {
 			t.Fatal(err)
 		}
 		return store.ToolCallRecordID(turn, 1)

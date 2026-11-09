@@ -71,7 +71,7 @@ func TestCacheWakeFailureStillMetersCachedUsage(t *testing.T) {
 	if requests.Load() != 2 {
 		t.Fatalf("fixture expected two requests; got %d", requests.Load())
 	}
-	if got := a.lastTurnCost(); !strings.Contains(got, "1010") {
+	if got := a.lastTurnCost(); !strings.Contains(got, "1,010") {
 		t.Fatalf("wake traversed compose, cached inference, tool result and failing inference; last-turn gauge remained %q", got)
 	}
 }

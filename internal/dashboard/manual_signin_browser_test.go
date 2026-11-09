@@ -34,7 +34,7 @@ run(assert => {
   S.identityExists=true; S.providersLoaded=true;
   S.config={llm:{provider:provider.name,model:'m1'}};
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   document.querySelector('[data-prov-row="0"]').click();
   form=document.querySelector('#settings-stack [data-signin-complete]');
   assert(form, 'the actual provider editor lacks the manual completion control');

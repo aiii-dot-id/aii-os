@@ -63,6 +63,12 @@ func realisticApp(t *testing.T) (*App, string) {
 	}
 	goldenFixtures(t, a)
 	realisticRecord(t, a)
+	// The realistic identity has work open: the work's own continuation
+	// (2026-11-06) would send a fresh turn after each turn these shapes pin.
+	off := false
+	a.cfgMu.Lock()
+	a.cfg.Agency.TurnContinuation = &off
+	a.cfgMu.Unlock()
 	return a, dir
 }
 

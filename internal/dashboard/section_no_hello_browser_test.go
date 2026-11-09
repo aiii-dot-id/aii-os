@@ -27,12 +27,13 @@ const sectionNoHelloPage = `<!doctype html>
 <div id="nav"></div><div id="views"></div>
 <div id="slot-rail"></div><div id="slot-panel"></div><div id="slot-dock"></div><div id="slot-overlay"></div>
 <script type="module">
-import { report, assert } from '/__harness.js';
+import { report, assert, until } from '/__harness.js';
 import { onSections, onLayout, publish, onTokensChanged } from '/sections.js';
 try {
   const layout = { profiles: { desktop: { rail: ['quiet'] }, mobile: { rail: ['quiet'] } } };
   onSections([{ id: 'quiet', slot: 'rail', title: 'Quiet', entry: 'never-there.html' }], '');
   onLayout(layout);
+  await until(() => document.querySelector('#slot-rail iframe') !== null);
   assert(document.querySelector('#slot-rail iframe') !== null, 'rig: the section was not mounted');
   // The frame has not said hello and never will. Every message a host
   // pushes must pass it by.
@@ -60,13 +61,14 @@ func TestASectionThatHasNotSaidHelloDoesNotStopTheFrame(t *testing.T) {
 	}
 	stub := func(body string) []byte { return []byte(body) }
 	runPageInEngines(t, sectionNoHelloPage, map[string][]byte{
-		"/sections.js": read("sections.js"),
-		"/bridge.js":   read("bridge.js"),
-		"/state.js":    read("state.js"),
-		"/util.js":     read("util.js"),
-		"/ws.js":       stub("export function send() { return ''; }\n"),
-		"/app.js":      stub("export function go() {}\n"),
-		"/panel.js":    stub("export function renderPanel() {}\n"),
+		"/sections.js":        read("sections.js"),
+		"/sections-frames.js": read("sections-frames.js"),
+		"/bridge.js":          read("bridge.js"),
+		"/state.js":           read("state.js"),
+		"/util.js":            read("util.js"),
+		"/ws.js":              stub("export function send() { return ''; }\n"),
+		"/app.js":             stub("export function go() {}\n"),
+		"/panel.js":           stub("export function renderPanel() {}\n"),
 	})
 }
 
@@ -115,8 +117,8 @@ if (window.top !== window) {
     ws.connect(); sockets[0].open();
     sockets[0].recv({ type: 'sections', sections: [{ id: 'loud', slot: 'rail', title: 'Loud', entry: 'loud.html', topics: ['status'] }] });
     sockets[0].recv({ type: 'layout', layout: { profiles: { desktop: { rail: ['loud'] }, mobile: { rail: ['loud'] } } } });
-    const frame = document.querySelector('#slot-rail iframe');
-    assert(frame !== null, 'rig: the section was not mounted');
+    await until(() => document.querySelector('#slot-rail iframe') !== null);
+    assert(document.querySelector('#slot-rail iframe') !== null, 'rig: the section was not mounted');
     await until(() => window.__bridges === 1);
     assert(window.__bridges === 1, 'rig: the section said hello and got ' + window.__bridges + ' bridges');
     sockets[0].recv({ type: 'status', stats: { name: 'Fixture' } });
@@ -134,7 +136,7 @@ import { createFrameBridge as shipped } from './bridge-shipped.js';
 export function createFrameBridge(opts) {
   const b = shipped(opts);
   window.__bridges = (window.__bridges || 0) + 1;
-  b.publish = function () { window.__published = (window.__published || 0) + 1; throw new Error('the section failed'); };
+  b.frame = function () { window.__published = (window.__published || 0) + 1; throw new Error('the section failed'); };
   return b;
 }
 `
@@ -155,6 +157,7 @@ func TestASectionThatThrowsDoesNotStopTheSocketsHandling(t *testing.T) {
 	stateJS := []byte(`export const S = { connected: false, reconnectTimer: null, identityExists: false, view: 'home', tokenPrompted: false, wsEverOpened: false };`)
 	modules := wsPageModules(wsJS, stateJS)
 	modules["/sections.js"] = read("sections.js")
+	modules["/sections-frames.js"] = read("sections-frames.js")
 	modules["/bridge-shipped.js"] = read("bridge.js")
 	modules["/bridge.js"] = []byte(sectionThrowsBridgeJS)
 	runPageInEngines(t, sectionThrowsPage, modules)

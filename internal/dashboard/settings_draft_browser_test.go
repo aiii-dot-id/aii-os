@@ -17,7 +17,7 @@ import { assert, run } from './__harness.js';
 run(() => {
   const el = id => document.getElementById(id);
   const edit = (id, value) => { const node = el(id); node.value = value; node.dispatchEvent(new Event('input', { bubbles: true })); return node; };
-  const nav = name => document.querySelector('[data-sec="' + name + '"]').click();
+  const nav = name => { S.settingsSection(name); S.requestSettingsSection(); renderSettings(); };
   const save = name => { document.querySelector('[data-save="' + name + '"]').click(); return frames.filter(f => f.type === 'config_set').at(-1); };
   S.identityExists = true;
   S.view = 'settings';
@@ -38,10 +38,10 @@ run(() => {
   el('cfg-model').blur();
   renderSettings();
   assert(el('cfg-model').value === 'unsaved-model', 'blur discarded draft');
-  nav('prompt'); edit('cfg-ptokens', '2345'); nav('substrate');
+  nav('dashboard'); edit('cfg-dport', '2345'); nav('substrate');
   assert(el('cfg-model').value === 'unsaved-model', 'section switch discarded draft');
-  nav('prompt');
-  assert(el('cfg-ptokens').value === '2345', 'another section stole the draft');
+  nav('dashboard');
+  assert(el('cfg-dport').value === '2345', 'another section stole the draft');
   nav('substrate');
   const sent = save('llm');
   assert(sent.config['llm.model'] === 'unsaved-model', 'save did not use the draft');
@@ -84,8 +84,8 @@ run(() => {
   setConnected(true); renderSettings();
   edit('cfg-model', ''); renderSettings();
   assert(el('cfg-model').value === '', 'explicit clear became the saved value');
-  nav('prompt'); edit('cfg-ptokens', '0'); renderSettings();
-  assert(el('cfg-ptokens').value === '0', 'zero draft became the saved value');
+  nav('dashboard'); edit('cfg-dport', '0'); renderSettings();
+  assert(el('cfg-dport').value === '0', 'zero draft became the saved value');
   S.config.dashboard.tls = true; nav('dashboard');
   el('cfg-dtls').checked = false; el('cfg-dtls').dispatchEvent(new Event('change', { bubbles: true }));
   renderSettings();
@@ -124,7 +124,7 @@ run(() => {
   const a = { name: 'Alpha', endpoint: 'https://alpha.test', default_model: 'base', has_key: false, chat: true, models: [] };
   const b = { name: 'Beta', endpoint: 'https://beta.test', default_model: 'base', has_key: false, chat: true, models: [] };
   S.providers = [a, b]; S.config = { llm: {} };
-  renderSettings(); document.querySelector('[data-sec="providers"]').click();
+  renderSettings(); S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   document.querySelector('[data-prov-row="0"]').click();
   edit('pv-model-0', 'alpha-draft'); edit('pv-key-0', 'fixture-secret-A');
   document.querySelector('[data-provider-editor] details').open = true;
@@ -175,7 +175,7 @@ run(async () => {
   S.identityExists = true; S.view = 'settings'; S.providersLoaded = true; S.providers = [];
   const svc = name => ({ name, added: true, has_key: true, speech: { stt: { model_required: true } } });
   S.config = { llm: {}, speech: { services: [svc('Alpha'), svc('Beta')], stt: { provider: 'Alpha', model: 'base', monthly_minutes: 100 } } };
-  renderSettings(); document.querySelector('[data-sec="speech"]').click();
+  renderSettings(); S.settingsSection('speech'); S.requestSettingsSection(); renderSettings();
   choose('sp-model-stt', 'by-id:');
   edit('sp-model-stt-typed', 'typed-model');
   edit('sp-key-stt', 'alpha-only-secret');
@@ -194,8 +194,10 @@ run(async () => {
   assert(!el('settings-stack').innerHTML.includes('alpha-only-secret'), 'speech draft key entered markup');
   const typed = el('sp-model-stt-typed'); typed.focus();
   typed.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+  const drawnBefore = el('settings-stack').firstElementChild;
   typed.value = 'composing'; renderSettings();
   assert(el('sp-model-stt-typed') === typed && document.activeElement === typed, 'readback interrupted composition');
+  assert(el('settings-stack').firstElementChild === drawnBefore, 'the page was drawn under a composition');
   typed.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
   await Promise.resolve();
   assert(el('sp-model-stt-typed').value === 'composing', 'composition end lost draft');

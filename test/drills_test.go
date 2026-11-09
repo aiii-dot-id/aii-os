@@ -343,12 +343,44 @@ func TestDrillOutputSignalsTheBaselineThroughIOCopy(t *testing.T) {
 	}
 }
 
+// drillContext is the time a drill is given: nine tenths of what is left of
+// the test's own deadline, and no bound of its own when the test has none.
+func drillContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		return context.WithCancel(t.Context())
+	}
+	return context.WithTimeout(t.Context(), time.Until(deadline)*9/10)
+}
+
+// THE DRILL IS GIVEN THE TEST'S TIME, NOT A FIXED THIRTY SECONDS. The
+// honest update drill took 8.7 s run alone on the Windows guest and 16.5 s
+// beside other work; with more beside it, it was killed at thirty before its
+// verdict, and the kill read as a refused update (cut g, 2026-11-08). The
+// drill bounds its own waits; its bound here only stops a hang, short of
+// the test binary's deadline so the failure is reported with its evidence.
+func TestTheUpdateDrillIsGivenTheTestsTimeNotAFixedBudget(t *testing.T) {
+	ctx, cancel := drillContext(t)
+	defer cancel()
+	got, bounded := ctx.Deadline()
+	want, ok := t.Deadline()
+	switch {
+	case !ok && bounded:
+		t.Fatalf("the test has no deadline, yet the drill is cut in %s", time.Until(got).Round(time.Second))
+	case ok && (!bounded || !got.Before(want)):
+		t.Fatalf("the drill's bound (%v, %v) is not short of the test's deadline %v", got, bounded, want)
+	case ok && time.Until(got) < time.Until(want)*8/10:
+		t.Fatalf("the drill is given %s of the test's %s", time.Until(got).Round(time.Second), time.Until(want).Round(time.Second))
+	}
+}
+
 // runUpdateDrill starts update.sh and waits for its actual baseline announcement.
 // A 1.5-second sleep could run the scenario BEFORE a loaded child read its
 // baseline, leaving it waiting 30 minutes for a change that already happened.
 func runUpdateDrill(t *testing.T, f drillFixture, scenario func()) error {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := drillContext(t)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(repoRoot(t), "packaging", "drills", "update.sh"))
 	cmd.WaitDelay = 2 * time.Second // a killed shell must not leave inherited pipes holding Wait

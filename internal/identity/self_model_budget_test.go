@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,7 @@ func TestThePortraitsBudgetIsTheOperatorsAndIsAskedOfANewPortraitOnly(t *testing
 		return args
 	}
 	long := strings.TrimSpace(strings.Repeat("I keep what I learn, and I say where I learned it. ", 150))
-	tokens := tokenestimate.Estimate(long)
+	tokens := tokenestimate.EstimateWire(long)
 	if tokens <= store.SelfModelDefaultMaxTokens {
 		t.Fatalf("rig: the long portrait is %d tokens, which is not over the default of %d", tokens, store.SelfModelDefaultMaxTokens)
 	}
@@ -50,6 +51,12 @@ func TestThePortraitsBudgetIsTheOperatorsAndIsAskedOfANewPortraitOnly(t *testing
 	}
 	if want := fmt.Sprintf("maximum is %d (prompt.self_model_max_tokens)", store.SelfModelDefaultMaxTokens); !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "bounded narrative") {
 		t.Fatalf("the refusal does not name the budget and its setting (%q): %v", want, err)
+	}
+	// AND IT CARRIES THEM, so the pass can say how much to cut without
+	// reading them out of its words.
+	var refusal *store.SelfModelRefusal
+	if !errors.As(err, &refusal) || refusal.Tokens != tokens || refusal.Limit != store.SelfModelDefaultMaxTokens {
+		t.Fatalf("the length refusal does not carry the count %d and the limit %d: %#v", tokens, store.SelfModelDefaultMaxTokens, refusal)
 	}
 
 	// The budget is the most a portrait may be: one token under the
@@ -66,7 +73,7 @@ func TestThePortraitsBudgetIsTheOperatorsAndIsAskedOfANewPortraitOnly(t *testing
 	// The operator lowers it under the portrait the record now holds.
 	st.SetSelfModelMaxTokens(500)
 	medium := strings.TrimSpace(strings.Repeat("I am careful with what I claim. ", 60))
-	if got := tokenestimate.Estimate(medium); got <= 500 || got > store.SelfModelDefaultMaxTokens {
+	if got := tokenestimate.EstimateWire(medium); got <= 500 || got > store.SelfModelDefaultMaxTokens {
 		t.Fatalf("rig: the medium portrait is %d tokens; it must lie between 500 and the default", got)
 	}
 	before = lg.LastSeq()
@@ -110,5 +117,33 @@ func TestThePortraitsBudgetIsTheOperatorsAndIsAskedOfANewPortraitOnly(t *testing
 	}
 	if _, err := engine.ExecuteAction(ctx, "verb", "commit", portrait("syn_again", "syn_short", long+" Once more.")); err == nil {
 		t.Fatal("with the budget back at its default the long portrait is refused again")
+	}
+}
+
+// A PORTRAIT IS JUDGED AS ITS PROMPT SAYS IT WILL BE (an identity's first
+// drafts, 2026-11-04 to 11-08, came in at 2,010 to 2,119 against 2,000: the
+// prompt named characters, the gate counted bytes). The prompt's sentence is
+// tokenestimate.Stated: a dash or a curly quote counts three, &, < and > six.
+// A draft heavy with them is refused one token under its stated count and
+// accepted at it, though its plain bytes are far under.
+func TestAPortraitIsJudgedAsItsPromptSaysItWillBe(t *testing.T) {
+	engine, st, lg, kp, _ := setupEngine(t)
+	refs := selfModelSources(t, st, lg, kp)
+	ctx := context.Background()
+	heavy := strings.TrimSpace(strings.Repeat("I weigh what I keep — “carefully” & <slowly>: it’s mine.\n", 40))
+	wire := tokenestimate.EstimateWire(heavy)
+	if plain := tokenestimate.Estimate(heavy); plain >= wire-1 {
+		t.Fatalf("rig: the draft's plain bytes (%d tokens) must count far under its stated count (%d)", plain, wire)
+	}
+	args := selfModelArgs("syn_heavy", refs)
+	args["synthesis_text"] = heavy
+	st.SetSelfModelMaxTokens(wire - 1)
+	before := lg.LastSeq()
+	if _, err := engine.ExecuteAction(ctx, "verb", "commit", args); err == nil || lg.LastSeq() != before {
+		t.Fatalf("a draft of %d tokens as the prompt counts them was accepted under a limit of %d: %v", wire, wire-1, err)
+	}
+	st.SetSelfModelMaxTokens(wire)
+	if _, err := engine.ExecuteAction(ctx, "verb", "commit", args); err != nil {
+		t.Fatalf("a draft of exactly its stated limit (%d) was refused: %v", wire, err)
 	}
 }

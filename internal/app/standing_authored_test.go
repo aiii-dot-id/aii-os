@@ -26,7 +26,7 @@ func TestStandingStateRendersTheDateItWasAuthored(t *testing.T) {
 		t.Fatal(err)
 	}
 	backdateStanding(t, a, time.Date(2026, 9, 15, 23, 30, 0, 0, time.UTC).UnixMilli())
-	ws, err := a.buildWorkState()
+	ws, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestStandingStateRendersTheDateItWasAuthored(t *testing.T) {
 	}
 
 	backdateStanding(t, a, 0)
-	ws, err = a.buildWorkState()
+	ws, err = a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

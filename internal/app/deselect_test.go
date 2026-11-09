@@ -68,7 +68,7 @@ func TestDeselectDropsFocusWithoutTouchingTheProjectOrTheSession(t *testing.T) {
 		t.Fatalf("deselect disturbed the work session: %+v", ws)
 	}
 	// 4. The compose no longer claims a project.
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

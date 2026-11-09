@@ -73,7 +73,7 @@ func (s *Server) operatorRead(w http.ResponseWriter, r *http.Request) (h *WSHand
 	s.jobsMu.Unlock()
 	if !s.tokenAuthorized(r) {
 		s.jobsWG.Done()
-		http.Error(w, "dashboard access token required", http.StatusUnauthorized)
+		http.Error(w, "this page isn't signed in. Sign in, then try again", http.StatusUnauthorized)
 		return nil, nil, false
 	}
 

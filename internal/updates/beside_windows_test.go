@@ -33,7 +33,7 @@ func init() {
 // It waits up to a minute for the dashboard at every sign-in, so an update
 // applied then meets exactly that.
 func TestAWindowsUpdateInstallsWhatTheInstallerInstalls(t *testing.T) {
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	dir := t.TempDir()
 	signer.provisionTrustDir(t, dir)
 	exe := filepath.Join(dir, "aii")

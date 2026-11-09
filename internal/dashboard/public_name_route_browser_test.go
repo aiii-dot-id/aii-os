@@ -21,7 +21,7 @@ run(async (assert) => {
   const show = (pn, over) => { S.config = config(pn, over); renderSettings(); };
   const text = (sel) => { const el = document.querySelector(sel); return el ? el.textContent : null; };
   show();
-  document.querySelector('[data-sec="dashboard"]').click();
+  S.settingsSection('dashboard'); S.requestSettingsSection(); renderSettings();
   assert(text('[data-route-now]'), 'the chosen route is not shown');
   assert(text('[data-route-published]') === null && text('[data-route-error]') === null, 'the card says something about a route the host has not looked at yet');
 
@@ -29,7 +29,7 @@ run(async (assert) => {
   const refusal = 'this machine has more than one IPv4 address (10.0.0.5, 192.168.1.5) and the dashboard binds every interface; name the ones to publish in certificate.direct_addresses';
   show({ route_error: refusal });
   assert((text('[data-route-error]') || '').includes(refusal), 'A ROUTE THE HOST REFUSED IS SHOWN NOWHERE ON THE CARD: ' + text('[data-route]'));
-  assert(text('[data-public-name-state]').includes('certificate issued') && !text('[data-public-name-state]').includes('could not be obtained'), 'a route failure changed what the card says of the certificate: ' + text('[data-public-name-state]'));
+  assert(text('[data-public-name-state]').includes('its certificate') && !text('[data-public-name-state]').includes('could not be obtained'), 'a route failure changed what the card says of the certificate: ' + text('[data-public-name-state]'));
 
   // What the service last answered, beside the choice and the failure.
   show({ address: '10.0.0.5', route_error: 'certificate service: unreachable' });

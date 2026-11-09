@@ -176,7 +176,7 @@ func TestARotationOffAPrivateConnectionChangesNothing(t *testing.T) {
 
 	res := postRotate(t, front, bound, old, oldKey)
 	body, _ := io.ReadAll(res.Body)
-	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "not private") || !strings.Contains(string(body), "HTTPS") {
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "isn't private") || !strings.Contains(string(body), "HTTPS") {
 		t.Fatalf("a rotation off a private connection: %d %s", res.StatusCode, body)
 	}
 	if len(res.Cookies()) != 0 {
@@ -292,7 +292,7 @@ func TestTheRouteIsChosenOverAPrivateConnectionOnly(t *testing.T) {
 	for i, ch := range []map[string]any{relay, {"certificate.route_mode": "direct"}, {"certificate.relay_endpoint": "relay.example.test"},
 		{"certificate.direct_addresses": []any{"10.8.0.2"}}, {"certificate.direct_addresses": nil}} {
 		m := ask(far, "route"+string(rune('a'+i)), map[string]any{"type": "config_set", "config": ch})
-		if m.Type != "error" || !strings.Contains(m.Message, "not private") {
+		if m.Type != "error" || !strings.Contains(m.Message, "isn't private") {
 			t.Fatalf("a route change off a private connection: %+v", m)
 		}
 	}
@@ -412,7 +412,7 @@ func TestAskingForATokenKeepsTheBrowserThatAskedAndCutsEveryOtherSession(t *test
 	mine.CloseNow()
 	again := postAct(t, bound, bound, "/auth/require", "http://"+bound, fresh.Value, freshKey)
 	body, _ := io.ReadAll(again.Body)
-	if again.StatusCode != http.StatusConflict || !strings.Contains(string(body), "already asks") || calls.Load() != 1 || len(again.Cookies()) != 0 {
+	if again.StatusCode != http.StatusConflict || !strings.Contains(string(body), "already has to sign in") || calls.Load() != 1 || len(again.Cookies()) != 0 {
 		t.Fatalf("asked again: %d %s, handler calls %d", again.StatusCode, body, calls.Load())
 	}
 }
@@ -438,7 +438,7 @@ func TestAskingForATokenOffAPrivateConnectionChangesNothing(t *testing.T) {
 		want                     int
 		says                     string
 	}{
-		{"a connection that is not private", front, self, "", http.StatusForbidden, "not private"},
+		{"a connection that is not private", front, self, "", http.StatusForbidden, "isn't private"},
 		{"another site", bound, "http://evil.example", "", http.StatusForbidden, "another site"},
 		{"no Origin", bound, "", "", http.StatusForbidden, "another site"},
 		{"a cross-site fetch", bound, self, "cross-site", http.StatusForbidden, "another site"},

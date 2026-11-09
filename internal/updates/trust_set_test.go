@@ -23,7 +23,7 @@ func guardedFixture(t *testing.T, dir string) (*Checker, *testReleaseSigner, str
 	t.Helper()
 	const ver = "9.9.9"
 	archive := releaseArchive(t, []byte("new binary"))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 	sig := signer.signReleasePayload(t, releaseArchivePayload{
 		ArchiveHash: sha256hex(archive), Version: ver,
@@ -117,7 +117,7 @@ func (emptyGuard) AcceptTrustEpoch(string, int64, string) error            { ret
 func ownFixture(t *testing.T) (*Checker, *testReleaseSigner, string, *int) {
 	t.Helper()
 	dir := t.TempDir()
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 	platform, arch := hostTarget()
 	sig := signer.signReleasePayload(t, releaseArchivePayload{ArchiveHash: strings.Repeat("b", 64), Version: "1.0.0",

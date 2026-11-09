@@ -48,6 +48,8 @@ type App struct {
 
 	cfg *Config
 
+	stageReader func() (string, error)
+
 	dashboard *dashboard.Server
 
 	logSink *logsink.Sink
@@ -159,6 +161,8 @@ type App struct {
 	bootInterrupted []string
 
 	bootSwept []store.WorkSession
+
+	bootKept []store.WorkSession
 
 	continuity *continuity.Runtime
 

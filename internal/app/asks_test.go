@@ -155,7 +155,7 @@ func TestAnAnswerRefusedOnItsWayLeavesTheQuestionOpenAndTheDecisionOwed(t *testi
 	if got := decisionOf(t, a, "ws_5"); got != owed {
 		t.Fatalf("the decision was cleared while its answer still waited for the turn: %q", got)
 	}
-	if said := a.DrainSteering(); len(said) != 1 || !strings.Contains(said[0], "[ask "+id+"] chose: B") {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 || !strings.Contains(said[0], "[ask "+id+"] chose: B") {
 		t.Fatalf("the answer did not reach the turn as the operator's marked message: %q", said)
 	}
 	if views := a.askViews(); len(views) != 0 {

@@ -52,11 +52,11 @@ run(() => {
   assert(mic.dataset.glyph === 'mic' && menuMode.textContent === 'Mode: interactive', 'auto is not interactive: ' + mic.dataset.glyph);
 
   show('setup', 'off', 'off', 7);
-  assert(mic.dataset.glyph === 'mic' && mic.classList.contains('faint') && mic.title === 'Voice isn\'t set up — opens Speech settings',
+  assert(mic.dataset.glyph === 'mic' && mic.classList.contains('faint') && mic.title === 'Voice isn\'t set up — opens Voice settings',
     'a microphone with nothing to speak into was drawn as a mode: ' + mic.outerHTML);
   opened.length = 0;
   mic.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-  assert(opened.join() === 'speech/sp-provider-stt', 'setup no longer opens Speech settings: ' + opened.join());
+  assert(opened.join() === 'speech/sp-provider-stt', 'setup no longer opens Voice settings: ' + opened.join());
   show('safe', 'interactive', 'on', 8);
   assert(mic.disabled && mic.dataset.glyph === 'mic', 'SAFE no longer pauses the microphone: ' + mic.outerHTML);
 
@@ -184,7 +184,7 @@ run(async () => {
 const voiceModeSettingsPage = substratePageMarkup + `<script type="module">
 import { S } from './state.js';
 import { frames } from './ws.js';
-import { renderSettings, saveConfigSection, acceptSettingsConfig, voiceModeReadback } from './views/settings.js';
+import { renderSettings, saveConfigSection, acceptSettingsConfig } from './views/settings.js';
 import { assert, run } from './__harness.js';
 
 run(() => {
@@ -198,14 +198,11 @@ run(() => {
       mode: { listen: 'meeting', speak: 'off', revision: 3, name: 'meeting', set: true } } };
   S.openSettings('speech');
   assert(byId('sp-voice-mode'), 'the Voice mode card is not on the speech page');
-  assert(byId('sp-mode-listen').value === 'meeting' && byId('sp-mode-speak').value === 'off', 'the pair in force is not drawn: ' +
-    byId('sp-mode-listen').value + '/' + byId('sp-mode-speak').value);
-  const rb = byId('sp-mode-readback').textContent;
-  assert(rb.indexOf('meeting') === 0 && rb.includes('listen: meeting, speak: off') && rb.includes('revision 3'),
-    'the readback does not name the mode, the pair and the revision: ' + rb);
+  const picked = name => document.querySelector('input[name="' + name + '"]:checked')?.value;
+  assert(picked('sp-mode-listen') === 'meeting' && picked('sp-mode-speak') === 'off', 'the pair in force is not drawn: ' + picked('sp-mode-listen') + '/' + picked('sp-mode-speak'));
 
-  byId('sp-mode-listen').value = 'interactive';
-  byId('sp-mode-speak').value = 'on';
+  byId('sp-mode-listen-interactive').click();
+  byId('sp-mode-speak-on').click();
   saveConfigSection('speech_mode');
   const sent = sets();
   assert(sent.length === 1 && sent[0]['speech.mode'], 'one config_set with the pair: ' + JSON.stringify(sent));
@@ -217,11 +214,10 @@ run(() => {
   renderSettings();
   assert(!byId('settings-stack').textContent.includes('Save could not be verified'), 'structured mode readback was compared by object identity');
 
-  assert(voiceModeReadback({ listen: 'interactive', speak: 'auto', revision: 0, name: 'interactive', set: false }).includes('nothing chosen'),
-    'an unset mode is not named as the default in force: ' + voiceModeReadback({ listen: 'interactive', speak: 'auto', revision: 0, name: 'interactive', set: false }));
+  // Either half can be handed back to the default.
   S.config.speech.mode = { listen: 'interactive', speak: 'auto', revision: 0, name: 'interactive', set: false };
   renderSettings();
-  assert(byId('sp-mode-speak').value === '', 'automatic is not offered as what it is: ' + byId('sp-mode-speak').value);
+  assert(picked('sp-mode-speak') === '', 'automatic is not offered as what it is: ' + picked('sp-mode-speak'));
   saveConfigSection('speech_mode');
   assert(acceptSettingsConfig(frames.filter(f => f.type === 'config_set').at(-1).request_id), 'Automatic acknowledgement not claimed');
   renderSettings();

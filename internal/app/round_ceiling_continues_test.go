@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -22,13 +21,12 @@ func TestATurnAtItsRoundCeilingContinuesInAFreshTurn(t *testing.T) {
 	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "probe"); err != nil {
 		t.Fatal(err)
 	}
-	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 	obs := fixtureModel(t, app, func(n int, w http.ResponseWriter) {
 		switch {
 		case n == 1:
 			_, _ = w.Write([]byte(callReply("", toolCall("r1", "work", `{"action":"start","description":"long reading"}`))))
 		case n <= 3:
-			_, _ = w.Write([]byte(callReply("", toolCall(fmt.Sprintf("r%d", n), "read", string(readArgs)))))
+			_, _ = w.Write([]byte(callReply("", toolCall(fmt.Sprintf("r%d", n), "read", probeArgs(dir, n)))))
 		case n == 4:
 			_, _ = w.Write([]byte(textReply("at the ceiling")))
 		default:

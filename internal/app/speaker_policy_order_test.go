@@ -116,7 +116,7 @@ func TestHeldSpeechAdmitsInOrderWithoutWaitingForInference(t *testing.T) {
 		defer a.turnMu.Unlock()
 		return len(a.steers) == 1
 	})
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != 1 || !strings.Contains(said[0], "second utterance") {
 		t.Fatalf("second utterance lost its admission: %v", said)
 	}

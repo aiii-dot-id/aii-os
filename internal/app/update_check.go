@@ -139,12 +139,10 @@ func (a *App) strandedBy(ctx context.Context, offered string) ([]updates.Strande
 	if line == "" || line == a.catalog.Line() {
 		return nil, ""
 	}
-	a.pluginMu.Lock()
-	installed := make(map[string]string, len(a.plugins))
-	for _, p := range a.plugins {
-		installed[p.ID] = p.Version
+	installed := map[string]string{}
+	for id, ir := range a.installedReleases() {
+		installed[id] = ir.version
 	}
-	a.pluginMu.Unlock()
 	if len(installed) == 0 {
 		return nil, ""
 	}

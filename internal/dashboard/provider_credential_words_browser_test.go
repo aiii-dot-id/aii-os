@@ -16,7 +16,7 @@ run(() => {
   S.identityExists = true; S.providersLoaded = true;
   S.config = { llm: { provider: claude.name, model: 'm1', resolved_provider: claude.name, resolved_model: 'm1', timeout_seconds: 120 }, credential_kinds: ['claude-code', 'codex'] };
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   const stack = () => document.querySelector('#settings-stack');
   const tips = () => [...stack().querySelectorAll('[title]')].map(e => e.getAttribute('title'));
   assert(tips().includes('adopted credential expired — sign in again, or refresh it with the tool it is borrowed from'),

@@ -34,6 +34,7 @@ var updatePromptGolden = flag.Bool("update-prompt-golden", false, "rewrite the p
 
 var (
 	turnGoldenNow      = regexp.MustCompile(`### Now\n[^\n]*`)
+	turnGoldenOperator = regexp.MustCompile(`### Your operator\n[^\n]*`)
 	turnGoldenDate     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 	turnGoldenPlatform = regexp.MustCompile(`You are running on [^.]*\.`)
 )
@@ -280,6 +281,7 @@ func pinnedText(t *testing.T, text, dir string) string {
 		out = strings.ReplaceAll(out, "**"+filepath.Base(program)+"**", "**<program>**")
 	}
 	out = turnGoldenNow.ReplaceAllString(out, "### Now\n<now>")
+	out = turnGoldenOperator.ReplaceAllString(out, "### Your operator\n<operator>")
 	out = turnGoldenPlatform.ReplaceAllString(out, "You are running on <platform>.")
 	return turnGoldenDate.ReplaceAllString(out, "<date>")
 }

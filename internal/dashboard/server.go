@@ -36,12 +36,16 @@ const shippedPrefix = "/shipped/"
 const plainPrefix = "/plain/"
 
 type Server struct {
+	sectionKey []byte
+
 	voiceControlsFailed atomic.Uint64
 
 	voiceControlsUnheld atomic.Uint64
 
 	wsMu    sync.Mutex
 	wsConns map[carrier]*wsClient
+
+	configMu sync.Mutex
 
 	interactionSignal chan struct{}
 	interactionDone   chan struct{}
@@ -109,6 +113,9 @@ type Server struct {
 	handler     *WSHandler
 	mu          sync.RWMutex
 
+	draftMu sync.Mutex
+	draft   *replyDraft
+
 	loopbackAddr string
 	loopServer   *http.Server
 
@@ -165,6 +172,7 @@ func New(host string, port int, handler *WSHandler) *Server {
 		handler = &WSHandler{}
 	}
 	s := &Server{
+		sectionKey:        newSectionKey(),
 		handler:           handler,
 		port:              port,
 		wsConns:           make(map[carrier]*wsClient),
@@ -212,6 +220,7 @@ func (s *Server) routes() []route {
 		{"GET /", reachFrame, s.serveFrame},
 
 		{"GET /sections/{id}/{path...}", reachSection, s.handleSectionFile},
+		{"GET /built-in-sections/{id}/{path...}", reachFrame, s.handleBuiltInSectionFile},
 
 		{"GET /p/{id}/{path...}", reachBrowser, s.handleProjectFile},
 
@@ -256,6 +265,7 @@ func (s *Server) routes() []route {
 
 		{"GET /sent", reachPage, s.serveSent},
 		{"GET /sent/body", reachPage, s.serveSentBody},
+		{"GET /settings-in-force", reachPage, s.serveSettingsInForce},
 
 		{"GET " + WorkExportRoute, reachPage, s.serveWorkExport},
 
@@ -287,22 +297,12 @@ func (s *Server) serveFrame(w http.ResponseWriter, r *http.Request) {
 	if p == "/" {
 		p = "/index.html"
 	}
-	var ctype string
-	switch path.Ext(p) {
-	case ".html":
-		ctype = "text/html; charset=utf-8"
-	case ".js":
-		ctype = "text/javascript; charset=utf-8"
-	case ".css":
-		ctype = "text/css; charset=utf-8"
-	case ".png":
-
-		ctype = "image/png"
-		shippedOnly = true
-	default:
+	ctype, embedOnly := frameType(path.Ext(p))
+	if ctype == "" {
 		http.NotFound(w, r)
 		return
 	}
+	shippedOnly = shippedOnly || embedOnly
 
 	var data []byte
 	ok, compressible := false, false
@@ -323,7 +323,7 @@ func (s *Server) serveFrame(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		compressible = ctype != "image/png"
+		compressible = !compressed[ctype]
 	}
 
 	w.Header().Set("Content-Type", ctype)
@@ -335,6 +335,10 @@ func (s *Server) serveFrame(w http.ResponseWriter, r *http.Request) {
 		referrerPolicy = "same-origin"
 	}
 	w.Header().Set("Referrer-Policy", referrerPolicy)
+	if p == "/section-api.js" || strings.HasPrefix(p, "/fonts/") {
+
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
 
 	w.Header().Set("Cache-Control", "no-cache")
 
@@ -568,6 +572,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if h.TurnActive != nil && h.TurnActive() {
 		s.sendMsg(ctx, conn, ServerMessage{Type: "response", Message: "", Stream: true})
 	}
+	if msg, ok := s.draftForConnect(); ok {
+		s.sendMsg(ctx, conn, msg)
+	}
 
 	for {
 		typ, data, err := conn.Read(ctx)
@@ -710,6 +717,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				s.queryTools(ctx, conn, h)
 			case "recall":
 				s.queryRecall(ctx, conn, h, msg)
+			case "belief_trail":
+				s.queryBeliefTrail(ctx, conn, h, msg)
 			case "identity":
 				s.queryIdentity(ctx, conn, h)
 			case "config":
@@ -755,6 +764,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case "config_set":
 			s.wsConfigSet(ctx, conn, cl, msg)
+
+		case "theme_set":
+			s.wsThemeSet(ctx, conn, msg)
+
+		case "pass_now":
+			s.wsPassNow(ctx, conn, h, msg)
 
 		case "tool_toggle":
 			s.wsToolToggle(ctx, conn, msg)
@@ -811,6 +826,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case "provider_set", "provider_delete", "provider_repair", "provider_remove_broken", "speech_service":
 			s.wsProviderEdit(ctx, conn, msg)
+
+		case "local_look":
+			s.wsLocalLook(ctx, conn, msg)
+		case "local_add":
+			s.wsLocalAdd(ctx, conn, msg)
 
 		default:
 

@@ -156,7 +156,7 @@ func applyOwnerFixture(t *testing.T, dir string) (*Checker, *atomic.Int64) {
 	t.Helper()
 	const ver = "9.9.9"
 	archive := releaseArchive(t, []byte("new binary"))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 	sig := signer.signReleasePayload(t, releaseArchivePayload{
 		ArchiveHash: sha256hex(archive), Version: ver,

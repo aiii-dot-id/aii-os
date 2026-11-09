@@ -24,6 +24,20 @@ func WithStablePrefix(ctx context.Context, n int) context.Context {
 
 func StablePrefix(ctx context.Context) int { n, _ := ctx.Value(stablePrefixKey{}).(int); return n }
 
+type textObserverKey struct{}
+
+func WithTextObserver(ctx context.Context, say func(string)) context.Context {
+	if say == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, textObserverKey{}, say)
+}
+
+func TextObserver(ctx context.Context) func(string) {
+	say, _ := ctx.Value(textObserverKey{}).(func(string))
+	return say
+}
+
 type tapSourceKey struct{}
 
 func WithTapSource(ctx context.Context, source string) context.Context {

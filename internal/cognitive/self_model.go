@@ -237,7 +237,7 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 	}
 
 	corrective := correctionLabel + "Your previous reply violated the output contract and was refused: " +
-		aerr.Error() + "\nReply again now with EXACTLY ONE commit tool call, variant \"self_model.synthesize\" " +
+		aerr.Error() + "\n" + cutBy(aerr) + "Reply again now with EXACTLY ONE commit tool call, variant \"self_model.synthesize\" " +
 		"(carrying the correct previous_synthesis_id when a portrait exists), and no prose beside the call. " +
 		"If there is genuinely no material change, reply with exactly NO_CHANGE."
 	view, sendable, err = fitted(corrective, aerr)
@@ -265,6 +265,20 @@ func (s *SelfModelFacility) Execute(ctx context.Context) error {
 	}
 	s.mintFailureExperience(aerr, aerr2, resp2.ModelID)
 	return fmt.Errorf("self_model: after corrective retry: %w (first attempt: %v)", aerr2, aerr)
+}
+
+func cutBy(err error) string {
+	var refusal interface{ Length() (tokens, limit int) }
+	if !errors.As(err, &refusal) {
+		return ""
+	}
+	tokens, limit := refusal.Length()
+	if limit <= 0 || tokens <= limit {
+		return ""
+	}
+	target := limit * 3 * 85 / 100
+	cut := max(100, (tokens*3-target+50)/100*100)
+	return fmt.Sprintf("Your synthesis_text was about %d tokens, over the limit of %d: shorten it by about %d characters, to about %d, and send the whole call again.\n", tokens, limit, cut, target)
 }
 
 const correctionLabel = "\n\nCorrection (from the runtime; the evidence ended above):\n"

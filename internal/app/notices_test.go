@@ -743,7 +743,7 @@ func TestAReplyFromTheOperatorsLineIsAnArrival(t *testing.T) {
 	if n, _, err := a.receiveFrom(context.Background(), route, nil); err != nil || n != 1 {
 		t.Fatalf("receive: %d %v", n, err)
 	}
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != 1 {
 		t.Fatalf("one arrival, got %v", said)
 	}

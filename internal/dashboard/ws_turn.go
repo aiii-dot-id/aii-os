@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 )
@@ -36,7 +37,7 @@ func (s *Server) wsAsk(ctx context.Context, conn carrier, msg ClientMessage) {
 		said = interaction.SaidTyped
 	}
 	if text != "" {
-		requestID := msg.RequestID
+		requestID, askID := msg.RequestID, msg.Ask.ID
 		s.runOperatorMessage(withRefusalOnReceipt(interaction.WithSaid(ctx, said)), conn, h, text, func(r ChatRecording) {
 			if settle != nil {
 				settle(r.Error == nil)
@@ -44,12 +45,20 @@ func (s *Server) wsAsk(ctx context.Context, conn carrier, msg ClientMessage) {
 			if r.Error == nil {
 				return
 			}
-			if s.client(conn) != nil {
+
+			if s.client(conn) != nil && askOpen(h, askID) {
 				s.sendErrorFor(ctx, conn, requestID, answerNotRecorded(r.Error.Message))
 			}
 			s.BroadcastAsks()
 		})
 	}
+}
+
+func askOpen(h *WSHandler, id string) bool {
+	if h.GetAsks == nil {
+		return false
+	}
+	return slices.ContainsFunc(h.GetAsks(), func(a AskView) bool { return a.ID == id })
 }
 
 func answerNotRecorded(why string) string {

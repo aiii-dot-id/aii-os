@@ -1,8 +1,17 @@
 import { S } from '../state.js';
-import { $, esc, bytes, b64, cardHead, loadingCard } from '../util.js';
+import { $, esc, bytes, b64, fill, loadingCard } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
 import { holdReloadWhile } from '../overlay.js';
+import { sheet } from '../shell/sheet.js';
+import { render as osNote } from '../components/os-note/os-note.js';
+import W from '../strings/settings-backups.js';
+import C from '../strings/components.js';
+
+let styled = false;
+function style() { if (!styled) sheet('views/backups.css').then(() => { styled = true; }, () => {}); }
+const nameOf = () => { const n = (S.stats && S.stats.name) || ''; return n === 'Unnamed' ? '' : n; };
+const named = (withName, unnamed) => { const n = nameOf(); return n ? fill(withName, { name: n }) : unnamed; };
 
 let said = null;
 let step = 1;
@@ -12,6 +21,9 @@ let plan = null;
 let restarting = false;
 let keyRestarting = false;
 let choiceRestarting = false;
+let form = null;
+let allShown = false;
+let restoreOpen = false;
 const actionReply = pendingSlot();
 const preferenceReply = pendingSlot();
 function busyAction() {
@@ -49,14 +61,14 @@ function ask(action, extra) {
   const requestID = send({ type: 'backups', backups: Object.assign({ action }, extra || {}) });
   if (!actionReply.arm({ action, name: extra?.name }, requestID)) {
     if (action === 'escrow_create') held = '';
-    say('bad', 'Not connected — nothing was requested.', actionCard(action));
+    say('bad', C.notConnected, actionCard(action));
     return;
   }
   said = null;
   if (action === 'restore_plan' || action === 'restore') clearControls(id => id === 'bk-confirm');
   rerender();
 }
-function rerender() { if (S.renderBackups) S.renderBackups(); if (S.renderIdentityView) S.renderIdentityView(); }
+function rerender() { if (S.renderBackups) S.renderBackups(); if (S.renderRecordState) S.renderRecordState(); }
 
 export function requestBackups() { send({ type: 'backups', backups: { action: 'status' } }); }
 
@@ -75,9 +87,9 @@ export function applyBackups(reply, requestID) {
   if (reply.error) {
     said = { kind: 'bad', text: reply.error, at };
   } else if (reply.action === 'take') {
-    said = { kind: 'good', text: 'A snapshot was taken and proved to restore.', at };
+    said = { kind: 'good', text: W.taken, at };
   } else if (reply.action === 'verify') {
-    said = { kind: 'good', text: reply.said || 'Proved.', at };
+    said = { kind: 'good', text: reply.said || W.proved, at };
   } else if (reply.action === 'escrow_create' && reply.file_b64) {
     saveFile(reply.file_name || 'escrow.age', reply.file_b64);
     savedAs = reply.file_name || 'escrow.age';
@@ -85,15 +97,15 @@ export function applyBackups(reply, requestID) {
     clearControls(id => id === 'bk-pass' || id === 'bk-again');
   } else if (reply.action === 'snapshot_key_back') {
     clearEscrow();
-    said = { kind: 'good', text: reply.said || 'The snapshot key from your escrow file is in place.', at };
+    said = { kind: 'good', text: reply.said || W.keyInPlace, at };
   } else if (reply.action === 'escrow_check') {
-    clearEscrow();
-    said = { kind: 'good', text: 'Checked: that file holds this identity\'s keys and opens with your passphrase. From the next pass, snapshots are encrypted. Keep the file and the passphrase where the loss of this machine cannot reach them.', at };
+    clearEscrow(); form = 'none';
+    said = { kind: 'good', text: W.escrowCheckedSaid, at };
   }
   rerender();
 }
 function saidHTML(at) {
-  return said && said.at === at ? '<div class="config-result ' + said.kind + '" data-said="' + at + '" data-announce style="margin-top:10px">' + esc(said.text) + '</div>' : '';
+  return said && said.at === at ? '<div class="config-result ' + said.kind + '" data-said="' + at + '" data-announce>' + esc(said.text) + '</div>' : '';
 }
 function say(kind, text, at) { said = { kind, text, at }; rerender(); }
 
@@ -108,30 +120,37 @@ function saveFile(name, b64) {
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
 }
 
-function when(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  const mins = Math.round((Date.now() - d.getTime()) / 60000);
-  const rel = mins < 0 ? 'in ' + human(-mins) : human(mins) + ' ago';
-  return d.toLocaleString() + ' (' + rel + ')';
+const relativeDay = new Intl.RelativeTimeFormat([], { numeric: 'auto' });
+const clock = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function dayOf(d) {
+  const start = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((start(d) - start(new Date())) / 86400000);
+  if (Math.abs(days) <= 1) return { near: true, words: relativeDay.format(days, 'day') };
+  return { near: false, words: d.toLocaleDateString([], d.getFullYear() === new Date().getFullYear() ? { day: 'numeric', month: 'long' } : { dateStyle: 'long' }) };
 }
-function human(mins) {
-  if (mins < 1) return 'less than a minute';
-  if (mins < 60) return mins + ' min';
-  if (mins < 48 * 60) return Math.round(mins / 60) + ' h';
-  return Math.round(mins / 1440) + ' days';
+function when(iso) {
+  const d = new Date(iso || '');
+  return isNaN(d) ? String(iso || '') : dayOf(d).words + ', ' + clock(d);
+}
+const rowWhen = iso => { const w = when(iso); return w.charAt(0).toUpperCase() + w.slice(1); };
+function lastWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return { time: String(iso || ''), day: '' };
+  const day = dayOf(d);
+  return { time: clock(d), day: day.near ? day.words : fill(W.onDay, { date: day.words }) };
 }
 
-function passLine(p) {
-  if (!p) return '<span class="dim-note">No pass has run yet. The first runs at the next 04:00, or press Back up now.</span>';
+function passLine(v) {
+  const p = v.last_pass;
+  const off = v.enabled ? '' : '<span class="backups__bad" data-off>' + esc(W.dailyOff) + '</span>' + (p ? ' ' : '');
+  if (!p) return off || (v.safe ? '' : esc(W.noPass));
+  if (p.outcome === 'ok') return off + (v.enabled && !v.safe ? '<span class="backups__good">' + esc(W.dailyOn) + '</span> ' : '') + esc(fill(W.dailyLast, lastWhen(p.at)));
   const at = when(p.at);
-  if (p.outcome === 'ok') return 'Verified, copied and proved to restore — ' + esc(at);
-  if (p.outcome === 'safe') return 'SAFE: the record was walked and verifies; no snapshot is made in SAFE — ' + esc(at);
-  if (p.outcome === 'disabled') return 'Switched off: nothing was verified and nothing copied — ' + esc(at);
-  return '<span class="bad-text">FAILED — no snapshot was kept, and the older ones stand. ' + esc(at) +
+  if (p.outcome === 'safe') return off + 'SAFE: the record was walked and verifies; no snapshot is made in SAFE — ' + esc(at);
+  if (p.outcome === 'disabled') return off + esc(W.passOff) + ' ' + esc(at);
+  return off + '<span class="backups__bad">' + esc(W.passFailed) + ' ' + esc(at) +
     (p.failing_since && p.failing_since !== p.at ? ' Failing since ' + esc(when(p.failing_since)) + '.' : '') + '</span>' +
-    (p.detail ? '<div class="dim-note" style="margin-top:4px">' + esc(p.detail) + '</div>' : '');
+    (p.detail ? '<span class="backups__hint backups__block">' + esc(p.detail) + '</span>' : '');
 }
 
 export function backupsHTML() {
@@ -141,179 +160,218 @@ export function backupsHTML() {
   const v = S.backups;
   if (!v) return loadingCard('backups');
   if (!v.secrets_ok || (v.safe && !v.key_absent && !v.snapshot_key_mismatch)) clearEscrow();
-  const snaps = v.snapshots || [];
+  style();
   const busy = busyAction();
   const waiting = !!busy || !!reader;
-  let html = choiceHTML(v, busy, waiting);
+  return '<div class="backups" data-backups>' +
+    '<header class="backups__head"><h2 class="backups__title">' + esc(W.title) + '</h2>' +
+    '<p class="backups__intro">' + esc(named(W.intro, W.introUnnamed)) + '</p></header>' +
+    choiceHTML(v, busy, waiting) + keptHTML(v, busy, waiting) + wayBackHTML(v, busy, waiting) + restoreHTML(v) + '</div>';
+}
 
-  html += '<div class="card" data-card="kept">' + cardHead('BACKUPS — WHAT IS KEPT', 'The snapshots kept of this identity, each proved to restore before it is kept, and a button to take one now.');
-  if (!v.enabled) html += '<div class="bad-text" data-off style="margin-bottom:8px">The maintenance pass is switched off: nothing is verified and no snapshot is made. Switch it on below.</div>';
-  if (v.waiting) html += '<div class="bad-text" style="margin-bottom:8px">This start is DEGRADED: it is waiting for Ring 5, asks for it again by itself, and makes no snapshot until it completes.</div>';
-  else if (v.safe) html += '<div class="bad-text" style="margin-bottom:8px">This start is SAFE: the record is walked every day and no snapshot is made.</div>';
-  html += '<div class="kv"><span>last pass</span><b data-lastpass>' + passLine(v.last_pass) + '</b></div>';
-  if (v.next_pass) html += '<div class="kv"><span>next pass</span><b>' + esc(when(v.next_pass)) + '</b></div>';
-  if (v.chain) html += '<div class="kv"><span>record</span><b>' + esc(v.chain) + '</b></div>';
-  if (!snaps.length) {
-    html += '<div class="empty" style="margin-top:10px">No snapshot yet.</div>';
+function keptHTML(v, busy, waiting) {
+  const snaps = v.snapshots || [];
+  const shown = allShown ? snaps : snaps.slice(0, 3);
+  let html = '<section class="backups__part" data-card="kept" aria-labelledby="bk-kept" aria-describedby="bk-kept-line">' +
+    '<div class="backups__top"><h3 id="bk-kept" class="backups__h3">' + esc(W.kept) + '</h3>' +
+    '<button class="c-button" id="bk-take"' + (waiting || v.safe || !v.enabled ? ' disabled' : '') + '>' + esc(busy === 'take' ? W.taking : W.takeNow) + '</button></div>' +
+    '<p id="bk-kept-line" class="backups__line" data-lastpass>' + passLine(v) + '</p>';
+  if (v.waiting) html += '<p class="backups__line backups__bad">' + esc(W.degraded) + '</p>';
+  else if (v.safe) html += '<p class="backups__line backups__bad">' + 'This start is SAFE: the record is walked every day and no snapshot is made.' + '</p>';
+  if (shown.length) {
+    html += '<ul class="backups__rows">' + shown.map(s =>
+      '<li class="backups__snap" data-snapshot="' + esc(s.name) + '"><span>' +
+      esc([rowWhen(s.at), fill(W.throughRecord, { n: s.record })].concat(s.on_demand ? [W.askedFor] : []).join(' · ')) + ' · ' +
+      (s.encrypted ? esc(W.encrypted) : '<span class="backups__bad">' + esc(W.notEncrypted) + '</span>') + '</span>' +
+      '<span class="backups__acts">' +
+      (s.encrypted ? '<form method="post" action="/backups/download"><button class="backups__act" type="submit" name="name" value="' + esc(s.name) + '" data-download="' + esc(s.name) + '">' + esc(W.download) + '</button></form>' : '') +
+      '<button class="backups__act" data-verify="' + esc(s.name) + '"' + (waiting || v.safe || !v.enabled ? ' disabled' : '') + '>' + esc(busy === 'verify:' + s.name ? W.proving : W.prove) + '</button>' +
+      '<button class="backups__act" data-restore="' + esc(s.name) + '" data-source="snapshot"' + (waiting ? ' disabled' : '') + '>' + esc(W.restore) + '</button>' +
+      '</span></li>').join('') + '</ul>';
+    if (snaps.length > shown.length) {
+      const oldest = dayOf(new Date(snaps[snaps.length - 1].at)).words;
+      html += '<p class="backups__more">' + esc(fill(W.more, { n: snaps.length - shown.length, date: oldest })) +
+        '<button class="backups__act" data-snaps-all>' + esc(fill(W.all, { n: snaps.length })) + '</button></p>';
+    }
   } else {
-    html += '<div style="margin-top:10px">' + snaps.map(s =>
-      '<div class="tool-row" data-snapshot="' + esc(s.name) + '"><span class="td">' +
-      '<b>' + esc(when(s.at)) + '</b> · through record ' + esc(s.record) +
-      ' · ' + (s.on_demand ? 'asked for' : 'daily') + ' · ' + (s.encrypted ? 'encrypted' : '<span class="bad-text">not encrypted</span>') +
-      '<div class="dim-note" style="font-family:var(--mono);font-size:11px">' + esc(s.name) + '</div></span>' +
-      '<span style="display:flex;gap:6px"><button class="btn ghost" data-verify="' + esc(s.name) + '"' + (waiting || v.safe || !v.enabled ? ' disabled' : '') + ' style="padding:4px 12px;font-size:12px">' +
-      (busy === 'verify:' + s.name ? 'Proving…' : 'Prove it restores') + '</button>' +
-      '<button class="btn ghost" data-restore="' + esc(s.name) + '" data-source="snapshot"' + (waiting ? ' disabled' : '') + ' style="padding:4px 12px;font-size:12px">Restore…</button>' +
-      (s.encrypted ? '<form method="post" action="/backups/download" style="display:inline"><button class="btn ghost" type="submit" name="name" value="' + esc(s.name) + '" data-download="' + esc(s.name) + '" style="padding:4px 12px;font-size:12px">Download</button></form>' : '') +
-      '</span></div>').join('') + '</div>';
+    html += '<p class="backups__hint">No snapshot yet.</p>';
   }
-  html += '<div class="dim-note" data-offsite style="margin-top:10px;line-height:1.5">' + (snaps.some(s => s.encrypted)
-    ? 'If this machine is lost, the way back is your escrow file, its passphrase and a snapshot kept somewhere else. Download saves an encrypted snapshot as it is kept here; only your escrow file opens it. Keep a recent one off this machine, and replace it as often as you can afford to lose.'
-    : 'If this machine is lost, the way back is your escrow file, its passphrase and a snapshot kept somewhere else. Only an encrypted snapshot can be downloaded: make or check an escrow file under Keys below, and the next snapshot is encrypted.') + '</div>';
-  html += '<div style="display:flex;gap:10px;align-items:center;margin-top:12px">' +
-    '<button class="btn" id="bk-take"' + (waiting || v.safe || !v.enabled ? ' disabled' : '') + '>' + (busy === 'take' ? 'Taking a snapshot…' : 'Back up now') + '</button>' +
-    '<span class="dim-note">A snapshot holds the whole identity — record, conversations and lived time — and is proved to restore before it is kept. One asked for here stands beside the daily ones; it never replaces one.</span></div>';
-  html += saidHTML('kept') + '</div>';
+  if (v.next_pass || v.chain) html += '<details class="backups__details"><summary>' + esc(C.details) + '</summary>' +
+    (v.next_pass ? '<div class="sp-kv"><span>next pass</span><b>' + esc(when(v.next_pass)) + '</b></div>' : '') +
+    (v.chain ? '<div class="sp-kv"><span>record</span><b>' + esc(v.chain) + '</b></div>' : '') + '</details>';
+  html += saidHTML('kept');
+  html += '<div class="backups__keep" data-card="keep">' +
+    '<label class="backups__field"><span class="backups__words"><span>' + esc(W.keepDays) + '</span>' +
+    '<span class="backups__hint">' + esc(W.keepDaysHint) + '</span></span>' +
+    '<input type="number" id="bk-keep" min="1" max="365" value="' + esc(v.backup_keep) + '"></label>' +
+    '<label class="backups__switch"><input type="checkbox" role="switch" class="backups__sw" id="bk-enabled"' + (v.enabled ? ' checked' : '') + '>' + esc(W.verifyDaily) + '</label>' +
+    '<p class="backups__hint" id="bk-draft" hidden>' + esc(W.unsaved) + '</p>' +
+    '<div class="backups__buttons"><button class="c-button" id="bk-save"' + (preferenceReply.waiting() ? ' disabled' : '') + '>' + esc(preferenceReply.waiting() ? C.waiting : C.save) + '</button></div>' +
+    saidHTML('keep') + '</div>';
+  return html + '</section>';
+}
 
-  html += restoreHTML(v);
+function wayBackHTML(v, busy, waiting) {
+  const snaps = v.snapshots || [];
+  let html = '<section class="backups__part" data-card="escrow" aria-labelledby="bk-way" aria-describedby="bk-way-what">' +
+    '<h3 id="bk-way" class="backups__h3">' + esc(W.wayBack) + '<span class="backups__h3-more"> · ' + esc(W.wayBackHint) + '</span></h3>' +
+    '<p class="backups__line" data-escrow-line>' + (v.escrow_checked_at
+      ? '<span class="backups__ok">' + esc(fill(v.escrow_covers ? W.escrowChecked : W.escrowCheckedOther, { when: when(v.escrow_checked_at) })) + '</span>'
+      : '<span class="backups__bad">' + esc(W.escrowNone) + '</span>') + '</p>';
+  if (!v.encrypting) html += '<p class="backups__line backups__bad" data-encrypting>' + (v.unencrypted_text ? '<span data-why>' + esc(v.unencrypted_text) + '</span>' : esc(W.notEncryptedNow)) + '</p>';
+  html += '<p id="bk-way-what" class="backups__hint">' + esc(named(W.escrowExplained, W.escrowExplainedUnnamed)) + ' ' + esc(named(W.escrowComesBack, W.escrowComesBackUnnamed)) + '</p>';
+  const kept = snaps.some(s => s.encrypted);
+  const note = osNote({ text: kept ? W.keepOff : W.downloadNeedsEscrow, live: false }).outerHTML.replace('<div class="c-os-note', '<div data-offsite class="c-os-note');
+  html += (kept ? '' : note) + escrowHTML(v, busy, waiting) + (kept ? note : '');
+  return html + saidHTML('escrow') + '</section>';
+}
 
-  html += '<div class="card" data-card="keep">' + cardHead('WHAT IS KEPT, AND WHETHER', 'Whether the identity is verified and backed up every day, and how many daily snapshots are kept.') +
-    '<label class="f" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bk-enabled"' + (v.enabled ? ' checked' : '') + '> VERIFY AND BACK UP EVERY DAY (04:00)</label>' +
-    '<label class="f">DAILY SNAPSHOTS TO KEEP</label><input type="number" id="bk-keep" min="1" max="365" value="' + esc(v.backup_keep) + '">' +
-    '<div class="dim-note" id="bk-draft" hidden>Unsaved preferences — not yet the running configuration.</div>' +
-    '<div class="dim-note" style="margin-top:6px">Each snapshot holds the whole database. Applies at once.</div>' +
-    '<div style="margin-top:10px"><button class="btn" id="bk-save"' + (preferenceReply.waiting() ? ' disabled' : '') + '>' + (preferenceReply.waiting() ? 'Saving…' : 'Save') + '</button></div>' + saidHTML('keep') + '</div>';
-
-  html += '<div class="card" data-card="escrow">' + cardHead('KEYS — THE ESCROW', 'A sealed copy of this identity\u2019s two keys under a passphrase only you know: the way back if this machine is lost.');
-  html += '<div class="kv"><span>snapshots</span><b data-encrypting>' + (v.encrypting ? 'encrypted before they can leave this machine' : '<span class="bad-text">NOT encrypted</span>') + '</b></div>';
-  if (!v.encrypting && v.unencrypted_text) html += '<div class="dim-note" data-why style="margin:6px 0 10px">' + esc(v.unencrypted_text) + '</div>';
-  html += '<div class="kv"><span>escrow</span><b>' + (v.escrow_checked_at ? (v.escrow_covers ? 'checked ' : 'checked (for a key no longer on this machine) ') + esc(when(v.escrow_checked_at)) : 'none checked') + '</b></div>';
-  html += '<div class="dim-note" style="margin:8px 0 12px;line-height:1.5">An escrow file is a sealed copy of this identity\'s two keys — the one that signs its record and the one that opens its snapshots — under a passphrase only you know. With a snapshot downloaded above, it is the way back if this machine is lost. Keep the file AND the passphrase somewhere the loss of this machine cannot reach: neither is any use without the other, and nobody can recover either for you.</div>';
+function escrowHTML(v, busy, waiting) {
   if (!v.secrets_ok) {
-    html += '<div class="bad-text" data-nosecrets>This connection is not private, so a passphrase typed here would cross the network in the clear. Open the dashboard on the machine itself, or switch on TLS in Settings → Dashboard, and come back.</div>';
-  } else if (keyRestarting) {
-    html += '<div data-key-restarting><b data-announce>Restarting with the key in place.</b><div class="dim-note">' + (v.record_absent ? 'The next start offers the restore of a snapshot kept here.' : 'The next start checks the whole record under the key.') + ' This page reconnects by itself.</div></div>';
-  } else if (v.key_absent) {
-    html += '<div data-keyback><b>Put this identity\'s key back</b>' +
-      '<div class="dim-note" style="margin:6px 0 10px;line-height:1.5">' + (v.record_absent
-        ? 'Neither the record nor the key that signs it is on this machine, and a snapshot of the record is, so this start is SAFE. Pick your escrow file and type its passphrase. The key in it is put in place only if it is the key a snapshot kept here names; the identity then restarts at the page that restores a snapshot.'
-        : 'The record is on this machine and the key that signs it is not, so this start is SAFE. Pick your escrow file and type its passphrase. The key in it is put in place only if it is the key this record names; the identity then restarts and checks its whole record under it.') + '</div>' +
-      '<input type="file" id="bk-keyfile" accept=".age">' +
-      '<label class="f">ITS PASSPHRASE</label><input type="password" id="bk-keypass" autocomplete="off">' +
-      '<div style="margin-top:10px"><button class="btn" id="bk-keyback"' + (waiting ? ' disabled' : '') + '>' + (busy === 'key_back' ? 'Putting the key back…' : 'Put the key back and restart') + '</button></div></div>';
-  } else if (v.key_unnamed) {
-    html += '<div data-key-unnamed><b>Put this identity\'s key back</b>' +
-      '<div class="dim-note" style="margin:6px 0 10px;line-height:1.5">The record on this machine does not say which key signs it (its first entry names none, or does not read), so this page cannot hold a key from an escrow file to it, and offers no form. Put the identity\'s key file back where the configuration names it, from a copy you keep, and restart. Or restore this identity on another, empty home from your escrow file and a snapshot, at first boot\'s restore door.</div></div>';
-  } else if (v.safe && v.snapshot_key_mismatch) {
-    html += '<div data-snapkeyback><b>Put the escrow\'s snapshot key in place</b>' +
-      '<div class="dim-note" style="margin:6px 0 10px;line-height:1.5">' + (v.snapshot_key_absent
-        ? 'No snapshot key is on this machine, and the snapshots kept here are encrypted (the newest is ' + esc(v.snapshot_key_mismatch) + '), so none of them can be restored. Pick your escrow file and type its passphrase: the snapshot key in it is put in place only if it opens them.'
-        : 'The snapshot key on this machine does not open the snapshots kept here (the newest is ' + esc(v.snapshot_key_mismatch) + '), so none of them can be restored. Pick your escrow file and type its passphrase: the snapshot key in it is put in place only if it opens them, and the one here is moved aside beside it, never deleted.') + '</div>' +
-      '<input type="file" id="bk-snapfile" accept=".age">' +
-      '<label class="f">ITS PASSPHRASE</label><input type="password" id="bk-snappass" autocomplete="off">' +
-      '<div style="margin-top:10px"><button class="btn" id="bk-snapback"' + (waiting ? ' disabled' : '') + '>' + (busy === 'snapshot_key_back' ? 'Putting the snapshot key in place…' : 'Put the escrow\'s snapshot key in place') + '</button></div></div>';
-  } else if (v.safe) {
-    html += '<div class="dim-note">An escrow is made and checked from a normal start.</div>';
-  } else if (step === 2) {
-    html += '<div data-step="2"><b>Step 2 of 2 — pick the file you just saved.</b>' +
-      '<div class="dim-note" style="margin:6px 0 10px">Your browser saved <span style="font-family:var(--mono)">' + esc(savedAs) + '</span>. Pick it back here: a file nobody can find protects nothing, and snapshots are not encrypted until this machine has seen the saved file open.</div>' +
-      '<input type="file" id="bk-file2" accept=".age">' +
-      '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn" id="bk-check2"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_check' ? 'Checking…' : 'Check it') + '</button>' +
-      '<button class="btn ghost" id="bk-cancel2">Start over</button></div></div>';
-  } else {
-    html += (v.export_ok
-      ? '<div data-step="1"><b>Make an escrow file</b>' +
-        '<label class="f">PASSPHRASE (12 CHARACTERS OR MORE)</label><input type="password" id="bk-pass" autocomplete="new-password">' +
-        '<label class="f">AGAIN</label><input type="password" id="bk-again" autocomplete="new-password">' +
-        '<div style="margin-top:10px"><button class="btn" id="bk-create"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_create' ? 'Sealing…' : 'Create escrow file') + '</button></div></div>'
-      : '<div data-step="1" data-noexport><b>Make an escrow file</b><div class="bad-text" style="margin-top:6px">' + esc(v.export_why_not || 'Exporting the identity\'s keys is not allowed from this page.') + '</div></div>') +
-      '<div style="margin-top:18px;border-top:1px solid var(--line);padding-top:12px" data-recheck><b>Check an escrow file you already have</b>' +
-      '<div class="dim-note" style="margin:6px 0 10px">Worth doing now and then: it proves you still have the right file and still know the passphrase.</div>' +
-      '<input type="file" id="bk-file" accept=".age">' +
-      '<label class="f">ITS PASSPHRASE</label><input type="password" id="bk-pass2" autocomplete="off">' +
-      '<div style="margin-top:10px"><button class="btn ghost" id="bk-check"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_check' ? 'Checking…' : 'Check it') + '</button></div></div>';
+    return '<p class="backups__line backups__bad" data-nosecrets>' + esc(W.noSecrets) + '</p>';
   }
-  html += saidHTML('escrow') + '</div>';
+  if (keyRestarting) {
+    return '<div data-key-restarting><b data-announce>' + esc(W.keyRestarting) + '</b><p class="backups__hint">' + (v.record_absent ? esc(W.keyRestartRestore) : esc(W.keyRestartCheck)) + ' ' + esc(W.reconnects) + '</p></div>';
+  }
+  if (v.key_absent) {
+    return '<div class="backups__form" data-keyback><b>' + esc(W.keyBackTitle) + '</b>' +
+      '<p class="backups__hint">' + (v.record_absent
+        ? 'Neither the record nor the key that signs it is on this machine, and a snapshot of the record is, so this start is SAFE. Pick your escrow file and type its passphrase. The key in it is put in place only if it is the key a snapshot kept here names; the identity then restarts at the page that restores a snapshot.'
+        : 'The record is on this machine and the key that signs it is not, so this start is SAFE. Pick your escrow file and type its passphrase. The key in it is put in place only if it is the key this record names; the identity then restarts and checks its whole record under it.') + '</p>' +
+      '<input type="file" id="bk-keyfile" accept=".age">' +
+      '<label for="bk-keypass">' + esc(W.passphrase) + '</label><input type="password" id="bk-keypass" autocomplete="off">' +
+      '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-keyback"' + (waiting ? ' disabled' : '') + '>' + (busy === 'key_back' ? esc(W.keyBackBusy) : esc(W.keyBackGo)) + '</button></div></div>';
+  }
+  if (v.key_unnamed) {
+    return '<div data-key-unnamed><b>' + esc(W.keyBackTitle) + '</b>' +
+      '<p class="backups__hint">' + esc(W.keyUnnamed) + '</p></div>';
+  }
+  if (v.safe && v.snapshot_key_mismatch) {
+    return '<div class="backups__form" data-snapkeyback><b>' + esc(W.snapKeyGo) + '</b>' +
+      '<p class="backups__hint">' + (v.snapshot_key_absent
+        ? esc(fill(W.snapKeyAbsent, { newest: v.snapshot_key_mismatch }))
+        : esc(fill(W.snapKeyMismatch, { newest: v.snapshot_key_mismatch }))) + '</p>' +
+      '<input type="file" id="bk-snapfile" accept=".age">' +
+      '<label for="bk-snappass">' + esc(W.passphrase) + '</label><input type="password" id="bk-snappass" autocomplete="off">' +
+      '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-snapback"' + (waiting ? ' disabled' : '') + '>' + (busy === 'snapshot_key_back' ? esc(W.snapKeyBusy) : esc(W.snapKeyGo)) + '</button></div></div>';
+  }
+  if (v.safe) return '<p class="backups__hint">' + esc(W.safeEscrow) + '</p>';
+  if (step === 2) {
+    return '<div class="backups__form" data-step="2"><b>' + esc(W.step2) + '</b>' +
+      '<p class="backups__hint">' + fill(esc(W.step2Saved), { file: '<span class="backups__code">' + esc(savedAs) + '</span>' }) + '</p>' +
+      '<input type="file" id="bk-file2" accept=".age">' +
+      '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-check2"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_check' ? esc(W.checking) : esc(W.checkIt)) + '</button>' +
+      '<button class="c-button c-button--quiet" id="bk-cancel2">' + esc(W.startOver) + '</button></div></div>';
+  }
+  const open = shownForm(v);
+  let html = '<div class="backups__buttons">' +
+    '<button class="c-button" data-escrow-open="check" aria-expanded="' + (open === 'check') + '"' + (waiting ? ' disabled' : '') + '>' + esc(W.check) + '</button>' +
+    '<button class="c-button" data-escrow-open="make" aria-expanded="' + (open === 'make') + '"' + (waiting ? ' disabled' : '') + '>' + esc(v.escrow_checked_at ? W.makeNew : W.makeFirst) + '</button></div>';
+  if (open === 'make') {
+    html += v.export_ok
+      ? '<div class="backups__form" data-step="1"><p class="backups__hint">' + esc(W.makeNewHint) + '</p>' +
+        '<label for="bk-pass">' + esc(W.passphrase) + '</label><input type="password" id="bk-pass" autocomplete="new-password" aria-describedby="bk-pass-hint">' +
+        '<p id="bk-pass-hint" class="backups__hint">' + esc(W.passphraseHint) + '</p>' +
+        '<label for="bk-again">' + esc(W.passphraseAgain) + '</label><input type="password" id="bk-again" autocomplete="new-password">' +
+        '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-create"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_create' ? esc(named(W.exporting, W.exportingUnnamed)) : esc(W.createFile)) + '</button>' +
+        '<button class="c-button c-button--quiet" data-escrow-close>' + esc(C.cancel) + '</button></div></div>'
+      : '<div class="backups__form" data-step="1" data-noexport><p class="backups__line backups__bad">' + esc(v.export_why_not || esc(W.noExport)) + '</p></div>';
+  } else if (open === 'check') {
+    html += '<div class="backups__form" data-recheck><p class="backups__hint">' + esc(W.recheckHint) + '</p>' +
+      '<input type="file" id="bk-file" accept=".age">' +
+      '<label for="bk-pass2">' + esc(W.passphrase) + '</label><input type="password" id="bk-pass2" autocomplete="off">' +
+      '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-check"' + (waiting ? ' disabled' : '') + '>' + (busy === 'escrow_check' ? esc(W.checking) : esc(W.checkIt)) + '</button>' +
+      '<button class="c-button c-button--quiet" data-escrow-close>' + esc(C.cancel) + '</button></div></div>';
+  }
   return html;
+}
+function shownForm(v) {
+  if (form) return form === 'none' ? null : form;
+  return v.escrow_checked_at ? null : 'make';
 }
 
 function choiceHTML(v, busy, waiting) {
   const c = v.identity_choice;
   if (!c && !choiceRestarting) return '';
-  let html = '<div class="card" data-card="choice">' + cardHead('WHICH FILES ARE THIS IDENTITY\'S', 'Shown when a start found this identity\u2019s files elsewhere or more than once: you choose which are theirs, and nothing is opened until you do.');
+  let html = '<section class="backups__part" data-card="choice" aria-labelledby="bk-choice" aria-describedby="bk-choice-why">' +
+    '<h3 id="bk-choice" class="backups__h3">Which files are this identity\'s</h3>';
   if (choiceRestarting) {
-    return html + '<div data-choice-restarting><b data-announce>Restarting on the files you chose.</b><div class="dim-note">The next start opens them and checks the whole record under the key, as every start does. This page reconnects by itself.</div></div></div>';
+    return html + '<div data-choice-restarting><b data-announce>' + esc(W.choiceRestarting) + '</b><p id="bk-choice-why" class="backups__hint">' + esc(W.choiceRestartingSays) + ' ' + esc(W.reconnects) + '</p></div></section>';
   }
   const record = c.files.find(f => f.key === 'ledger_path');
   const records = (record && record.found) || [];
-  html += '<div class="dim-note" style="margin-bottom:10px;line-height:1.5">This identity\'s record is not where its configuration names it. This start found the files below elsewhere, or more than one copy of them, and did not choose among them: the wrong choice would put an old copy of the record, or another identity\'s, in its place. Nothing was opened, moved or written. ' +
+  html += '<p id="bk-choice-why" class="backups__line">' + esc(W.choiceWhy) + ' ' +
     (records.length
-      ? 'Choose which are this identity\'s; the identity then restarts on them and checks its whole record under the key, as every start does. The files you do not choose stay where they are.'
-      : 'No record of this identity was found in this home, and nothing to restore one from, so there is nothing to choose; what is here is named below, and this start does not begin a new identity over it. Put the record back where the configuration names it, from a copy you keep, and restart; or restore this identity from your escrow file and a snapshot on a new, empty home.') + '</div>';
+      ? esc(W.choiceRecords)
+      : esc(W.choiceNone)) + '</p>';
   c.files.forEach(f => {
     const found = f.found || [];
-    html += '<div data-choice-file="' + esc(f.key) + '" style="margin-bottom:10px"><b>' + esc(f.what.charAt(0).toUpperCase() + f.what.slice(1)) + '</b>';
+    html += '<div data-choice-file="' + esc(f.key) + '"><b>' + esc(f.what.charAt(0).toUpperCase() + f.what.slice(1)) + '</b>';
     if (!found.length) {
-      html += '<div class="dim-note">None was found here.' + (records.length ? ' It goes to <span style="font-family:var(--mono)">' + esc(f.standard) + '</span>, where a first start puts it.' : '') + '</div>';
+      html += '<p class="backups__hint">' + esc(W.noneFound) + (records.length ? ' It goes to <span class="backups__code">' + esc(f.standard) + '</span>, where a first start puts it.' : '') + '</p>';
     } else if (!records.length) {
-      found.forEach(x => { html += '<div style="margin-top:4px"><span style="font-family:var(--mono)">' + esc(x.path) + '</span> · ' + esc(bytes(x.bytes)) + (x.modified ? ' · last changed ' + esc(when(x.modified)) : '') + '</div>'; });
+      found.forEach(x => { html += '<p class="backups__line"><span class="backups__code">' + esc(x.path) + '</span> · ' + esc(bytes(x.bytes)) + (x.modified ? ' · last changed ' + esc(when(x.modified)) : '') + '</p>'; });
     } else {
       found.forEach((x, i) => {
-        html += '<label style="display:flex;gap:6px;align-items:baseline;margin-top:4px"><input type="radio" name="bk-pick-' + esc(f.key) + '" id="bk-pick-' + esc(f.key) + '-' + i + '" value="' + esc(x.path) + '"' + (found.length === 1 ? ' checked' : '') + '>' +
-          '<span><span style="font-family:var(--mono)">' + esc(x.path) + '</span> · ' + esc(bytes(x.bytes)) + (x.modified ? ' · last changed ' + esc(when(x.modified)) : '') + '</span></label>';
+        html += '<label class="backups__switch"><input type="radio" name="bk-pick-' + esc(f.key) + '" id="bk-pick-' + esc(f.key) + '-' + i + '" value="' + esc(x.path) + '"' + (found.length === 1 ? ' checked' : '') + '>' +
+          '<span><span class="backups__code">' + esc(x.path) + '</span> · ' + esc(bytes(x.bytes)) + (x.modified ? ' · last changed ' + esc(when(x.modified)) : '') + '</span></label>';
       });
     }
     html += '</div>';
   });
-  if (!records.length) return html + saidHTML('choice') + '</div>';
-  html += '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="bk-choose"' + (waiting ? ' disabled' : '') + '>' + (busy === 'identity_choose' ? 'Writing your choice…' : 'Use these and restart') + '</button></div>';
-  return html + saidHTML('choice') + '</div>';
+  if (!records.length) return html + saidHTML('choice') + '</section>';
+  html += '<div class="backups__buttons"><button class="c-button c-button--primary" id="bk-choose"' + (waiting ? ' disabled' : '') + '>' + (busy === 'identity_choose' ? esc(W.choosing) : esc(W.chooseGo)) + '</button></div>';
+  return html + saidHTML('choice') + '</section>';
 }
 
 function restoreHTML(v) {
   const busy = busyAction();
   const sets = v.set_aside || [];
-  if (!plan && !restarting && !sets.length && !v.restore_failed && !v.restored && said?.at !== 'restore') return '';
-  let html = '<div class="card" data-card="restore">' + cardHead('RESTORE', 'What a restore from a snapshot sets aside, said before you confirm it, and what earlier restores set aside.');
+  const due = !!(plan || restarting || v.restore_failed || said?.at === 'restore');
+  let html = '<details class="backups__restore" data-card="restore" aria-describedby="bk-restore-what"' + (due || restoreOpen ? ' open' : '') + '>' +
+    '<summary><h3 id="bk-restore" class="backups__h3">' + esc(W.restoreWhat) + '</h3><span class="backups__hint"> · ' + esc(W.restoreWhatHint) + '</span></summary>' +
+    '<p id="bk-restore-what" class="backups__line">' + esc(W.restoreExplained) + ' ' + esc(W.restoreConfirmHow) + '</p>';
   if (restarting) {
-    return html + '<div data-restarting><b data-announce>Restarting to restore.</b><div class="dim-note">The restore is performed by the next start, before the record is opened: the snapshot is proved first, what is live is moved aside — never deleted — and the snapshot is put in place. This page reconnects by itself.</div></div></div>';
+    return html + '<div data-restarting><b data-announce>' + esc(W.restoreRestarting) + '</b><p class="backups__hint">' + esc(W.restoreRestartingSays) + ' ' + esc(W.reconnects) + '</p></div></details>';
   }
-  if (v.restore_failed) html += '<div class="config-result bad" data-restore-failed data-announce style="margin-bottom:10px">' + esc(v.restore_failed) + '</div>';
-  if (v.restored) html += '<div class="dim-note" data-restored style="margin-bottom:10px;line-height:1.5">' + esc(v.restored) + '</div>';
+  if (v.restore_failed) html += '<div class="config-result bad" data-restore-failed data-announce>' + esc(v.restore_failed) + '</div>';
+  if (v.restored) html += '<p class="backups__hint" data-restored>' + esc(v.restored) + '</p>';
   if (plan) {
     const p = plan;
-    html += '<div data-plan><b>Restore from ' + esc(p.source === 'set-aside' ? 'the set kept aside' : 'the snapshot') + ' of ' + esc(when(p.at)) + '</b>' +
-      '<div class="dim-note" style="font-family:var(--mono);font-size:11px">' + esc(p.name) + '</div>' +
-      '<div class="kv"><span>the record will end at</span><b data-plan-to>record ' + esc(p.restored_to) + '</b></div>' +
-      '<div class="kv"><span>set aside</span><b data-plan-aside>' + (p.no_live_record ? 'no records: there is no live record here'
-        : p.set_aside < 0 ? 'the live record does not read, so it cannot be counted — all of it is set aside'
-        : p.set_aside === 0 ? 'no records: the live record ends where this one does'
+    html += '<div class="backups__plan" data-plan><b>Restore from ' + esc(p.source === 'set-aside' ? 'the set kept aside' : 'the snapshot') + ' of ' + esc(when(p.at)) + '</b>' +
+      '<p class="backups__hint backups__code">' + esc(p.name) + '</p>' +
+      '<div class="sp-kv"><span>the record will end at</span><b data-plan-to>record ' + esc(p.restored_to) + '</b></div>' +
+      '<div class="sp-kv"><span>set aside</span><b data-plan-aside>' + (p.no_live_record ? esc(W.planNoLive)
+        : p.set_aside < 0 ? esc(W.planUnread)
+        : p.set_aside === 0 ? esc(W.planNone)
         : esc(p.set_aside) + ' record' + (p.set_aside === 1 ? '' : 's') + ' (everything after record ' + esc(p.restored_to) + ', through ' + esc(p.live_through) + '), and every conversation since') + '</b></div>';
     if (p.witnessed < 0) {
-      html += '<div class="kv"><span>the witness</span><b data-plan-witness>no witness receipt is known on this machine</b></div>';
+      html += '<div class="sp-kv"><span>the witness</span><b data-plan-witness>' + 'no witness receipt is known on this machine' + '</b></div>';
     } else if (p.witnessed_set_aside === 0) {
-      html += '<div class="kv"><span>the witness</span><b data-plan-witness>will notice nothing: it has attested through record ' + esc(p.witnessed) + ', which this restore keeps</b></div>';
+      html += '<div class="sp-kv"><span>the witness</span><b data-plan-witness>will notice nothing: it has attested through record ' + esc(p.witnessed) + ', which this restore keeps</b></div>';
     } else {
-      html += '<div class="kv"><span>the witness</span><b data-plan-witness class="bad-text">' + esc(p.witnessed_set_aside) + ' of those records ' + (p.witnessed_set_aside === 1 ? 'has' : 'have') + ' been attested by the witness (through record ' + esc(p.witnessed) + ')</b></div>' +
-        '<div class="dim-note" data-plan-anchoring style="line-height:1.5"><b>Read this before you confirm.</b> The witness holds its own record of how far this identity\'s history reached. After this restore, the next time the identity anchors, the witness refuses it as a rollback — and this runtime treats that as an integrity conflict: <b>the identity enters SAFE and its record is frozen</b> until you deal with it. It does not go on running unwitnessed. (A snapshot older than this identity\'s first anchor is the one exception: the witness bookmarks by a key record that snapshot predates, so it may not recognise the restored identity at all — no refusal, and no attestation of what it once held either.) Teaching the witness about a restore has not been built yet; until it is, the ways round it are to restore no further back than the record the witness has attested, or to take this identity off the witness first (Settings → Witness, clear the URL — it applies at the next start, which this restore is), which leaves its later records unattested. These are the facts that work, or that witness\'s operator, would need:</div>' +
-        '<pre class="quote" data-witness-facts style="white-space:pre-wrap;font-size:11.5px">' + esc(witnessFacts(p)) + '</pre>' +
-        '<button class="btn ghost" id="bk-copyfacts" style="padding:4px 12px;font-size:12px">Copy these</button>';
+      html += '<div class="sp-kv"><span>the witness</span><b data-plan-witness class="backups__bad">' + esc(p.witnessed_set_aside) + ' of those records ' + (p.witnessed_set_aside === 1 ? 'has' : 'have') + ' been attested by the witness (through record ' + esc(p.witnessed) + ')</b></div>' +
+        '<p class="backups__hint" data-plan-anchoring><b>Read this before you confirm.</b> ' + 'The witness holds its own record of how far this identity\'s history reached. After this restore, the next time the identity anchors, the witness refuses it as a rollback — and this runtime treats that as an integrity conflict:' + ' <b>the identity enters SAFE and its record is frozen</b> ' + 'until you deal with it. It does not go on running unwitnessed. (A snapshot older than this identity\'s first anchor is the one exception: the witness bookmarks by a key record that snapshot predates, so it may not recognise the restored identity at all — no refusal, and no attestation of what it once held either.) Teaching the witness about a restore has not been built yet; until it is, the ways round it are to restore no further back than the record the witness has attested, or to take this identity off the witness first (Settings → Technical → Verification, clear the URL — it applies at the next start, which this restore is), which leaves its later records unattested. These are the facts that work, or that witness\'s operator, would need:' + '</p>' +
+        '<pre class="quote backups__facts" data-witness-facts>' + esc(witnessFacts(p)) + '</pre>' +
+        '<div class="backups__buttons"><button class="c-button" id="bk-copyfacts">Copy these</button></div>';
     }
-    html += '<div class="dim-note" style="margin-top:8px;line-height:1.5">Nothing is deleted. What is live now is moved, whole, into a folder under <span style="font-family:var(--mono)">' + esc(p.aside_under) + '</span>, listed here afterwards with a button that puts it back.</div>' +
-      '<label class="f">TO CONFIRM, TYPE: ' + esc(p.confirm_text) + '</label><input type="text" id="bk-confirm" autocomplete="off">' +
-      '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn" id="bk-restore" disabled>' + (busy === 'restore' ? 'Asking…' : 'Restore and restart') + '</button>' +
-      '<button class="btn ghost" id="bk-noplan"' + (busy === 'restore' ? ' disabled' : '') + '>Cancel</button></div></div>';
+    html += '<p class="backups__hint">' + fill(esc(W.planAside), { folder: '<span class="backups__code">' + esc(p.aside_under) + '</span>' }) + '</p>' +
+      '<div class="backups__form"><label for="bk-confirm">' + esc(fill(W.restoreConfirm, { text: p.confirm_text })) + '</label><input type="text" id="bk-confirm" autocomplete="off"></div>' +
+      '<div class="backups__buttons"><button class="c-button c-button--danger" id="bk-restore" disabled>' + esc(busy === 'restore' ? C.waiting : W.restoreGo) + '</button>' +
+      '<button class="c-button c-button--quiet" id="bk-noplan"' + (busy === 'restore' ? ' disabled' : '') + '>' + esc(W.restoreCancel) + '</button></div></div>';
   }
   if (sets.length) {
-    html += '<div style="margin-top:' + (plan ? '18' : '0') + 'px"><b>Kept aside by earlier restores</b>' + sets.map(x =>
-      '<div class="tool-row" data-set="' + esc(x.name) + '"><span class="td">' +
-      '<b>' + esc(when(x.set_aside_at)) + '</b> · through record ' + esc(x.was_through) + ' · ' + esc(bytes(x.bytes)) +
-      (x.put_back_at ? ' · <span data-putback>put back ' + esc(when(x.put_back_at)) + ' — this folder is a copy of what was put back</span>' : ' · set aside when the record was restored to ' + esc(x.restored_to)) +
-      '<div class="dim-note" data-set-path style="font-family:var(--mono);font-size:11px">' + esc(x.path) + '</div></span>' +
-      '<button class="btn ghost" data-restore="' + esc(x.name) + '" data-source="set-aside"' + (busy ? ' disabled' : '') + ' style="padding:4px 12px;font-size:12px">Put this back…</button></div>').join('') +
-      '<div class="dim-note" style="margin-top:6px">These folders are never removed by this page. Remove one by hand when you are sure you will not want it.</div></div>';
+    html += '<div><b>' + esc(W.setsTitle) + '</b><ul class="backups__rows">' + sets.map(x =>
+      '<li class="backups__snap" data-set="' + esc(x.name) + '"><span>' +
+      esc(when(x.set_aside_at)) + ' · through record ' + esc(x.was_through) + ' · ' + esc(bytes(x.bytes)) +
+      (x.put_back_at ? ' · <span data-putback>put back ' + esc(when(x.put_back_at)) + ' — ' + esc(W.putBackCopy) + '</span>' : ' · set aside when the record was restored to ' + esc(x.restored_to)) +
+      '<span class="backups__hint backups__code backups__block" data-set-path>' + esc(x.path) + '</span></span>' +
+      '<span class="backups__acts"><button class="backups__act" data-restore="' + esc(x.name) + '" data-source="set-aside"' + (busy ? ' disabled' : '') + '>' + esc(W.putBack) + '</button></span></li>').join('') + '</ul>' +
+      '<p class="backups__hint">' + esc(W.setsNote) + '</p></div>';
+  } else if (!plan && !v.restored && !v.restore_failed) {
+    html += '<p class="backups__hint" data-restore-none>' + esc(W.restoreNone) + '</p>';
   }
-  return html + saidHTML('restore') + '</div>';
+  return html + saidHTML('restore') + '</details>';
 }
 function witnessFacts(p) {
   return 'witness: ' + (p.witness_url || '(none configured)') + '\n' +
@@ -325,8 +383,8 @@ function witnessFacts(p) {
 function readFileB64(input, then) {
   if (reader || actionReply.waiting()) return;
   const f = input && input.files && input.files[0];
-  if (!f) { say('bad', 'Pick the escrow file first.', 'escrow'); return; }
-  if (f.size > 65536) { say('bad', 'That file is larger than any escrow file.', 'escrow'); return; }
+  if (!f) { say('bad', W.pickFile, 'escrow'); return; }
+  if (f.size > 65536) { say('bad', W.fileTooLarge, 'escrow'); return; }
   const r = new FileReader();
   reader = r;
   r.onload = () => {
@@ -334,7 +392,7 @@ function readFileB64(input, then) {
     reader = null;
     then(b64(r.result));
   };
-  r.onerror = () => { if (reader !== r) return; reader = null; say('bad', 'That file could not be read.', 'escrow'); };
+  r.onerror = () => { if (reader !== r) return; reader = null; say('bad', W.fileUnreadable, 'escrow'); };
   r.readAsArrayBuffer(f);
   rerender();
 }
@@ -368,13 +426,26 @@ export function wireBackups(root) {
     for (const f of S.backups.identity_choice.files) {
       if (!(f.found || []).length) continue;
       const on = root.querySelector('input[name="bk-pick-' + f.key + '"]:checked');
-      if (!on) { say('bad', 'Choose one file for ' + f.what + '.', 'choice'); return; }
+      if (!on) { say('bad', fill(W.chooseOne, { what: f.what }), 'choice'); return; }
       picked[f.key] = on.value;
     }
     ask('identity_choose', { picked });
   };
   const take = $('bk-take');
   if (take) take.onclick = () => ask('take');
+  root.querySelectorAll('[data-snaps-all]').forEach(btn => { btn.onclick = () => { allShown = true; rerender(); }; });
+  root.querySelectorAll('[data-escrow-open]').forEach(btn => { btn.onclick = () => {
+    const which = btn.dataset.escrowOpen;
+    if (shownForm(S.backups || {}) === which) return;
+    clearEscrow(); form = which; said = null; rerender();
+    $(which === 'make' ? 'bk-pass' : 'bk-file')?.focus();
+  }; });
+  root.querySelectorAll('[data-escrow-close]').forEach(btn => { btn.onclick = () => {
+    const asked = actionReply.waiting()?.action.startsWith('escrow');
+    clearEscrow(); if (asked) { actionReply.drop(); requestBackups(); }
+    form = 'none'; said = null; rerender();
+  }; });
+  root.querySelectorAll('details[data-card="restore"] > summary').forEach(s => { s.onclick = () => { restoreOpen = !s.parentElement.open; }; });
   root.querySelectorAll('[data-verify]').forEach(btn => { btn.onclick = () => ask('verify', { name: btn.dataset.verify }); });
   root.querySelectorAll('[data-restore]').forEach(btn => { btn.onclick = () => ask('restore_plan', { name: btn.dataset.restore, source: btn.dataset.source }); });
   const confirmBox = $('bk-confirm'), doRestore = $('bk-restore');
@@ -390,23 +461,23 @@ export function wireBackups(root) {
     clearControls(id => id === 'bk-confirm'); said = null; rerender();
   };
   const copyFacts = $('bk-copyfacts');
-  if (copyFacts && plan) copyFacts.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(witnessFacts(plan)); copyFacts.textContent = 'Copied'; };
+  if (copyFacts && plan) copyFacts.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(witnessFacts(plan)); copyFacts.textContent = C.copied; };
   const save = $('bk-save');
   if (save) save.onclick = () => {
     const keep = parseInt($('bk-keep').value, 10);
-    if (!(keep >= 1 && keep <= 365)) { say('bad', 'Keep between 1 and 365 daily snapshots.', 'keep'); return; }
+    if (!(keep >= 1 && keep <= 365)) { say('bad', W.keepDaysRange, 'keep'); return; }
     if (preferenceReply.waiting()) return;
     const enabled = !!$('bk-enabled').checked;
     const fields = new Map(['bk-enabled','bk-keep'].map(id => [id, valueOf($(id))]));
     const requestID = send({ type: 'config_set', config: { 'maintenance.enabled': enabled, 'maintenance.backup_keep': keep } });
     const sent = preferenceReply.arm({ enabled, keep, fields }, requestID);
-    say(sent ? 'good' : 'bad', sent ? 'Waiting for the runtime to confirm…' : 'Not connected — preferences were not saved.', 'keep');
+    say(sent ? 'good' : 'bad', sent ? C.waiting : W.prefsNotSaved, 'keep');
   };
   const create = $('bk-create');
   if (create) create.onclick = () => {
     const p = $('bk-pass').value, again = $('bk-again').value;
-    if (p.length < 12) { say('bad', 'The passphrase is shorter than 12 characters.', 'escrow'); return; }
-    if (p !== again) { say('bad', 'The two passphrases differ.', 'escrow'); return; }
+    if (p.length < 12) { say('bad', W.passphraseShort, 'escrow'); return; }
+    if (p !== again) { say('bad', W.passphrasesDiffer, 'escrow'); return; }
     held = p;
     ask('escrow_create', { passphrase: p, again: again });
   };
@@ -414,33 +485,33 @@ export function wireBackups(root) {
   if (check2) check2.onclick = () => readFileB64($('bk-file2'), b64 => ask('escrow_check', { file_b64: b64, passphrase: held }));
   const cancel2 = $('bk-cancel2');
   if (cancel2) cancel2.onclick = () => {
-    clearEscrow();
-    if (actionReply.waiting()?.action.startsWith('escrow')) actionReply.drop();
+    const asked = actionReply.waiting()?.action.startsWith('escrow');
+    clearEscrow(); if (asked) { actionReply.drop(); requestBackups(); }
     said = null; rerender();
   };
   const keyBack = $('bk-keyback');
   if (keyBack) keyBack.onclick = () => {
     const p = $('bk-keypass').value;
-    if (!p) { say('bad', 'Type the file\'s passphrase.', 'escrow'); return; }
+    if (!p) { say('bad', W.typePassphrase, 'escrow'); return; }
     readFileB64($('bk-keyfile'), b64 => ask('key_back', { file_b64: b64, passphrase: p }));
   };
   const snapBack = $('bk-snapback');
   if (snapBack) snapBack.onclick = () => {
     const p = $('bk-snappass').value;
-    if (!p) { say('bad', 'Type the file\'s passphrase.', 'escrow'); return; }
+    if (!p) { say('bad', W.typePassphrase, 'escrow'); return; }
     readFileB64($('bk-snapfile'), b64 => ask('snapshot_key_back', { file_b64: b64, passphrase: p }));
   };
   const check = $('bk-check');
   if (check) check.onclick = () => {
     const p = $('bk-pass2').value;
-    if (!p) { say('bad', 'Type the file\'s passphrase.', 'escrow'); return; }
+    if (!p) { say('bad', W.typePassphrase, 'escrow'); return; }
     readFileB64($('bk-file'), b64 => ask('escrow_check', { file_b64: b64, passphrase: p }));
   };
 }
 
 export function forgetBackupsSecrets() {
   clearEscrow(); clearControls(id => id === 'bk-confirm');
-  actionReply.drop(); said = null; plan = null; restarting = false; keyRestarting = false; choiceRestarting = false;
+  actionReply.drop(); said = null; plan = null; restarting = false; keyRestarting = false; choiceRestarting = false; form = null;
 }
 export function acceptBackupPreferences(requestID) {
   const saved = S.config?.maintenance;
@@ -448,14 +519,14 @@ export function acceptBackupPreferences(requestID) {
   const asked = preferenceReply.claim(requestID);
   if (!asked) return false;
   if (saved?.enabled !== asked.enabled || saved?.backup_keep !== asked.keep) {
-    say('bad', 'Save could not be verified. Your edits are kept; review the saved preferences.', 'keep');
+    say('bad', W.saveUnverified, 'keep');
     return true;
   }
   asked.fields.forEach((value, id) => {
     const field = controls.get(id);
     if (field && valueOf(field.el) === value) { field.saved = value; field.dirty = false; }
   });
-  say('good', 'Preferences saved.', 'keep');
+  say('good', W.prefsSaved, 'keep');
   requestBackups();
   return true;
 }
@@ -470,7 +541,7 @@ export function backupsConnectionLost() {
   const action = actionReply.waiting();
   const preferences = preferenceReply.drop();
   forgetBackupsSecrets();
-  if (action || preferences) said = {kind:'bad', text:'Connection lost — completion is unknown. Review current state before trying again; nothing is automatically retried.', at:action ? actionCard(action.action) : 'keep'};
+  if (action || preferences) said = {kind:'bad', text:W.connectionLost, at:action ? actionCard(action.action) : 'keep'};
   rerender();
 }
 export function backupsReconnected() { if (S.backups) { restarting = false; keyRestarting = false; choiceRestarting = false; plan = null; clearControls(id => id === 'bk-confirm'); requestBackups(); } }

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/llm"
@@ -242,27 +241,9 @@ func toolSetFile(goos, set string) string {
 	return "testdata/whole_prompt/tools/" + set + "." + goos + ".golden"
 }
 
-// sentShapes is the last rendering of every shape's request, which the
-// size report reads after the goldens' test made it: the same requests,
-// sent once.
-var sentShapes struct {
-	sync.Mutex
-	rendered []renderedShape
-}
-
-// renderedShapes is the rendering the goldens' test made last in this
-// test binary, or a new one when it has made none (renderShapes).
-func renderedShapes(t *testing.T) []renderedShape {
-	t.Helper()
-	sentShapes.Lock()
-	rendered := sentShapes.rendered
-	sentShapes.Unlock()
-	if rendered != nil {
-		return rendered
-	}
-	return renderShapes(t)
-}
-
+// renderShapes makes the host send every shape, each in a subtest of t
+// named for it, and returns them rendered: the goldens and the size report
+// both read this one rendering (TestEveryRequestShapeSendsItsPinnedWholeRequest).
 func renderShapes(t *testing.T) []renderedShape {
 	t.Helper()
 	defer tools.ShellWallAsAccountForTest()()
@@ -275,9 +256,6 @@ func renderShapes(t *testing.T) []renderedShape {
 			t.Fatalf("the %s request could not be made; nothing is compared", s.name)
 		}
 	}
-	sentShapes.Lock()
-	sentShapes.rendered = out
-	sentShapes.Unlock()
 	return out
 }
 
@@ -354,17 +332,20 @@ func TestEveryRequestShapeSendsItsPinnedWholeRequest(t *testing.T) {
 			t.Errorf("%s pins no request shape (an update removes it)", file)
 		}
 	}
+	// AND KEEPS ITS RECORDED SIZE, measured on this same rendering. The
+	// sizes were a test of their own that read the rendering this one kept
+	// in the process; the gate's sharder dealt the two to different shards,
+	// and the second rendered every shape again (28 s a gate).
+	t.Run("keeps its recorded size", func(t *testing.T) { recordedSizesHold(t, shapes) })
 }
 
 // EVERY REQUEST SHAPE KEEPS ITS RECORDED SIZE (prompt_sizes_test.go). A
 // size that moved fails, naming the shape and the part; the commit that
-// moved it carries the new number (-update-prompt-golden). It reads the
-// requests the goldens' test rendered above, when it ran first in this
-// test binary.
-func TestEveryRequestShapeKeepsItsRecordedSize(t *testing.T) {
+// moved it carries the new number (-update-prompt-golden).
+func recordedSizesHold(t *testing.T, shapes []renderedShape) {
 	var rows, setRows []sizeRow
 	sets := map[string]bool{}
-	for _, r := range renderedShapes(t) {
+	for _, r := range shapes {
 		for _, d := range r.tools {
 			if j := toolDefinitionJSON(t, d); r.dir != "" && strings.Contains(j, r.dir) {
 				t.Fatalf("shape %s offers %s, whose definition names a place on this machine; its size would move with the machine", r.shape.name, d.Function.Name)

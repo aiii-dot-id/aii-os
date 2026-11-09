@@ -87,7 +87,7 @@ func (a *App) wakeInner(ctx context.Context, role, fact string) (string, error) 
 }
 
 func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool) (conversation.Result, error) {
-	workState, err := a.buildWorkState()
+	workState, err := a.buildWorkState(ctx)
 	if err != nil {
 		return conversation.Result{}, fmt.Errorf("working state: %w", err)
 	}
@@ -132,7 +132,7 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	a.settlePictures(ctx, result, err)
 	if err != nil {
 
-		kept := a.recordInterruptedTurnContext(ctx, result)
+		kept := a.recordInterruptedTurnContext(ctx, result, conversation.FailureCause(err))
 		a.resumeTimedOutTurn(ctx, err, kept)
 		return result, err
 	}
@@ -149,8 +149,6 @@ func (a *App) think(ctx context.Context, current llm.Message, appendCurrent bool
 	a.markComposedHarvests(p.Turn)
 	a.noteYield(result.Yielded)
 
-	if why := a.noteTurnShape(capReasonOf(result), interaction.TurnID(ctx)); why != "" {
-		result.Notes = result.NothingContinues(why)
-	}
+	result.Notes = a.noteTurnShape(capReasonOf(result), interaction.TurnID(ctx), result.Yielded).closing(result)
 	return result, nil
 }

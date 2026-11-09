@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -124,25 +123,19 @@ func closedTab(t *testing.T, engine browserEngine, path string, servers []ICESer
 	}
 	cmd := exec.Command(path, append([]string{"--remote-debugging-port=0"}, engine.args(profile, "about:blank")...)...)
 	cmd.Env = append(browserEnv(engine, root, os.Environ()), "DBUS_SESSION_BUS_ADDRESS=disabled:")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	outputPath := filepath.Join(root, "output.log")
 	output, err := os.Create(outputPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd.Stdout, cmd.Stderr = output, output
-	err = cmd.Start()
+	browser, err := startBrowserGroup(cmd)
 	_ = output.Close()
 	if err != nil {
 		t.Fatalf("%s failed to start: %v", engine.name, err)
 	}
-	exited := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(exited)
-	}()
 	t.Cleanup(func() {
-		if err := stopBrowserProcess(cmd, exited); err != nil {
+		if err := browser.stop(); err != nil {
 			t.Errorf("%s cleanup: %v", engine.name, err)
 		}
 	})

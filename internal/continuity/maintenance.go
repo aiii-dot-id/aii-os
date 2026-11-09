@@ -376,7 +376,7 @@ func (r *Runtime) proveSnapshotIn(ctx context.Context, cfg Settings, dir string,
 
 	beside, err := besideFor(cfg, dir)
 	if err != nil {
-		return fmt.Errorf("copy does not verify — not published: %w", err)
+		return proofFailed("chain", fmt.Errorf("copy does not verify — not published: %w", err))
 	}
 	ledgerCopy, dbCopy := filepath.Join(dir, "ledger.jsonl"), filepath.Join(dir, SnapshotDB)
 	var verified store.MirrorHead
@@ -387,34 +387,34 @@ func (r *Runtime) proveSnapshotIn(ctx context.Context, cfg Settings, dir string,
 		}
 	})
 	if err != nil {
-		return fmt.Errorf("copy does not verify — not published: %w; witness: %s", err, beside.Summary())
+		return proofFailed("chain", fmt.Errorf("copy does not verify — not published: %w; witness: %s", err, beside.Summary()))
 	}
 	if fp != want.Identity {
-		return fmt.Errorf("copy does not verify — not published: the record copy is identity %s, captured from %s", fp, want.Identity)
+		return proofFailed("chain", fmt.Errorf("copy does not verify — not published: the record copy is identity %s, captured from %s", fp, want.Identity))
 	}
 	if uint64(n) != want.LastSeq {
-		return fmt.Errorf("copy does not verify — not published: the record copy holds %d records, captured at %d", n, want.LastSeq)
+		return proofFailed("chain", fmt.Errorf("copy does not verify — not published: the record copy holds %d records, captured at %d", n, want.LastSeq))
 	}
 	head, copied, err := store.InspectCopy(ctx, dbCopy)
 	if err != nil {
-		return fmt.Errorf("copy does not verify — not published: database: %w", err)
+		return proofFailed("database", fmt.Errorf("copy does not verify — not published: database: %w", err))
 	}
 	if head.Hash != want.LastHash {
-		return fmt.Errorf("copy does not verify — not published: the database copy ends at record %d, captured at %d", head.Seq, want.LastSeq)
+		return proofFailed("database", fmt.Errorf("copy does not verify — not published: the database copy ends at record %d, captured at %d", head.Seq, want.LastSeq))
 	}
 	if d := want.Runtime.Differs(copied); d != "" {
-		return fmt.Errorf("copy does not verify — not published: the database copy is not the captured state: %s", d)
+		return proofFailed("database", fmt.Errorf("copy does not verify — not published: the database copy is not the captured state: %s", d))
 	}
 	head, restored, err := store.ProveRestore(ctx, dbCopy, ledgerCopy, scratch, verified)
 	if err != nil {
-		return fmt.Errorf("copy does not restore — not published: %w", err)
+		return proofFailed("restore", fmt.Errorf("copy does not restore — not published: %w", err))
 	}
 	if head.Hash != want.LastHash {
-		return fmt.Errorf("copy does not restore — not published: replayed over the database copy, the record copy ends at record %d (%.12s), captured at %d (%.12s)",
-			head.Seq, head.Hash, want.LastSeq, want.LastHash)
+		return proofFailed("restore", fmt.Errorf("copy does not restore — not published: replayed over the database copy, the record copy ends at record %d (%.12s), captured at %d (%.12s)",
+			head.Seq, head.Hash, want.LastSeq, want.LastHash))
 	}
 	if d := want.Runtime.DiffersAfterRestore(restored); d != "" {
-		return fmt.Errorf("copy does not restore — not published: %s", d)
+		return proofFailed("restore", fmt.Errorf("copy does not restore — not published: %s", d))
 	}
 	return nil
 }
@@ -595,7 +595,7 @@ func (r *Runtime) sayNoLongerEncrypted(dir, today string) {
 	if last.Name == "" {
 		return
 	}
-	detail := "this identity's snapshots were encrypted and are not any more: " + today + " is being written in the clear, because no checked recovery copy of the snapshot key is recorded on this machine. The last encrypted one is " + last.Name + ". Anything that copies the backups folder off this machine now copies the whole record unencrypted. Check your escrow file in Settings → Backups & Keys to encrypt again"
+	detail := "this identity's snapshots were encrypted and are not any more: " + today + " is being written in the clear, because no checked recovery copy of the snapshot key is recorded on this machine. The last encrypted one is " + last.Name + ". Anything that copies the backups folder off this machine now copies the whole record unencrypted. Check your escrow file in Settings → Backups to encrypt again"
 	logsink.Error("maintenance.error", "ALERT (snapshots-no-longer-encrypted): %s", detail)
 	if r.w.Store() == nil {
 		return

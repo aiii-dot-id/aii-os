@@ -178,8 +178,16 @@ func (s *Store) standingReportRead(q standingReader, id string, cur *StandingCur
 		case e.ToID != id || e.FromID == id:
 			re = ReportEdge{Edge: e, Reason: "outending direction"}
 		case e.EdgeType == "CONTRADICTS":
-			r.Contradicted = true
-			re = ReportEdge{Edge: e, Reason: "contradiction"}
+			retired, err := contradictionSourceRetired(q, e.FromID)
+			if err != nil {
+				return nil, fmt.Errorf("standing of %s: contradiction %s: %w", id, e.ID, err)
+			}
+			if retired {
+				re = ReportEdge{Edge: e, Reason: "contradiction resolved: the belief it came from was archived or superseded"}
+			} else {
+				r.Contradicted = true
+				re = ReportEdge{Edge: e, Reason: "contradiction"}
+			}
 		case e.EdgeType == "SUPPORTS" || e.EdgeType == "REINFORCED_BY" || e.EdgeType == "DERIVED_FROM":
 			info, known := resolved[e.FromID]
 			if !known {
@@ -632,9 +640,9 @@ func (s *Store) TensionsView() ([]TensionPair, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows, err := s.db.Query(
-		`SELECT id, from_id, to_id FROM edges
-		 WHERE edge_type = 'CONTRADICTS' AND archived = 0
-		 ORDER BY created_seq ASC`)
+		`SELECT e.id, e.from_id, e.to_id FROM edges e
+		 WHERE ` + LiveContradiction("e") + `
+		 ORDER BY e.created_seq ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -698,4 +706,18 @@ func (s *Store) beliefEndLocked(id string) (end TensionEnd, isBelief bool, err e
 		return TensionEnd{ID: id}, false, nil
 	}
 	return TensionEnd{}, false, fmt.Errorf("tension end %s: %w", id, err)
+}
+
+func contradictionSourceRetired(q standingReader, from string) (bool, error) {
+	var retired bool
+	err := q.QueryRow(`SELECT archived = 1 OR superseded_by IS NOT NULL FROM beliefs WHERE id = ?`, from).Scan(&retired)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return retired, err
+}
+
+func LiveContradiction(edge string) string {
+	return edge + ".edge_type = 'CONTRADICTS' AND " + edge + ".archived = 0 AND NOT EXISTS (SELECT 1 FROM beliefs r WHERE r.id IN (" +
+		edge + ".from_id, " + edge + ".to_id) AND (r.archived = 1 OR r.superseded_by IS NOT NULL))"
 }

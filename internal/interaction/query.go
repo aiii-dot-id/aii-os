@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/canonicaljson"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,12 +42,14 @@ type WindowState struct {
 	HasNewer    bool   `json:"has_newer"`
 }
 type Query struct {
-	Window  *WindowQuery `json:"-"`
-	Version int          `json:"version"`
-	Source  string       `json:"source,omitempty"`
-	Filter  Filter       `json:"filter"`
-	Cursor  string       `json:"cursor,omitempty"`
-	Limit   int          `json:"limit,omitempty"`
+	Window *WindowQuery `json:"-"`
+
+	Outcomes []Outcome `json:"-"`
+	Version  int       `json:"version"`
+	Source   string    `json:"source,omitempty"`
+	Filter   Filter    `json:"filter"`
+	Cursor   string    `json:"cursor,omitempty"`
+	Limit    int       `json:"limit,omitempty"`
 }
 type Page struct {
 	Window       *WindowState `json:"-"`
@@ -310,6 +313,11 @@ func DetailRead(r ReadRequest, raw []byte) (*ReadResult, error) {
 
 func Served(r Record) Record {
 	r.Details.ExitStatus = nil
+	if w := r.Details.Work; w != nil {
+		served := *w
+		served.Promise, served.ResumesOn, served.Under, served.Met = nil, nil, "", ""
+		r.Details.Work = &served
+	}
 	return r
 }
 
@@ -375,6 +383,10 @@ func Matches(r Record, f Filter) bool {
 	return true
 }
 
+func (q Query) admits(r Record) bool {
+	return Matches(r, q.Filter) && (len(q.Outcomes) == 0 || slices.Contains(q.Outcomes, r.Outcome))
+}
+
 func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) {
 	if q.Filter.IncludeDescendants {
 		return nil, Invalid("descendant ancestry requires the recorded store")
@@ -388,7 +400,7 @@ func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) 
 	}
 	low, high, err := q.WindowBounds(inc, func(id string) (uint64, error) {
 		for _, r := range rows {
-			if r.ID == id && Matches(r, q.Filter) {
+			if r.ID == id && q.admits(r) {
 				return r.Sequence, nil
 			}
 		}
@@ -406,7 +418,7 @@ func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) 
 	p := &Page{Version: Version, Source: q.Source, Incarnation: inc, Filter: q.Filter, Cursor: q.Cursor, Rows: []Record{}, Lost: lost, Availability: "complete"}
 	var last uint64
 	for _, r := range rows {
-		if r.Sequence < low || r.Sequence > high || before != nil && r.Sequence >= *before || !Matches(r, q.Filter) {
+		if r.Sequence < low || r.Sequence > high || before != nil && r.Sequence >= *before || !q.admits(r) {
 			continue
 		}
 		if len(p.Rows) == q.Limit {
@@ -436,7 +448,7 @@ func MemoryPage(q Query, inc string, rows []Record, lost uint64) (*Page, error) 
 		if len(p.Rows) > 0 {
 			first, last := p.Rows[0].Sequence, p.Rows[len(p.Rows)-1].Sequence
 			for _, r := range rows {
-				if Matches(r, q.Filter) {
+				if q.admits(r) {
 					p.Window.HasOlder = p.Window.HasOlder || r.Sequence < first
 					p.Window.HasNewer = p.Window.HasNewer || r.Sequence > last
 				}

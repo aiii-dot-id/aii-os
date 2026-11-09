@@ -90,17 +90,16 @@ func TestASpokenWordIsTheOperatorsOnlyWhenItsSpeakerWasIdentifiedAsThem(t *testi
 	refused(spoken, "the operator's UUID, on the utterance that established it", "was not identified")
 	heard(spoken, as(aGuest, "matched", `,"decision":"known","speaker":"a guest","speaker_id":"guest-1"`))
 	refused(spoken, "another person, matched", "someone other than the operator")
-
+	// IT MUST BE THE OPERATOR'S IDENTIFIED UUID. An anonymous
+	// speaker's UUID is matched in its own gallery with the decision
+	// "uncertain" and no enrolled id. Named by the operator, it is theirs: the
+	// decision is not read.
 	heard(spoken, as(onPhone, "matched", `,"decision":"uncertain","speaker_id":""`))
-	refused(spoken, "the operator's UUID, an anonymous speaker's", "did not identify the speaker")
+	unconfirmed(spoken, "a UUID the operator named, matched, with no enrolled id, and not confirmed in the page")
 	heard(spoken, as(onPhone, "matched", `,"decision":"unknown"`))
-	refused(spoken, "the operator's UUID, the speaker unknown", "did not identify the speaker")
-	heard(spoken, as(onPhone, "matched", `,"decision":"uncertain","speaker_id":"quinn-phone"`))
-	refused(spoken, "the operator's UUID, an uncertain match to their enrolled voice", "did not identify the speaker")
-	heard(spoken, as(onPhone, "matched", `,"decision":"known","speaker_id":""`))
-	refused(spoken, "the operator's UUID, known as nobody", "did not identify the speaker")
+	unconfirmed(spoken, "a UUID the operator named, matched, the decision unknown, and not confirmed in the page")
 	heard(spoken, as(onPhone, "matched", `,"decision":"known","speaker":"Quinn","speaker_id":"quinn-phone"`))
-	unconfirmed(spoken, "identified as an enrolled voice, matched to one of the operator's UUIDs, and not confirmed in the page")
+	unconfirmed(spoken, "an enrolled voice, matched to one of the operator's UUIDs, and not confirmed in the page")
 	confirm(spoken)
 	stands(spoken, "identified, and confirmed in the page")
 

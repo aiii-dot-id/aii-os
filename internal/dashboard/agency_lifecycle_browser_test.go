@@ -9,33 +9,24 @@ import (
 
 func TestTheAgencyCardOffersOnlyRoleRouting(t *testing.T) {
 	page := `<!doctype html>
-<div id="settings-stack"></div>
+<div id="settings-stack"></div><div id="technical-stack"></div>
 <script type="module">
 import { S } from './state.js';
 import { frames } from './ws.js';
-import { renderSettings, savedText } from './views/settings.js';
+import { savedText } from './views/settings.js';
+import { drawHelpers } from './views/settings/technical/forms.js';
 import { assert, run } from './__harness.js';
 run(() => {
   S.config = { llm: { provider: 'p', model: 'm', endpoint: 'https://x.test', api_key_masked: 'none', context_length: 1000, max_output_tokens: 100 },
     dashboard: { host: '127.0.0.1', port: 1, tls: false }, prompt: {}, witness: {}, logs: {}, plugins: {},
-    agency: { prefer_local_for_roles: false }, restart_required: [] };
-  S.providers = []; S.providersLoaded = true; S.view = 'settings';
-  renderSettings();
-  document.querySelector('[data-sec="agency"]').click();
-  const st = document.getElementById('settings-stack');
+    agency: {}, restart_required: [] };
+  S.providers = []; S.providersLoaded = true; S.view = 'technical';
+  const st = document.getElementById('technical-stack');
+  drawHelpers(st);
   assert(!document.getElementById('cfg-hn') && !st.querySelector('[data-lifecycle="coaching"]'), 'the card still draws the coaching control');
   assert(!/coaching/i.test(st.textContent), 'the card still speaks of coaching prompts');
-  const routing = st.querySelector('[data-lifecycle="routing"]').textContent;
-  assert(/applies live/i.test(routing) && /role-tagged spawn/i.test(routing), 'role routing is stated as live: ' + routing);
-  const note = st.querySelector('.savesay').textContent;
-  assert(/live/.test(note) && !/restart/.test(note), 'the savebar names the one live lifecycle: ' + note);
-  assert(/applies live/.test(savedText('agency', [])) && !/coaching|restart/.test(savedText('agency', [])), 'a save of the card says it applied live, and nothing more');
+  assert(!document.getElementById('cfg-plr') && !st.querySelector('[data-save]'), 'the panel still offers a switch or a Save');
   assert(!/live/.test(savedText('dashboard', ['dashboard.port'])) && /after restart: dashboard.port/.test(savedText('dashboard', ['dashboard.port'])), 'other sections name their restart-bound fields');
-  document.getElementById('cfg-plr').checked = true;
-  st.querySelector('[data-save="agency"]').click();
-  const sent = frames.filter(f => f.type === 'config_set');
-  assert(sent.length === 1, 'the save sent ' + sent.length + ' config frame(s)');
-  assert(JSON.stringify(sent[0].config) === '{"agency.prefer_local_for_roles":true}', 'the save writes only role routing: ' + JSON.stringify(sent[0].config));
 });
 </script>`
 	modules := map[string][]byte{}

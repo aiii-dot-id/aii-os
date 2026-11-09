@@ -38,3 +38,23 @@ export const loadingCard = what => '<div class="card"><div class="empty">loading
 
 export const cardHead = (label, tip) =>
   '<h3 title="' + String(tip).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' + label + '</h3>';
+
+export function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs || {})) {
+    if (value == null || value === false) continue;
+    if (name.startsWith('on') && typeof value === 'function') el.addEventListener(name.slice(2).toLowerCase(), value);
+    else el.setAttribute(name, value === true ? '' : String(value));
+  }
+  const add = child => {
+    if (child == null || child === false) return;
+    if (Array.isArray(child)) child.forEach(add);
+    else el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  };
+  children.forEach(add);
+  return el;
+}
+
+export function fill(text, slots) {
+  return String(text).replace(/\{(\w+)\}/g, (all, key) => (slots && slots[key] != null ? String(slots[key]) : all));
+}

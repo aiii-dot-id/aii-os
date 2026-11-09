@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -66,18 +67,21 @@ func (a *App) recordReply(ctx context.Context, text string, result conversation.
 	return ref, nil
 }
 
-func (a *App) recordLoopNotes(ctx context.Context, about string, notes []string) {
+func (a *App) recordLoopNotes(ctx context.Context, about string, notes []string) bool {
 	if len(notes) == 0 || a.engine == nil {
-		return
+		return len(notes) == 0
 	}
+	ok := true
 	if about == "" {
 		about = a.unansweredAnchor(ctx)
 	}
 	for _, note := range notes {
 		if _, err := a.engine.RecordRelatedConversationRef(ctx, string(interaction.System), note, about, interaction.Details{ReasonCode: store.ReasonLoopNote}); err != nil {
+			ok = false
 			logsink.Warn("turn.error", "the loop's note on the turn was not recorded (%v): %s", err, note)
 		}
 	}
+	return ok
 }
 
 func replyReasoning(r conversation.Result) []store.ReasoningCall {
@@ -124,7 +128,7 @@ func (a *App) wireProjectInteractionRecorder() {
 	if a.projects == nil || a.store == nil {
 		return
 	}
-	a.projects.SetContractRecorder(func(id string, before *project.Contract, after project.Contract) error {
+	a.projects.SetContractRecorder(func(id, by string, before *project.Contract, after project.Contract) error {
 		copyContract := func(c project.Contract) interaction.ProjectContract {
 			return interaction.ProjectContract{Outcome: c.Outcome, Acceptance: append([]string(nil), c.Acceptance...), Constraints: append([]string(nil), c.Constraints...)}
 		}
@@ -134,9 +138,20 @@ func (a *App) wireProjectInteractionRecorder() {
 			change.Before = &prior
 		}
 
+		var hand *store.RowAnnotation
+		if by != "" {
+			payload, err := json.Marshal(struct {
+				By string `json:"by"`
+			}{by})
+			if err != nil {
+				return err
+			}
+			hand = &store.RowAnnotation{Kind: store.AnnotationProjectBy, Key: id, Payload: string(payload)}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.store.RecordInteraction(ctx, interaction.Input{ID: "project_" + uuid.New().String(), Kind: interaction.Notice, Role: interaction.System, ProjectID: id, Content: "Project criteria accepted", Details: interaction.Details{Project: change}})
+		_, err := a.store.RecordInteractionAnnotated(ctx, interaction.Input{ID: "project_" + uuid.New().String(), Kind: interaction.Notice, Role: interaction.System, ProjectID: id, Content: "Project criteria accepted", Details: interaction.Details{Project: change}}, hand)
 		return err
 	})
 }

@@ -778,6 +778,13 @@ type undoWall struct{}
 
 type callLook struct{}
 
+func (r *Registry) lookFor(t Tool) *firewall.Policy {
+	if ro, ok := t.(interface{ ReadOnly() bool }); ok && ro.ReadOnly() {
+		return r.policy.SteadyLook()
+	}
+	return r.policy.Look()
+}
+
 func (r *Registry) wallOf(ctx context.Context) *firewall.Policy {
 	if wall, ok := ctx.Value(undoWall{}).(*firewall.Policy); ok && wall != nil {
 		return wall
@@ -1160,7 +1167,7 @@ func (r *Registry) execute(ctx context.Context, name string, args map[string]any
 		}
 	}
 
-	look := r.policy.Look()
+	look := r.lookFor(t)
 	ctx = context.WithValue(ctx, callLook{}, look)
 
 	if name == "read" || name == "write" || name == "edit" {
@@ -1480,6 +1487,210 @@ func referencesHome(cmd string) bool {
 
 const ownLogWord = "log"
 
+var shellWordCommands = map[string]bool{
+	"git": true, "go": true, "docker": true, "kubectl": true,
+	"npm": true, "cargo": true, "systemctl": true, "brew": true,
+}
+
+var gitValueOptions = map[string]bool{
+	"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
+	"--exec-path": true, "--super-prefix": true, "--config-env": true, "--attr-source": true,
+}
+
+func gitSubcommandIndex(ws []string) int {
+	for i := 1; i < len(ws); i++ {
+		if !strings.HasPrefix(ws[i], "-") {
+			return i
+		}
+		if gitValueOptions[ws[i]] {
+			i++
+		}
+	}
+	return -1
+}
+
+func shellPathlessWords(cmd string, tokens []shellToken) map[int]bool {
+	out := make(map[int]bool)
+
+	if strings.ContainsAny(cmd, ";|&`\n<>") || strings.Contains(cmd, "$(") {
+		return out
+	}
+
+	var word string
+	for _, v := range shellVersions(cmd) {
+		ws := shellWords(cmd, v)
+		if len(ws) < 2 || !shellWordCommands[ws[0]] {
+			return out
+		}
+		sub := 1
+		if ws[0] == "git" {
+
+			if sub = gitSubcommandIndex(ws); sub < 0 {
+				return out
+			}
+		}
+		if word != "" && ws[sub] != word {
+			return out
+		}
+		word = ws[sub]
+
+		n := 0
+		for _, w := range ws {
+			if w == word {
+				n++
+			}
+		}
+		if n != 1 {
+			return out
+		}
+	}
+	if word == "" ||
+		strings.ContainsAny(word, "/\\") ||
+		strings.Contains(word, "..") ||
+		strings.ContainsAny(word, "*?[") ||
+		strings.HasPrefix(word, "-") {
+		return out
+	}
+	for i, tok := range tokens {
+		if tok.text == word && !tok.cut && !tok.fragment && !tok.literal && !tok.code {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+var shellPatternCommands = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "zgrep": true, "rg": true, "ag": true, "ack": true,
+}
+
+var shellPatternSelfArgs = map[string]bool{
+	"--include": true, "--exclude": true, "--exclude-dir": true, "--color": true, "--colour": true,
+}
+
+const shellPatternFlags = "cvniwxlLhHrRsqoEFGPzZaIUbUuyk"
+
+func shellPatternWords(cmd string, tokens []shellToken) map[int]bool {
+	out := make(map[int]bool)
+	if strings.ContainsAny(cmd, ";&`\n<>") || strings.Contains(cmd, "$(") || strings.Contains(cmd, "||") {
+		return out
+	}
+	var patterns []string
+	for _, v := range shellVersions(cmd) {
+		var found []string
+		var all []string
+		for _, seg := range strings.Split(cmd, "|") {
+
+			if strings.Contains(seg, "''") || strings.Contains(seg, `""`) {
+				return out
+			}
+			ws := shellWords(strings.TrimSpace(seg), v)
+			if len(ws) == 0 {
+				return out
+			}
+			all = append(all, ws...)
+			if !shellPatternCommands[filepath.Base(ws[0])] {
+				continue
+			}
+			pattern, after := "", len(ws)
+			for i := 1; i < len(ws); i++ {
+				w := ws[i]
+				if w == "--" {
+					if i+1 < len(ws) {
+						pattern = ws[i+1]
+					}
+					break
+				}
+				if strings.HasPrefix(w, "--") {
+
+					if name, _, has := strings.Cut(w, "="); has && shellPatternSelfArgs[name] {
+						continue
+					}
+					return out
+				}
+				if strings.HasPrefix(w, "-") {
+					for _, c := range w[1:] {
+						if !strings.ContainsRune(shellPatternFlags, c) {
+							return out
+						}
+					}
+					continue
+				}
+				pattern, after = w, i+1
+				break
+			}
+			if pattern == "" || strings.HasPrefix(pattern, "-") || strings.Contains(pattern, "..") {
+				continue
+			}
+
+			for j := after; j < len(ws); j++ {
+				w := ws[j]
+				if w == "--" {
+					break
+				}
+				if strings.HasPrefix(w, "--") {
+					if name, _, has := strings.Cut(w, "="); has && shellPatternSelfArgs[name] {
+						continue
+					}
+					pattern = ""
+					break
+				}
+				if strings.HasPrefix(w, "-") {
+					for _, c := range w[1:] {
+						if !strings.ContainsRune(shellPatternFlags, c) {
+							pattern = ""
+						}
+					}
+				}
+			}
+			if pattern == "" {
+				return out
+			}
+			found = append(found, pattern)
+		}
+		for _, p := range found {
+			n := 0
+			for _, w := range all {
+				if w == p {
+					n++
+				}
+			}
+			if n != 1 {
+				return out
+			}
+		}
+		if patterns == nil {
+			patterns = found
+		} else if !slices.Equal(patterns, found) {
+			return out
+		}
+	}
+	for i, tok := range tokens {
+		if slices.Contains(patterns, tok.text) && !tok.cut && !tok.fragment && !tok.literal && !tok.code {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+func placeSaid(said, text string, rule *firewall.Rule) string {
+	base := filepath.Base(rule.Path)
+	if text == base {
+
+		if !rule.Stem {
+			if fi, err := os.Stat(rule.Path); err == nil {
+				if fi.IsDir() {
+					return said + " names the directory " + base + "/, which the host keeps: " + rule.Reason
+				}
+				if fi.Mode().IsRegular() {
+					return said + " names the file " + base + ", which the host keeps: " + rule.Reason
+				}
+			}
+		}
+		return said + " names " + base + ", a place the host keeps: " + rule.Reason
+	}
+	return said + " is inside " + base + ", which the host keeps: " + rule.Reason
+}
+
 func ownLogCommand(cmd string) bool {
 	if strings.ContainsAny(cmd, ";&|<>()`$\\\n") {
 		return false
@@ -1534,7 +1745,7 @@ func (r *Registry) shellWallWord(policy *firewall.Policy, base, cmd string) (why
 			}
 
 			if v.Rule.Path != "" {
-				return c.said() + " is inside " + filepath.Base(v.Rule.Path) + ", which the host keeps: " + v.Rule.Reason, "", literalWord(c.text, c.literal)
+				return placeSaid(c.said(), c.text, v.Rule), "", literalWord(c.text, c.literal)
 			}
 			return r.floorRefusal(policy, tokens, c, v.Rule.Pattern, base), "", literalWord(c.text, c.literal)
 		}
@@ -1562,8 +1773,12 @@ func (r *Registry) shellWallWord(policy *firewall.Policy, base, cmd string) (why
 	}
 
 	var refs []globbed
-	for _, tok := range tokens {
-		if tok.fragment {
+	pathless := shellPathlessWords(cmd, tokens)
+	for i := range shellPatternWords(cmd, tokens) {
+		pathless[i] = true
+	}
+	for i, tok := range tokens {
+		if pathless[i] || tok.fragment {
 			continue
 		}
 		refs = append(refs, globbed{text: tok.text, literal: tok.literal})
@@ -1583,7 +1798,7 @@ func (r *Registry) shellWallWord(policy *firewall.Policy, base, cmd string) (why
 				return r.asTold(err).Error(), "", ""
 			}
 			if rule != nil {
-				return ref.said() + " is inside " + filepath.Base(rule.Path) + ", which the host keeps: " + rule.Reason, "", literalWord(ref.text, ref.literal)
+				return placeSaid(ref.said(), ref.text, rule), "", literalWord(ref.text, ref.literal)
 			}
 		}
 

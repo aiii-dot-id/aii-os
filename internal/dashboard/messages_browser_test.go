@@ -72,8 +72,9 @@ run(() => {
   const said = q('[data-delivered-sends]').textContent + q('[data-open-sends]').textContent;
   assert(!/repl/i.test(said), 'the page called activity a reply: ' + said);
 
-  assert(q('[data-arrival="in_later"] [data-woke]').textContent === 'Woke the identity.', 'a waking arrival is not said to have woken');
-  assert(q('[data-arrival="in_hostile"] [data-woke]').textContent.includes('no turn has read it yet'), 'an unread arrival is not said');
+  // Arrivals: from whom, which channel, whether it woke; untrusted text inert.
+  assert(/^Woke /.test(q('[data-arrival="in_later"] [data-woke]').textContent), 'a waking arrival is not said to have woken');
+  assert(/no turn has read it yet/i.test(q('[data-arrival="in_hostile"] [data-woke]').textContent), 'an unread arrival is not said');
   assert(q('[data-arrival="in_relayed"]').textContent.includes('not a person writing'), 'a relayed event is named as a person');
   assert(!stack.querySelector('img') && !stack.querySelector('script') && !stack.querySelector('[data-arrival="in_hostile"] b') && window.__owned === undefined, 'untrusted text became markup');
   assert(q('[data-arrival="in_hostile"]').textContent.includes('<img src=x') && q('[data-arrival="in_hostile"]').textContent.includes('<b>999</b>'), 'untrusted text was not shown as text');
@@ -83,42 +84,55 @@ run(() => {
   assert(reads().length === 2 && reads()[1].messages.limit === 100, 'Show more did not ask for more: ' + JSON.stringify(reads()[1]));
   acceptMessages({ request_id: reads()[1].request_id, messages: state });
 
-  const lineEl = i => q('[data-contact-line="' + i + '"]');
-  const field = (i, k) => lineEl(i).querySelector('[data-contact-field="' + k + '"]');
-  assert(field(0, 'name').value === 'Robin' && field(0, 'wake').checked && !field(1, 'operator').checked, 'the saved book is not drawn');
-  field(1, 'address').value = '  4242 ';
-  field(1, 'operator').checked = true;
-  field(1, 'operator').dispatchEvent(new Event('input', { bubbles: true }));
-  assert(!q('[data-contacts-draft]').hidden, 'an edit is not said to be unsaved');
+  // Contacts: a list by contact, edited one at a time, sent whole through the door.
+  const row = i => q('[data-contact-row="' + i + '"]');
+  const field = k => q('[data-contact-editor] [data-contact-field="' + k + '"]');
+  const lineField = (n, k) => q('[data-contact-editor] [data-contact-line="' + n + '"] [data-contact-field="' + k + '"]');
+  const type = (el, value) => { el.value = value; el.dispatchEvent(new Event('input', { bubbles: true })); };
+  assert(row(0).textContent.includes('Robin') && row(0).textContent.includes('may wake') && row(1).textContent.includes('Quinn') && !row(1).textContent.includes('your notices go here'), 'the saved book is not drawn');
+  assert(q('[data-contacts-draft]').hidden && !q('[data-save="contacts"]'), 'a book with no edit offers a Save');
+  q('[data-contact-edit="1"]').click();
+  type(lineField(0, 'address'), '  4242 ');
+  assert(!q('[data-contacts-draft]').hidden && q('[data-save="contacts"]'), 'an edit is not said to be unsaved');
+  field('operator').click();
   q('[data-contact-add]').click();
-  field(2, 'name').value = 'Ada'; field(2, 'channel').value = 'Mail'; field(2, 'address').value = 'ada@example.test';
-  field(2, 'name').dispatchEvent(new Event('input', { bubbles: true }));
-  q('[data-contact-up="2"]').click();
-  assert(field(1, 'name').value === 'Ada' && field(2, 'name').value === 'Quinn', 'Move up did not reorder the lines');
+  type(q('[data-contact-name]'), 'Ada');
+  type(lineField(0, 'channel'), 'Mail'); type(lineField(0, 'address'), 'ada@example.test');
+  q('[data-contact-add-line]').click();
+  type(lineField(1, 'channel'), 'sms'); type(lineField(1, 'address'), '555');
+  q('[data-contact-up="1"]').click();
+  assert(lineField(0, 'channel').value === 'sms' && lineField(1, 'channel').value === 'Mail', 'Move up did not reorder the lines');
   q('[data-save="contacts"]').click();
   const sent = sets().at(-1).config.contacts;
   const want = [
     { name: 'Robin', channel: 'telegram', address: '111', wake: true, operator: false },
-    { name: 'Ada', channel: 'mail', address: 'ada@example.test', wake: false, operator: false },
     { name: 'Quinn', channel: 'telegram', address: '4242', wake: false, operator: true },
+    { name: 'Ada', channel: 'sms', address: '555', wake: false, operator: false },
+    { name: 'Ada', channel: 'mail', address: 'ada@example.test', wake: false, operator: false },
   ];
   assert(JSON.stringify(sent) === JSON.stringify(want), 'the book was not sent whole and in order: ' + JSON.stringify(sent));
   assert(q('[data-save="contacts"]').disabled, 'a second save can start before the first is answered');
   S.config = { ...S.config, contacts: want };
   assert(acceptSettingsConfig(sets().at(-1).request_id), 'the door’s answer was not taken');
   renderSettings();
-  assert(q('[data-said="contacts"]').textContent === 'Saved — the contacts are in force now.', 'a kept book is not said: ' + q('.savebar').textContent);
-  assert(q('[data-contacts-draft]').hidden && field(2, 'operator').checked, 'the draft did not retire into the saved book');
+  assert(q('[data-said="contacts"]').textContent === 'Saved. The contacts are in force now.', 'a kept book is not said: ' + q('[data-contacts]').textContent);
+  assert(q('[data-contacts-draft]').hidden && row(1).textContent.includes('your notices go here') && row(2).textContent.includes('Sms, then mail'), 'the draft did not retire into the saved book');
   assert(reads().length === 3, 'the lists were not read again after the contacts changed');
 
-  field(0, 'operator').checked = true;
-  field(0, 'operator').dispatchEvent(new Event('input', { bubbles: true }));
+  // A refusal is said beside Save, and the edits stay. Only one contact is you: the
+  // box moves the mark, and the page sends what it shows.
+  q('[data-contact-edit="0"]').click();
+  field('operator').click();
+  assert(field('operator').checked, 'This is you did not take');
   q('[data-save="contacts"]').click();
-  assert(rejectSettingsConfig('contacts, line 3: line 1 marks Robin as you, the operator, and this line marks Quinn: the operator is one person', sets().at(-1).request_id), 'the refusal was not taken');
-  assert(q('[data-said="contacts"]').textContent.includes('the operator is one person'), 'the refusal is not beside Save');
-  assert(field(0, 'operator').checked && field(2, 'operator').checked && !q('[data-contacts-draft]').hidden, 'a refusal lost the edits');
+  const moved = sets().at(-1).config.contacts;
+  assert(moved[0].operator && !moved[1].operator, 'two contacts were marked as you: ' + JSON.stringify(moved));
+  assert(rejectSettingsConfig('contacts, line 3: this line was refused', sets().at(-1).request_id), 'the refusal was not taken');
+  assert(q('[data-said="contacts"]').textContent.includes('this line was refused'), 'the refusal is not beside Save');
+  assert(field('operator').checked && !q('[data-contacts-draft]').hidden, 'a refusal lost the edits');
   q('[data-contact-remove="0"]').click();
-  assert(field(0, 'name').value === 'Ada' && !q('[data-contact-line="2"]'), 'Remove did not take the line out');
+  assert(!q('[data-contacts]').textContent.includes('Robin') && row(0).textContent.includes('Quinn'), 'Remove did not take the contact out');
+
 });
 </script>`
 
@@ -167,16 +181,16 @@ run(() => {
   const read = frames.find(f => f.type === 'query' && f.query === 'messages');
   assert(acceptMessages({ request_id: read.request_id, messages: state }), 'the answer to the read was not taken');
   const page = q('[data-notices] [data-notice="page"]'), maybe = q('[data-notices] [data-notice="maybe"]');
-  assert(page && page.dataset.route === 'page' && page.querySelector('[data-notice-route]').textContent.startsWith('Route: a page'), 'a notice the page took does not say so');
+  assert(page && page.dataset.route === 'page' && page.querySelector('[data-notice-route]').textContent === 'shown on a page', 'a notice the page took does not say so');
   assert(maybe && maybe.dataset.route === 'channel' && maybe.dataset.state === 'unknown', 'a notice off the dashboard of unknown effect is not listed as such');
-  assert(maybe.querySelector('[data-notice-route]').textContent.includes('off the dashboard via org.example.telegram'), 'the route does not name its adapter');
+  assert(maybe.querySelector('[data-notice-route]').textContent.includes('sent to your lines (org.example.telegram)'), 'the route does not name its adapter');
   assert(maybe.textContent.includes('cannot be told') && maybe.querySelector('[data-answer]').textContent === '<b>502</b>' && !stack.querySelector('[data-answer] b'), 'the unknown effect or the adapter’s words are not said as text');
   for (const id of ['flying', 'cut']) {
     const row = q('[data-notices] [data-notice="' + id + '"]');
-    assert(row && row.dataset.route === '' && row.querySelector('[data-notice-route]').textContent.startsWith('Route: not recorded, sent'), id + ' does not say its route is not recorded');
-    assert(!row.textContent.includes('off the dashboard') && !row.textContent.includes('not taken yet'), id + ' names a route the row does not record');
+    assert(row && row.dataset.route === '' && row.querySelector('[data-notice-route]').textContent === 'not recorded', id + ' does not say its route is not recorded');
+    assert(!row.textContent.includes('sent to your lines') && !row.textContent.includes('waiting here'), id + ' names a route the row does not record');
   }
-  assert(q('[data-notices] [data-omitted]').textContent.includes('newest 4 of 5 notices') && q('[data-notices] [data-omitted] [data-open-section="storage"]'), 'what the list leaves out is not said with the way to the rest');
+  assert(q('[data-notices] [data-omitted]').textContent.includes('newest 4 of 5 notices') && q('[data-notices] [data-omitted] a[href="#/settings/technical/storage"]'), 'what the list leaves out is not said with the way to the rest');
 });
 </script>`
 

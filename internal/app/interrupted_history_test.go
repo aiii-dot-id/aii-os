@@ -292,7 +292,7 @@ func TestAnInterruptedReplyInSafeModeReachesTheModelWithItsCause(t *testing.T) {
 	app, _ := promptCacheApp(t)
 	app.engine.SetSafeMode("fixture")
 	t.Cleanup(func() { app.engine.SetSafeMode("") })
-	app.recordInterruptedTurnContext(t.Context(), conversation.Result{Spoken: interruptedWords, Interrupted: "the substrate failed mid-turn"})
+	app.recordInterruptedTurnContext(t.Context(), conversation.Result{Spoken: interruptedWords, Interrupted: "the substrate failed mid-turn"}, "")
 	conv, _, err := app.buildHistory(t.Context())
 	if err != nil {
 		t.Fatal(err)

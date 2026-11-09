@@ -135,6 +135,11 @@ CREATE TABLE IF NOT EXISTS work_sessions (
     harvested_ms INTEGER,
     delivered_at INTEGER,
     started_leg INTEGER NOT NULL DEFAULT 0,
+    promise       TEXT, -- successor-column: 0.2.1
+    resumes_on    TEXT, -- successor-column: 0.2.1
+    promised_turn TEXT, -- successor-column: 0.2.1
+    resumes_under TEXT, -- successor-column: 0.2.1
+    reflect_every INTEGER, -- successor-column: 0.2.1
     family TEXT NOT NULL DEFAULT '',
     started_at INTEGER,
     tool_calls INTEGER
@@ -359,6 +364,8 @@ CREATE TABLE IF NOT EXISTS relationships (
                       CHECK (relationship_type IN ('founding_operator','operator','peer','other')),
     charter_text      TEXT NOT NULL DEFAULT '',
     operator_approval TEXT NOT NULL DEFAULT '',
+    approval_digest   TEXT NOT NULL DEFAULT '',
+    approved_level    TEXT NOT NULL DEFAULT '',
     superseded_by     TEXT REFERENCES relationships(id),
     created_seq       INTEGER NOT NULL REFERENCES ledger(seq),
     updated_seq       INTEGER REFERENCES ledger(seq)

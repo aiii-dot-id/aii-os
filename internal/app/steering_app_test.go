@@ -48,7 +48,7 @@ func TestSteerReportsNoTurnStructurally(t *testing.T) {
 	if delivered {
 		t.Fatal("Steer claimed delivery with no turn to deliver into")
 	}
-	if said := a.DrainSteering(); len(said) != 0 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 0 {
 		t.Fatalf("the words were queued anyway and would surface inside an unrelated later turn: %v", said)
 	}
 }
@@ -67,14 +67,14 @@ func TestSteerQueuesDuringATurnAndDrainsOnce(t *testing.T) {
 		t.Fatalf("second steer: delivered=%v err=%v", delivered, err)
 	}
 
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != 2 {
 		t.Fatalf("drained %d, want both sentences", len(said))
 	}
 	if said[0] != "that file is already fixed" {
 		t.Fatalf("the operator's words were not preserved verbatim after trim: %q", said[0])
 	}
-	if again := a.DrainSteering(); len(again) != 0 {
+	if again := steeredWords(a.DrainSteering()); len(again) != 0 {
 		t.Fatalf("a second drain returned %d — the operator would appear to have said it twice", len(again))
 	}
 }
@@ -100,7 +100,7 @@ func TestSteerRefusesRatherThanDrops(t *testing.T) {
 	if delivered {
 		t.Fatal("a refused steer reported itself delivered")
 	}
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != maxPendingSteers {
 		t.Fatalf("drained %d, want the %d that were accepted", len(said), maxPendingSteers)
 	}

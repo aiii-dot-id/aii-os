@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -39,10 +40,17 @@ type Contract struct {
 	Acceptance []string `json:"acceptance,omitempty"`
 
 	Constraints []string `json:"constraints,omitempty"`
+
+	AgreedBy string `json:"agreed_by,omitempty"`
+	AgreedAt string `json:"agreed_at,omitempty"`
 }
 
 func (c Contract) IsZero() bool {
 	return c.Outcome == "" && len(c.Acceptance) == 0 && len(c.Constraints) == 0
+}
+
+func sameContractWords(a, b Contract) bool {
+	return a.Outcome == b.Outcome && slices.Equal(a.Acceptance, b.Acceptance) && slices.Equal(a.Constraints, b.Constraints)
 }
 
 var contractKeys = map[string]string{
@@ -78,10 +86,11 @@ type Project struct {
 type Manager struct {
 	mu               sync.Mutex
 	root             string
-	contractRecorder func(string, *Contract, Contract) error
+	contractRecorder func(id, by string, before *Contract, after Contract) error
 }
 
-const manifestName = "project.json"
+const ManifestName = "project.json"
+const manifestName = ManifestName
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -89,7 +98,7 @@ func NewManager(root string) *Manager { return &Manager{root: root} }
 
 func (m *Manager) Root() string { return m.root }
 
-func (m *Manager) SetContractRecorder(fn func(string, *Contract, Contract) error) {
+func (m *Manager) SetContractRecorder(fn func(id, by string, before *Contract, after Contract) error) {
 	m.mu.Lock()
 	m.contractRecorder = fn
 	m.mu.Unlock()
@@ -98,7 +107,7 @@ func (m *Manager) recordContract(p *Project, before *Contract) error {
 	if m.contractRecorder == nil {
 		return nil
 	}
-	if err := m.contractRecorder(p.ID, before, p.Contract); err != nil {
+	if err := m.contractRecorder(p.ID, p.Contract.AgreedBy, before, p.Contract); err != nil {
 		return &ContractRecordError{ID: p.ID, Cause: err}
 	}
 	return nil
@@ -175,6 +184,8 @@ func (m *Manager) Create(name, description, createdBy string, parent *string, co
 	}
 	if contract != nil {
 		p.Manifest.Contract = *contract
+
+		p.Manifest.Contract.AgreedBy, p.Manifest.Contract.AgreedAt = createdBy, now
 	}
 	if err := writeManifest(dir, &p.Manifest); err != nil {
 
@@ -306,8 +317,8 @@ func (m *Manager) List() ([]*Project, error) {
 	return out, nil
 }
 
-func (m *Manager) Update(id, name, description, focus string, parent *string, contract *Contract, attributes map[string]any) (*Project, error) {
-	return m.ApplyPatch(id,
+func (m *Manager) Update(id, by, name, description, focus string, parent *string, contract *Contract, attributes map[string]any) (*Project, error) {
+	return m.ApplyPatch(id, by,
 		strPtrIfSet(name),
 		strPtrIfSet(description),
 		strPtrIfSet(focus),
@@ -326,11 +337,14 @@ func strPtrIfSet(s string) *string {
 	return p
 }
 
-func (m *Manager) ApplyPatch(id string, name, description, focus, parent *string, contract *Contract, attributes map[string]any) (*Project, error) {
+func (m *Manager) ApplyPatch(id, by string, name, description, focus, parent *string, contract *Contract, attributes map[string]any) (*Project, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := rejectAuthorityInAttributes(attributes); err != nil {
 		return nil, err
+	}
+	if contract != nil && by != "operator" && by != "identity" {
+		return nil, fmt.Errorf("a contract is written by operator or identity, not %q", by)
 	}
 	p, err := m.loadLocked(id)
 	if err != nil {
@@ -348,7 +362,14 @@ func (m *Manager) ApplyPatch(id string, name, description, focus, parent *string
 		if err := validateAcceptance(contract); err != nil {
 			return nil, err
 		}
-		p.Contract = *contract
+
+		next := *contract
+		if sameContractWords(previous, next) {
+			next.AgreedBy, next.AgreedAt = previous.AgreedBy, previous.AgreedAt
+		} else {
+			next.AgreedBy, next.AgreedAt = by, time.Now().UTC().Format(time.RFC3339)
+		}
+		p.Contract = next
 	}
 	if name != nil {
 		t := strings.TrimSpace(*name)

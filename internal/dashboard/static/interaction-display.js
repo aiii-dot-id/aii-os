@@ -105,5 +105,15 @@ export function foldTurns(items, page = {}) {
     run.items.push(item); run.last = i;
   });
   flush(null);
+  for (let i = 0; i < out.length; i++) {
+    const receipt = out[i];
+    if (!receipt.receipt || !receipt.replied) continue;
+    const reply = out[i + 1].anchor.row.id;
+    let j = i + 2;
+    while (j < out.length && !out[j].receipt && out[j].anchor.row.related_id === reply) j++;
+    out.splice(i, 1);
+    out.splice(j - 1, 0, receipt);
+    i = j - 1;
+  }
   return out;
 }

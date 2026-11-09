@@ -54,7 +54,7 @@ func TestVoiceStableSpeakerIDSurvivesHost(t *testing.T) {
 			a.turnMu.Lock()
 			a.steers = append(a.steers, steerEntry{role: roleOperator, content: voiceMarker + b.text, voice: b})
 			a.turnMu.Unlock()
-			said := a.DrainSteering()
+			said := steeredWords(a.DrainSteering())
 			want := "[voice · " + tc.label + " (speaker_id=\"" + tc.id + "\")] my opening words"
 			if len(said) != 1 || said[0] != want {
 				t.Errorf("live identity lost the exact speaker ID: got %q want %q", said, want)

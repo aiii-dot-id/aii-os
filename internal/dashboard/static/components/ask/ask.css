@@ -1,0 +1,21 @@
+.c-ask { display:flex; flex-direction:column; gap:var(--s-3); padding:var(--s-4); border:1px solid var(--line); border-radius:var(--r-object); background:var(--surface); }
+.c-ask[data-state="answered"] { background:transparent; }
+.c-ask__label { margin:0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); }
+.c-ask__text { margin:0; font-family:var(--font-page); font-size:var(--t-md); line-height:var(--t-md-lh); color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+.c-ask__text--theirs { font-family:var(--font-voice); font-size:var(--v-md); line-height:var(--v-md-lh); }
+.c-ask__hint { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text-2); overflow-wrap:anywhere; }
+.c-ask__args { display:grid; grid-template-columns:max-content minmax(0, 1fr); gap:var(--s-1) var(--s-3); margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); }
+.c-ask__args dt { color:var(--text-2); }
+.c-ask__args dd { margin:0; color:var(--text); overflow-wrap:anywhere; }
+.c-ask__bar { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-2); }
+.c-ask__choice[aria-pressed="true"] { border-color:var(--accent); color:var(--text); }
+.c-ask__choice[aria-pressed="true"]:disabled { color:var(--text); }
+.c-ask__say { display:flex; flex:1 1 16rem; gap:var(--s-2); min-width:0; }
+.c-ask__say .c-ask__choice { flex:none; white-space:nowrap; }
+.c-ask__input { flex:1 1 auto; min-width:0; min-height:var(--target); padding:var(--s-2) var(--s-3); border:1px solid var(--control); border-radius:var(--r-control); background:var(--bg); color:var(--text); font-family:var(--font-page); font-size:var(--t-md); line-height:var(--t-md-lh); }
+.c-ask__input:focus-visible { outline:2px solid var(--focus); outline-offset:1px; }
+.c-ask__input:disabled { color:var(--text-2); }
+.c-ask__note { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text-2); }
+.c-ask__note:empty { display:none; }
+.c-ask[data-state="refused"] .c-ask__note { color:var(--bad); }
+@media (max-width: 767px) { .c-ask__input { min-height:var(--target-phone); } #thread-inner > .c-ask { padding:var(--s-3) var(--s-2); } }

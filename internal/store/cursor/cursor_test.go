@@ -86,3 +86,41 @@ func TestTheLengthOfATurnIsItsCodePoints(t *testing.T) {
 		}
 	}
 }
+
+// A REBUILT PART IS WHOLE, OR IT GIVES WAY TO ITS RECORD. Kept whole, the cursor stands at the
+// recorded end. Behind another part it is not cut, so not taken. First in the pass and cut, it
+// gives way to the turn as recorded, cut there, which moves the cursor inside the record.
+func TestARebuiltPartIsWholeOrGivesWayToItsRecord(t *testing.T) {
+	recorded := &TurnPart{ID: "t1", Role: "participant", Text: "[voice] a frame around the words", Whole: true, TurnID: "x"}
+	rebuilt := TurnPart{ID: "t1", Role: "operator", Text: "the words", Whole: true, TurnID: "x", AsRecorded: recorded}
+	end := TurnCursor{Turn: "t1", Position: TurnLength(recorded.Text)}
+	two := ConversationBatch{Start: "s", Through: end, Parts: []TurnPart{{ID: "t0", Role: "operator", Text: "hello", Whole: true}, rebuilt}}
+	if whole := two.Keep(2, 0); whole.Through != end || whole.Parts[1].Text != "the words" {
+		t.Errorf("kept whole: %+v", whole)
+	}
+	if behind := two.Keep(2, 3); len(behind.Parts) != 1 || behind.Through != (TurnCursor{Turn: "t0", Position: 5}) {
+		t.Errorf("cut behind another part: %+v", behind)
+	}
+	// Kept whole with a part after it dropped, the cursor stands at the recorded end all the same.
+	first := ConversationBatch{Start: "s", Through: TurnCursor{Turn: "t3", Position: 1}, Parts: []TurnPart{rebuilt, {ID: "t3", Role: "operator", Text: "x", Whole: true}}}
+	if kept := first.Keep(1, 0); kept.Through != end || kept.Parts[0].Text != "the words" {
+		t.Errorf("kept whole, the next part dropped: %+v", kept)
+	}
+	one := ConversationBatch{Start: "s", Through: end, Parts: []TurnPart{rebuilt}}
+	cut := one.Keep(1, 3)
+	if len(cut.Parts) != 1 || cut.Parts[0].Text != "[vo" || cut.Parts[0].Role != "participant" || cut.Parts[0].Whole || cut.Parts[0].TurnID != "x" {
+		t.Errorf("cut alone: %+v", cut)
+	}
+	if cut.Start != "s" || cut.Through != (TurnCursor{Turn: "t1", Position: 3}) {
+		t.Errorf("cut alone, the cursor: %+v", cut)
+	}
+	// A record shorter than the cut is read whole.
+	short := TurnPart{ID: "t2", Role: "operator", Text: "a much longer rebuilt text", Whole: true, AsRecorded: &TurnPart{ID: "t2", Role: "operator", Text: "[voice] hi", Whole: true}}
+	got := ConversationBatch{Start: "s", Parts: []TurnPart{short}}.Keep(1, 20)
+	if len(got.Parts) != 1 || got.Parts[0].Text != "[voice] hi" || !got.Parts[0].Whole || got.Through != (TurnCursor{Turn: "t2", Position: 10}) {
+		t.Errorf("a shorter record: %+v", got)
+	}
+	if rebuilt.Text != "the words" || one.Parts[0].AsRecorded != recorded {
+		t.Errorf("Keep changed the batch it was asked of: %+v", one)
+	}
+}

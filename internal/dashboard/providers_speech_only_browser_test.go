@@ -18,7 +18,7 @@ run(() => {
   S.config = { llm: { provider: 'OpenAI', model: 'gpt', resolved_provider: 'OpenAI', resolved_model: 'gpt', timeout_seconds: 120 },
     speech: { stt: { provider: '' }, tts: { provider: '' }, services: [] } };
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   const rows = [...document.querySelectorAll('[data-prov-row]')];
   assert(rows.length === 1 && rows[0].dataset.provRow === '1' && rows[0].textContent.includes('OpenAI'),
     'the Providers card lists something other than the chat providers, or lost the entry index: ' + rows.map(r => r.dataset.provRow + ':' + r.textContent.trim().slice(0, 24)).join(' | '));

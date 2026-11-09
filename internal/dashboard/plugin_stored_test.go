@@ -139,7 +139,7 @@ func TestAPluginsKeysAreShownOnlyOnAPrivateConnection(t *testing.T) {
 	read := func(kind string) ClientMessage {
 		return ClientMessage{Type: "plugin_stored", Stored: &PluginStoredRequest{Plugin: "org.example.p", Kind: kind}}
 	}
-	if r := pluginStoredRefusal(read("keys"), false); r == "" || !strings.Contains(r, "not private") {
+	if r := pluginStoredRefusal(read("keys"), false); r == "" || !strings.Contains(r, "isn't private") {
 		t.Fatalf("keys over a connection that is not private: %q", r)
 	}
 	for _, c := range []struct {

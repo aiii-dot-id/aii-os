@@ -30,6 +30,8 @@ WITH retired AS (
   SELECT b.id, b.statement, COALESCE(b.superseded_by, '') AS successor,
          COALESCE((SELECT e.created_seq FROM edges e
                     WHERE e.edge_type = 'SUPERSEDES' AND e.from_id = b.superseded_by AND e.to_id = b.id),
+                  (SELECT MAX(la.seq) FROM ledger la
+                    WHERE la.type = 'belief.archive' AND json_extract(la.payload, '$.id') = b.id),
                   b.last_seq) AS seq
     FROM beliefs b
    WHERE b.ring = 3 AND (b.archived = 1 OR b.superseded_by IS NOT NULL))

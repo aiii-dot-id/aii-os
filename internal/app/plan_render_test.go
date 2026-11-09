@@ -17,7 +17,7 @@ func TestPlanSurfaceRendersInWorkState(t *testing.T) {
 	}
 
 	// Absent fields render nothing: the working state before any plan.
-	before, err := a.buildWorkState()
+	before, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestPlanSurfaceRendersInWorkState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,11 +8,15 @@ import (
 )
 
 func TestTheComponentSetsViewNamesNoPlugin(t *testing.T) {
-	raw, err := os.ReadFile("static/views/plugins.js")
-	if err != nil {
-		t.Fatal(err)
+	// The page and its parts (step 16b), read as one.
+	var src string
+	for _, f := range []string{"static/views/plugins.js", "static/views/plugins/catalog.js", "static/views/plugins/card.js"} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src += string(raw)
 	}
-	src := string(raw)
 	for _, fn := range []string{"function componentSetsHTML(", "function servingSelection(", "function runtimeLimitsHTML(",
 		"function needsOf(", "function readinessHTML(", "function pendingHTML(", "function checksHTML(", "function probesHTML(",
 		"function machineHTML(", "function wireMachine("} {

@@ -7,7 +7,11 @@ import (
 	"testing"
 )
 
-func TestSettingsOffersRotationAndTheRouteOnlyOverAPrivateConnection(t *testing.T) {
+// R133 on the Settings page itself: the route on the Access card, offered
+// only where the server says the connection is private, and saying what it
+// did. Signing devices out (the rotation) is Phone and other devices'
+// (TestPhoneAndOtherDevicesShowsTheCodeAtOnce).
+func TestSettingsOffersTheRouteOnlyOverAPrivateConnection(t *testing.T) {
 	page := `<!doctype html><html><body><div id="settings-stack"></div>
 <script type="module">
 import { S } from '/state.js';
@@ -22,35 +26,10 @@ run(async (assert) => {
       moves_with: ['sign-in profile mail', 'webhooks of plug.example'],
       relays: [{ name: 'relay.example.test', port: 443, origin: 'https://ui.abc.id.example.test' }, { name: 'far.example.test', port: 9443, origin: 'https://ui.abc.id.example.test:9443' }] } }, over || {});
   S.view = 'settings'; S.providersLoaded = true; S.providers = []; S.connected = true;
-  let answer = { ok: true, text: '' };
-  const rotations = [];
-  S.rotateAccessToken = async () => { rotations.push(1); await tick(); return answer; };
-  let confirmed = true;
-  window.confirm = () => confirmed;
-
   S.config = config();
   renderSettings();
-  document.querySelector('[data-sec="dashboard"]').click();
-  const rotate = () => document.querySelector('[data-token-rotate]');
-  assert(rotate() && !document.querySelector('[data-token-rotate-private]'), 'a private connection was not offered the rotation');
-
-  confirmed = false;
-  rotate().click();
-  await tick(); await tick();
-  assert(rotations.length === 0, 'the rotation ran although the person said no');
-  confirmed = true;
-  rotate().click();
-  assert(rotate().disabled, 'the control accepted a second press while rotating');
-  await tick(); await tick(); await tick();
-  assert(rotations.length === 1, 'the control did not ask the server once: ' + rotations.length);
-  const said = document.querySelector('[data-token-rotate-said]');
-  assert(said && said.textContent.includes('Rotated') && said.textContent.includes('every other browser'), 'the rotation was not said: ' + (said && said.textContent));
-
-  answer = { ok: false, text: 'This connection is not private, so the access token was not rotated' };
-  rotate().click();
-  await tick(); await tick(); await tick();
-  const refused = document.querySelector('[data-token-rotate-said]');
-  assert(refused && refused.className.includes('bad') && refused.textContent.includes('not private'), 'a refusal was not said beside the control');
+  S.settingsSection('dashboard'); S.requestSettingsSection(); renderSettings();
+  assert(!document.querySelector('[data-token-rotate]'), 'the rotation is still drawn on the Access card');
 
   const route = document.getElementById('cfg-route');
   assert(route && route.options.length === 3, 'the route was not offered with the relays advertised');
@@ -81,7 +60,7 @@ run(async (assert) => {
   renderSettings();
   const relayOption = [...document.getElementById('cfg-route').options].find(o => o.value.startsWith('relay:'));
   assert(relayOption && relayOption.disabled, 'a relay was offered to a dashboard that asks for no token');
-  assert(document.querySelector('[data-route-note]').textContent.includes('access token'), 'the reason a relay is not offered was not said');
+  assert(document.querySelector('[data-route-note]').textContent.includes('every device must sign in'), 'the reason a relay is not offered was not said');
   document.querySelector('[data-save="route"]').click();
   const direct = sent[sent.length - 1];
   assert(rejectSettingsConfig('certificate.route_mode: a relay carries the public internet to this dashboard', direct.request_id), 'the refusal was not claimed');
@@ -90,9 +69,8 @@ run(async (assert) => {
 
   S.config = config({ public_name: Object.assign(config().public_name, { machine_addresses: ['10.8.0.2', '192.168.1.5'] }) });
   renderSettings();
-  assert(!document.querySelector('[data-route-addresses]'), 'the direct addresses were shown to an operator who has not asked for the expert controls');
-  S.stats = { expert: true };
-  renderSettings();
+  // An override for technical operators, drawn whatever any setting says:
+  // nothing on the page shows or hides a control by a setting.
   const addrRadio = v => document.querySelector('input[name="cfg-route-addr"][value="' + v + '"]');
   const addrBox = v => document.querySelector('[data-route-addr][value="' + v + '"]');
   assert(addrRadio('auto') && addrRadio('auto').checked && addrBox('10.8.0.2') && addrBox('192.168.1.5') && !addrBox('10.8.0.2').checked, 'the direct addresses were not offered as worked out, with the machine\'s own to pick');
@@ -129,24 +107,26 @@ run(async (assert) => {
   S.config = config({ public_name: Object.assign(config().public_name, { machine_addresses: ['10.8.0.2', 'fd00::2', 'fd00::3'], held_families: [{ family: 'IPv6', addresses: ['fd00::2', 'fd00::3'] }] }) });
   renderSettings();
   const heldSaid = () => [...document.querySelectorAll('[data-route-held]')].map(e => e.textContent);
-  assert(heldSaid().length === 1 && heldSaid()[0].includes('No IPv6 address is published') && heldSaid()[0].includes('(fd00::2, fd00::3)') && heldSaid()[0].includes('under Direct addresses, below.'),
+  assert(heldSaid().length === 1 && heldSaid()[0].includes('No IPv6 address is published') && heldSaid()[0].includes('(fd00::2, fd00::3)') && heldSaid()[0].includes('Tick the ones people reach it at.'),
     'a family the direct route holds was not said with its addresses: ' + JSON.stringify(heldSaid()));
-  S.stats = {};
+  // Whatever the status says of the retired setting, where they are chosen
+  // is below: the addresses are drawn.
+  S.stats = { expert: false };
   renderSettings();
-  assert(heldSaid().length === 1 && heldSaid()[0].includes('(Show technical controls, under Route, shows them)'), 'without the technical controls the held family does not say where it is chosen: ' + JSON.stringify(heldSaid()));
+  assert(heldSaid().length === 1 && heldSaid()[0].includes('Tick the ones people reach it at.') && document.querySelector('[data-route-addresses]'), 'the held family does not say where it is chosen, or the addresses are not drawn: ' + JSON.stringify(heldSaid()));
 
   S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: true, require_token: true, token_short: true } });
   renderSettings();
   const offered = [...document.getElementById('cfg-route').options].filter(o => o.value.startsWith('relay:'));
   assert(offered.length === 2 && offered.every(o => o.disabled), 'a relay was offered behind a short token');
-  assert(document.querySelector('[data-route-note]').textContent.includes('short') && document.querySelector('[data-route-note]').textContent.includes('Rotate access token'), 'the short token was not said with the way out');
+  assert(document.querySelector('[data-route-note]').textContent.includes('short') && document.querySelector('[data-route-note]').textContent.includes('Sign out all devices'), 'the short secret was not said with the way out');
   assert(!document.querySelector('[data-route-token-short]'), 'a dashboard with no relay was warned about one');
   S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: true, require_token: true, token_short: true },
     public_name: Object.assign(config().public_name, { route_mode: 'relay', relay_endpoint: 'relay.example.test:443' }) });
   renderSettings();
   const kept = [...document.getElementById('cfg-route').options].find(o => o.value === 'relay:relay.example.test:443');
   assert(kept && kept.selected && !kept.disabled, 'the relay already chosen was taken away behind a short token');
-  assert(document.querySelector('[data-route-token-short]') && document.querySelector('[data-route-token-short]').textContent.includes('Rotate access token'), 'a relay behind a short token was not warned about');
+  assert(document.querySelector('[data-route-token-short]') && document.querySelector('[data-route-token-short]').textContent.includes('Sign out all devices'), 'a relay behind a short secret was not warned about');
 
   S.config = config({ public_name: Object.assign(config().public_name, { relays: undefined }) });
   renderSettings();
@@ -156,17 +136,13 @@ run(async (assert) => {
   assert(sent.filter(m => m.type === 'public_name_look').length === asks + 1, 'the route control did not ask the service which relays it offers');
   S.config = config({ public_name: Object.assign(config().public_name, { relays: [] }) });
   renderSettings();
-  assert(document.querySelector('[data-route-note]').textContent.includes('advertises no relay'), 'an empty relay list was not said');
+  assert(document.querySelector('[data-route-note]').textContent.includes('offers no relay'), 'an empty relay list was not said');
 
+  // OFF A PRIVATE CONNECTION: no control, and the reason instead.
   S.config = config({ secrets_ok: false });
   renderSettings();
-  assert(!rotate() && document.querySelector('[data-token-rotate-private]'), 'the rotation was offered off a private connection');
   assert(!document.getElementById('cfg-route') && document.querySelector('[data-route-private]'), 'the route was offered off a private connection');
   assert(document.querySelector('[data-route-now]'), 'the route in force was not shown off a private connection');
-
-  S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: false, require_token: false } });
-  renderSettings();
-  assert(!rotate() && !document.querySelector('[data-token-where]'), 'an open dashboard was offered a token to rotate');
 });
 </script></body></html>`
 
@@ -255,25 +231,25 @@ run(async (assert) => {
 
   S.config = config();
   renderSettings();
-  document.querySelector('[data-sec="dashboard"]').click();
+  S.settingsSection('dashboard'); S.requestSettingsSection(); renderSettings();
   assert(require() && !document.querySelector('[data-token-rotate]') && !document.querySelector('[data-token-where]'), 'an open dashboard over a private connection was not offered the requirement alone');
-  assert(document.querySelector('[data-token-off-where]').textContent.includes('config.json'), 'the page does not say where asking stops');
+  assert(document.querySelector('[data-token-off-where]').textContent.includes('only in the configuration on this computer'), 'the page does not say where asking stops');
   const note = document.querySelector('[data-route-note]').textContent;
-  assert(note.includes('Ask for an access token') && !note.includes('aii dashboard-token'), 'the relay note does not send the person to this control: ' + note);
+  assert(note.includes('Turn that on above') && !note.includes('aii dashboard-token'), 'the relay note does not send the person to this control: ' + note);
 
   confirmed = false;
   require().click();
   await tick(); await tick();
   assert(asked.length === 0, 'the requirement was turned on although the person said no');
-  assert(question.includes('every other open page is cut off and asks for the token') && question.includes('config.json'), 'the person was not told what asking does: ' + question);
+  assert(question.includes('Every other open page is cut off and asks for a code'), 'the person was not told what asking does: ' + question);
   confirmed = true;
   require().click();
   assert(require().disabled, 'the control accepted a second press');
   await tick(); await tick(); await tick();
   assert(asked.length === 1, 'the control did not ask the server once: ' + asked.length);
   const said = document.querySelector('[data-token-require-said]');
-  assert(said && said.className.includes('good') && said.textContent.includes('Asked for'), 'the act was not said: ' + (said && said.textContent));
-  assert(!require() && document.querySelector('[data-token-where]') && document.querySelector('[data-token-rotate]'), 'after the act the page does not say where the token it now asks for is read');
+  assert(said && said.className.includes('good') && said.textContent.includes('On. Every other browser'), 'the act was not said: ' + (said && said.textContent));
+  assert(!require() && !document.querySelector('[data-token-where]') && !document.querySelector('[data-token-rotate]') && !document.getElementById('settings-stack').textContent.includes('dashboard-token'), 'after the act the card shows a token, where it is read, or a rotation');
   assert(document.querySelector('[data-token-off-where]'), 'the page stopped saying where asking stops');
 
   answer = { ok: false, text: 'This connection is not private, so the access token was not turned on' };
@@ -290,7 +266,7 @@ run(async (assert) => {
 
   S.config = config({ dashboard: { host: '127.0.0.1', port: 8181, tls: false, require_token: true } });
   renderSettings();
-  assert(!require() && document.querySelector('[data-token-rotate]'), 'the requirement was offered while a token is already asked for');
+  assert(!require() && !document.querySelector('[data-token-rotate]'), 'the requirement or a rotation was offered while a token is already asked for');
 });
 </script></body></html>`
 
@@ -361,8 +337,19 @@ try {
 `)
 }
 
-func TestOnePressOpensTheDashboardOnAnotherDevice(t *testing.T) {
-	page := `<!doctype html><html><body><div id="settings-stack"></div>
+// ONE PRESS OPENS THE DASHBOARD ON ANOTHER DEVICE, with no friction for
+// the human user, on Phone and other devices. On an ordinary install, with no token, no name and nothing
+// leading to it, Set up itself turns the token on, claims the name, chooses
+// the relay with its port named and asks for an access code; the person
+// presses once and scans. Where another device already reaches this
+// computer the code is asked for with no press at all. The page says what
+// the relay sees and what a lost device means. Their own code replaces the
+// generated one and ends it by its id; leaving the page ends the code shown;
+// and where a move would break something registered at the old address, the
+// page asks once before making it. The Access card's own lines are read on
+// the Access card.
+func TestOnePressSetsUpPhoneAndOtherDevices(t *testing.T) {
+	page := `<!doctype html><html><body><div id="settings-stack"></div><div id="views"></div>
 <script type="module">
 import { S } from '/state.js';
 import { sent } from '/ws.js';
@@ -377,43 +364,63 @@ run(async (assert) => {
   const last = type => sent.filter(m => m.type === type).pop();
   const act = which => document.querySelector('[data-open-elsewhere-act="' + which + '"]');
   const said = () => (document.querySelector('[data-open-said]') || { textContent: '' }).textContent;
-  S.view = 'settings'; S.providersLoaded = true; S.providers = [];
+  // The Access card's lines are read there; the press is on Phone and other devices.
+  const accessCard = () => { S.view = 'settings'; S.settingsSection('dashboard'); renderSettings(); };
+  const phone = () => { S.view = 'phone'; renderSettings(); };
+  // Leaving the page ends what it was doing, as Done did.
+  const leave = () => { S.view = 'settings'; window.dispatchEvent(new HashChangeEvent('hashchange')); S.view = 'phone'; };
+  S.view = 'phone'; S.providersLoaded = true; S.providers = [];
   let required = 0;
   S.requireAccessToken = async () => { required++; await tick(); return { ok: true, text: '' }; };
 
   S.config = cfg({}, { status: 'none', tls: false, can_claim: true });
   renderSettings();
-  document.querySelector('[data-sec="dashboard"]').click();
-  assert(act('start') && act('start').textContent === 'Open on another device', 'the one button is not offered to an ordinary install');
+  assert(act('start') && act('start').textContent === 'Set up', 'the one button is not offered to an ordinary install');
+  // WHAT THE PRESS DOES IS SAID BEFORE IT, and nothing is sent before it.
   const claims = () => (document.querySelector('[data-open-claims]') || { textContent: '' }).textContent;
-  assert(/claims one for it/.test(claims()) && /its public key is sent to the name service\b/.test(claims()), 'an identity with no name is not told, before the press, that the press claims one and sends its public key: ' + claims());
-  const does = () => (document.querySelector('[data-open-does]') || { textContent: '' }).textContent;
+  assert(/public key goes to the name service\b/.test(claims()) && /the claim is written in their record/.test(claims()), 'an identity with no name is not told, before the press, that the press claims one and sends its public key: ' + claims());
+  // AND EVERYTHING ELSE THE SAME PRESS DOES: the access token, a certificate
+  // made for the name and listed in public logs, the one-time access code,
+  // asking the name service for its relays, a relay saved as the route, and
+  // what a relay sees, in the words the panel says while one carries the
+  // name.
+  const does = () => (document.querySelector('[data-open-how]') || { textContent: '' }).textContent;
   const relaySees = 'can see that you connected, from which address, when and how much';
-  const saysAllItDoes = text => /turns on the access token if it is off/.test(text) && /certificate made for the name \(certificates are listed in public logs\)/.test(text) &&
-    /makes a one-time access code/.test(text) && /asks the name service which relays it offers, saves one as the route and connects through it/.test(text) && text.includes(relaySees);
-  assert(/^The same press /.test(does()) && saysAllItDoes(does()), 'before the press, the card does not say everything the press does: ' + does());
+  const saysAllItDoes = text => /asks every device to sign in, gets/.test(text) && /gets a certificate for the name/.test(text) && /listed in public logs/.test(text) &&
+    /makes a one-time code/.test(text) && /asks the name service which relays it offers, chooses one as the route and connects through it/.test(text) && text.includes(relaySees);
+  assert(does().includes('Set up asks every device to sign in') && saysAllItDoes(does()), 'before the press, the page does not say everything the press does: ' + does());
   S.config = cfg({ settings: [{ key: 'certificate.server_url', value: 'https://names.example.test', set: true }] }, { status: 'none', tls: false, can_claim: true });
   renderSettings();
-  assert(/its public key is sent to the name service at https:\/\/names\.example\.test,/.test(claims()), 'the name service in force is not named beside the button: ' + claims());
-  assert(/public key to the name service at https:\/\/names\.example\.test\./.test(document.querySelector('[data-public-name-state]').textContent), 'the Claim button\'s card does not say where the public key goes');
+  assert(/public key goes to the name service at https:\/\/names\.example\.test,/.test(claims()), 'the name service in force is not named beside the button: ' + claims());
+  accessCard();
+  assert(/public key to the name service at https:\/\/names\.example\.test\./.test(document.querySelector('[data-public-name-part]').textContent), 'the Claim button\'s card does not say where the public key goes');
+  phone();
   assert(!sent.some(m => m.type === 'public_name_claim' || m.type === 'public_name_look'), 'the page asked the host for a name or a look before any press: ' + sent.map(m => m.type));
   S.config = cfg({}, { status: 'prepared', name: name, tls: false });
   renderSettings();
-  assert(claims() === '', 'an identity that holds a name is told the press claims one: ' + claims());
-  assert(/^Pressing this /.test(does()) && saysAllItDoes(does()), 'an identity whose name is prepared is not told, before the press, everything the press does: ' + does());
+  assert(!/public key goes to/.test(claims()), 'an identity that holds a name is told the press claims one: ' + claims());
+  // A NAME THAT IS ONLY HELD (prepared, where a new identity starts): the
+  // press does all of that but the claim, and says so before it.
+  assert(does().includes('Set up asks every device to sign in') && saysAllItDoes(does()), 'an identity whose name is prepared is not told, before the press, everything the press does: ' + does());
+  // A DECLINED SERVICE CLAIMS NOTHING (certificate.server_url = none). Neither
+  // card says a key is sent; both say that no name can be claimed; both
+  // presses that would claim are disabled, and pressed anyway they send
+  // nothing and turn nothing on.
   S.config = cfg({ settings: [{ key: 'certificate.server_url', value: 'none: the certificate service is declined', set: true }] }, { status: 'none', tls: false, can_claim: false, service_declined: true });
   renderSettings();
-  const declined = /The certificate service is declined in this identity.s configuration, so no name can be claimed\./;
-  const claimCard = () => document.querySelector('[data-public-name-state]').textContent;
+  const declined = /The name service is declined in .*'s configuration, so no address can be claimed and no code made\./;
+  const claimCard = () => document.querySelector('[data-public-name-part]').textContent;
   assert(declined.test(claims()) && !/public key|is sent|Pressing this claims/.test(claims()), 'beside a declined service the press is said to send a key, or not said to claim nothing: ' + claims());
-  assert(declined.test(claimCard()) && !/public key|sends/.test(claimCard()), 'beside a declined service the Claim card says a key is sent, or not that no name can be claimed: ' + claimCard());
   assert(does() === '', 'beside a declined service the press is said to do what it will not: ' + does());
+  assert(!act('start'), 'a press that would claim is offered though the service is declined');
+  accessCard();
+  assert(declined.test(claimCard()) && !/public key|sends/.test(claimCard()), 'beside a declined service the Claim card says a key is sent, or not that no name can be claimed: ' + claimCard());
   const claimPress = document.querySelector('[data-public-name="claim"]');
-  assert(claimPress && claimPress.disabled && act('start') && act('start').disabled, 'a press that would claim is offered though the service is declined');
+  assert(claimPress && claimPress.disabled, 'the Claim press is offered though the service is declined');
   const quiet = () => sent.filter(m => ['public_name_claim', 'public_name_look', 'config_set', 'access_code'].includes(m.type)).length;
   const quietBefore = quiet();
   claimPress.disabled = false; claimPress.click();
-  act('start').disabled = false; act('start').click();
+  phone();
   await tick(); await tick(); await tick();
   assert(quiet() === quietBefore && required === 0, 'a press beside a declined service sent ' + sent.slice(-3).map(m => m.type) + ' or turned the token on (' + required + ')');
   assert(said() === '' && !act('done'), 'the Open press beside a declined service started its flow: ' + said());
@@ -423,7 +430,7 @@ run(async (assert) => {
   await tick(); await tick(); await tick();
   assert(required === 1, 'the press did not turn the access token on: ' + required);
   assert(last('public_name_claim'), 'the press did not claim the name: ' + sent.map(m => m.type));
-  assert(act('start').disabled, 'a second press was offered while the first is working');
+  assert(!act('start'), 'a second press was offered while the first is working');
 
   S.config = cfg({ require_token: true }, { status: 'claiming', name: name });
   renderSettings();
@@ -433,7 +440,9 @@ run(async (assert) => {
   const route = last('config_set');
   assert(route && route.config['certificate.route_mode'] === 'relay' && route.config['certificate.relay_endpoint'] === 'relay.example.test:443',
     'the press did not choose the relay the host marked, with its port named: ' + JSON.stringify(route));
-  assert(document.querySelector('[data-route-expert]').hidden, 'the route controls were shown to an operator who did not ask for them');
+  accessCard();
+  assert(!document.querySelector('[data-route-controls]').hidden, 'the route controls were hidden');
+  phone();
 
   const carried = { status: 'issued', name: name, origin: 'https://' + name, direct_origin: 'https://' + name + ':8181', route_mode: 'relay', relay_endpoint: 'relay.example.test:443', relay: 'relay.example.test:443', relay_connected: true, relays: relays };
   S.config = cfg({ require_token: true }, carried);
@@ -445,8 +454,8 @@ run(async (assert) => {
   const shown = () => document.querySelector('[data-open-code]');
   assert(shown() && shown().textContent.includes('ABCD-EFGH-JKMN') && shown().querySelector('svg[data-fixture]') && shown().textContent.includes('2 minutes') && shown().textContent.includes('https://' + name),
     'the code was not shown as a picture, as text, with its life and the address to type it at: ' + (shown() && shown().textContent));
-  const panel = () => document.querySelector('[data-open-elsewhere]').textContent;
-  assert(panel().includes('cannot read any of it') && panel().includes('from which address') && panel().includes('moves off the relay') && panel().includes('Rotate access token'), 'what the relay sees and what a lost device means were not said: ' + panel());
+  const panel = () => document.querySelector('[data-phone]').textContent;
+  assert(panel().includes('cannot read any of it') && panel().includes('from which address') && panel().includes('leaves the relay') && panel().includes('Lost a device?'), 'what the relay sees and what a lost device means were not said: ' + panel());
   assert(panel().includes(relaySees), 'what the relay sees is not said in the words said before the press: ' + panel());
 
   document.getElementById('cfg-open-own').value = 'my own sign-in phrase';
@@ -461,8 +470,9 @@ run(async (assert) => {
   assert(acceptAccessCode(again.request_id, { id: 'c2', code: 'my own sign-in phrase', own: true, seconds: 90 }), 'the second code was not claimed');
   assert(shown().textContent.includes('as strong as what you typed') && shown().textContent.includes('90 seconds'), 'an own code was not said to be the person\'s own, with its life: ' + shown().textContent);
 
-  act('done').click();
-  assert(last('access_code_cancel').access_code === 'c2' && !shown() && act('start').textContent === 'Open on another device', 'Done did not end the code it showed');
+  // Leaving the page ends the code shown, by its id.
+  leave();
+  assert(last('access_code_cancel').access_code === 'c2', 'leaving the page did not end the code it showed');
 
   const before = sent.filter(m => m.type === 'config_set').length;
   S.config = cfg({ require_token: true }, { status: 'issued', name: name, origin: 'https://' + name + ':8181', direct_origin: 'https://' + name + ':8181', route_mode: 'direct', relays: relays, moves_with: ['sign-in profile mail'] });
@@ -474,24 +484,30 @@ run(async (assert) => {
   act('move').click();
   assert(sent.filter(m => m.type === 'config_set').length === before + 1 && last('config_set').config['certificate.relay_endpoint'] === 'relay.example.test:443', 'the move was not made on the second press');
 
-  act('done').click();
+  // No relay offered: said plainly, nothing chosen.
+  leave();
   S.config = cfg({ require_token: true }, { status: 'issued', name: name, origin: 'https://' + name + ':8181', route_mode: 'direct', relays: [] });
   renderSettings();
   act('start').click();
   assert(said().includes('No relay is offered') && !act('start').disabled, 'the missing relay was not said: ' + said());
 
+  // A name another device already reaches: the code is asked for at once, with no press.
+  leave();
+  const asks = sent.filter(m => m.type === 'access_code').length, sets = sent.filter(m => m.type === 'config_set').length;
   S.config = cfg({ host: '10.8.0.2', tls: true, require_token: true }, { status: 'issued', name: name, origin: 'https://' + name + ':8181', route_mode: 'direct', address: '10.8.0.2', relays: relays });
   renderSettings();
-  const asks = sent.filter(m => m.type === 'access_code').length, sets = sent.filter(m => m.type === 'config_set').length;
-  act('start').click();
-  assert(sent.filter(m => m.type === 'access_code').length === asks + 1 && sent.filter(m => m.type === 'config_set').length === sets, 'a dashboard already reached on its own network was moved to a relay, or given no code');
+  assert(sent.filter(m => m.type === 'access_code').length === asks + 1 && sent.filter(m => m.type === 'config_set').length === sets && !act('start'), 'a dashboard already reached on its own network was moved to a relay, given no code, or asked for a press');
 
-  act('done').click();
+  // A NAME PREPARED AT FIRST START is held and has no certificate yet. The
+  // card says so; the press chooses the route first, and once something
+  // leads to the name its certificate is asked for, once.
+  leave();
   acceptSettingsConfig(last('config_set').request_id); // the host answered the move's save: nothing is pending
   S.config = cfg({ require_token: true }, { status: 'prepared', name: name, origin: 'https://' + name + ':8181', direct_origin: 'https://' + name + ':8181', route_mode: 'direct', relays: relays });
-  renderSettings();
-  assert(document.querySelector('[data-public-name-state]').textContent.includes('held and not in use') && !document.querySelector('[data-public-name="retry"]'),
+  accessCard();
+  assert(document.querySelector('[data-public-name-state]').textContent.includes('held, not yet in use') && !document.querySelector('[data-public-name="retry"]'),
     'a held name was shown as a failed certificate: ' + document.querySelector('[data-public-name-state]').textContent);
+  phone();
   const held = sent.filter(m => m.type === 'config_set').length, retries = sent.filter(m => m.type === 'public_name_retry').length;
   act('start').click();
   assert(sent.filter(m => m.type === 'config_set').length === held + 1 && last('config_set').config['certificate.relay_endpoint'] === 'relay.example.test:443' && sent.filter(m => m.type === 'public_name_retry').length === retries,
@@ -501,7 +517,7 @@ run(async (assert) => {
   assert(acceptSettingsConfig(leads.request_id), 'the held name\'s route answer was not claimed');
   renderSettings(); renderSettings();
   assert(sent.filter(m => m.type === 'public_name_retry').length === retries + 1 && /certificate/.test(said()), 'something leads to a held name and its certificate was not asked for exactly once: ' + said());
-  act('done').click();
+  leave();
 
   acceptSettingsConfig((last('config_set') || {}).request_id);
   const unasked = { status: 'prepared', name: name, origin: 'https://' + name + ':8181', direct_origin: 'https://' + name + ':8181', route_mode: 'direct' };
@@ -516,21 +532,22 @@ run(async (assert) => {
   S.config = cfg({ require_token: true }, Object.assign({}, unasked, { relays: relays }));
   renderSettings();
   assert(saves() === savesAtLook + 1 && last('config_set').config['certificate.relay_endpoint'] === 'relay.example.test:443', 'the relays arrived and the press did not choose the one marked');
-  act('done').click();
+  leave();
   acceptSettingsConfig(last('config_set').request_id);
 
   S.config = cfg({ require_token: true, settings: [{ key: 'dashboard.channel_sessions', value: '16' }, { key: 'certificate.relay_carried_max', value: '7', set: true }] }, carried);
-  renderSettings();
+  accessCard();
   const readBack = document.querySelector('[data-settings-read]');
   const readRow = key => readBack && readBack.querySelector('[data-setting="' + key + '"]');
   assert(readBack && readRow('dashboard.channel_sessions') && readRow('dashboard.channel_sessions').textContent.includes('16') && readRow('dashboard.channel_sessions').textContent.includes('the default'),
     'a setting with no control is not read on the card with its default: ' + (readBack && readBack.textContent));
   assert(readRow('certificate.relay_carried_max').textContent.includes('7') && readRow('certificate.relay_carried_max').textContent.includes('config.json'), 'a setting the file states is not read as stated');
+  S.view = 'phone';
 
   S.stats = {};
   S.config = cfg({ require_token: true }, carried);
   renderSettings();
-  assert(act('off') && act('off').textContent === 'Stop using the relay' && document.querySelector('[data-route-expert]').hidden, 'a dashboard behind a relay offers no way off it without Expert');
+  assert(act('off') && act('off').textContent === 'Stop using the relay', 'a dashboard behind a relay offers no way off it in one press');
   const savedBefore = saves();
   act('off').click();
   const offSave = last('config_set');
@@ -539,11 +556,14 @@ run(async (assert) => {
   assert(acceptSettingsConfig(offSave.request_id), 'the answer to Stop using the relay was not claimed');
   renderSettings();
   const offTold = document.querySelector('[data-open-off-said]');
-  assert(offTold && offTold.textContent === 'This dashboard is off the relay.' && !act('off'), 'taking the dashboard off the relay was not said, or the button stayed: ' + (offTold && offTold.textContent));
+  assert(offTold && offTold.textContent === 'This page is off the relay.' && !act('off'), 'taking the dashboard off the relay was not said, or the button stayed: ' + (offTold && offTold.textContent));
 
-  S.stats = { expert: true };
-  renderSettings();
-  assert(!document.querySelector('[data-route-expert]').hidden && document.getElementById('cfg-route'), 'Expert did not show the route controls');
+  // The route controls are there, whatever the status says of a retired
+  // setting.
+  S.stats = { expert: false };
+  accessCard();
+  assert(!document.querySelector('[data-route-controls]').hidden && document.getElementById('cfg-route'), 'the route controls are not drawn');
+  leave();
 
   S.config = cfg({ require_token: true }, { status: 'none', tls: false, can_claim: true });
   renderSettings();
@@ -553,19 +573,21 @@ run(async (assert) => {
   assert(claimed() === claimedBefore + 1 && /Claiming/.test(said()), 'the press with the service in force did not claim: ' + said());
   S.config = cfg({ require_token: true }, { status: 'none', tls: false, can_claim: false, service_declined: true });
   renderSettings();
-  assert(declined.test(said()) && !act('done') && claimed() === claimedBefore + 1, 'a running flow did not stop when the service was declined: ' + said());
+  assert(declined.test(claims()) && !act('done') && claimed() === claimedBefore + 1, 'a running flow did not stop when the service was declined: ' + claims());
 
   // A NAME WHOSE KEY IS NOT LOADED (a boot into SAFE): the certificate it
   // holds is served and nothing renews it. The card says so and offers no
   // Retry; the press says why and asks for nothing.
   S.config = cfg({ require_token: true }, { status: 'held', name: name, origin: 'https://' + name + ':8181', not_after: '2026-12-01T00:00:00Z', last_error: 'the identity\u2019s key is not loaded', route_mode: 'direct' });
-  renderSettings();
+  accessCard();
   const heldSaid = document.querySelector('[data-public-name-state]').textContent;
-  assert(heldSaid.includes('serving the certificate this identity holds, which expires 2026-12-01T00:00:00Z') && heldSaid.includes('It cannot be renewed: the identity\u2019s key is not loaded') && !document.querySelector('[data-public-name="retry"]'),
+  assert(heldSaid.includes('serving the certificate they hold, which expires') && heldSaid.includes('It cannot be renewed: the identity\u2019s key is not loaded') && !document.querySelector('[data-public-name="retry"]'),
     'a held certificate was not said as served and not renewable: ' + heldSaid);
+  leave();
+  phone();
   const askedBefore = sent.length;
   act('start').click();
-  assert(/cannot renew it/.test(said()) && sent.slice(askedBefore).every(m => !['public_name_retry', 'public_name_claim', 'public_name_look', 'access_code'].includes(m.type)),
+  assert(/cannot be renewed/.test(said()) && sent.slice(askedBefore).every(m => !['public_name_retry', 'public_name_claim', 'public_name_look', 'access_code'].includes(m.type)),
     'the press on a held certificate did not say why, or asked for something: ' + said());
 });
 </script></body></html>`

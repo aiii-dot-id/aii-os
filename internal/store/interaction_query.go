@@ -91,7 +91,7 @@ func (s *Store) enrichInteraction(ctx context.Context, tx *readSnapshot, r *inte
 		return nil
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT kind,payload FROM turn_annotations WHERE turn_seq=? AND kind!=? ORDER BY kind`, r.Sequence, AnnotationSaid)
+	rows, err := tx.QueryContext(ctx, `SELECT kind,payload FROM turn_annotations WHERE turn_seq=? AND kind NOT IN (?,?,?,?,?) ORDER BY kind`, r.Sequence, AnnotationSaid, AnnotationTurnSource, AnnotationRequest, AnnotationPlanStep, AnnotationPlanStepServed)
 	if err != nil {
 		return err
 	}
@@ -161,6 +161,12 @@ func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out
 		where = append(where, "c.kind IN ("+strings.TrimSuffix(strings.Repeat("?,", len(q.Filter.Kinds)), ",")+")")
 		for _, k := range q.Filter.Kinds {
 			args = append(args, string(k))
+		}
+	}
+	if len(q.Outcomes) > 0 {
+		where = append(where, "c.outcome IN ("+strings.TrimSuffix(strings.Repeat("?,", len(q.Outcomes)), ",")+")")
+		for _, o := range q.Outcomes {
+			args = append(args, string(o))
 		}
 	}
 	if q.Filter.From != "" {
@@ -276,39 +282,12 @@ func (s *Store) QueryInteractions(ctx context.Context, q interaction.Query) (out
 	interaction.Seal(page)
 	return page, nil
 }
-func (s *Store) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (out *interaction.ReadResult, retErr error) {
+func (s *Store) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (*interaction.ReadResult, error) {
 	if err := interaction.ValidateRead(&req); err != nil {
 		return nil, err
 	}
-	if req.Source != "recorded" {
-		return nil, interaction.Invalid("store only owns recorded detail")
-	}
-	if req.Incarnation != s.InteractionIncarnation() {
-		return nil, &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "source retired"}
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	tx, err := s.beginReadSnapshot(ctx)
+	r, err := s.RecordedInteraction(ctx, req)
 	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := tx.Close(); retErr == nil && err != nil {
-			out = nil
-			retErr = err
-		}
-	}()
-	r, err := scanInteraction(tx.QueryRowContext(ctx, "SELECT "+interactionSelect+" FROM conversations c WHERE c.id=? AND "+interactionAudience, req.ID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, &interaction.Error{Code: "INTERACTION_CONTENT_UNAVAILABLE", Detail: "record unavailable to this audience"}
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err = s.enrichInteraction(ctx, tx, &r); err != nil {
 		return nil, err
 	}
 
@@ -317,6 +296,44 @@ func (s *Store) ReadInteraction(ctx context.Context, req interaction.ReadRequest
 		return nil, err
 	}
 	return interaction.DetailRead(req, raw)
+}
+
+func (s *Store) RecordedInteraction(ctx context.Context, req interaction.ReadRequest) (out interaction.Record, retErr error) {
+	if err := interaction.ValidateRead(&req); err != nil {
+		return out, err
+	}
+	if req.Source != "recorded" {
+		return out, interaction.Invalid("store only owns recorded detail")
+	}
+	if req.Incarnation != s.InteractionIncarnation() {
+		return out, &interaction.Error{Code: "INTERACTION_SOURCE_CHANGED", Detail: "source retired"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tx, err := s.beginReadSnapshot(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() {
+		if err := tx.Close(); retErr == nil && err != nil {
+			out = interaction.Record{}
+			retErr = err
+		}
+	}()
+	r, err := scanInteraction(tx.QueryRowContext(ctx, "SELECT "+interactionSelect+" FROM conversations c WHERE c.id=? AND "+interactionAudience, req.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, &interaction.Error{Code: "INTERACTION_CONTENT_UNAVAILABLE", Detail: "record unavailable to this audience"}
+	}
+	if err != nil {
+		return out, err
+	}
+	if err = s.enrichInteraction(ctx, tx, &r); err != nil {
+		return out, err
+	}
+	return r, nil
 }
 
 func (s *Store) interactionTable() string {

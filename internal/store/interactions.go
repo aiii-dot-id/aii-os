@@ -35,16 +35,25 @@ func (s *Store) notifyInteraction(changed *bool) {
 	}
 }
 func (s *Store) RecordInteraction(ctx context.Context, in InteractionInput) (InteractionRef, error) {
+	return s.RecordInteractionAnnotated(ctx, in, nil)
+}
+
+type RowAnnotation struct{ Kind, Key, Payload string }
+
+func (s *Store) RecordInteractionAnnotated(ctx context.Context, in InteractionInput, mark *RowAnnotation) (InteractionRef, error) {
 	if (in.Kind != interaction.Message && in.Kind != interaction.Notice) || in.Source != nil || in.Details.Work != nil {
 		return InteractionRef{}, interaction.Invalid("this kind requires its owner operation")
+	}
+	if mark != nil && (mark.Kind == "" || mark.Kind == AnnotationSaid || mark.Kind == AnnotationTurnSource || mark.Kind == AnnotationPress || mark.Kind == AnnotationRequest || mark.Kind == AnnotationPlanStep || mark.Kind == AnnotationPlanStepServed || !json.Valid([]byte(mark.Payload))) {
+		return InteractionRef{}, interaction.Invalid("an annotation beside a recorded row names a kind of its own and holds JSON")
 	}
 	changed := false
 	defer s.notifyInteraction(&changed)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.recordInteractionLocked(ctx, in, &changed)
+	return s.recordInteractionLocked(ctx, in, &changed, mark)
 }
-func (s *Store) recordInteractionLocked(ctx context.Context, in InteractionInput, changed *bool) (InteractionRef, error) {
+func (s *Store) recordInteractionLocked(ctx context.Context, in InteractionInput, changed *bool, mark *RowAnnotation) (InteractionRef, error) {
 	tx, err := s.w().BeginTx(ctx, nil)
 	if err != nil {
 		return InteractionRef{}, err
@@ -53,6 +62,11 @@ func (s *Store) recordInteractionLocked(ctx context.Context, in InteractionInput
 	ref, inserted, err := s.appendInteractionTx(ctx, tx, in)
 	if err != nil {
 		return ref, err
+	}
+	if inserted && mark != nil {
+		if err := annotateRowTx(ctx, tx, ref.Sequence, mark.Kind, mark.Key, mark.Payload); err != nil {
+			return InteractionRef{}, err
+		}
 	}
 	err = tx.Commit()
 	*changed = inserted
@@ -188,6 +202,11 @@ func (s *Store) appendInteractionTx(ctx context.Context, tx *sql.Tx, in Interact
 			return InteractionRef{}, false, err
 		}
 	}
+	if in.Role != interaction.Resident && (in.Kind == interaction.Message || in.Kind == interaction.Notice) {
+		if err = markTurnSource(ctx, tx, uint64(seq), in.TurnID); err != nil {
+			return InteractionRef{}, false, err
+		}
+	}
 	return InteractionRef{ID: in.ID, Sequence: uint64(seq), RecordedAt: now}, true, nil
 }
 
@@ -213,7 +232,7 @@ func (s *Store) RecordRelatedConversation(ctx context.Context, role, content, tu
 		kind = interaction.Notice
 	}
 	id := "turn_" + uuid.New().String()
-	ref, err := s.recordInteractionLocked(ctx, InteractionInput{ID: id, Kind: kind, Role: interaction.Role(role), Content: content, SessionID: "default", ProjectID: s.activeProject, TurnID: turn, RelatedID: related, Details: details}, &changed)
+	ref, err := s.recordInteractionLocked(ctx, InteractionInput{ID: id, Kind: kind, Role: interaction.Role(role), Content: content, SessionID: "default", ProjectID: s.activeProject, TurnID: turn, RelatedID: related, Details: details}, &changed, nil)
 	if ref.ID == "" {
 		ref.ID = id
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -61,7 +62,11 @@ type DreamFacility struct {
 	talkCalls toolCallReader
 
 	stalledAt time.Time
-	now       func() time.Time
+
+	stallKind ConditionKind
+
+	stallMu sync.Mutex
+	now     func() time.Time
 
 	held retryHolder
 }
@@ -160,6 +165,41 @@ func (d *DreamFacility) Reconfigure(cfg DreamConfig) {
 
 func (d *DreamFacility) cfg() *DreamConfig { return d.config.Load() }
 
+func (d *DreamFacility) stalledWithin(now time.Time, spacing time.Duration) bool {
+	d.stallMu.Lock()
+	at := d.stalledAt
+	d.stallMu.Unlock()
+	return !at.IsZero() && now.Sub(at) < spacing
+}
+
+func (d *DreamFacility) Held() string {
+	now := time.Now()
+	if d.now != nil {
+		now = d.now()
+	}
+	cfg := d.cfg()
+	if cfg == nil {
+		return ""
+	}
+	if !d.stalledWithin(now, cfg.Spacing) {
+		return ""
+	}
+	d.stallMu.Lock()
+	kind := d.stallKind
+	d.stallMu.Unlock()
+	if kind == ConditionNoRoom {
+		return PressBudget
+	}
+	return PressStall
+}
+
+func (d *DreamFacility) SetStalledAtForTest(at time.Time, spacing time.Duration) {
+	d.config.Store(&DreamConfig{Spacing: spacing})
+	d.stallMu.Lock()
+	d.stalledAt = at
+	d.stallMu.Unlock()
+}
+
 func (d *DreamFacility) SetTeller(t *Teller) { d.teller = t }
 
 func (d *DreamFacility) Name() string { return "dream" }
@@ -189,6 +229,10 @@ const (
 
 func (d *DreamFacility) pass(ctx context.Context, cfg *DreamConfig) (passOutcome, error) {
 	var expTexts, expIDs []string
+
+	d.stallMu.Lock()
+	d.stallKind = ""
+	d.stallMu.Unlock()
 	var experiences []rows.Experience
 	if d.due(cfg) {
 
@@ -244,6 +288,9 @@ func (d *DreamFacility) pass(ctx context.Context, cfg *DreamConfig) (passOutcome
 			d.teller.tell(Condition{Facility: "dream", Kind: ConditionNoRoom,
 				Said: "the request does not fit the model's input budget with no conversation and no experience in it — nothing sent, nothing advanced (what every request carries leaves no room; " + d.teller.room() + " makes room)"},
 				"dream|no_room", "dream: none of what waits for your dream passes fits beside what every dream request carries in the model's input budget, so nothing was sent and nothing advanced. Your operator can make room on the Cognition card.")
+			d.stallMu.Lock()
+			d.stallKind = ConditionNoRoom
+			d.stallMu.Unlock()
 			return passStalled, nil
 		}
 		if cut == 0 {
@@ -271,6 +318,9 @@ func (d *DreamFacility) pass(ctx context.Context, cfg *DreamConfig) (passOutcome
 		d.teller.tell(Condition{Facility: "dream", Kind: ConditionNoRoom,
 			Said: "no conversation fits the model's input budget beside what every request carries — nothing sent, nothing advanced"},
 			"dream|no_room", "dream: none of what waits for your dream passes fits beside what every dream request carries in the model's input budget, so nothing was sent and nothing advanced. Your operator can make room on the Cognition card.")
+		d.stallMu.Lock()
+		d.stallKind = ConditionNoRoom
+		d.stallMu.Unlock()
 		return passStalled, nil
 	}
 	output, modelID, err := d.llm.ChatSimple(wire.WithTapSource(callCtx, "dream"), systemPrompt, d.request(cfg, expTexts, talk, calls))
@@ -394,7 +444,7 @@ func (d *DreamFacility) OnAlarm(ctx context.Context, alarmID string, clock strin
 		now = d.now()
 	}
 	cfg := d.cfg()
-	if !d.stalledAt.IsZero() && now.Sub(d.stalledAt) < cfg.Spacing {
+	if d.stalledWithin(now, cfg.Spacing) {
 		return AlarmResult{Accepted: false}
 	}
 	if !d.due(cfg) && len(d.unreadConversation(cfg).Parts) == 0 {
@@ -403,7 +453,9 @@ func (d *DreamFacility) OnAlarm(ctx context.Context, alarmID string, clock strin
 
 	outcome, err := d.pass(ctx, cfg)
 	if outcome == passStalled {
+		d.stallMu.Lock()
 		d.stalledAt = now
+		d.stallMu.Unlock()
 		logsink.Warn("dream.refusal", "the pass advanced nothing — DREAM waits %s before it is tried again (cognition.consolidate_spacing_seconds); the material waits with it", cfg.Spacing)
 	}
 	if err != nil {

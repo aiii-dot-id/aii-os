@@ -39,8 +39,10 @@ func (s *Store) selfModelBudget() int {
 
 func (s *Store) admitSelfModelBudget(payload ledger.SelfModelSynthesisPayload) error {
 	budget := s.selfModelBudget()
-	if tokens := tokenestimate.Estimate(normalizeSelfModelText(payload.SynthesisText)); tokens > budget {
-		return refuseSelfModel("bounded narrative", "synthesis_text is approximately %d tokens; maximum is %d (prompt.self_model_max_tokens)", tokens, budget)
+
+	if tokens := tokenestimate.EstimateWire(normalizeSelfModelText(payload.SynthesisText)); tokens > budget {
+		return &SelfModelRefusal{Requirement: "bounded narrative", Tokens: tokens, Limit: budget,
+			Detail: fmt.Sprintf("synthesis_text is approximately %d tokens; maximum is %d (prompt.self_model_max_tokens)", tokens, budget)}
 	}
 	return nil
 }
@@ -78,7 +80,11 @@ var ErrSelfModelUnchanged = errors.New("self-model portrait is materially unchan
 type SelfModelRefusal struct {
 	Requirement string
 	Detail      string
+	Tokens      int
+	Limit       int
 }
+
+func (e *SelfModelRefusal) Length() (tokens, limit int) { return e.Tokens, e.Limit }
 
 func (e *SelfModelRefusal) Error() string {
 	if e.Detail == "" {

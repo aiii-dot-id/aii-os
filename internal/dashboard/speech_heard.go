@@ -7,7 +7,7 @@ import (
 
 func (s *Server) handleSpeechHeard(w http.ResponseWriter, r *http.Request) {
 	if !s.tokenAuthorized(r) {
-		sayRefused(w, http.StatusUnauthorized, "this dashboard needs its access token")
+		sayRefused(w, http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !sameSiteAs(origin, r.Host) {

@@ -117,8 +117,31 @@ run(() => {
   const revoke = frames.find(f => f.type === 'plugin' && f.plugin && f.plugin.action === 'revoke');
   assert(revoke && revoke.plugin.id === 'org.example.bar' && revoke.plugin.act === 'enroll', 'the revoke did not name its one operation: ' + JSON.stringify(frames));
   assert(!sent.some(ch => Object.keys(ch).some(k => k.endsWith('.auto_confirm'))), 'the revoke sent a list through the settings door: ' + JSON.stringify(sent));
-  const upd = st.querySelector('[data-plugin="install:org.example.bar"]');
+  const upd = st.querySelector('[data-entry="org.example.bar"] [data-plugin="install:org.example.bar"]');
   assert(upd !== null && upd.textContent.trim() === 'Update', 'an installed release the index outranks is not offered its Update');
+  // Its row in the list (step 16b): who signed it, its version, the update
+  // that is out, Update to it, and Manage, which opens its card under it.
+  const listed = st.querySelector('[data-plugin-row="org.example.bar"]');
+  assert(listed !== null && listed.textContent.includes('Signed · 1.0.0 · 1.1.0 available'), 'the list row of an installed plugin: ' + (listed && listed.textContent));
+  assert(listed.querySelector('[data-plugin="install:org.example.bar"]').textContent === 'Update', 'the list row offers no Update to the release that is out');
+  const manage = listed.querySelector('[data-manage="org.example.bar"]'), region = listed.querySelector('[data-manage-of="org.example.bar"]');
+  assert(manage !== null && region !== null && region.hidden && manage.getAttribute('aria-expanded') === 'false', 'the card is not folded under Manage');
+  manage.click();
+  assert(!region.hidden && manage.getAttribute('aria-expanded') === 'true' && region.querySelector('.plugin-detail') !== null, 'Manage did not open its card');
+  renderPlugins();
+  assert(!st.querySelector('[data-manage-of="org.example.bar"]').hidden, 'a card opened under Manage closed again on the next frame');
+  assert(st.querySelector('[data-manage-of="org.example.bar"] [data-plugin="uninstall:org.example.bar"]') !== null, 'its card offers no Uninstall');
+  // Uninstall asks once, naming the plugin; declined, nothing is sent.
+  let asked = '';
+  window.confirm = q => { asked = q; return false; };
+  const before = frames.length;
+  st.querySelector('[data-manage-of="org.example.bar"] [data-plugin="uninstall:org.example.bar"]').click();
+  assert(asked === 'Uninstall org.example.bar? What it saved stays until you delete it.' && frames.length === before, 'Uninstall did not ask first, or sent when declined: ' + asked);
+  // The catalog's last good check is said in words, never as a raw time.
+  S.config.plugins.catalog_fetched_at = new Date(Date.now() - 20 * 60000).toISOString();
+  renderPlugins();
+  assert(st.textContent.includes('Checked 20 minutes ago') && !st.textContent.includes(S.config.plugins.catalog_fetched_at), 'the catalog check is not said in words: ' + st.querySelector('[data-plugins-part]').textContent);
+  delete S.config.plugins.catalog_fetched_at;
   assert(st.querySelector('[data-plugin="uninstall:org.example.bar"]') !== null, 'an installed release keeps its Uninstall beside the Update');
   assert(text.includes('1 update'), 'the catalog card does not count the update');
 
@@ -128,7 +151,7 @@ run(() => {
   const detail = st.querySelector('.plugin-detail');
   assert(detail !== null, 'the installed plugin shows no detail block');
   const dt = detail.textContent;
-  assert(dt.includes('Example Co') && dt.includes('certified pub-7') && dt.includes('tools.provider v1') && dt.includes('net.fetch, files.read') && dt.includes('wasm_component') && dt.includes('sha256:0123456789abcdef'),
+  assert(dt.includes('Example Co') && dt.includes('certified pub-7') && dt.includes('1.0.0'),
     'the installed plugin detail is incomplete: ' + dt);
 
   st.querySelector('[data-catalog-refresh]').click();
@@ -187,6 +210,7 @@ run(() => {
       applies: 'next_session', settings: [{ key: 'tts_voice', type: 'enum', title: 'Voice', values: ['alba', 'marius'], default: 'alba' }],
       readiness: { models_loaded: 5, accelerator: 'cpu', probe_ms: 710 } },
     { id: 'org.example.quiet', version: '1.0.0', tier: 'T1', mode: 'wasm', variant: 'linux-x86_64-wasm', settings: [] },
+    { id: 'org.example.hello', version: '0.1.0', tier: 'T1', kind: 'asset', title: 'Hello page', description: 'A page that says hello.' },
   ] } };
   renderPlugins();
   const text = document.getElementById('plugins-stack').textContent;
@@ -196,7 +220,7 @@ run(() => {
   assert(!/reported itself ready[\s\S]*reported itself ready/.test(text), 'a plugin that reported no readiness says nothing');
   const cards = Array.from(document.querySelectorAll('#plugins-stack .card'));
   const cardWith = frag => cards.find(c => (c.querySelector('h3') || {}).textContent && c.querySelector('h3').textContent.includes(frag));
-  const voice = cardWith('0.1.0-native-cp1');
+  const voice = cardWith('AII Voice native English checkpoint');
   assert(voice, 'the voice card is rendered');
   assert(voice.querySelector('h3').textContent.startsWith('AII Voice native English checkpoint'), 'the title heads the card: ' + voice.querySelector('h3').textContent);
   assert(voice.querySelector('.pkg-id').textContent === 'id.aiii.voice', 'the id is still shown, under the title');
@@ -204,6 +228,13 @@ run(() => {
   const quiet = cardWith('org.example.quiet');
   assert(quiet, 'the untitled card is rendered');
   assert(quiet.querySelector('.pkg-id') === null && quiet.querySelector('.pkg-desc') === null, 'a package that titles itself nothing is headed by its id and gains no empty lines');
+  // A plugin the catalog does not list says nothing of its updates (step 16b).
+  const row = document.querySelector('[data-plugin-row="org.example.quiet"]');
+  assert(row && row.textContent.includes('Signed · 1.0.0') && !/up to date|is out/.test(row.textContent), 'a row claims an update state the catalog never gave: ' + (row && row.textContent));
+  // AN ASSET'S CARD says what it is and that it runs no program; nothing of a plugin's.
+  const asset = document.querySelector('[data-asset-card="org.example.hello"]');
+  assert(asset && asset.textContent.includes('A page that says hello.') && asset.textContent.includes('Runs no program.') && !/variant|operation/.test(asset.textContent), 'an asset\'s card: ' + (asset && asset.textContent));
+  assert(asset.querySelector('h3').textContent === 'Hello page', 'an asset\'s card is headed by more than its name, as a plugin\'s is: ' + asset.querySelector('h3').textContent);
 });
 </script>`
 	read := func(name string) []byte {

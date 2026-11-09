@@ -214,7 +214,7 @@ func TestANonPrimaryIsReachedThroughTheCallRoute(t *testing.T) {
 	if slices.Contains(model.sent[0], recent) {
 		t.Fatalf("a non-primary was listed: %v", model.sent[0])
 	}
-	direct := model.observed["direct"]
+	direct, _, _ := strings.Cut(model.observed["direct"], "\n[status · ") // the host's status line rides every result (2026-11-06)
 	if !strings.Contains(direct, "is not in your tool list; call it with tools action=call name="+recent+" args={…}") || strings.Contains(direct, "\n") {
 		t.Fatalf("a direct call to an unlisted operation must be refused in one line naming the route: %q", direct)
 	}

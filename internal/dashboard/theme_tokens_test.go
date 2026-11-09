@@ -1,63 +1,78 @@
 package dashboard
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// THE LIGHT BLOCK OVERRIDES EVERY COLOUR TOKEN THE DARK ROOT DEFINES.
-// The browser test can only show that a token RESOLVES, and a token
-// missing from the light block still resolves — to the dark value,
-// which is exactly the defect: one dark surface in a light page. So
-// the two token sets are compared statically. Geometry and type tokens
-// are theme-neutral and stay in :root alone.
-func themeBlocks(t *testing.T) (dark, light map[string]bool) {
-	t.Helper()
-	css, err := staticFS.ReadFile("static/theme.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := func(open string) map[string]bool {
-		i := strings.Index(string(css), open)
-		if i < 0 {
-			t.Fatalf("theme.css has no %q block", open)
+// THE DARK THEME OVERRIDES EVERY COLOUR THE LIGHT ROOT DEFINES. The
+// browser test can only show that a token RESOLVES, and a token missing
+// from the dark block still resolves — to the light value, which is
+// exactly the defect: one light surface in a dark page. So the token sets
+// are compared statically, in both files. In tokens.css every colour role
+// of :root is redefined by the dark theme. In theme.css, whose names are
+// aliases of the roles, what does not follow a role by construction (a
+// value with no var() in it: the per-theme rgb of a colour for the
+// translucent tints, a shadow) is redefined by its dark block, and the
+// dark block defines nothing :root does not. Type, space and shape, and
+// the few values that are the same in both themes (the decoration's names,
+// which are nothing in both), stay in :root alone.
+func TestTheDarkThemeOverridesEveryColourToken(t *testing.T) {
+	read := func(name string) string {
+		raw, err := staticFS.ReadFile("static/" + name)
+		if err != nil {
+			t.Fatal(err)
 		}
-		body := string(css)[i+len(open):]
-		body = body[:strings.Index(body, "\n}")]
-		out := map[string]bool{}
-		for _, m := range regexp.MustCompile(`(?m)(--[a-z0-9-]+)\s*:`).FindAllStringSubmatch(body, -1) {
-			out[m[1]] = true
-		}
-		return out
+		return string(raw)
 	}
-	return block(":root {"), block(`:root[data-theme="light"] {`)
-}
 
-func TestTheLightThemeOverridesEveryColourToken(t *testing.T) {
-	dark, light := themeBlocks(t)
-	neutral := map[string]bool{"--font": true, "--mono": true, "--r-lg": true, "--r-md": true, "--r-sm": true, "--white": true, "--grad": true, "--grad-hot": true}
-	var missing, extra []string
-	for name := range dark {
-		if !neutral[name] && !light[name] {
-			missing = append(missing, name)
+	tokens := read("tokens/tokens.css")
+	roots, dark := tokenBlock(t, tokens, ":root {"), tokenBlock(t, tokens, `:root[data-theme="dark"] {`)
+	var missing []string
+	colours := 0
+	for name, value := range roots {
+		if strings.HasPrefix(value, "#") {
+			colours++
+			if _, ok := dark[name]; !ok {
+				missing = append(missing, name)
+			}
 		}
 	}
-	for name := range light {
-		if !dark[name] {
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("tokens.css: the dark theme leaves these roles at their light values: %v", missing)
+	}
+	if colours < 14 {
+		t.Fatalf("tokens.css: expected the full set of colour roles in :root, found %d", colours)
+	}
+
+	theme := read("theme.css")
+	roots, dark = tokenBlock(t, theme, ":root {"), tokenBlock(t, theme, `:root[data-theme="dark"] {`)
+	same := map[string]bool{"--white-rgb": true, "--glow": true, "--sky": true, "--stars": true}
+	missing = nil
+	var extra []string
+	for name, value := range roots {
+		if !strings.Contains(value, "var(") && !same[name] {
+			if _, ok := dark[name]; !ok {
+				missing = append(missing, name)
+			}
+		}
+	}
+	for name := range dark {
+		if _, ok := roots[name]; !ok {
 			extra = append(extra, name)
 		}
 	}
 	sort.Strings(missing)
 	sort.Strings(extra)
 	if len(missing) > 0 {
-		t.Errorf("the light theme leaves these tokens at their dark values: %v", missing)
+		t.Errorf("theme.css: the dark theme leaves these tokens at their light values: %v", missing)
 	}
 	if len(extra) > 0 {
-		t.Errorf("the light theme defines tokens the dark root does not: %v (add them to :root so both themes carry them)", extra)
+		t.Errorf("theme.css: the dark theme defines tokens :root does not: %v (add them to :root so both themes carry them)", extra)
 	}
-	if len(dark) < 30 {
-		t.Fatalf("expected the full token set in :root, found %d", len(dark))
+	if len(roots) < 30 {
+		t.Fatalf("theme.css: expected every old name in :root, found %d", len(roots))
 	}
 }

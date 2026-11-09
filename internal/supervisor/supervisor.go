@@ -260,6 +260,21 @@ type child struct {
 
 func (c *child) abandonNow() { c.abandonOnce.Do(func() { close(c.abandon) }) }
 
+func (s *Supervisor) profileLeftSaid(cleanup func() error) func() error {
+	var once sync.Once
+	return func() error {
+		err := cleanup()
+		left, ok := err.(*ProfileLeftError)
+		if !ok {
+			return err
+		}
+		once.Do(func() {
+			logsink.Warn("plugins.end", "plugin %s: its Windows container profile %s could not be removed (%s); it is empty and unused, and uninstalling the plugin removes it", s.spec.PluginID, left.Name, left.Reason)
+		})
+		return nil
+	}
+}
+
 func (c *child) retire() error {
 	var err error
 	if c.contained != nil {
@@ -597,7 +612,7 @@ func (s *Supervisor) contain(c *child, walled *launched) error {
 	c.isolation = s.spec.ArgvContainment
 	if walled != nil {
 
-		contained, cmsg = walled.contained, walled.containment.Description
+		contained, cmsg = s.profileLeftSaid(walled.contained), walled.containment.Description
 		c.isolation = walled.containment
 	} else {
 		contained, cmsg, cerr = containProcess(c.cmd.Process.Pid, s.spec.RLimitASBytes)

@@ -29,7 +29,7 @@ run(() => {
   const more = document.getElementById('mic-more'), menu = document.getElementById('mic-menu');
   const show = (state, connected, speaks) => { S.stats = { voice_state: state, voice_source: state === 'plugin' ? 'id.test.voice' : 'ElevenLabs · scribe_v2', reply_voice: speaks || '' }; S.connected = connected; render(); };
   wireMic();
-  assert(mic.title === 'Voice isn\'t set up — opens Speech settings' && mic.classList.contains('faint'), 'before the host says anything the microphone offers setup: ' + mic.outerHTML);
+  assert(mic.title === 'Voice isn\'t set up — opens Voice settings' && mic.classList.contains('faint'), 'before the host says anything the microphone offers setup: ' + mic.outerHTML);
 
   show('plugin', true);
   assert(!conv.hidden && mic.hidden, 'a voice plugin is the conversation microphone, and push-to-talk leaves');
@@ -47,12 +47,12 @@ run(() => {
   assert(document.getElementById('mic-voice').textContent === 'Replies spoken by ElevenLabs',
     'the voice that speaks replies is not named: ' + document.getElementById('mic-voice').outerHTML);
   assert(document.getElementById('mic-source').hidden, 'a microphone that is not set up was named as one');
-  assert(mic.title === 'Voice input isn\'t set up — opens Speech settings', 'the microphone said voice was missing beside a voice that speaks: ' + mic.title);
+  assert(mic.title === 'Voice input isn\'t set up — opens Voice settings', 'the microphone said voice was missing beside a voice that speaks: ' + mic.title);
   show('cloud', true, 'ElevenLabs');
   assert(document.getElementById('mic-source').textContent === 'Cloud speech — ElevenLabs · scribe_v2' &&
     !document.getElementById('mic-voice').hidden, 'both halves are named when both are there');
 
-  for (const [state, title] of [['setup', 'Voice isn\'t set up — opens Speech settings'], ['unreachable', 'Voice can\'t reach its service — opens Speech settings']]) {
+  for (const [state, title] of [['setup', 'Voice isn\'t set up — opens Voice settings'], ['unreachable', 'Voice can\'t reach its service — opens Voice settings']]) {
     show(state, false);
     assert(!mic.hidden && !mic.disabled && mic.classList.contains('faint') && mic.title === title, state + ' is a faint way into settings, even offline: ' + mic.outerHTML);
     assert(more.hidden, state + ' has no chevron: the microphone itself leads to settings');

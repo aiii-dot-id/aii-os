@@ -12,7 +12,10 @@ const (
 	Chrome  = "blink-chrome"
 	Edge    = "blink-edge"
 	Firefox = "gecko-firefox"
+	WebKit  = "webkit-playwright"
 )
+
+const playwrightDir = "AII_PLAYWRIGHT_DIR"
 
 var onPath = map[string][]string{
 	Chrome:  {"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"},
@@ -74,6 +77,9 @@ func installed(engine string) []string {
 }
 
 func Find(engine string) (path string, looked []string) {
+	if engine == WebKit {
+		return findWebKit()
+	}
 	for _, name := range pathNames(engine) {
 		looked = append(looked, name+" on PATH")
 		if p, err := exec.LookPath(name); err == nil {
@@ -87,6 +93,41 @@ func Find(engine string) (path string, looked []string) {
 		}
 	}
 	return "", looked
+}
+
+func findWebKit() (string, []string) {
+	var looked []string
+	if runtime.GOOS == "windows" {
+		return "", append(looked, "WebKit is not driven on Windows")
+	}
+	dir := os.Getenv(playwrightDir)
+	if dir == "" {
+		return "", append(looked, playwrightDir+" unset (a folder with node_modules/playwright-core and browsers/webkit-*)")
+	}
+	looked = append(looked, "node on PATH")
+	if _, err := exec.LookPath("node"); err != nil {
+		return "", looked
+	}
+	core := filepath.Join(dir, "node_modules", "playwright-core", "package.json")
+	looked = append(looked, core)
+	if _, err := os.Stat(core); err != nil {
+		return "", looked
+	}
+	browsers := filepath.Join(dir, "browsers", "webkit-*", "INSTALLATION_COMPLETE")
+	looked = append(looked, browsers)
+	if found, _ := filepath.Glob(browsers); len(found) == 0 {
+		return "", looked
+	}
+	_, here, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", append(looked, "this package's own folder (unknown)")
+	}
+	script := filepath.Join(filepath.Dir(here), "webkit-playwright.mjs")
+	looked = append(looked, script)
+	if fi, err := os.Stat(script); err != nil || fi.IsDir() {
+		return "", looked
+	}
+	return script, looked
 }
 
 func Allowed(engine string) bool {

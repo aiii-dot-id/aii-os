@@ -90,8 +90,9 @@ run(() => {
   // How often the index is fetched is the operator's, and says what it
   // also decides: when a download the network stopped is tried again.
   const every = stack.querySelector('#cfg-catevery');
-  assert(every && every.value === '30' && every.closest('label').textContent.includes('tried again by itself when the index is next fetched'), 'the catalog\'s spacing: ' + (every && every.closest('label').textContent));
-  assert(stack.textContent.includes('saved — applies now; every plugin is judged again'), 'the limits say they apply now: ' + stack.textContent);
+  assert(every && every.value === '30' && every.closest('label').textContent.includes('Check every (minutes)'), 'the catalog\'s spacing: ' + (every && every.closest('label').textContent));
+  // The operator's limits apply now.
+  assert(stack.textContent.includes('Applies at once.'), 'the limits say they apply now: ' + stack.textContent);
 });
 </script>`
 

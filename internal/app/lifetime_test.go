@@ -50,7 +50,7 @@ func TestAContinuationEndsWithTheAppsLifetime(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		a.continueCappedTurn("ws_lifetime", 1, capDeclared, "")
+		a.continueCappedTurn("ws_lifetime", 1, capDeclared, "", false, "")
 		close(done)
 	}()
 	select {
@@ -86,7 +86,7 @@ func TestALegWaitingForTheTurnWhenTheIdentityStopsIsToldAsNotRun(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		a.continueCappedTurn("ws_lifetime", 1, capDeclared, "")
+		a.continueCappedTurn("ws_lifetime", 1, capDeclared, "", false, "")
 		close(done)
 	}()
 	a.bgCancel()

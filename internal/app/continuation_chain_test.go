@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -146,6 +147,16 @@ func jsonStringFrom(body, marker string) string {
 	return body[i:]
 }
 
+// scheduledOrWhy is scheduleContinuation as these tests ask it: whether a fresh
+// turn was scheduled, and why not.
+func (a *App) scheduledOrWhy(reason capReason, from string) (bool, string) {
+	e := a.scheduleContinuation(reason, from, false)
+	return e.kind == continued, e.why
+}
+
+// nothingContinues is the closing line of a capped turn's reply when no
+// fresh turn was scheduled for it: the operator's sentence (2026-10-13),
+// with the turn's tool calls and why nothing follows.
 func nothingContinues(calls int, why string) string {
 	return fmt.Sprintf("[This turn ended at its budget after %d tool calls. Nothing continues by itself: %s. Ask again to continue.]", calls, why)
 }
@@ -180,7 +191,20 @@ func loopNotesBeside(t *testing.T, a *App, id string) string {
 		}
 		out += "\n\n" + note
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return out
+}
+
+// holdsNote reports whether one of the loop's notes in a record read by
+// recordedReply (the reply, then each note after a blank line) begins and
+// ends so, wherever it stands among them.
+func holdsNote(record, begins, ends string) bool {
+	parts := strings.Split(record, "\n\n")
+	return slices.ContainsFunc(parts[1:], func(note string) bool {
+		return strings.HasPrefix(note, begins) && strings.HasSuffix(note, ends)
+	})
 }
 
 // promisesInTheRecord counts the loop's notes in the record that say the
@@ -201,7 +225,6 @@ func TestCappedTurnContinuesInAFreshTurn(t *testing.T) {
 	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "leg probe"); err != nil {
 		t.Fatal(err)
 	}
-	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 
 	obs := &contScript{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +238,7 @@ func TestCappedTurnContinuesInAFreshTurn(t *testing.T) {
 				toolCall("c1b", "work", `{"action":"update","plan":"read the probe","steps":1}`),
 			))
 		case n <= 7: // two remaining calls, then four grace rounds
-			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", string(readArgs))))
+			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n))))
 		case n == 8: // the forced no-tools ending of leg one
 			_, _ = io.WriteString(w, textReply("leg one checkpointed"))
 		default: // the continuation turn: answer and end naturally
@@ -359,12 +382,16 @@ func TestATokenFencedTurnContinuesInAFreshTurn(t *testing.T) {
 		t.Fatal("no continuation turn reached the model — the fenced turn died at its fence")
 	}
 	fact := jsonStringFrom(contReq, "budget checkpoint — continuation 1")
-	for _, want := range []string{"ended because it spent its token budget", "still active", "Resume point: read past the fence"} {
+	// The fence ended on a call with the tools withdrawn, so the card does
+	// not send the leg back to a plan that call could not update: it
+	// asks for the plan to be reconciled with the answer.
+	for _, want := range []string{"ended because it spent its token budget", "still active", "Resume point: read past the fence",
+		"may be older than that turn's closing answer", "reconcile them with that answer and the recorded results", "Do not replay completed calls"} {
 		if !strings.Contains(fact, want) {
 			t.Errorf("the continuation fact omits %q: %q", want, fact)
 		}
 	}
-	for _, wrong := range []string{"declared tool budget", "context filled"} {
+	for _, wrong := range []string{"declared tool budget", "context filled", "resume from plan= and next_move= in your working state"} {
 		if strings.Contains(fact, wrong) {
 			t.Errorf("the continuation fact names an ending that did not happen (%q): %q", wrong, fact)
 		}
@@ -463,7 +490,6 @@ func TestDeliveredSessionDoesNotContinue(t *testing.T) {
 	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "leg probe"); err != nil {
 		t.Fatal(err)
 	}
-	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 
 	obs := &contScript{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -477,7 +503,7 @@ func TestDeliveredSessionDoesNotContinue(t *testing.T) {
 				toolCall("c1b", "work", `{"action":"update","plan":"read then deliver","steps":1}`),
 			))
 		case n <= 6:
-			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", string(readArgs))))
+			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n))))
 		case n == 7: // deliver INSIDE the grace window, still tool-calling
 			_, _ = io.WriteString(w, callReply("", toolCall("c7", "work", `{"action":"deliver","result":"served: done before the cap"}`)))
 		case n == 8:
@@ -499,10 +525,10 @@ func TestDeliveredSessionDoesNotContinue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turn failed: %v", err)
 	}
-	// And the reply says so. It used to end on the loop's sentence, "the
-	// work continues automatically in a fresh turn", which the loop writes
-	// before the app has looked for a session to continue.
-	said := "delivered and capped\n\n" + nothingContinues(8, "no work session is active")
+	// And the reply closes the turn. It used to end on the loop's sentence, "the
+	// work continues automatically in a fresh turn", and then on "Ask again to
+	// continue": neither is so of work that was delivered.
+	said := "delivered and capped"
 	if recordedReply(t, app, reply) != said {
 		t.Errorf("the reply of a capped turn that delivered its session = %q, want %q", reply, said)
 	}
@@ -583,12 +609,15 @@ func TestStopCancelsTheInFlightTurn(t *testing.T) {
 	}
 }
 
-// THE CHAIN IS BOUNDED AT EIGHT. Eight consecutive capped turns each hand their work
-// to a fresh leg; the ninth stands down, so a stuck task cannot chain for
-// ever. The turn gate is held throughout: the scheduled legs wait behind
-// it and none reaches a model, because what is under test is the
-// decision, not the legs.
-func TestTheContinuationChainStandsDownAfterEightLegs(t *testing.T) {
+// A SESSION'S WORK IS NOT BOUNDED BY THE CHAIN: work continues. The chain of
+// eight (docs/BETA1_CONTRACT.md) bounded consecutive capped turns so a
+// stuck task could not chain for ever; what stops an active session's
+// work now is read from its record (continueWork: the operator's hold,
+// the day's ceiling, a stuck pattern, a fresh turn that records nothing),
+// and the bound stands only for a deadline's resume with no session. The
+// turn gate is held throughout: the first cap queues the leg, and each
+// cap after it finds that leg queued and queues no second one.
+func TestASessionsWorkIsNotBoundedByTheChain(t *testing.T) {
 	app, _ := dispatchApp(t)
 	if !agencyOn(app.configSnapshot().Agency.TurnContinuation) {
 		t.Fatal("rig: turn continuation is on unless the config says otherwise")
@@ -601,8 +630,8 @@ func TestTheContinuationChainStandsDownAfterEightLegs(t *testing.T) {
 	if err := app.acquireTurn(ctx); err != nil {
 		t.Fatalf("acquire turn: %v", err)
 	}
-	// Stop while the legs still wait: the shutdown cancel reaches them
-	// first, and only then is the gate let go, so none of them runs.
+	// Stop while the leg still waits: the shutdown cancel reaches it
+	// first, and only then is the gate let go, so it never runs.
 	t.Cleanup(func() {
 		stop := stopAppAside(app)
 		<-app.bgCtx.Done()
@@ -611,39 +640,34 @@ func TestTheContinuationChainStandsDownAfterEightLegs(t *testing.T) {
 		case <-stop.done:
 			stop.check(t)
 		case <-time.After(15 * time.Second):
-			t.Error("Stop did not return after the waiting legs were cancelled")
+			t.Error("Stop did not return after the waiting leg was cancelled")
 		}
 	})
-
-	for leg := 1; leg <= 8; leg++ {
-		if scheduled, why := app.scheduleContinuation(capDeclared, ""); !scheduled || why != "" {
-			t.Fatalf("capped turn %d was not continued (%q); the bound is eight legs", leg, why)
+	for cap := 1; cap <= limits.DefaultContinuations+2; cap++ {
+		if scheduled, why := app.scheduledOrWhy(capDeclared, ""); !scheduled || why != "" {
+			t.Fatalf("capped turn %d was not continued (%q); the chain's bound does not govern a session's work", cap, why)
 		}
 	}
-	scheduled, why := app.scheduleContinuation(capDeclared, "")
-	if scheduled {
-		t.Fatal("a ninth consecutive capped turn was continued: the chain has no bound")
+	app.turn.mu.Lock()
+	queued := app.turn.legsQueued
+	app.turn.mu.Unlock()
+	if queued != 1 {
+		t.Fatalf("%d legs queued for ten caps, want the one that carries the work on", queued)
 	}
-	if want := "the host has already started 8 fresh turns in a row, its limit (agency.max_turn_continuations)"; why != want {
-		t.Errorf("the ninth capped turn is told %q, want %q", why, want)
-	}
-	// Stood down, it stays down for turns nobody asked for: a tenth is
-	// refused too.
-	if scheduled, _ := app.scheduleContinuation(capDeclared, ""); scheduled {
-		t.Fatal("the chain stood down and then continued with nobody having looked")
-	}
-
-	app.resetAsk()
-	for leg := 1; leg <= 8; leg++ {
-		if scheduled, why := app.scheduleContinuation(capDeclared, ""); !scheduled {
-			t.Fatalf("after the operator's own message capped turn %d was refused its continuation (%q); a new chain is eight legs", leg, why)
-		}
-	}
-	if scheduled, _ := app.scheduleContinuation(capDeclared, ""); scheduled {
-		t.Fatal("the new chain has no bound: a ninth leg after the operator's message was continued")
+	if on := resumesOnOfSession(t, app, "ws_chain"); on != "now" {
+		t.Fatalf("the condition is %q, want now", on)
 	}
 }
 
+// A CAPPED TURN THAT NOTHING CONTINUES SAYS SO, AND WHY (the expert review
+// of 2026-10-12, h-turn-01). The loop closes a turn cut by a budget with
+// "the work continues automatically in a fresh turn" before the app has
+// decided. With continuation switched off no fresh turn was scheduled and
+// the reply kept the sentence (the chain's bound, the other case once
+// here, no longer governs a session's work: continueWork): shown to the
+// operator, and recorded in the identity's history, where nothing kept it.
+// The reply now closes on what the app did, and the record holds that
+// reply and no other line.
 func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 	// declared ends a turn at its declared budget after eight tool calls;
 	// fenced ends one at its token fence after two.
@@ -651,7 +675,6 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 		if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "leg probe"); err != nil {
 			t.Fatal(err)
 		}
-		readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 		return func(n int) string {
 			switch {
 			case n == 1:
@@ -659,7 +682,7 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 					toolCall("c1a", "work", `{"action":"start","description":"capped work"}`),
 					toolCall("c1b", "work", `{"action":"update","plan":"read the probe","steps":1}`))
 			case n <= 7:
-				return callReply("", toolCall(fmt.Sprintf("c%d", n), "read", string(readArgs)))
+				return callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n)))
 			}
 			return textReply("capped here")
 		}, "capped here"
@@ -682,11 +705,6 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 		app.cfg.Agency.TurnContinuation = &off
 		app.cfgMu.Unlock()
 	}
-	chainSpent := func(app *App) {
-		app.turn.mu.Lock()
-		app.turn.contChain = limits.DefaultContinuations
-		app.turn.mu.Unlock()
-	}
 	for _, c := range []struct {
 		name    string
 		ending  func(*testing.T, *App, string) (func(int) string, string)
@@ -697,10 +715,6 @@ func TestACappedTurnNothingContinuesSaysSoAndWhy(t *testing.T) {
 	}{
 		{name: "switched off", ending: declared, refuse: switchedOff, calls: 8,
 			why: "continuation is switched off (agency.turn_continuation)"},
-		// The operator's message starts a new chain as its turn begins
-		// (resetAsk), so the chain is spent while the turn runs.
-		{name: "chain spent", ending: declared, refuse: chainSpent, midTurn: true, calls: 8,
-			why: "the host has already started 8 fresh turns in a row, its limit (agency.max_turn_continuations)"},
 		{name: "switched off at the token fence", ending: fenced, refuse: switchedOff, calls: 2,
 			why: "continuation is switched off (agency.turn_continuation)"},
 	} {
@@ -793,8 +807,17 @@ func TestALegThatDoesNotRunIsToldToTheOperator(t *testing.T) {
 			if err != nil {
 				t.Fatalf("turn failed: %v", err)
 			}
-			if !strings.HasSuffix(recordedReply(t, app, reply), "while its work session is still active, the work continues automatically in a fresh turn.]") {
-				t.Fatalf("rig: the capped turn was not handed to a fresh turn: %q", reply)
+			// THE CAP'S NOTE STANDS BESIDE THE REPLY, NOT ALWAYS LAST. A leg
+			// refused at its first request said nothing, so its own note
+			// ("This turn ended without a reply") stands beside the newest
+			// words, which are this reply. Once the turn gate is released the
+			// leg can land that note before this read. The leg's notice is
+			// waited for first, so this read always sees both.
+			if !c.ran {
+				waitUntil(t, func() bool { return outboxReply(t, app, "continuation_") != "" }, "the operator's notice that the leg did not run")
+			}
+			if record := recordedReply(t, app, reply); !holdsNote(record, "[This turn's token budget (500) is spent: ", "while its work session is still active, the work continues automatically in a fresh turn.]") {
+				t.Fatalf("rig: the capped turn's reply holds no note of its cap that says its work continues in a fresh turn: %q", record)
 			}
 
 			if c.ran {
@@ -846,5 +869,69 @@ func TestALegThatDoesNotRunIsToldToTheOperator(t *testing.T) {
 				t.Errorf("a leg that failed before a word delivered %q", got)
 			}
 		})
+	}
+}
+
+// A HANDOFF IN WORDS IS KEPT (the 04:19Z miss; a review's falsifier). The checkpoint
+// tells the model that, while its work session is active, the work continues in a
+// fresh turn. A model that answers that ask in words alone, inside the grace, ended
+// a turn the host then took for a natural finish: nothing was scheduled and nothing
+// said, and the reply's promise stood in the record over a silent identity. Answered
+// so, with the session active, a fresh turn starts and both readers are told.
+func TestAHandoffInWordsStartsTheFreshTurnItPromises(t *testing.T) {
+	app, dir := dispatchApp(t)
+	defer stopApp(t, app)
+	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "leg probe"); err != nil {
+		t.Fatal(err)
+	}
+	const handoff = "My work session is still open, so this continues in a fresh turn on its own."
+	obs := fixtureModel(t, app, func(n int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case n == 1: // two setup calls; the declaration buys one remaining call
+			_, _ = io.WriteString(w, callReply("",
+				toolCall("c1a", "work", `{"action":"start","description":"handed on"}`),
+				toolCall("c1b", "work", `{"action":"update","plan":"read the probe","steps":1}`)))
+		case n <= 3: // past the declaration: the checkpoint arms on this round
+			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n))))
+		case n == 4: // the checkpoint's ask, answered in words, inside the grace
+			_, _ = io.WriteString(w, textReply(handoff))
+		default: // the fresh turn
+			_, _ = io.WriteString(w, textReply("the next leg took it up"))
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := app.acquireTurn(ctx); err != nil {
+		t.Fatalf("acquire turn: %v", err)
+	}
+	reply, err := app.observeChat(ctx, "begin", func(kind, name, args string) {})
+	if err != nil {
+		t.Fatalf("turn failed: %v", err)
+	}
+	if reply != handoff {
+		t.Fatalf("the reply is %q", reply)
+	}
+	// The identity's record says a fresh turn follows.
+	if got := recordedReply(t, app, handoff); !strings.Contains(got, "the work continues automatically in a fresh turn") {
+		t.Errorf("the record holds %q: it does not say the work continues", got)
+	}
+	// And one does.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && len(obs.snapshot()) < 5 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := len(obs.snapshot()); n < 5 {
+		t.Fatalf("no fresh turn started after the promise: the model was asked %d times", n)
+	}
+	// The fresh turn's words are on the page: it moved nothing, so they
+	// are not sent (the floor for an unpromised leg, 2026-11-06), and the
+	// row beside them says so.
+	waitUntil(t, replyRecorded(app, "the next leg took it up"), "the fresh turn's words")
+	if r := waitRowBeside(t, app); r != wordsHeldUnpromisedRow {
+		t.Errorf("the row beside the fresh turn's words: %q", r)
+	}
+	if got := outboxReply(t, app, "wake_cont_"); got != "" {
+		t.Errorf("a fresh turn that moved nothing reached the operator's outbox: %q", got)
 	}
 }

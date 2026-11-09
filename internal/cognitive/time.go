@@ -3,6 +3,8 @@ package cognitive
 import (
 	"container/heap"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -69,6 +71,8 @@ type AlarmResult struct {
 	Accepted     bool
 	NextDeadline *int64
 
+	Deferred bool
+
 	Err error
 }
 
@@ -81,6 +85,8 @@ type SetAlarmer interface {
 
 	UpdateAlarmDeadlineCAS(alarmID string, expectedDeadline, newDeadline int64) (bool, error)
 	DeleteAlarmCAS(alarmID string, expectedDeadline int64) (bool, error)
+
+	AlarmByID(alarmID string) (rows.Alarm, bool, error)
 }
 
 type LifetimeTicker interface {
@@ -146,7 +152,13 @@ type TIME struct {
 	wake      PlatformWake
 	gate      *quiesce.Gate
 
-	pendingDispatch map[string]time.Time
+	pendingDispatch map[string]hold
+
+	holdSeq uint64
+
+	holdEpoch uint64
+
+	holdHook func()
 
 	unowned    map[string]bool
 	safeSource func() bool
@@ -165,7 +177,7 @@ type TIME struct {
 }
 
 type AlarmEnqueuer interface {
-	EnqueueAlarm(alarm rows.Alarm) error
+	EnqueueAlarm(alarm rows.Alarm, token uint64) error
 }
 
 func NewTIME(store SetAlarmer, lifetime LifetimeTicker) *TIME {
@@ -174,7 +186,8 @@ func NewTIME(store SetAlarmer, lifetime LifetimeTicker) *TIME {
 		lifetime:        lifetime,
 		owners:          make(map[string]AlarmOwner),
 		dead:            make(map[string]bool),
-		pendingDispatch: make(map[string]time.Time),
+		pendingDispatch: make(map[string]hold),
+		holdEpoch:       newHoldEpoch(),
 		safeMarks:       make(map[string]safeMark),
 		resched:         make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
@@ -263,6 +276,9 @@ func (t *TIME) quiesced() bool {
 	t.mu.Lock()
 	g := t.gate
 	t.mu.Unlock()
+	if g == nil {
+		return false
+	}
 	return g.Paused()
 }
 
@@ -365,8 +381,10 @@ func (t *TIME) LifeClock() int64 {
 }
 
 func WallNow() int64 {
-	return time.Now().UTC().UnixMilli()
+	return wallNowFn().UTC().UnixMilli()
 }
+
+var wallNowFn = time.Now
 
 func (t *TIME) Start(ctx context.Context) {
 	t.mu.Lock()
@@ -526,8 +544,8 @@ func (t *TIME) nextWakeIncludingEphemerals(includeEphemerals bool) (time.Time, b
 	}
 	now := time.Now()
 	pending := make(map[string]bool, len(t.pendingDispatch))
-	for id, since := range t.pendingDispatch {
-		retryAt := since.Add(pendingDispatchRetryAfter)
+	for id, h := range t.pendingDispatch {
+		retryAt := h.since.Add(pendingDispatchRetryAfter)
 		if !now.Before(retryAt) {
 			delete(t.pendingDispatch, id)
 			continue
@@ -899,7 +917,7 @@ func (t *TIME) dispatchAlarm(ctx context.Context, alarm rows.Alarm) {
 	owner, ok := t.owners[alarm.OwnerName]
 	if !ok {
 
-		t.pendingDispatch[alarm.AlarmID] = time.Now()
+		t.acquireHoldLocked(alarm.AlarmID)
 		said := t.unowned[alarm.AlarmID]
 		if t.unowned == nil {
 			t.unowned = map[string]bool{}
@@ -912,30 +930,61 @@ func (t *TIME) dispatchAlarm(ctx context.Context, alarm rows.Alarm) {
 		}
 		return
 	}
+
+	token, claimed := t.acquireHoldLocked(alarm.AlarmID)
+	if !claimed {
+		t.mu.Unlock()
+		return
+	}
 	t.mu.Unlock()
 	if enq != nil {
 
-		t.mu.Lock()
-		t.pendingDispatch[alarm.AlarmID] = time.Now()
-		t.mu.Unlock()
-		if err := enq.EnqueueAlarm(alarm); err != nil {
+		if err := enq.EnqueueAlarm(alarm, token); err != nil {
 			logsink.Warn("time.error", "alarm %s enqueue failed (row preserved for retry): %v", alarm.AlarmID, err)
 		}
 		return
 	}
 	result := t.invokeOwner(ctx, owner, alarm)
-	t.applyTransitions(alarm, result)
+	t.applyTransitions(alarm, result, token)
 }
 
-func (t *TIME) clearPendingDispatch(alarmID string) {
+type hold struct {
+	since time.Time
+	token uint64
+}
+
+func (t *TIME) acquireHoldLocked(alarmID string) (uint64, bool) {
+	if _, held := t.pendingDispatch[alarmID]; held {
+		return 0, false
+	}
+	if t.holdHook != nil {
+		t.holdHook()
+	}
+	t.holdSeq++
+	token := t.holdEpoch<<32 | (t.holdSeq & 0xffffffff)
+	t.pendingDispatch[alarmID] = hold{since: time.Now(), token: token}
+	return token, true
+}
+
+func newHoldEpoch() uint64 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return uint64(time.Now().UnixNano()) & 0xffffffff
+	}
+	return uint64(binary.BigEndian.Uint32(b[:]))
+}
+
+func (t *TIME) releaseHold(alarmID string, token uint64) {
 	t.mu.Lock()
-	delete(t.pendingDispatch, alarmID)
+	if h, ok := t.pendingDispatch[alarmID]; ok && h.token == token {
+		delete(t.pendingDispatch, alarmID)
+	}
 	t.mu.Unlock()
 	t.signalResched()
 }
 
-func (t *TIME) applyTransitions(alarm rows.Alarm, result AlarmResult) error {
-	defer t.clearPendingDispatch(alarm.AlarmID)
+func (t *TIME) applyTransitions(alarm rows.Alarm, result AlarmResult, token uint64) error {
+	defer t.releaseHold(alarm.AlarmID, token)
 	var currentClock int64
 	if alarm.Clock == "wall" {
 		currentClock = WallNow()
@@ -958,7 +1007,8 @@ func (t *TIME) applyTransitions(alarm rows.Alarm, result AlarmResult) error {
 		}
 	case result.NextDeadline != nil:
 		return t.applyCAS(alarm, *result.NextDeadline)
-	case alarm.RepeatEvery != nil:
+	case alarm.RepeatEvery != nil && !result.Deferred:
+
 		return t.applyCAS(alarm, currentClock+*alarm.RepeatEvery)
 	default:
 
@@ -972,6 +1022,87 @@ func (t *TIME) applyTransitions(alarm rows.Alarm, result AlarmResult) error {
 	return nil
 }
 
+type BringForwardResult struct {
+	Moved  bool
+	From   int64
+	To     int64
+	Reason string
+}
+
+const (
+	PressSafe         = "safe"
+	PressInFlight     = "in_flight"
+	PressAlreadyDue   = "already_due"
+	PressChanged      = "changed"
+	PressNotRecurring = "not_recurring"
+	PressAbsent       = "absent"
+
+	PressPaused = "paused"
+
+	PressStall = "stall"
+
+	PressBudget = "budget_hold"
+)
+
+func (t *TIME) BringAlarmForward(alarmID string) (BringForwardResult, error) {
+	if t.quiesced() {
+		return BringForwardResult{Reason: PressPaused}, nil
+	}
+
+	release, reason := t.claimForPress(alarmID)
+	if reason != "" {
+		return BringForwardResult{Reason: reason}, nil
+	}
+	defer release()
+
+	alarm, ok, err := t.store.AlarmByID(alarmID)
+	if err != nil {
+		return BringForwardResult{}, fmt.Errorf("read alarm %s: %w", alarmID, err)
+	}
+	if !ok {
+		return BringForwardResult{Reason: PressAbsent}, nil
+	}
+	if alarm.RepeatEvery == nil {
+		return BringForwardResult{From: alarm.Deadline, Reason: PressNotRecurring}, nil
+	}
+
+	now := WallNow()
+	if alarm.Clock != "wall" {
+		now = t.LifeClock()
+	}
+	if alarm.Deadline <= now {
+		return BringForwardResult{From: alarm.Deadline, Reason: PressAlreadyDue}, nil
+	}
+
+	moved, err := t.store.UpdateAlarmDeadlineCAS(alarmID, alarm.Deadline, now)
+	if err != nil {
+		return BringForwardResult{From: alarm.Deadline}, fmt.Errorf("bring alarm %s forward: %w", alarmID, err)
+	}
+	if !moved {
+		return BringForwardResult{From: alarm.Deadline, Reason: PressChanged}, nil
+	}
+	t.signalResched()
+	logsink.Info("time.decision", "alarm %s brought forward from %d to %d at the operator's ask", alarmID, alarm.Deadline, now)
+	return BringForwardResult{Moved: true, From: alarm.Deadline, To: now}, nil
+}
+
+func (t *TIME) claimForPress(alarmID string) (func(), string) {
+	t.mu.Lock()
+	safe := t.safeSource
+	t.mu.Unlock()
+
+	if safe != nil && safe() {
+		return nil, PressSafe
+	}
+	t.mu.Lock()
+	token, claimed := t.acquireHoldLocked(alarmID)
+	t.mu.Unlock()
+	if !claimed {
+		return nil, PressInFlight
+	}
+	return func() { t.releaseHold(alarmID, token) }, ""
+}
+
 func (t *TIME) OwnerFor(name string) (AlarmOwner, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -979,14 +1110,14 @@ func (t *TIME) OwnerFor(name string) (AlarmOwner, bool) {
 	return o, ok
 }
 
-func (t *TIME) ClearPendingDispatch(alarmID string) { t.clearPendingDispatch(alarmID) }
+func (t *TIME) ClearPendingDispatch(alarmID string, token uint64) { t.releaseHold(alarmID, token) }
 
 func (t *TIME) InvokeAlarmOwner(ctx context.Context, owner AlarmOwner, alarm rows.Alarm) AlarmResult {
 	return t.invokeOwner(ctx, owner, alarm)
 }
 
-func (t *TIME) ApplyAlarmTransitions(alarm rows.Alarm, result AlarmResult) error {
-	return t.applyTransitions(alarm, result)
+func (t *TIME) ApplyAlarmTransitions(alarm rows.Alarm, result AlarmResult, token uint64) error {
+	return t.applyTransitions(alarm, result, token)
 }
 
 func (t *TIME) invokeOwner(ctx context.Context, owner AlarmOwner, alarm rows.Alarm) (result AlarmResult) {

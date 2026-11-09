@@ -36,16 +36,16 @@ function render() {
   el.hidden = step === 'closed' || !!S.identityExists;
   if (el.hidden) { el.innerHTML = ''; return; }
   let html = '<h2 style="margin-top:6px">Restore an identity</h2>' +
-    '<p class="lead">For a machine that has never held this identity. You need the two things that left the old machine — the <b>escrow file</b> with its passphrase, and a <b>snapshot</b> — and the provider, model and key above, because a restored identity needs a mind to run on.</p>';
+    '<p class="lead">Moving an identity here from another computer? You need the backup file and its passphrase.</p>';
   if (!secretsOK) {
-    html += '<div class="err" data-nosecrets data-announce>This connection is not private: a passphrase, or an identity in the clear, would cross the network. Open this page on the machine itself, or serve the dashboard with TLS, and come back.</div>';
+    html += '<div class="err" data-nosecrets data-announce>To restore, open this page on the computer where AII OS runs.</div>';
     renderInto(el, html); return;
   }
   html += '<div data-step="keys"><label class="f">1 · THE ESCROW FILE</label>';
   if (keys) {
-    html += '<div class="ok" data-keys-ok data-announce>The keys of identity <span style="font-family:var(--mono)">' + esc(keys.identity.slice(0, 16)) + '…</span> are in place on this machine; the key signs and verifies.</div>';
+    html += '<div class="ok" data-keys-ok data-announce>This identity\'s keys are on this computer.</div>';
   } else {
-    if (begun) html += '<div class="err" data-begun data-announce>A restore of ' + esc(named(begun.identity)) + ' was begun on this machine and has been neither finished nor withdrawn. To go on with it, open the escrow file again below; to end it, press "Withdraw these keys".</div>';
+    if (begun) html += '<div class="err" data-begun data-announce>A restore was started here and not finished. To go on with it, open the escrow file again below; to end it, press "Withdraw these keys".</div>';
     html += '<input type="file" id="fbr-escrow" accept=".age">' +
       '<label class="f">ITS PASSPHRASE</label><input type="password" id="fbr-pass" autocomplete="off">' +
       '<div style="margin-top:10px"><button class="btn" id="fbr-keys"' + (busy ? ' disabled' : '') + '>' + (busy && act === 'opening' ? 'Opening…' : 'Open it') + '</button></div>';
@@ -54,19 +54,19 @@ function render() {
   if (keys) {
     html += '<div data-step="snapshot" style="margin-top:16px"><label class="f">2 · THE SNAPSHOT</label>';
     if (snapshot) {
-      html += '<div class="ok" data-snapshot-ok data-announce>' + esc(snapshot) + ' is on this machine.</div>';
+      html += '<div class="ok" data-snapshot-ok data-announce>This backup is already here.</div>';
     } else {
       html += (keys.holds_snapshot_key
         ? '<div class="fb-hint">The encrypted snapshot file, named <span style="font-family:var(--mono)">ledger-&lt;date&gt;-seq&lt;N&gt;.tar.age</span>. Do not rename it.</div><input type="file" id="fbr-snap" accept=".age">'
         : '<div class="fb-hint">This escrow was made before snapshots were encrypted, so pick a plaintext snapshot\'s FOLDER, named <span style="font-family:var(--mono)">ledger-&lt;date&gt;-seq&lt;N&gt;</span>.</div>') +
         '<div class="fb-hint" style="margin-top:8px">Or a plaintext snapshot\'s folder:</div><input type="file" id="fbr-folder" webkitdirectory>' +
-        '<div style="margin-top:10px"><button class="btn" id="fbr-send"' + (busy ? ' disabled' : '') + '>' + (busy && act === 'sending' ? esc(progress || 'Sending…') : 'Send it to this machine') + '</button></div>';
+        '<div style="margin-top:10px"><button class="btn" id="fbr-send"' + (busy ? ' disabled' : '') + '>' + (busy && act === 'sending' ? esc(progress || 'Sending…') : 'Send it here') + '</button></div>';
     }
     html += '</div>';
   }
   if (keys && snapshot) {
     html += '<div data-step="restore" style="margin-top:16px"><label class="f">3 · RESTORE</label>' +
-      '<div class="fb-hint" data-restore-says>The snapshot is proved before anything is put in place, and held to the keys above: another identity\'s snapshot is refused. The identity will be as it was when that snapshot was made — what it lived afterwards on the old machine is not in it. If the witness attested records this snapshot does not hold, the next anchor is refused as a rollback and the identity enters SAFE until you deal with it — see Backups &amp; Keys after the restore.</div>' +
+      '<div class="fb-hint" data-restore-says>The snapshot is proved before anything is put in place, and held to the keys above: another identity\'s snapshot is refused. Anything after this backup was made is not in it. If the witness attested records this snapshot does not hold, the next anchor is refused as a rollback and the identity enters SAFE until you deal with it — see Backups after the restore.</div>' +
       '<div style="margin-top:10px"><button class="btn" id="fbr-restore" style="width:100%"' + (busy ? ' disabled' : '') + '>' + (step === 'restoring' ? 'Proving and restoring…' : 'Restore') + '</button></div></div>';
   }
   if (said) html += '<div class="' + (said.kind === 'ok' ? 'ok' : 'err') + '" data-restore-said data-announce style="margin-top:12px">' + esc(said.text) + '</div>';
@@ -133,11 +133,11 @@ function wire() {
   };
   const w = $('fbr-withdraw');
   if (w) w.onclick = () => {
-    const whose = named((keys || begun).identity), got = received();
+    const got = received();
     const only = got.length === 1 ? 'Only the keys this page put here from your escrow file are removed, with the snapshot this page received (' + got[0] + '); your own copy of it is not touched.'
       : got.length ? 'Only the keys this page put here from your escrow file are removed, with the snapshots this page received (' + got.join(', ') + '); your own copies of them are not touched.'
       : 'Only the keys this page put here from your escrow file are removed.';
-    if (!window.confirm('Withdraw the keys of ' + whose + ' from this machine? ' + only + ' The escrow file is not touched, and the keys can be put back from it here. This identity cannot be restored on this machine until they are.')) return;
+    if (!window.confirm('Remove this identity\'s keys from this computer? ' + only + ' You can\'t restore it here until you add them again.')) return;
     back = step;
     busy = true; act = 'withdrawing'; step = 'withdrawing'; said = null; render();
     if (!send({ type: 'restore_new', restore_new: { action: 'withdraw' } })) { busy = false; step = back; say('err', 'Not connected — nothing was sent.'); }
@@ -145,8 +145,6 @@ function wire() {
   const c = $('fbr-close');
   if (c) c.onclick = () => { step = 'closed'; said = null; render(); };
 }
-
-function named(identity) { return identity ? 'identity ' + identity.slice(0, 16) + '…' : 'an identity'; }
 
 function received() {
   const got = ((begun && begun.received) || []).slice();
@@ -167,12 +165,10 @@ export function applyRestoreNew(reply) {
   busy = false;
   if (reply.error) { if (step === 'restoring') step = 'snapshot'; else if (step === 'withdrawing') step = back; say('err', reply.error); return; }
   if (reply.action === 'withdraw' && reply.withdrawn) {
-    const whose = named((keys || begun || {}).identity);
     begun = null; keys = null; snapshot = ''; progress = ''; said = null; step = 'closed';
     render();
     const el = $('fb-result');
-    const took = (reply.snapshots || []).length ? ', with the snapshots this page received,' : ',';
-    if (el) el.innerHTML = '<div class="ok" data-withdrawn>' + esc('The keys of ' + whose + ' are withdrawn from this machine' + took + ' and nothing else here was changed. Your escrow file still holds them. You can birth a new identity here now, or restore one.') + '</div>';
+    if (el) el.innerHTML = '<div class="ok" data-withdrawn>' + esc('This identity\'s keys were removed from this computer. Your escrow file still holds them. You can birth a new identity here now, or restore one.') + '</div>';
     return;
   }
   if (reply.action === 'keys' && reply.keys) { keys = reply.keys; begun = { identity: keys.identity, received: (begun && begun.received) || [] }; step = 'snapshot'; said = null; render(); return; }

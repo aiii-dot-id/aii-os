@@ -12,7 +12,7 @@ import (
 )
 
 func TestAPackageWhoseModelsAreAllConditionalHasItsDirectoryFromTheStart(t *testing.T) {
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	store := openStore(t)
 	language := SettingDecl{Key: "tts_language", Type: SettingEnum, Title: "Speaking language", Default: "en", Values: []string{"en", "fr"}}
 	models := []ModelDecl{whenModel("fr-pack", &ModelWhen{Setting: "tts_language", Values: []string{"fr"}})}
@@ -150,7 +150,12 @@ func TestARunningPluginsModelsFollowItsSettingsWithoutARestart(t *testing.T) {
 	// path under the same directory.
 	close(french.block)
 	q.Want(ap.LateMaterial(ap.ModelsAbsent(want)))
-	waitFor(t, "the French pack", func() bool { return len(ap.ModelsAbsent(want)) == 0 })
+	// Ready, not the file: the fetch is still writing the store after its
+	// file lands, and the test's directory is removed when it returns.
+	waitFor(t, "the French pack", func() bool { return len(ready.list()) == 2 })
+	if len(ap.ModelsAbsent(want)) != 0 {
+		t.Fatal("after the fetch the French models still read as absent")
+	}
 	if _, err := os.Stat(filepath.Join(dir, "tts", "languages", "fr", "pack.bin")); err != nil {
 		t.Fatalf("the pack is not at its declared path: %v", err)
 	}

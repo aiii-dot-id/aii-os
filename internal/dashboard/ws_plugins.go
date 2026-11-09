@@ -121,7 +121,7 @@ func pluginStoredRefusal(msg ClientMessage, secretsOK bool) string {
 	case msg.Stored == nil || msg.Stored.Plugin == "" || (msg.Stored.Kind != "memories" && msg.Stored.Kind != "keys"):
 		return "plugin stored: name the plugin, and memories or keys"
 	case msg.Stored.Kind == "keys" && !secretsOK:
-		return "this connection is not private, so a plugin's keys and their values are not shown — open the dashboard on the machine itself, or switch on TLS in Settings → Dashboard"
+		return "this connection isn't private, so a plugin's keys are hidden. Use the AII OS computer, or turn on \"Serve over HTTPS\" in Settings → Access"
 	}
 	return ""
 }
@@ -132,7 +132,7 @@ func pluginKeyRefusal(msg ClientMessage, secretsOK bool) string {
 	case pk == nil || pk.Plugin == "" || pk.Key == "":
 		return "name the plugin and the setting"
 	case msg.Type == "plugin_key_set" && !secretsOK:
-		return "this connection is not private, so the key was not taken — open the dashboard on the machine itself, or switch on TLS in Settings → Dashboard"
+		return "this connection isn't private, so the key wasn't saved. Use the AII OS computer, or turn on \"Serve over HTTPS\" in Settings → Access"
 	}
 	return ""
 }

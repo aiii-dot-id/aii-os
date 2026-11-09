@@ -28,9 +28,9 @@ export function query(n, e) { return send(Object.assign({ type: 'query', query: 
 	return modules
 }
 
-// THE LONGEST WAIT BEFORE A REFUSED MODEL IS TRIED AGAIN IS ON THE
-// SUBSTRATE CARD. Its label states the default as the host sends it (the
-// card holds no number of its own: here one no code holds), a blank field
+// THE LONGEST WAIT BEFORE A REFUSED MODEL IS TRIED AGAIN IS UNDER MODEL'S
+// MORE OPTIONS. Its hint states the default as the host sends it (the
+// page holds no number of its own: here one no code holds), a blank field
 // is the default, and a Save of the card sends the setting only where the
 // field was changed, so the default stays the program's and is not
 // written into config.json by a save of the model.
@@ -49,9 +49,11 @@ run(() => {
   S.providers = []; S.providersLoaded = true; S.view = 'settings';
   renderSettings();
   const field = () => document.getElementById('cfg-refused-retry');
-  assert(field(), 'the substrate card draws the longest wait');
+  assert(field(), 'More options draws the longest wait');
   const label = field().previousElementSibling;
-  assert(label && label.textContent === 'LONGEST WAIT BEFORE A REFUSED MODEL IS TRIED AGAIN (SECONDS; BLANK = 4321)', 'the label states the default the host sent: ' + (label && label.textContent));
+  assert(label && label.textContent === 'Try a refused model again after (seconds)', 'the label names the wait: ' + (label && label.textContent));
+  const hint = field().nextElementSibling;
+  assert(hint && hint.textContent === 'A refused model is tried again by itself, each wait twice the last, up to this long. Blank: 4321 seconds.', 'the hint states the default the host sent: ' + (hint && hint.textContent));
   assert(field().value === '', 'no wait named is a blank field: ' + field().value);
 
   const save = () => { document.querySelector('[data-save="llm"]').click(); const sent = frames.filter(f => f.type === 'config_set'); frames.length = 0; return sent; };
@@ -76,6 +78,12 @@ run(() => {
   field().value = '';
   sent = save();
   assert(sent.length === 1 && sent[0].config['llm.refused_retry_max_seconds'] === null, 'a cleared field sends null, the default again: ' + JSON.stringify(sent[0] && sent[0].config));
+  // The host keeps a cleared wait as 0, and the page reads that as what it asked for.
+  S.config.llm.refused_retry_max_seconds = 0;
+  assert(acceptSettingsConfig('req-1'), 'the save is claimed');
+  renderSettings();
+  const said = document.querySelector('[data-said="llm"]');
+  assert(said && said.classList.contains('good') && said.textContent === 'Saved.', 'clearing the wait reads as: ' + (said && said.textContent));
 });
 </script>`
 	runPageInEngines(t, page, settingsFieldModules(t))
@@ -88,41 +96,43 @@ run(() => {
 // the setting only where the field was changed.
 func TestTheRollSizeFieldShowsTheHostsDefaultAndSendsOnlyAChange(t *testing.T) {
 	page := `<!doctype html>
-<div id="settings-stack"></div>
+<div id="settings-stack"></div><div id="technical-stack"></div>
 <script type="module">
 import { S } from './state.js';
 import { frames } from './ws.js';
-import { renderSettings, acceptSettingsConfig } from './views/settings.js';
+import { acceptSettingsConfig } from './views/settings.js';
+import { drawLogsForm } from './views/settings/technical/forms.js';
 import { assert, run } from './__harness.js';
 run(() => {
   S.config = { llm: { provider: '', model: 'm', endpoint: 'https://x.test', api_key_masked: 'none' },
     dashboard: { host: '127.0.0.1', port: 1, tls: false }, prompt: {}, witness: {}, plugins: {}, agency: {}, cognition: {}, restart_required: [],
     logs: { dir: 'log', max_backups: 9, compress_days: 7, max_bytes: 0, max_bytes_default: 3145729 } };
-  S.providers = []; S.providersLoaded = true; S.view = 'settings'; S.logsList = [];
+  S.providers = []; S.providersLoaded = true; S.view = 'technical'; S.logsList = [];
+  const st = document.getElementById('technical-stack');
+  const renderSettings = S.renderTechnical = () => drawLogsForm(st);
   renderSettings();
-  const nav = document.querySelector('[data-sec="logs"]');
-  assert(nav, 'Settings has a Logs section');
-  nav.click();
   const field = () => document.getElementById('cfg-lbytes');
   assert(field(), 'the Logs card draws the roll size');
-  const label = field().previousElementSibling;
-  assert(label && label.textContent === 'ROLL THE LIVE LOG AT (BYTES; BLANK = 3145729)', 'the label states the default the host sent: ' + (label && label.textContent));
+  assert(field().placeholder === 'Usually 3', 'the field shows the default the host sent: ' + field().placeholder);
   assert(field().value === '', 'no size named is a blank field: ' + field().value);
 
-  const save = () => { document.querySelector('[data-save="logs"]').click(); const sent = frames.filter(f => f.type === 'config_set'); frames.length = 0; return sent; };
+  const save = () => { document.querySelector('[data-save="technical"]').click(); const sent = frames.filter(f => f.type === 'config_set'); frames.length = 0; return sent; };
+  const other = name => { document.getElementById('cfg-ldir').value = name; S.config.logs.dir = name; };
+  other('elsewhere');
   let sent = save();
   assert(sent.length === 1 && !('logs.max_bytes' in sent[0].config), 'a save with the field untouched does not send it: ' + JSON.stringify(sent[0] && sent[0].config));
   assert(acceptSettingsConfig('req-1'), 'the save is claimed');
   renderSettings(); // the Save is drawn again, no longer waiting
 
-  field().value = '2097152';
+  field().value = '2';
   sent = save();
   assert(sent.length === 1 && sent[0].config['logs.max_bytes'] === 2097152, 'a size typed is sent as a number: ' + JSON.stringify(sent[0] && sent[0].config));
   S.config.logs.max_bytes = 2097152;
   assert(acceptSettingsConfig('req-1'), 'the save is claimed');
   renderSettings(); // the Save is drawn again, no longer waiting
-  assert(field().value === '2097152', 'the size the file states is shown: ' + field().value);
+  assert(field().value === '2', 'the size the file states is shown: ' + field().value);
 
+  other('again');
   sent = save();
   assert(sent.length === 1 && !('logs.max_bytes' in sent[0].config), 'a save with the stated size untouched does not send it again: ' + JSON.stringify(sent[0] && sent[0].config));
   assert(acceptSettingsConfig('req-1'), 'the save is claimed');
@@ -143,38 +153,40 @@ run(() => {
 // log kept the host sends no default and the label says there is no bound.
 func TestTheFoldersBoundFieldShowsTheHostsDefaultAndSendsOnlyAChange(t *testing.T) {
 	page := `<!doctype html>
-<div id="settings-stack"></div>
+<div id="settings-stack"></div><div id="technical-stack"></div>
 <script type="module">
 import { S } from './state.js';
 import { frames } from './ws.js';
-import { renderSettings, acceptSettingsConfig } from './views/settings.js';
+import { acceptSettingsConfig } from './views/settings.js';
+import { drawLogsForm } from './views/settings/technical/forms.js';
 import { assert, run } from './__harness.js';
 run(() => {
   S.config = { llm: { provider: '', model: 'm', endpoint: 'https://x.test', api_key_masked: 'none' },
     dashboard: { host: '127.0.0.1', port: 1, tls: false }, prompt: {}, witness: {}, plugins: {}, agency: {}, cognition: {}, restart_required: [],
     logs: { dir: 'log', max_backups: 9, compress_days: 7, max_bytes: 0, max_bytes_default: 3145729, max_total_bytes: 0, max_total_bytes_default: 31457290 } };
-  S.providers = []; S.providersLoaded = true; S.view = 'settings'; S.logsList = [];
+  S.providers = []; S.providersLoaded = true; S.view = 'technical'; S.logsList = [];
+  const st = document.getElementById('technical-stack');
+  const renderSettings = S.renderTechnical = () => drawLogsForm(st);
   renderSettings();
-  document.querySelector('[data-sec="logs"]').click();
   const field = () => document.getElementById('cfg-ltotal');
   assert(field(), 'the Logs card draws the folder bound');
-  const label = () => field().previousElementSibling.textContent;
-  assert(label() === 'KEEP THE ROTATED LOGS UNDER (BYTES, OLDEST GO FIRST; BLANK = 31457290)', 'the label states the default the host sent: ' + label());
+  assert(field().placeholder === 'Usually 30', 'the field shows the default the host sent: ' + field().placeholder);
   assert(field().value === '', 'no bound named is a blank field: ' + field().value);
 
-  const save = () => { document.querySelector('[data-save="logs"]').click(); const sent = frames.filter(f => f.type === 'config_set'); frames.length = 0; return sent; };
+  const save = () => { document.querySelector('[data-save="technical"]').click(); const sent = frames.filter(f => f.type === 'config_set'); frames.length = 0; return sent; };
+  document.getElementById('cfg-ldir').value = 'elsewhere'; S.config.logs.dir = 'elsewhere';
   let sent = save();
   assert(sent.length === 1 && !('logs.max_total_bytes' in sent[0].config), 'a save with the field untouched does not send it: ' + JSON.stringify(sent[0] && sent[0].config));
   assert(acceptSettingsConfig('req-1'), 'the save is claimed');
   renderSettings();
 
-  field().value = '20971520';
+  field().value = '20';
   sent = save();
   assert(sent.length === 1 && sent[0].config['logs.max_total_bytes'] === 20971520, 'a bound typed is sent as a number: ' + JSON.stringify(sent[0] && sent[0].config));
   S.config.logs.max_total_bytes = 20971520;
   assert(acceptSettingsConfig('req-1'), 'the save is claimed');
   renderSettings();
-  assert(field().value === '20971520', 'the bound the file states is shown: ' + field().value);
+  assert(field().value === '20', 'the bound the file states is shown: ' + field().value);
 
   field().value = '';
   sent = save();
@@ -183,7 +195,7 @@ run(() => {
 
   S.config.logs.max_total_bytes = 0; S.config.logs.max_backups = -1; S.config.logs.max_total_bytes_default = 0;
   renderSettings();
-  assert(label() === 'KEEP THE ROTATED LOGS UNDER (BYTES, OLDEST GO FIRST; BLANK = NO BOUND WHILE ALL ARE KEPT)', 'with every log kept the label says there is no bound: ' + label());
+  assert(field().placeholder === '', 'with every log kept no usual bound is shown: ' + field().placeholder);
 });
 </script>`
 	runPageInEngines(t, page, settingsFieldModules(t))

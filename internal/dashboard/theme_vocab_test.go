@@ -13,11 +13,18 @@ func TestDeclaredThemeTokensReadsShippedStylesheet(t *testing.T) {
 		t.Fatal("the shipped theme.css must yield a vocabulary; empty disables inert detection entirely")
 	}
 	// Load-bearing names spread across the block, including one whose
-	// value contains var() and one whose value contains commas and
-	// quotes — the parser must survive both.
-	for _, name := range []string{"--acc", "--bg0", "--txt", "--line", "--grad", "--font"} {
+	// value is a var() and one whose value holds commas — the parser must
+	// survive both (a value with quotes too is --font-voice, below).
+	for _, name := range []string{"--acc", "--bg0", "--txt", "--line", "--acc-rgb", "--font"} {
 		if !got[name] {
 			t.Errorf("theme.css declares %s but the vocabulary does not contain it", name)
+		}
+	}
+	// The roles theme.json may set (spec 5c) are in tokens/tokens.css: a
+	// vocabulary read from theme.css alone would call each of them inert.
+	for _, name := range []string{"--text", "--accent", "--surface", "--bg", "--font-voice", "--measure"} {
+		if !got[name] {
+			t.Errorf("tokens.css declares the role %s but the vocabulary does not contain it", name)
 		}
 	}
 	if got["--acent"] {

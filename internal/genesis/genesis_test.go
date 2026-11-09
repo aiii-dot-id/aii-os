@@ -315,7 +315,7 @@ func TestBirthAcceptsServerBundleKind(t *testing.T) {
 func TestVerifySelfContained(t *testing.T) {
 	dir := t.TempDir()
 	root, bundle, _ := mintTestRing0(t)
-	_, err := Birth(&BirthConfig{
+	born, err := Birth(&BirthConfig{
 		Name:        "PortableTest",
 		Ring0Bundle: bundle,
 		Root:        root.Env,
@@ -326,6 +326,10 @@ func TestVerifySelfContained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A birth hands back its open ledger, whose directory lock is held
+	// until it is closed; left open, Windows cannot remove the directory
+	// (the native run of 2026-11-07).
+	t.Cleanup(func() { _ = born.Ledger.Close() })
 
 	n, fp, err := VerifySelfContained(filepath.Join(dir, "ledger.jsonl"))
 	if err != nil {

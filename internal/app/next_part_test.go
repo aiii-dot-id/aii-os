@@ -137,7 +137,7 @@ func TestANextPartWhoseWorkWasFinishedStandsDown(t *testing.T) {
 	if _, err := app.recordReply(capped, "capped here, the rest follows", conversation.Result{}); err != nil {
 		t.Fatal(err)
 	}
-	if scheduled, why := app.scheduleContinuation(capDeclared, "turn_capped"); !scheduled {
+	if scheduled, why := app.scheduledOrWhy(capDeclared, "turn_capped"); !scheduled {
 		t.Fatalf("rig: the leg was not scheduled: %s", why)
 	}
 	// Another turn finishes the work before the leg takes the gate: the
@@ -316,7 +316,7 @@ func TestALegSaysWhetherAnotherTurnRanSinceTheOneItContinues(t *testing.T) {
 			if _, err := app.recordReply(interaction.WithTurn(ctx, "turn_capped"), "capped, the rest follows", conversation.Result{}); err != nil {
 				t.Fatal(err)
 			}
-			if scheduled, why := app.scheduleContinuation(capDeclared, "turn_capped"); !scheduled {
+			if scheduled, why := app.scheduledOrWhy(capDeclared, "turn_capped"); !scheduled {
 				t.Fatalf("rig: the leg was not scheduled: %s", why)
 			}
 			if c.between != nil {

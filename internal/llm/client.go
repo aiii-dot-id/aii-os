@@ -609,6 +609,8 @@ func (b openAIBody) bytes() ([]byte, error) {
 
 const maxResponseBytes = 32 << 20
 
+const MaxResponseBytes = maxResponseBytes
+
 const refusalBodyBytes = 64 << 10
 
 func refusalError(resp *http.Response) (*HTTPError, error) {
@@ -645,6 +647,7 @@ func warnInconsistentUsage(key, provider, model, sent string) {
 
 func (c *Client) Chat(ctx context.Context, messages []Message, opts ChatOptions) (resp *Response, err error) {
 	ctx = wire.WithTapSource(ctx, opts.Source)
+	ctx = wire.WithTextObserver(ctx, opts.OnText)
 	ctx = withSystemTexts(ctx, messages)
 	started := time.Now()
 	attempts := &attemptRecord{}

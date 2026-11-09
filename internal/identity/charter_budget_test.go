@@ -51,6 +51,9 @@ func TestTheChartersBudgetIsTheOperatorsAndIsAskedOfANewCharterOnly(t *testing.T
 	if !errors.As(err, &refusal) || refusal.Tokens != tokens || refusal.Max != store.CharterDefaultMaxTokens || lg.LastSeq() != before {
 		t.Fatalf("a charter of %d tokens under the default budget: err %v, ledger %d to %d; it must be refused by its type, with both numbers, before anything is appended", tokens, err, before, lg.LastSeq())
 	}
+	if !strings.Contains(refusal.Error(), "(Settings → Technical → Reflection)") {
+		t.Fatalf("the refusal names the wrong place for the budget: %s", refusal.Error())
+	}
 	for _, want := range []string{
 		fmt.Sprintf("maximum is %d (prompt.charter_max_tokens)", store.CharterDefaultMaxTokens),
 		"say the shorter charter to your operator, and record it once they have affirmed it",

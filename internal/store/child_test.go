@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,7 +132,7 @@ func classifySession(t *testing.T, description string, queued bool) map[string]s
 	}
 	got["unharvested"] = class(listed(s.UnharvestedDeliveries(8)))
 	got["recent delivered"] = class(listed(s.RecentDeliveredSubagents(8)))
-	if err := s.MarkHarvested(x, 1); err != nil {
+	if _, err := s.TakeInDelivery(context.Background(), x, 1, "taken in"); err != nil {
 		t.Fatal(err)
 	}
 	// Every boundary X crossed names one actor.

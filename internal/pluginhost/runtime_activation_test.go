@@ -21,7 +21,7 @@ import (
 
 func TestRuntimeDeclarationRefusesTypedWhereItCannotBeMet(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestRuntimeRootIsPublishedPinnedLaunchedFromAndReleased(t *testing.T) {
 	// Activate is still running; a host whose bwrap dies on spawn fails
 	// after Activate has returned, and only this asks about that.
 	skipWhereTheSandboxCannotBeEstablished(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)

@@ -88,7 +88,7 @@ func TestAPluginKeyCrossesAPrivateConnectionToTheHandlerOnly(t *testing.T) {
 // handler sees it; forgetting one needs no secret and is allowed.
 func TestAPluginKeyIsRefusedOverAConnectionThatIsNotPrivate(t *testing.T) {
 	set := ClientMessage{Type: "plugin_key_set", PluginKey: &PluginKeyRequest{Plugin: "p", Key: "api_key", Secret: "sk-x"}}
-	if r := pluginKeyRefusal(set, false); !strings.Contains(r, "not private") {
+	if r := pluginKeyRefusal(set, false); !strings.Contains(r, "isn't private") {
 		t.Fatalf("a key over a connection that is not private is refused by name: %q", r)
 	}
 	if r := pluginKeyRefusal(set, true); r != "" {

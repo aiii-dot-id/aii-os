@@ -103,7 +103,7 @@ func (p FilePolicy) typesSentence() string {
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	refuse := func(code int, text string) { http.Error(w, text, code) }
 	if !s.tokenAuthorized(r) {
-		refuse(http.StatusUnauthorized, "this dashboard needs its access token")
+		refuse(http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	if o := r.Header.Get("Origin"); o != "" && !sameSiteAs(o, r.Host) {

@@ -15,6 +15,7 @@ import (
 
 type Rhythm struct {
 	decide     func(facility, decision, reason string)
+	tick       func()
 	stagSrc    stagnationSource
 	attnDoor   LedgerWriter
 	attnOutbox func(id, content string)
@@ -126,9 +127,12 @@ func (r *Rhythm) OnAlarm(ctx context.Context, alarmID, clock string, deadline in
 		if !r.turn.TryBeginTurn() {
 			logsink.Info("rhythm.refusal", "the identity is in a turn — metabolism deferred to the next pass")
 			r.decision("metabolism", "defer", "the identity is in a turn")
-			return AlarmResult{}
+			return AlarmResult{Deferred: true}
 		}
 		defer r.turn.EndTurn()
+	}
+	if r.tick != nil {
+		r.tick()
 	}
 
 	now := time.Now()
@@ -354,6 +358,8 @@ func (r *Rhythm) checkStagnation() {
 }
 
 func (r *Rhythm) SetDecisionLog(fn func(facility, decision, reason string)) { r.decide = fn }
+
+func (r *Rhythm) SetTick(fn func()) { r.tick = fn }
 
 func (r *Rhythm) decision(facility, decision, reason string) {
 	if r.decide != nil {

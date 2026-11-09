@@ -47,7 +47,9 @@ function next() {
     if (window.__pwn) { fail('the ghost id EXECUTED — banner escaping is broken'); return; }
     const text = banner.textContent || '';
     if (!text.toLowerCase().includes('names no project')) { fail('banner does not say what happened: ' + text); return; }
-    if (!document.getElementById('proj-space').textContent.includes('No project focused')) { fail('empty state missing under the ghost'); return; }
+    if (!document.getElementById('np-name')) { fail('the new-project page is missing under the ghost'); return; }
+    // TITLE: a ghost must never title the tab — p is null, the base
+    // title from go() stands untouched.
     if (document.title.indexOf('ghost') >= 0) { fail('ghost id reached the tab title: ' + document.title); return; }
     next();
   } else if (step === 2) {

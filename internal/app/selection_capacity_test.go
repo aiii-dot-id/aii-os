@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -49,6 +50,16 @@ func TestSelectionProbeProcess(t *testing.T) {
 		os.Exit(0)
 	case "valid":
 		fmt.Print(`{"total":8192,"available":4096}`)
+		os.Exit(0)
+	case "lingers": // leaves a child holding its output, then hangs
+		exe, err := os.Executable()
+		if err == nil {
+			child := exec.Command(exe, "-test.run=^TestSelectionProbeProcess$")
+			child.Env = append(os.Environ(), "AII_TEST_SELECTION_PROBE=slow", "AII_TEST_SELECTION_PROBE_TAKES=3s")
+			child.Stdout = os.Stdout
+			_ = child.Start()
+		}
+		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	case "slow": // answers, after the time it is told to take
 		d, err := time.ParseDuration(os.Getenv("AII_TEST_SELECTION_PROBE_TAKES"))
@@ -106,6 +117,40 @@ func TestSelectionProbeFailureAndDeadline(t *testing.T) {
 			}
 			if mode == "hang" && time.Since(start) > 6*time.Second {
 				t.Fatal("probe lifetime was not bounded")
+			}
+		})
+	}
+}
+
+// WHICH BOUND CUT A QUERY IS THE EARLIER ONE. A probe killed at its own
+// bound can take a while to end: here a child it left behind holds its
+// output, and Wait gives that its own grace. When the end comes after the
+// measurement's deadline too, the reason must still name the operator's
+// setting, which was due first; on a loaded Windows host the reason was
+// "the measurement ended" (cut f and cut g, 2026-11-08). When the
+// measurement's deadline is the earlier, that is the reason.
+func TestAProbeCutByItsOwnBoundIsNamedSoHoweverLongItTakesToEnd(t *testing.T) {
+	exe, args := selectionProbeFixture(t)
+	for _, tc := range []struct {
+		name, mode     string
+		bound, measure time.Duration
+		want           string
+	}{
+		{"its own bound first", "lingers", 2 * time.Second, 2*time.Second + 200*time.Millisecond,
+			"the Vulkan probe did not answer within 2000 ms (plugins.runtime.hardware_query_ms)"},
+		{"the measurement first", "hang", 2 * time.Second, 300 * time.Millisecond,
+			"the Vulkan probe did not finish before the selection measurement ended"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AII_TEST_SELECTION_PROBE", tc.mode)
+			ctx, cancel := context.WithTimeout(t.Context(), tc.measure)
+			defer cancel()
+			_, err := selectionQuery(ctx, tc.bound, exe, args...)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("the query was not cut by a deadline: %v", err)
+			}
+			if got := vulkanProbeFailed(ctx, tc.bound, err); got != tc.want {
+				t.Errorf("bound %s, measurement %s: the reason is %q, want %q", tc.bound, tc.measure, got, tc.want)
 			}
 		})
 	}

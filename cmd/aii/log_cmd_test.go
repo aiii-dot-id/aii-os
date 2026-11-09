@@ -37,10 +37,13 @@ func TestLogTapTurnsOnSaysWhatItRecordsAndTurnsOff(t *testing.T) {
 		t.Errorf("a fresh installation does not report its captures as off:\n%s", out.String())
 	}
 
-	// A PROMPT TAP IS THE OPERATOR'S, in config.json: the command, which
-	// the identity can run too, refuses to write one.
-	if code := run("tap", "llm.prompt", "on", "--for", "20m"); code != 1 || !strings.Contains(errb.String(), "config.json under logs.taps") {
-		t.Fatalf("aii log tap llm.prompt on exited %d: %s", code, errb.String())
+	// A PROMPT TAP IS THE IDENTITY'S TOO: the command, which the
+	// identity can run as well as the operator, writes one, and clears it.
+	if code := run("tap", "llm.prompt", "on", "--for", "20m"); code != 0 || !strings.Contains(out.String(), "RECORDING until") {
+		t.Fatalf("aii log tap llm.prompt on exited %d: %s%s", code, out.String(), errb.String())
+	}
+	if code := run("tap", "llm.prompt", "clear"); code != 0 {
+		t.Fatalf("aii log tap llm.prompt clear exited %d: %s", code, errb.String())
 	}
 	if code := run("tap", "llm.return", "on", "--for", "20m"); code != 0 {
 		t.Fatalf("aii log tap exited %d: %s", code, errb.String())

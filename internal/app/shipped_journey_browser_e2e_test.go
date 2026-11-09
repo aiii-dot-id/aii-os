@@ -14,6 +14,24 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 )
 
+// THE WAY OUT OF A CUSTOMIZATION THAT DOES NOT LOAD (design review DR05), in
+// a real Chrome on a born identity's own dashboard. A customized module can
+// stop the page three ways: it lacks what the app imports from it, it does
+// not parse, or it throws as the app starts. Each leaves the page saying
+// so, with the dashboard as shipped one link away. That link opens a
+// dashboard that starts and connects, with the customization still on disk,
+// and the page says where the person is and how to go back. With the
+// customization gone, the ordinary page starts and says nothing (the
+// control, first and last).
+//
+// A customized module is a script of the identity's, and it runs only once
+// the operator has approved those exact bytes (R183, amending R71). So each
+// one is first left unapproved, and the page starts as shipped with nothing
+// said (the script is held); then it is approved through the host's own
+// approval (approveOverlayScript, what Settings → Plugins and permissions
+// calls), and only then does it stop the page.
+//
+// COVERAGE LIMIT, NAMED: Blink only, as the other journeys.
 func TestADashboardThatCannotStartOffersTheDashboardAsShipped(t *testing.T) {
 	chrome := needChrome(t)
 	dir := t.TempDir()
@@ -128,17 +146,17 @@ func TestADashboardThatCannotStartOffersTheDashboardAsShipped(t *testing.T) {
     if (!box) { last = 'no failure panel'; return null; }
     last = box.textContent;
     if (box.getAttribute('role') !== 'alert') return 'FAIL the panel is not an alert';
-    if (!box.textContent.includes('The dashboard did not start')) return 'FAIL ' + box.textContent;
+    if (!box.textContent.includes('This page could not load')) return 'FAIL ' + box.textContent;
     if (!box.textContent.includes('`+c.says+`')) return 'FAIL the panel does not carry the cause: ' + box.textContent;
-    const out = [...box.querySelectorAll('a')].find(a => a.textContent === 'Open the dashboard as shipped');
+    const out = [...box.querySelectorAll('a')].find(a => a.textContent === 'Open safe mode');
     if (!out || !out.getAttribute('href').startsWith('/shipped/')) return 'FAIL no way out to /shipped/';
     return 'ok';`, false)
-		act(`[...document.querySelectorAll('#boot-failure a')].find(a => a.textContent === 'Open the dashboard as shipped').click()`)
+		act(`[...document.querySelectorAll('#boot-failure a')].find(a => a.textContent === 'Open safe mode').click()`)
 		await(c.how+": the dashboard as shipped starts", started("/shipped/")+`
     const here = document.getElementById('boot-shipped');
     if (!here) { last = 'no note'; return null; }
-    if (here.getAttribute('role') !== 'status' || !here.textContent.includes('your scripts are not loaded')) return 'FAIL ' + here.textContent;
-    const back = [...here.querySelectorAll('a')].find(a => a.textContent === 'Back to your dashboard');
+    if (here.getAttribute('role') !== 'status' || !here.textContent.includes('your custom scripts are off')) return 'FAIL ' + here.textContent;
+    const back = [...here.querySelectorAll('a')].find(a => a.textContent === 'Leave safe mode');
     if (!back || !back.getAttribute('href').startsWith('/') || back.getAttribute('href').startsWith('/shipped')) return 'FAIL no way back';
     return 'ok';`, true)
 		if _, err := os.Stat(filepath.Join(ui, c.file)); err != nil {
@@ -147,7 +165,7 @@ func TestADashboardThatCannotStartOffersTheDashboardAsShipped(t *testing.T) {
 	}
 
 	customize("", "")
-	act(`[...document.querySelectorAll('#boot-shipped a')].find(a => a.textContent === 'Back to your dashboard').click()`)
+	act(`[...document.querySelectorAll('#boot-shipped a')].find(a => a.textContent === 'Leave safe mode').click()`)
 	await("back on the dashboard", started("/")+`
     return document.getElementById('boot-shipped') ? 'FAIL the ordinary page says it is the one as shipped' : 'ok';`, true)
 }

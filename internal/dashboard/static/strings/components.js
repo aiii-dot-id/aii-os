@@ -1,0 +1,46 @@
+export default Object.freeze({
+  save: "Save",
+  saved: "Saved.",
+  cancel: "Cancel",
+  close: "Close",
+  done: "Done",
+  back: "Back",
+  remove: "Remove",
+  add: "Add",
+  edit: "Edit",
+  open: "Open",
+  copy: "Copy",
+  copied: "Copied.",
+  copyLink: "Copy link",
+  linkCopied: "Link copied.",
+  copyFailed: "Couldn't copy: the browser refused the clipboard.",
+  refresh: "Refresh",
+  retry: "Try again",
+  showAll: "Show all",
+  showMore: "Show more",
+  details: "Details",
+  change: "Change",
+  undo: "Undo",
+
+  loading: "Loading…",
+  waiting: "Waiting for AII OS to confirm…",
+  notConnected: "Not connected. Nothing was sent.",
+  connectionLost: "The connection dropped before AII OS confirmed this. What is shown is its last word; it is read again on reconnecting.",
+  connectionLostCheck: "The connection dropped before this was confirmed. Check what is in force before trying again; nothing is retried by itself.",
+  saveUnverified: "AII OS answered, but the save could not be verified. Your edits are kept; check what is in force.",
+  offline: "Not connected. Reconnecting…",
+  reconnected: "Connected again.",
+
+  wholeNumber: "A whole number.",
+  between: "Between {min} and {max}.",
+
+  optional: "optional",
+  required: "Required.",
+  chooseOne: "Choose one.",
+
+  nothingYet: "Nothing here yet.",
+
+  menu: "More",
+  expand: "Show",
+  collapse: "Hide"
+});

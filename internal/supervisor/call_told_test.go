@@ -89,19 +89,48 @@ var (
 
 // startedWithin reads the child's start from text and holds it to the
 // span in which the child was started (the log's own resolution, a second).
+//
+// The start is written as a wall time without its offset, the log's own
+// layout, so for one hour a year, when daylight saving ends, the text
+// names two instants. Reparsing it would pick one of them and fail in
+// that hour on whichever side it did not pick. So the span's own
+// seconds are written the same way, in the span's zone, and the text
+// must be one of them: that holds the text to the span without deciding
+// which of the two instants it meant.
 func startedWithin(t *testing.T, text string, re *regexp.Regexp, from, to time.Time) {
 	t.Helper()
 	m := re.FindStringSubmatch(text)
 	if m == nil {
 		t.Fatalf("%q does not name when the child started (want %s)", text, re)
 	}
-	at, err := time.ParseInLocation("2006/01/02 15:04:05", m[1], time.Local)
+	var written []string
+	for at := from.Truncate(time.Second); !at.After(to); at = at.Add(time.Second) {
+		w := at.In(from.Location()).Format(startedLayout)
+		written = append(written, w)
+		if w == m[1] {
+			return
+		}
+	}
+	t.Fatalf("the child's start is given as %s, outside %s..%s (written %v), when it was started", m[1], from, to, written)
+}
+
+// TestAStartInTheRepeatedHourIsStillFound pins the hour that repeats when
+// daylight saving ends: a child started in its second half, written
+// without an offset, must still be found inside its own span. A reparse
+// in the local zone put it an hour earlier, outside the span.
+func TestAStartInTheRepeatedHourIsStillFound(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("no zone database for America/New_York:", err)
 	}
-	if at.Before(from) || at.After(to) {
-		t.Fatalf("the child's start is given as %s, outside %s..%s, when it was started", at, from, to)
+	// 06:07:54Z is 01:07:54 EST, the second 01:07:54 of 2026-11-01 in New York.
+	from := time.Date(2026, 11, 1, 6, 7, 54, 0, time.UTC).In(ny)
+	to := from.Add(300 * time.Millisecond)
+	if from.Format("MST") != "EST" {
+		t.Fatalf("the pinned instant is not in the repeated hour's second half: %s", from)
 	}
+	text := "plugin p: a call answered in 1ms, the first since its child started " + from.Format(startedLayout)
+	startedWithin(t, text, firstSince, from, to)
 }
 
 func linesWith(c *logsink.Capture, text string) []string {

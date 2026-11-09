@@ -91,8 +91,8 @@ func TestTheDashboardAsShippedConsultsNoOverlay(t *testing.T) {
 	if resp, _ := get("/shipped/config.json"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /shipped/config.json = %d, want 404", resp.StatusCode)
 	}
-	if resp, got := get("/shipped/icon-32.png"); resp.StatusCode != 200 || !bytes.Equal(got, embedded("icon-32.png")) {
-		t.Errorf("GET /shipped/icon-32.png = %d, want the compiled icon", resp.StatusCode)
+	if resp, got := get("/shipped/icon.svg"); resp.StatusCode != 200 || !bytes.Equal(got, embedded("icon.svg")) {
+		t.Errorf("GET /shipped/icon.svg = %d, want the compiled icon", resp.StatusCode)
 	}
 }
 

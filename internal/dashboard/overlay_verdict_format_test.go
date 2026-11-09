@@ -6,9 +6,10 @@ import (
 	"testing"
 )
 
-// ASPIRE #2: the verdict format is a WIRE CONTRACT, not prose. panel.js
-// splits every outcome on the FIRST ": " — verb before it, sentence
-// after — and renders the verb as a row label. This test drives the
+// ASPIRE #2: the verdict format is a WIRE CONTRACT, not prose. An
+// outcome is its verb, the FIRST ": ", then its sentence: Status shows it
+// whole beside its file (views/settings/status.js), and an identity's own
+// copy of the old panel.js splits it there, the verb as a row label. This test drives the
 // real decision paths (additive, fork, new file, hazard-suffixed,
 // rejected) and pins the shape the consumer actually performs, against
 // the exact bytes the wire carries (overlayMessage, not a copy).
@@ -49,7 +50,7 @@ func TestOverlayVerdictWireFormat(t *testing.T) {
 	verbs := map[string]bool{}
 	for _, ev := range evs {
 		outcome := ev.Outcome
-		// Exactly the split panel.js performs: first ": " only.
+		// Exactly the split the old panel.js performs: first ": " only.
 		// A sentence may contain further colons ("HAZARD: ...",
 		// "inert: dir unopenable: <err>") — first-split must survive
 		// them.

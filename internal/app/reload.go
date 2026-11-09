@@ -521,6 +521,7 @@ func (a *App) reload(asked bool) {
 
 	if a.store != nil {
 		a.store.SetOperatorVoices(fresh.Speech.OperatorSpeakers)
+		a.settleNamedVoices(fresh.Speech.OperatorSpeakers)
 	}
 
 	a.applyAgency(*fresh)
@@ -629,7 +630,7 @@ func (a *App) reload(asked bool) {
 		logsink.Info("config.decision", "metabolism rhythm re-armed live -> every %ds from now", fresh.Agency.RhythmSeconds)
 	}
 	if cognitionChanged {
-		logsink.Info("config.decision", "the rhythm's settings applied live (Settings → Identity → Cognition): each facility reads them at its next pass")
+		logsink.Info("config.decision", "the rhythm's settings applied live (Settings → Technical → Reflection): each facility reads them at its next pass")
 	}
 	if policyChanged {
 		logsink.Info("config.decision", "plugin grants/auth profiles applied live -> %d grant(s), %d profile(s)",
@@ -640,6 +641,9 @@ func (a *App) reload(asked bool) {
 	}
 	if a.dashboard != nil && !reflect.DeepEqual(current, *fresh) {
 		a.dashboard.BroadcastConfig()
+	}
+	if a.dashboard != nil && !reflect.DeepEqual(current.Speech.OperatorSpeakers, fresh.Speech.OperatorSpeakers) {
+		a.dashboard.BroadcastAsks()
 	}
 	if a.dashboard != nil && sandboxMoved {
 		a.dashboard.BroadcastSandbox()

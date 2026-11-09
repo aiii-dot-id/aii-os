@@ -21,7 +21,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 	// Set, then nil keeps it, then a pointer to "" clears it — the
 	// whole PATCH contract in three moves.
 	set := "the active concern"
-	if _, err := m.ApplyPatch(p.ID, nil, nil, &set, nil, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, &set, nil, nil, nil); err != nil {
 		t.Fatalf("set focus: %v", err)
 	}
 	got, err := m.Load(p.ID)
@@ -31,7 +31,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 	if got.Focus != "the active concern" {
 		t.Fatalf("set focus did not write: %q", got.Focus)
 	}
-	if _, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = m.Load(p.ID)
@@ -39,7 +39,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 		t.Fatalf("nil patch cleared focus: %q", got.Focus)
 	}
 	clearFocus := ""
-	if _, err := m.ApplyPatch(p.ID, nil, nil, &clearFocus, nil, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, &clearFocus, nil, nil, nil); err != nil {
 		t.Fatalf("clear focus: %v", err)
 	}
 	got, _ = m.Load(p.ID)
@@ -47,7 +47,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 		t.Fatalf("focus was not cleared: %q", got.Focus)
 	}
 	clearDesc := ""
-	if _, err := m.ApplyPatch(p.ID, nil, &clearDesc, nil, nil, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, &clearDesc, nil, nil, nil, nil); err != nil {
 		t.Fatalf("clear description: %v", err)
 	}
 	got, _ = m.Load(p.ID)
@@ -58,7 +58,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 	// Name is NOT clearable — an unnamed project is an empty-state
 	// vocabulary defect on every surface that lists projects.
 	empty := ""
-	if _, err := m.ApplyPatch(p.ID, &empty, nil, nil, nil, nil, nil); err == nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", &empty, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("empty name was accepted — it must be refused")
 	}
 	got, err = m.Load(p.ID)
@@ -72,7 +72,7 @@ func TestApplyPatchClearsFocus(t *testing.T) {
 	// A set name still updates (regression: the app bridge passes nil
 	// for absent, a pointer for present).
 	newName := "Beta"
-	if _, err := m.ApplyPatch(p.ID, &newName, nil, nil, nil, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", &newName, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
 	got, _ = m.Load(p.ID)
@@ -91,7 +91,7 @@ func TestStringlyUpdateStillWorks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Update(p.ID, "", "", "", nil, nil, nil); err != nil {
+	if _, err := m.Update(p.ID, "operator", "", "", "", nil, nil, nil); err != nil {
 		t.Fatalf("empty update: %v", err)
 	}
 	got, err := m.Load(p.ID)
@@ -105,7 +105,7 @@ func TestStringlyUpdateStillWorks(t *testing.T) {
 		t.Fatalf("stringly empty update changed name: %q", got.Name)
 	}
 	// A set value still writes.
-	if _, err := m.Update(p.ID, "", "", "new focus", nil, nil, nil); err != nil {
+	if _, err := m.Update(p.ID, "operator", "", "", "new focus", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = m.Load(p.ID)

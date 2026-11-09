@@ -40,3 +40,28 @@ func TestAnExitStatusBelongsToAToolResultAndIsNotServed(t *testing.T) {
 		t.Fatalf("a compacted row carries the member: %s %v", raw, err)
 	}
 }
+
+// A work change's promise and its wait are the session's own and stay in
+// the record; the version 1 contract does not carry them, so a page and a
+// detail read leave them out and keep the rest of the change.
+func TestAWorksPromiseAndWaitAreNotServed(t *testing.T) {
+	promise, resumes, plan := "the figures by noon", "now", "add them up"
+	r := Record{ID: "w", Kind: Notice, Role: System, Details: Details{Work: &WorkChange{
+		Session: "ws", Plan: &plan, Promise: &promise, ResumesOn: &resumes, Under: promise, Met: "delivery:ws_child"}}}
+	got := Served(r).Details.Work
+	if got.Promise != nil || got.ResumesOn != nil || got.Under != "" || got.Met != "" || got.Session != "ws" || got.Plan != &plan {
+		t.Fatalf("Served: %+v", got)
+	}
+	if w := r.Details.Work; w.Promise == nil || w.ResumesOn == nil || w.Under == "" || w.Met == "" {
+		t.Fatal("Served changed the record it was given")
+	}
+	raw, err := json.Marshal(Compact(r, "recorded", "inc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range []string{`"promise"`, `"resumes_on"`, `"under"`, `"met"`} {
+		if strings.Contains(string(raw), member) {
+			t.Fatalf("a compacted row carries %s: %s", member, raw)
+		}
+	}
+}

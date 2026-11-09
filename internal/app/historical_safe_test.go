@@ -44,7 +44,7 @@ func TestHistoricalSafeConversationSurvivesUnavailableViewsWithoutWriting(t *tes
 	if _, safe := a.SafeMode(); !safe {
 		t.Fatal("fixture did not reach actual boot-SAFE")
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil || !strings.Contains(state, "retained working state") {
 		t.Errorf("recorded work state was lost: %q %v", state, err)
 	}

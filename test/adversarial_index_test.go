@@ -75,9 +75,18 @@ func TestTheTreeGuardsCarryTheirMarker(t *testing.T) {
 		"test/libc_lockstep_test.go":         {"TestLibcIsTheOneSQLiteWasBuiltAgainst", "TestTheLibcLockstepGuardRefusesWhatItIsFor"},
 		"test/sql_owners_test.go":            {"TestOnlyTheStoresOwnersImportDatabaseSQL"},
 		"internal/store/tree_writes_test.go": {"TestNoCodeOutsideTheStoreWritesItsTables"},
-		"test/private_terms_test.go":         {"TestNoPrivateTermInTheTree", "TestThePrivateTermsGuardRefusesWhatItIsFor"},
-		"test/decode_end_check_test.go":      {"TestADecodersMoreIsAskedOnlyInALoop", "TestTheDecodeEndGuardRefusesWhatItIsFor"},
-		"test/restart_sites_test.go":         {"TestOnlyTheListedSitesAskForARestart", "TestTheRestartGuardRefusesWhatItIsFor"},
+		// No personal name, personal data or value that must never be published
+		// is in the source; the terms themselves stay outside the tree.
+		"test/private_terms_test.go": {"TestNoPrivateTermInTheTree", "TestThePrivateTermsGuardRefusesWhatItIsFor"},
+		// The strict read has one owner: the check it replaced does not come
+		// back.
+		"test/decode_end_check_test.go": {"TestADecodersMoreIsAskedOnlyInALoop", "TestTheDecodeEndGuardRefusesWhatItIsFor"},
+		// SAFE is left only by a restart: the sites that can ask for one
+		// are held closed (the SAFE review of 2026-10-21, I1).
+		"test/restart_sites_test.go": {"TestOnlyTheListedSitesAskForARestart", "TestTheRestartGuardRefusesWhatItIsFor"},
+		// A ruling's cited proof is a test in the tree, or listed with where
+		// it is kept (the ruling-proof audit of e60bb9ec, 2026-11-06).
+		"test/ruling_proofs_test.go": {"TestEveryTestARulingCitesIsInTheTree", "TestTheRulingProofGuardRefusesWhatItIsFor", "TestTheRulingProofGuardReadsOnlyThisTreesDeclarations"},
 	} {
 		src, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {

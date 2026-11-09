@@ -126,6 +126,7 @@ type Engine struct {
 	timers        TimerSetter
 	reachable     func(name string) bool
 	askProposer   func(session, text string, choices []string, connector string) error
+	voiceAsker    func(uuid, question string) (string, error)
 	askFits       func(session, text string, choices []string, connector string) error
 	workStarted   func(ctx context.Context, session, family, description string) string
 	workDelivered func(ctx context.Context, session string) string
@@ -133,6 +134,7 @@ type Engine struct {
 	workState     func(context.Context) (string, error)
 	workWake      func()
 	yieldGate     func() (need bool, why string)
+	ceilingGate   func() (past bool, resumeAt int64)
 	routeLimits   func(role string) SpawnLimits
 
 	toolResultChars int
@@ -166,6 +168,8 @@ type Ports struct {
 
 	AskProposer func(session, text string, choices []string, connector string) error
 
+	VoiceAsker func(uuid, question string) (string, error)
+
 	AskFits func(session, text string, choices []string, connector string) error
 
 	WorkStarted func(ctx context.Context, session, family, description string) string
@@ -179,6 +183,8 @@ type Ports struct {
 	WorkWake func()
 
 	YieldGate func() (need bool, why string)
+
+	CeilingGate func() (past bool, resumeAt int64)
 
 	RouteLimits func(role string) SpawnLimits
 }
@@ -202,6 +208,7 @@ func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscovere
 		timers:        p.Timers,
 		reachable:     p.Reachable,
 		askProposer:   p.AskProposer,
+		voiceAsker:    p.VoiceAsker,
 		askFits:       p.AskFits,
 		workStarted:   p.WorkStarted,
 		workDelivered: p.WorkDelivered,
@@ -209,6 +216,7 @@ func NewEngine(s *store.Store, l EventWriter, rm *ring.Manager, td ToolDiscovere
 		workState:     p.WorkState,
 		workWake:      p.WorkWake,
 		yieldGate:     p.YieldGate,
+		ceilingGate:   p.CeilingGate,
 		routeLimits:   p.RouteLimits,
 
 		toolResultChars: p.ToolResultChars,

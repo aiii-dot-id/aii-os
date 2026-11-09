@@ -30,6 +30,8 @@ const (
 	workFactReason    = "reason %s"
 	workFactExit      = "exit %d"
 	workFactSeveral   = "begun while several sessions were active, counted to the newest"
+
+	workFactStep      = "step: %s"
 	workKeptIndent    = "    | "
 	workReadAlone     = `recall source=work%s query="" after_seq=%d limit=1 shows it alone, and its printed call id reads its result whole`
 	workNoCalls       = "No tool call of %s is recorded."
@@ -47,7 +49,8 @@ const (
 	workTexEnd        = "[end of %s's result as kept, part %d of %d"
 	workTexContinues  = "; continues: query=\"%s part:%d\"]"
 	workNoSessionWhy  = "source=work reads the calls of the work session you act in, and you act in none: name one with id=ws_…"
-	workUnknownWhy    = "%s is not one of your work sessions: id names a session of yours (ws_…)"
+	workUnknownWhy    = "%s names none of your work sessions: work status lists them with their whole ids, and a short id must begin one of them"
+	workAmbiguousWhy  = "%s begins %d of your work sessions: use the whole id, as work status lists it"
 	workTexCursorWhy  = "query=%q reads one result whole; after_seq pages a session's calls — drop one of them"
 )
 
@@ -137,6 +140,9 @@ func (e *Engine) workRecordSession(ctx context.Context, id string) (*store.WorkS
 	if id == "" {
 		if sub, ok := ctx.Value(SubagentWorkSession{}).(string); ok && sub != "" {
 			id = sub
+		} else if resumed := interaction.ResumeSession(ctx); resumed != "" {
+
+			id = resumed
 		} else {
 			ws, err := e.store.ActiveWorkSession()
 			if err != nil {
@@ -153,10 +159,34 @@ func (e *Engine) workRecordSession(ctx context.Context, id string) (*store.WorkS
 		return nil, fmt.Errorf("recall work: load work session %s: %w", id, err)
 	}
 	if ws == nil {
+
+		if r, ok := e.store.(interface {
+			RecentWorkSessions(limit int) ([]store.WorkSession, error)
+		}); ok {
+			recent, err := r.RecentWorkSessions(workSessionPrefixScan)
+			if err != nil {
+				return nil, fmt.Errorf("recall work: list work sessions: %w", err)
+			}
+			var hits []store.WorkSession
+			for _, s := range recent {
+				if strings.HasPrefix(s.ID, id) {
+					hits = append(hits, s)
+				}
+			}
+			switch len(hits) {
+			case 1:
+				return &hits[0], nil
+			case 0:
+			default:
+				return nil, &WorkRecordRefusal{Code: "work.session_ambiguous", Why: fmt.Sprintf(workAmbiguousWhy, id, len(hits))}
+			}
+		}
 		return nil, &WorkRecordRefusal{Code: "work.session_unknown", Why: fmt.Sprintf(workUnknownWhy, id)}
 	}
 	return ws, nil
 }
+
+const workSessionPrefixScan = 200
 
 func workCallLine(c store.WorkCall) string {
 	line := fmt.Sprintf(workCallLineForm, c.Seq, c.Tex, c.Tool, workFacts(c), c.Tool, c.Args())
@@ -181,7 +211,7 @@ func workCallLine(c store.WorkCall) string {
 
 func workFacts(c store.WorkCall) string {
 	if !c.Ended {
-		return workNoResult + workSeveral(c)
+		return workNoResult + workSeveral(c) + workStep(c)
 	}
 	facts := []string{c.Outcome}
 	if c.ReasonCode != "" {
@@ -193,7 +223,14 @@ func workFacts(c store.WorkCall) string {
 	if c.DurationMS != nil {
 		facts = append(facts, (time.Duration(*c.DurationMS) * time.Millisecond).String())
 	}
-	return strings.Join(facts, ", ") + workSeveral(c)
+	return strings.Join(facts, ", ") + workSeveral(c) + workStep(c)
+}
+
+func workStep(c store.WorkCall) string {
+	if c.PlanStep == nil {
+		return ""
+	}
+	return ", " + fmt.Sprintf(workFactStep, *c.PlanStep)
 }
 
 func workSeveral(c store.WorkCall) string {

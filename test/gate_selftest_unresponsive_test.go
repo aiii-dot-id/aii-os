@@ -100,6 +100,17 @@ while :; do sleep 1; done
 						_ = syscall.Kill(pid, syscall.SIGKILL)
 					}
 				}
+				// The pid files are written by the fixture as it goes; a
+				// fixture killed before it wrote one leaves a process no
+				// file names. Every one of them carries this subtest's
+				// own state directory, so ask for the mark as well.
+				killed, survivors := reapByMark(state)
+				if len(killed) > 0 {
+					t.Logf("reaper: asked %d marked process(es) to stop", len(killed))
+				}
+				if len(survivors) > 0 {
+					t.Errorf("the reaper asked but these marked processes are still running: %v", survivors)
+				}
 				if !reaped {
 					_ = cmd.Process.Kill()
 					<-exited
@@ -532,4 +543,89 @@ echo "ok  fake/other 0s"
 			}
 		})
 	}
+}
+
+// reapByMark kills every process whose environment carries this subtest's
+// state directory, and returns the pids it asked to die. The pid files are
+// the fast path and stay; this is the one that still finds a fixture whose
+// own bookkeeping never got written, which is how the shells from
+// 2026-10-24 outlived their test by six days.
+//
+// Linux only. Elsewhere there is no /proc to ask, and the caller's pid-file
+// loop is the whole of what can be done.
+func reapByMark(state string) (killed, survivors []int) {
+	if _, err := os.Stat("/proc"); err != nil {
+		return nil, nil
+	}
+	mark := []byte("FIXTURE_STATE=" + state)
+	environs, err := filepath.Glob("/proc/[0-9]*/environ")
+	if err != nil {
+		return nil, nil
+	}
+	self := os.Getpid()
+	for _, env := range environs {
+		pid, err := strconv.Atoi(filepath.Base(filepath.Dir(env)))
+		if err != nil || pid == self {
+			continue
+		}
+		raw, err := os.ReadFile(env)
+		if err != nil {
+			continue
+		}
+		// Entries are NUL-separated; the mark must be the whole entry,
+		// never a prefix of a longer path. This is what keeps a state
+		// directory that is a prefix of another from being swept by
+		// asking for the longer name, and the longer from being swept
+		// by asking for the shorter.
+		found := false
+		for _, entry := range bytes.Split(raw, []byte{0}) {
+			if bytes.Equal(entry, mark) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		killed = append(killed, pid)
+	}
+	// Look. Sending SIGKILL is a request, and the invariant this file
+	// keeps is that no child outlives its test. Only the observation
+	// establishes that, so wait for each death, bounded, and name any
+	// process that is still running when the budget is spent.
+	deadline := time.Now().Add(reapObserveBudget)
+	for _, pid := range killed {
+		for reapStillRunning(pid) && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if reapStillRunning(pid) {
+			survivors = append(survivors, pid)
+		}
+	}
+	return killed, survivors
+}
+
+// reapObserveBudget bounds how long the reaper looks for a death it asked
+// for. SIGKILL cannot be blocked or caught, so this is slack for scheduling
+// and for a process group still draining, not a wait on anything the child
+// chooses.
+const reapObserveBudget = 5 * time.Second
+
+// reapStillRunning reports whether pid is still executing. A zombie has
+// exited: it keeps a /proc entry until its parent reaps it, and counting
+// that as a survivor would make every sweep report one and the report
+// worthless.
+func reapStillRunning(pid int) bool {
+	st, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	body := string(st)
+	i := bytes.LastIndexByte([]byte(body), ')')
+	if i < 0 || i+1 >= len(body) {
+		return false
+	}
+	return !strings.HasPrefix(strings.TrimSpace(body[i+1:]), "Z")
 }

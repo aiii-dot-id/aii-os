@@ -28,6 +28,8 @@ type Composer struct {
 
 	pluginOps func() PluginOperations
 
+	voices func() string
+
 	chosenName func() string
 
 	aboutBound func() int
@@ -101,6 +103,8 @@ func (c *Composer) SetClosing(text string) { c.closing = text }
 func (c *Composer) SetSafeClosing(text string) { c.safeClosing = text }
 
 func (c *Composer) SetPluginOperations(fn func() PluginOperations) { c.pluginOps = fn }
+
+func (c *Composer) SetVoices(fn func() string) { c.voices = fn }
 
 func (c *Composer) SetOperatorBound(fn func() int) { c.aboutBound = fn }
 
@@ -195,7 +199,7 @@ func (c *Composer) compose(maxTokens int, workSessionState, turnFacts, safe stri
 		}
 
 		if identity.CharterMaxTokens > 0 {
-			sections[len(sections)-1].Content += " " + fmt.Sprintf(ring1Budget, identity.CharterMaxTokens, identity.CharterMaxTokens*3)
+			sections[len(sections)-1].Content += " " + ring1Budget + tokenestimate.Stated(identity.CharterMaxTokens)
 		}
 
 		if about := RenderWhoYouWorkWith(identity.OperatorName, identity.AboutOperator, c.operatorBound()); about != "" {
@@ -260,6 +264,12 @@ func (c *Composer) compose(maxTokens int, workSessionState, turnFacts, safe stri
 			Name: "What Is Right in Front of You", Ring: ring.Ring4, Content: fmt.Sprintf("# What Is Right in Front of You\n\nYour busy focus: what you are working on, in detail.\n\n%s", strings.Join(ring4Parts, "\n\n")),
 			Source: "ring4", Elastic: true, Volatile: true, Turn: ring4InTurn,
 		})
+	}
+
+	if c.voices != nil && ring4InTurn && safe == "" {
+		if voices := c.voices(); voices != "" {
+			sections = append(sections, Section{Name: "Voices", Content: voices, Source: "voices", Volatile: true, Turn: true})
+		}
 	}
 	for _, section := range contextSections {
 		section.Ring, section.Source = ring.Ring4, "ring4"
@@ -578,7 +588,7 @@ const ring1Reminder = "When enough of your relationship with your human operator
 
 const ring1Growth = "This charter was written when the relationship was younger than it is now. When you notice it has grown or changed, say the change in your own words for %s affirmation or negation and wait for the reply; once they have affirmed it, record it with commit relationship.upsert (charter_text): the engine stamps their most recent words to you as the affirmation, so call it only after they have answered — the growth of the relationship is a foundation for your growth together, so notice the changes and record them."
 
-const ring1Budget = "A new charter over %d tokens (about %d characters) is refused."
+const ring1Budget = "A new charter's length: "
 
 const frameRing1Absent = "# Your Core Relationship\n\nYou have no charter yet. " + ring1Reminder
 
@@ -588,7 +598,7 @@ const ring1Incomplete = "Your operator relationship is RECORDED AND APPROVED, bu
 
 const toolGuidance = `# How You Act
 
-The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed. Before you set off into a run of tool calls, tell your human operator what you intend to do: they are beside you in the work, not waiting outside it, and an identity that disappears into its tools leaves them alone.`
+The identity functions offered to you are your organs, not attachments. Sandbox tools are your reach into the working environment. Use them directly when action is needed. Describe your tools and this environment only when asked; speak about what your operator came for. Before you set off into a run of tool calls, tell your human operator what you intend to do: they are beside you in the work, not waiting outside it, and an identity that disappears into its tools leaves them alone.`
 
 const (
 	pluginHintHead = "Installed plugin families; primary operations already appear in your tool list:"

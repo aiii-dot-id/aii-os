@@ -26,10 +26,10 @@ func (f *fakeTime) InvokeAlarmOwner(context.Context, cognitive.AlarmOwner, store
 	f.invoked++
 	return cognitive.AlarmResult{Accepted: true}
 }
-func (f *fakeTime) ApplyAlarmTransitions(store.Alarm, cognitive.AlarmResult) error {
+func (f *fakeTime) ApplyAlarmTransitions(store.Alarm, cognitive.AlarmResult, uint64) error {
 	return f.settleErr
 }
-func (f *fakeTime) ClearPendingDispatch(string) { f.cleared++ }
+func (f *fakeTime) ClearPendingDispatch(string, uint64) { f.cleared++ }
 
 const alarmPayload = `{"alarm_id":"alarm_dream","owner":"dream","clock":"wall","deadline":1,"payload":"{}"}`
 
@@ -82,11 +82,11 @@ func (s *settleCapture) OwnerFor(string) (cognitive.AlarmOwner, bool) { return n
 func (s *settleCapture) InvokeAlarmOwner(context.Context, cognitive.AlarmOwner, store.Alarm) cognitive.AlarmResult {
 	return cognitive.AlarmResult{Accepted: true}
 }
-func (s *settleCapture) ApplyAlarmTransitions(a store.Alarm, _ cognitive.AlarmResult) error {
+func (s *settleCapture) ApplyAlarmTransitions(a store.Alarm, _ cognitive.AlarmResult, _ uint64) error {
 	s.got = a
 	return nil
 }
-func (s *settleCapture) ClearPendingDispatch(string) {}
+func (s *settleCapture) ClearPendingDispatch(string, uint64) {}
 
 func TestRepeatEverySurvivesTheWorkQueue(t *testing.T) {
 	every := int64(600000)
@@ -99,7 +99,7 @@ func TestRepeatEverySurvivesTheWorkQueue(t *testing.T) {
 	// The adapter goes through the executor door now (the door that
 	// pokes the loop); an unstarted executor over the capture queue is
 	// the same seam one layer up.
-	if err := (alarmEnqueuerAdapter{ex: cognitive.NewExecutor(q)}).EnqueueAlarm(dispatched); err != nil {
+	if err := (alarmEnqueuerAdapter{ex: cognitive.NewExecutor(q)}).EnqueueAlarm(dispatched, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,7 +123,7 @@ func TestAOneShotAlarmStaysOneShotAcrossTheWorkQueue(t *testing.T) {
 	q := &captureQ{}
 	if err := (alarmEnqueuerAdapter{ex: cognitive.NewExecutor(q)}).EnqueueAlarm(store.Alarm{
 		AlarmID: "morning_brief", OwnerName: "morning_brief", Clock: "wall", Deadline: 42,
-	}); err != nil {
+	}, 1); err != nil {
 		t.Fatal(err)
 	}
 	cap := &settleCapture{}

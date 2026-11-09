@@ -16,23 +16,37 @@ import (
 
 func buildSectionPkg(t *testing.T, dir, id, sectionID string) string {
 	t.Helper()
-	files := map[string][]byte{
+	return writeAssetPkg(t, dir, id, sectionPkgFiles(sectionID))
+}
+
+func sectionPkgFiles(sectionID string) map[string][]byte {
+	return map[string][]byte{
 		"section.json": []byte(`{"id":"` + sectionID + `","title":"Hello","slot":"panel",` +
 			`"commands":["project.select"],"topics":["status"],"entry":"index.html"}`),
 		"index.html": []byte("<!DOCTYPE html><script type=\"module\" src=\"./module.js\"></script>"),
 		"module.js":  []byte("import { ready } from '/section-api.js';\nconst api = await ready();\napi.tokens(() => {});\nawait api.data.subscribe('status', s => { api.resize(120); });\napi.act('project.select', { id: 'p1' }).catch(() => {});\n"),
 		"styles.css": []byte("body{color:inherit}"),
 	}
-	return writeAssetPkg(t, dir, id, files)
 }
 
 func writeAssetPkg(t *testing.T, dir, id string, files map[string][]byte) string {
 	t.Helper()
-	manifest, err := json.Marshal(map[string]any{
+	return writeAssetPkgSaying(t, dir, id, files, nil)
+}
+
+// writeAssetPkgSaying writes an asset package whose manifest also says what
+// about holds (title, description, publisher).
+func writeAssetPkgSaying(t *testing.T, dir, id string, files map[string][]byte, about map[string]string) string {
+	t.Helper()
+	fields := map[string]any{
 		"kind": "asset", "id": id, "version": "0.1.0",
 		"package_hash": packagetest.ReferencePackageHash(files),
 		"asset_type":   "static_template",
-	})
+	}
+	for k, v := range about {
+		fields[k] = v
+	}
+	manifest, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +131,14 @@ func TestSectionPackagesActivateAtStartup(t *testing.T) {
 	if _, ok := app.sections.Get("org.example.prompts"); ok {
 		t.Fatal("an asset without section.json must not register")
 	}
-	if len(app.sections.List()) != 2 {
-		t.Fatalf("exactly hello+devsec must be registered: %v", app.sections.List())
+	installed := 0
+	for _, sec := range app.sections.List() {
+		if !sec.BuiltIn {
+			installed++
+		}
+	}
+	if installed != 2 {
+		t.Fatalf("exactly hello+devsec must be registered beside the built-in sections: %v", app.sections.List())
 	}
 
 	// The plugin lane still works beside the section lane.

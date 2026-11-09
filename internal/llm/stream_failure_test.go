@@ -16,10 +16,10 @@ func TestAProvidersFailureInsideItsStreamIsTypedInEveryDialect(t *testing.T) {
 	const anthText = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"half\"}}\n\n"
 	const anthError = "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
-	anth := func(r io.Reader) error { _, err := readAnthropicStream(r); return err }
-	chat := func(r io.Reader) error { _, err := readChatStream(r); return err }
-	responses := func(r io.Reader) error { _, err := readResponsesStream(r); return err }
-	gemini := func(r io.Reader) error { _, err := readGeminiStream(r); return err }
+	anth := func(r io.Reader) error { _, err := readAnthropicStream(r, nil); return err }
+	chat := func(r io.Reader) error { _, err := readChatStream(r, nil); return err }
+	responses := func(r io.Reader) error { _, err := readResponsesStream(r, nil); return err }
+	gemini := func(r io.Reader) error { _, err := readGeminiStream(r, nil); return err }
 	for _, c := range []struct {
 		name      string
 		read      func(io.Reader) error

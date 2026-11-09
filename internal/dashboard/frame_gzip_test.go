@@ -151,10 +151,10 @@ func TestTheEmbeddedFrameGoesGzipToABrowserThatTakesIt(t *testing.T) {
 		}
 		embedded, _ := staticFS.ReadFile(name)
 		address := strings.TrimPrefix(name, "static")
-		if strings.HasSuffix(name, ".png") {
+		if strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".woff2") {
 			res, body := frameAsk(t, bound, "GET", address, "", "Accept-Encoding", "gzip")
 			if res.Header.Get("Content-Encoding") != "" || !bytes.Equal(body, embedded) || varies(res.Header, "Accept-Encoding") {
-				t.Errorf("the icon %s changed: Content-Encoding %q, Vary %q", address, res.Header.Get("Content-Encoding"), res.Header.Values("Vary"))
+				t.Errorf("the icon or face %s changed: Content-Encoding %q, Vary %q", address, res.Header.Get("Content-Encoding"), res.Header.Values("Vary"))
 			}
 			return nil
 		}

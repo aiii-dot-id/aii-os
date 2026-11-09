@@ -10,7 +10,7 @@ import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderSettings } from './views/settings.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {
@@ -24,12 +24,12 @@ run(() => {
  const card=()=>one('[data-agent-notes]');
  const asked=()=>socket.frames.filter(f=>f.type==='agent_notes_copy');
  const host=(notes,id,message)=>socket.recv({type:'sandbox',request_id:id,message,sandbox:{root:'/home',extra_roots:[],off:false,agent_notes:notes}});
- renderSettings();one('[data-sec="sandbox"]').click();
+ renderSettings();S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
  host({copied:false});
- assert(card() && el('notes-copy') && el('notes-copy').textContent==='Copy notes','the card does not offer Copy notes while no copy is there');
+ assert(card() && el('notes-copy') && el('notes-copy').textContent==='Copy those notes','the card does not offer Copy those notes while no copy is there');
  for (const says of ['the notes other AI agents keep on this machine','by default Claude Code\u2019s, the Claude desktop app\u2019s and Codex\u2019s, or those of the stores set in genesis.agent_memory','the kinds the copy takes are copied, by default .md and .txt','never credentials, sessions or databases','not as their own memories','model’s provider'])
    assert(card().textContent.includes(says),'the card does not say: '+says);
- assert(card().querySelector('h3').title.length>20,'the card’s heading has no sentence for a resting pointer');
+ { const said=document.getElementById(card().getAttribute('aria-describedby')||''); assert((card().querySelector('h3').title||(said&&said.textContent)||'').length>20,'the card’s heading has no sentence of its own'); }
  assert(asked().length===0,'the card asked for a copy before it was pressed');
 
  // A refusal: the host's words, the button stays.

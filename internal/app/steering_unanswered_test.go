@@ -271,7 +271,7 @@ func TestUnansweredWordsInSafeModeReachTheNextTurnOnce(t *testing.T) {
 	if _, err := app.recordConversationRef(failed, string(interaction.Operator), "first question"); err != nil {
 		t.Fatal(err)
 	}
-	app.recordInterruptedTurnContext(failed, conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown})
+	app.recordInterruptedTurnContext(failed, conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown}, "")
 	next := interaction.WithTurn(t.Context(), "turn-next")
 	if _, err := app.recordConversationRef(next, string(interaction.Operator), "second question"); err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func wordlessFailureDeliversItsNote(t *testing.T, safe bool) {
 	}
 
 	failed := interaction.WithTurn(t.Context(), "turn-wordless")
-	app.recordInterruptedTurnContext(failed, conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown})
+	app.recordInterruptedTurnContext(failed, conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown}, "")
 	related := ""
 	if safe {
 		for _, r := range app.engine.SafeTranscript() {
@@ -391,7 +391,7 @@ func TestAnUnansweredNoteWithNothingToStandBesideIsLoud(t *testing.T) {
 	}
 	logs := logsink.CaptureForTest(t)
 	app.recordInterruptedTurnContext(interaction.WithTurn(t.Context(), "turn-alone"),
-		conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown})
+		conversation.Result{Unanswered: []string{unansweredWords}, Interrupted: providerDown}, "")
 	notes := unansweredNotices(t, app)
 	if len(notes) != 1 || notes[0].related != "" {
 		t.Fatalf("the note was not kept for the page: %+v", notes)

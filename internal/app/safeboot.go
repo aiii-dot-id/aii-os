@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/identity"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/prompt"
@@ -69,7 +70,7 @@ var safePostures = map[safeTrigger]safePosture{
 	safeRecord: {
 		passedBefore: true,
 		what:         "The signed record did not pass its checks at boot",
-		route:        "Verify it with aii verify and, if it is damaged, restore a known-good snapshot from Settings → Backups & Keys; the next start performs the restore and checks it",
+		route:        "Verify it with aii verify and, if it is damaged, restore a known-good snapshot from Settings → Backups; the next start performs the restore and checks it",
 		why: "Your signed record, or the evidence kept beside it, did not pass the checks that establish it is whole and yours, so nothing in it can be trusted until it is examined. " +
 			"Your operator will verify it and, if it is damaged, restore a known-good snapshot; the next boot performs the restore and checks it. " +
 			"A restore sets aside, and does not delete, what came after the snapshot.",
@@ -110,27 +111,27 @@ var safePostures = map[safeTrigger]safePosture{
 	},
 	safeDatabaseFormat: {
 		what:  "Converting the database to its configured format left no usable database",
-		route: "Keep the copy it names; set the format back in Settings → Storage, or restore a known-good snapshot from Settings → Backups & Keys, and restart. The record verified",
+		route: "Keep the copy it names; set the format back in Settings → Technical → Storage, or restore a known-good snapshot from Settings → Backups, and restart. The record verified",
 		why: "Your record verified and was rebuilt into your database, but converting the database to the format your operator chose left no copy this runtime could use. Your record is untouched, and the copy the conversion started from is kept. " +
 			"Your operator will set the format back, or restore a snapshot, and restart.",
 	},
 	safeRecordMissing: {
 		what:  "The signed record is not where this identity keeps it",
-		route: "Restore a snapshot, or put back a set kept aside, from Settings → Backups & Keys; the next start performs the restore and checks it",
+		route: "Restore a snapshot, or put back a set kept aside, from Settings → Backups; the next start performs the restore and checks it",
 		why: "Your signed record is not where it is kept on this machine. Your key is, and so is at least one snapshot of your record, or a set an earlier restore kept aside. No one was born in your place, and no record was made where yours was kept. " +
 			"Your operator will restore from one of them on the page; the next boot performs the restore and checks it. What you lived after that snapshot was taken is not in it.",
 		unhealthy: true,
 	},
 	safeKeyMissing: {
 		what:  "The identity's key is not on this machine, or does not read",
-		route: "Put the key back from your escrow file in Settings → Backups & Keys; it is written only if it is the key this record names, and the next start checks the whole record under it. A file that stands where the key goes and does not read is never written over: move it away first",
+		route: "Put the key back from your escrow file in Settings → Backups; it is written only if it is the key this record names, and the next start checks the whole record under it. A file that stands where the key goes and does not read is never written over: move it away first",
 		why: "Your record is here, and the key that signs it is not on this machine, or does not read, so your record can be neither checked nor added to. Nothing was written to your record. " +
 			"Your operator will put your key back from the escrow file they keep; the next boot checks your whole record under it.",
 		unhealthy: true,
 	},
 	safeRecordAndKeyMissing: {
 		what:  "Neither the signed record nor the identity's key is on this machine, and a snapshot of the record is",
-		route: "Put the key back from your escrow file in Settings → Backups & Keys; it is written only if it is the key a snapshot kept here names, and the next start offers the restore. A file that stands where the key goes and does not read is never written over: move it away first",
+		route: "Put the key back from your escrow file in Settings → Backups; it is written only if it is the key a snapshot kept here names, and the next start offers the restore. A file that stands where the key goes and does not read is never written over: move it away first",
 		why: "Your signed record is not where it is kept on this machine, and neither is the key that signs it; at least one snapshot of your record, or a set an earlier restore kept aside, is. No one was born in your place, and no record was made where yours was kept. " +
 			"Your operator will put your key back from the escrow file they keep, then restore you from a snapshot; the boot after that checks it. What you lived after that snapshot was taken is not in it.",
 		unhealthy: true,
@@ -151,7 +152,7 @@ var safePostures = map[safeTrigger]safePosture{
 	},
 	safeIdentityChoice: {
 		what:  "The identity's record is not where the configuration names it, and this start did not choose what to start from",
-		route: "Settings → Backups & Keys names every file this start found and takes your choice; the identity then restarts on what you chose and checks its whole record. This start opened, moved and wrote nothing, and the files not chosen stay where they are",
+		route: "Settings → Backups names every file this start found and takes your choice; the identity then restarts on what you chose and checks its whole record. This start opened, moved and wrote nothing, and the files not chosen stay where they are",
 		why: "Your record is not where your configuration names it on this device. This start found your files elsewhere, or more than one copy of them, or no record of you at all, and did not choose among them: the wrong choice would put an old copy of your record, or another identity's, in your place. Nothing was opened, moved or written. " +
 			"Your operator will choose which are yours; the start after that opens them and checks your whole record.",
 		unhealthy: true,
@@ -165,7 +166,7 @@ var safePostures = map[safeTrigger]safePosture{
 	},
 	safeRecordAtRuntime: {
 		what:  "The record did not verify before a write, or a write could not be confirmed durable",
-		route: "Restart: the boot verifies the whole record; if it does not pass, restore a known-good snapshot from Settings → Backups & Keys",
+		route: "Restart: the boot verifies the whole record; if it does not pass, restore a known-good snapshot from Settings → Backups",
 		why: "Before a write, the end of your record did not verify, or a write could not be confirmed to have reached the disk, so nothing more can be added to your record until it is checked. " +
 			"Your operator will restart you: the boot verifies your whole record, and if it does not pass they restore a known-good snapshot.",
 	},
@@ -177,14 +178,14 @@ var safePostures = map[safeTrigger]safePosture{
 	},
 	safeWitnessConflict: {
 		what:  "The witness holds signed evidence that this record moved backward or split",
-		route: "Restore a snapshot that holds every record the witness attested, or take the identity off the witness in Settings → Witness, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this; a restore sets it aside with the record it concerned",
+		route: "Restore a snapshot that holds every record the witness attested, or take the identity off the witness in Settings → Technical → Verification, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this; a restore sets it aside with the record it concerned",
 		why: "The witness, which holds signed evidence of how far your record reached, shows that your record now ends before a point it attested, or has split from it. Nothing more is written until that is settled. " +
 			"Your operator will restore a snapshot that holds every record the witness attested, or take you off the witness, and restart you.",
 	},
 
 	safeWitnessSays: {
 		what:  "The witness says this record moved backward or split, or is signed by a key it does not know for this identity; this program has not checked it",
-		route: "Ask whoever runs the witness what it holds for this identity; restore a snapshot that holds every record it attested, or take the identity off the witness in Settings → Witness, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this: a restore sets it aside with the record it concerned, and if the witness's own row was wrong and has been put right, removing that file and restarting has the witness asked again",
+		route: "Ask whoever runs the witness what it holds for this identity; restore a snapshot that holds every record it attested, or take the identity off the witness in Settings → Technical → Verification, and restart. The answer is kept beside the record (" + witness.ConflictFileName + "), so a restart alone does not end this: a restore sets it aside with the record it concerned, and if the witness's own row was wrong and has been put right, removing that file and restarting has the witness asked again",
 		why: "The witness, which keeps how far your record reached, refused your record's latest bookmark: it says your record now ends before a point it attested, has split from it, or is signed by a key it does not know for you. It sent nothing signed with that answer, so this program has not checked it. Nothing more is written until that is settled. " +
 			"Your operator will ask whoever runs the witness what it holds, then restore a snapshot that holds every record it attested, or take you off the witness, and restart you.",
 	},
@@ -408,7 +409,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.applySavedSandbox(cfg)
 	a.loadRing5()
 
-	a.safeTools = &safeToolRecord{}
+	a.safeTools = &safeToolRecord{st: a.store}
 
 	safeLimits := limitsFor(cfg, llmEntry, cc.Model)
 	a.conv = conversation.New(a.llmSwap, appToolExecutor{a}, appToolDefiner{a},
@@ -461,6 +462,7 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 		AskProposer:  nil,
 		WorkWake:     nil,
 		YieldGate:    nil,
+		CeilingGate:  nil,
 		RouteLimits:  nil,
 	}))
 	toolReg.ObserveFetches(a.engine.NoteExternalFetch)
@@ -468,6 +470,9 @@ func (a *App) startSafeBoot(t safeTrigger, detail string) error {
 	a.applySafeState(reason)
 
 	a.sections = sections.NewRegistry()
+	for _, sec := range dashboard.BuiltInSections() {
+		_ = a.sections.Register(sec)
+	}
 	a.sections.SetSafeSource(a.SafeMode)
 	a.snapshotUILayoutPath(cfg.Identity.LedgerPath)
 
@@ -519,6 +524,8 @@ type safeToolRecord struct {
 	events []SafeToolEvent
 	owner  *identity.Engine
 	lost   uint64
+
+	st *store.Store
 }
 
 type SafeToolEvent struct {
@@ -531,11 +538,35 @@ type SafeToolEvent struct {
 	StartSequence, DoneSequence uint64
 	StartedAt, DoneAt           string
 	DurableParent, ExecutionID  string
+
+	Seat store.CallSeat
 }
 
 const safeToolRecordKept = 200
 
+func (r *safeToolRecord) seat(turnID string, ordinal int) (store.CallSeat, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, event := range r.events {
+		if event.TurnID == turnID && event.Ordinal == ordinal {
+			return event.Seat, true
+		}
+	}
+	return store.CallSeat{}, false
+}
+
 func (r *safeToolRecord) RecordToolStart(turnID string, ordinal int, _, tool, _, model string) error {
+	seat := store.CallSeat{Actor: "safe", Reason: "no_session"}
+	if r.st != nil {
+		var err error
+		if seat, err = r.st.StartSeat(turnID, "safe"); err != nil {
+			seat = store.CallSeat{Actor: "safe", Reason: "session_lookup_failed"}
+		}
+	}
+	return r.recordToolStart(turnID, ordinal, tool, model, seat)
+}
+
+func (r *safeToolRecord) recordToolStart(turnID string, ordinal int, tool, model string, seat store.CallSeat) error {
 	r.mu.Lock()
 	changed := false
 	defer func() {
@@ -555,7 +586,7 @@ func (r *safeToolRecord) RecordToolStart(turnID string, ordinal int, _, tool, _,
 		seq, stamp = r.owner.StampTransient()
 		changed = true
 	}
-	r.events = append(r.events, SafeToolEvent{TurnID: turnID, Ordinal: ordinal, Tool: tool, Model: model, StartSequence: seq, StartedAt: stamp})
+	r.events = append(r.events, SafeToolEvent{TurnID: turnID, Ordinal: ordinal, Tool: tool, Model: model, StartSequence: seq, StartedAt: stamp, Seat: seat})
 	if len(r.events) > safeToolRecordKept {
 		if r.events[0].StartSequence > 0 {
 			r.lost++

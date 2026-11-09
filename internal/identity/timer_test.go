@@ -350,7 +350,7 @@ func TestTimerTagStatusQueryEvery(t *testing.T) {
 	// A fired timer stays visible as fired (the alarm-history promise).
 	st := engineStore(e)
 	owner := NewTimerDeliveryOwner(e)
-	if r := owner.OnAlarm(ctxBG(), "tea2", "wall", time.Now().UnixMilli(), encodeTimerPayload("personal", "")); !r.Accepted {
+	if r := owner.OnAlarm(ctxBG(), "tea2", "wall", time.Now().UnixMilli(), encodeTimerPayload("personal", "", "")); !r.Accepted {
 		t.Fatal("fire must deliver")
 	}
 	list2, _ := e.ExecuteAction(ctxBG(), "verb", "timer", map[string]any{
@@ -401,7 +401,7 @@ func TestTheAlarmsReadListsWhatIsSetAfterEveryFiring(t *testing.T) {
 	message := strings.Repeat("review the day's commitments. ", 20)
 	first := time.Now().Add(-60 * 24 * time.Hour).UnixMilli()
 	for day := int64(0); day < 60; day++ {
-		if r := owner.OnAlarm(ctxBG(), "daily", "wall", first+day*24*3600*1000, encodeTimerPayload("ops", message)); !r.Accepted {
+		if r := owner.OnAlarm(ctxBG(), "daily", "wall", first+day*24*3600*1000, encodeTimerPayload("ops", message, "")); !r.Accepted {
 			t.Fatalf("firing %d was not delivered: %v", day, r.Err)
 		}
 	}
@@ -435,7 +435,7 @@ func TestTimerOwnerWakes(t *testing.T) {
 	poked := false
 	e.workWake = func() { poked = true }
 
-	r := owner.OnAlarm(ctxBG(), "wake7", "wall", time.Now().UnixMilli(), encodeTimerPayload("morning", "good morning"))
+	r := owner.OnAlarm(ctxBG(), "wake7", "wall", time.Now().UnixMilli(), encodeTimerPayload("morning", "good morning", ""))
 	if !r.Accepted {
 		t.Fatal("floor must accept")
 	}
@@ -551,7 +551,7 @@ func TestTimerDoubleDispatchSingleDelivery(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(time.Hour).UnixMilli()
-	payload := encodeTimerPayload("identity", "look at yourself")
+	payload := encodeTimerPayload("identity", "look at yourself", "")
 
 	// The same firing (alarmID + deadline) dispatched concurrently.
 	results := make(chan cognitive.AlarmResult, 2)
@@ -636,7 +636,7 @@ func TestTimerDeliveryRefusalCarriesTheFreezeAsItsReason(t *testing.T) {
 	engine, st, _, _, _ := setupEngine(t)
 	owner := NewTimerDeliveryOwner(engine)
 	st.SetFrozen(true, "test: integrity lost")
-	got := owner.OnAlarm(context.Background(), "frozen", "wall", int64(42), encodeTimerPayload("tea", "kettle"))
+	got := owner.OnAlarm(context.Background(), "frozen", "wall", int64(42), encodeTimerPayload("tea", "kettle", ""))
 	if got.Accepted {
 		t.Fatal("a delivery the freeze refused was accepted")
 	}
@@ -728,7 +728,7 @@ func TestTheAlarmsReadListsTheNewestFiringsAndSaysHowToAskForTheRest(t *testing.
 	t.Cleanup(owner.Stop)
 	first := time.Now().Add(-60 * 24 * time.Hour).UnixMilli()
 	for day := int64(0); day < 60; day++ {
-		if r := owner.OnAlarm(ctxBG(), "daily", "wall", first+day*24*3600*1000, encodeTimerPayload("ops", fmt.Sprintf("firing number %d.", day))); !r.Accepted {
+		if r := owner.OnAlarm(ctxBG(), "daily", "wall", first+day*24*3600*1000, encodeTimerPayload("ops", fmt.Sprintf("firing number %d.", day), "")); !r.Accepted {
 			t.Fatalf("firing %d was not delivered: %v", day, r.Err)
 		}
 	}

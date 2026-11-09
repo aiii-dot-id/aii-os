@@ -42,21 +42,33 @@ func (s *Server) wsConfigSet(ctx context.Context, conn carrier, cl *wsClient, ms
 			state, err := h.SetConfig(want)
 			if err != nil {
 				s.sendErrorFor(ctx, conn, reqID, err.Error())
+				s.broadcastAsksIfNaming(want)
 				return
 			}
 			s.sendMsg(ctx, conn, ServerMessage{RequestID: reqID, Type: "config", Config: state})
+			s.BroadcastConfig()
 			s.BroadcastStatus()
+			s.broadcastAsksIfNaming(want)
 		})
 		return
 	}
 	state, err := h.SetConfig(msg.Config)
 	if err != nil {
 		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+		s.broadcastAsksIfNaming(msg.Config)
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "config", Config: state})
 
+	s.BroadcastConfig()
 	s.BroadcastStatus()
+	s.broadcastAsksIfNaming(msg.Config)
+}
+
+func (s *Server) broadcastAsksIfNaming(cfg map[string]any) {
+	if _, named := cfg["speech.operator_speakers"]; named {
+		s.BroadcastAsks()
+	}
 }
 
 func (s *Server) wsToolToggle(ctx context.Context, conn carrier, msg ClientMessage) {
@@ -123,7 +135,7 @@ func changesRoute(cfg map[string]any) bool {
 	return mode || relay || addresses
 }
 
-const notPrivateRoute = "this connection is not private, so the route was not changed — open the dashboard on the machine itself, or serve it over HTTPS (Settings → Dashboard), and choose the route there"
+const notPrivateRoute = "this connection isn't private, so the route wasn't changed. Use the AII OS computer, or turn on \"Serve over HTTPS\" in Settings → Access"
 
 func changesSubstrate(cfg map[string]any) bool {
 	if cfg == nil {
@@ -132,4 +144,23 @@ func changesSubstrate(cfg map[string]any) bool {
 	_, provider := cfg["llm.provider"]
 	_, model := cfg["llm.model"]
 	return provider || model
+}
+
+func (s *Server) wsThemeSet(ctx context.Context, conn carrier, msg ClientMessage) {
+	h := s.currentHandler()
+	if h.SetThemeTokens == nil {
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
+		return
+	}
+	if len(msg.Tokens) == 0 {
+		s.sendErrorFor(ctx, conn, msg.RequestID, "theme_set requires tokens")
+		return
+	}
+	if err := h.SetThemeTokens(msg.Tokens); err != nil {
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
+		return
+	}
+	s.sendMsg(ctx, conn, ServerMessage{RequestID: msg.RequestID, Type: "theme", Theme: s.themeBytes()})
+	others := s.conns(func(c carrier, _ *wsClient) bool { return c != conn })
+	s.fanOut(ctx, others, s.themeMessage())
 }

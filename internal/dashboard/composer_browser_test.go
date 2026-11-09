@@ -2,10 +2,7 @@
 
 package dashboard
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func chatModuleRig(t *testing.T) map[string][]byte {
 	t.Helper()
@@ -63,7 +60,7 @@ func TestTheComposerFollowsTheIdentityAndTheActiveModel(t *testing.T) {
 	page := `<!doctype html><html><body>
 <div id="thread"><div id="thread-inner"></div></div>
 <div id="effort" hidden><button id="effort-btn" aria-expanded="false">Effort · <b id="effort-val"></b></button><div id="effort-menu" hidden></div></div>
-<textarea id="msg-input"></textarea><button id="send-btn"></button>
+<textarea id="msg-input"></textarea><button id="send-btn"></button><div id="reply-line"></div>
 <button id="elsewhere">elsewhere</button>
 <script type="module">
 import { run } from '/__harness.js';
@@ -80,7 +77,7 @@ run(async (assert) => {
   const own = (levels, in_force, checked) => ({ llm: { effort_choice: { levels, in_force, checked } } });
 
   S.identityExists = true;
-  S.stats = { name: 'TestIdentity' };
+  S.stats = { name: 'Quill' };
   S.config = own(['low', 'medium', 'high'], 'high');
   renderComposer();
   assert(!wrap.hidden, 'a model with its own levels is offered the control');
@@ -141,15 +138,50 @@ run(async (assert) => {
   renderComposer();
   assert(wrap.hidden, 'no config, no control');
 
-  assert(input.placeholder === 'Message TestIdentity', 'the placeholder names the identity: ' + input.placeholder);
+  assert(input.placeholder === 'Reply to Quill', 'the placeholder names the identity: ' + input.placeholder);
+  // THE LINE UNDER THE BOX SAYS IDLE ONLY ON THE HOST'S WORD. Until the work state
+  // is known, and whenever it says something follows, nothing.
+  const line = () => document.getElementById('reply-line').textContent;
+  S.stats = { name: 'Quill' }; S.work = null; S.thinking = false;
+  renderComposer();
+  assert(line() === '', 'idle was said before the work state was known: ' + line());
+  S.work = { alarms: [], nothing_scheduled: false };
+  renderComposer();
+  assert(line() === '', 'idle was said though the host says something follows: ' + line());
+  S.work = { alarms: [], nothing_scheduled: true };
+  renderComposer();
+  assert(line() === 'Quill is idle. Nothing is scheduled.', 'idle with nothing scheduled is not said: ' + line());
+  // WHAT THE WORK WAITS FOR IS SAID, the host's reading (work.resumes), where
+  // nothing was said before (D6).
+  S.work = { alarms: [], nothing_scheduled: false, resumes: { session: 'ws_a', on: 'word' } };
+  renderComposer();
+  assert(line() === 'Quill is waiting for your reply.', 'a wait for their word is not said: ' + line());
+  S.work = { alarms: [], nothing_scheduled: false, resumes: { session: 'ws_a', on: 'delivery:ws_b' } };
+  renderComposer();
+  assert(line() === 'Quill is waiting for a sub-agent to finish.', 'a wait for a delivery is not said: ' + line());
+  const soon = new Date(Date.now() + 60000);
+  S.work = { alarms: [], nothing_scheduled: false, resumes: { session: 'ws_a', on: 'time:' + soon.getTime() } };
+  renderComposer();
+  assert(line().startsWith('Quill will carry on ') && line().endsWith('.') && !line().includes('time:'), 'a wait for a moment is not said in words: ' + line());
+  S.work = { alarms: [], nothing_scheduled: false, resumes: { session: 'ws_a', on: 'now' } };
+  renderComposer();
+  assert(line() === '', 'a wait for now said something: ' + line());
+  S.work = { alarms: [], nothing_scheduled: true };
+  S.thinking = true;
+  renderComposer();
+  assert(line() === 'Quill is answering · Esc to stop', 'answering is not said while they answer: ' + line());
+  S.thinking = false; S.stats = { name: 'Unnamed' };
+  renderComposer();
+  assert(line() === 'They are idle. Nothing is scheduled.', 'an unnamed identity is not said to be idle: ' + line());
+  S.stats = { name: 'Quill' };
   S.stats = { name: 'Unnamed' };
   renderComposer();
-  assert(input.placeholder === 'Message your identity', 'an unnamed identity is not called Unnamed: ' + input.placeholder);
+  assert(input.placeholder === 'Reply to them', 'an unnamed identity is not called Unnamed: ' + input.placeholder);
   S.identityExists = false;
   S.stats = { name: '(not born)' };
   S.config = own(['low'], 'low');
   renderComposer();
-  assert(input.placeholder === 'Message your identity' && wrap.hidden, 'before birth: no name and no control');
+  assert(input.placeholder === 'Reply to them' && wrap.hidden, 'before birth: no name and no control');
 });
 </script></body></html>`
 	runPageInEngines(t, page, chatModuleRig(t))
@@ -328,83 +360,9 @@ run((assert) => {
 	runPageInEnginesAtSize(t, page, modules, 375, 812)
 }
 
-func TestHomeTalkFollowsTheMicrophonesState(t *testing.T) {
-	page := `<!doctype html><html><body>
-<nav><div class="nav-item" data-view="home"></div><div class="nav-item" data-view="chat"></div><div class="nav-item" data-view="memory"></div><div class="nav-item" data-view="identity"></div><div class="nav-item" data-view="projects"></div></nav>
-<div id="home-inner"></div>
-<textarea id="msg-input"></textarea><button id="converse">talk</button><button id="mic">mic</button><input id="mem-search">
-<script type="module">
-import { run } from '/__harness.js';
-import { S } from '/state.js';
-import { renderHome } from '/views/home.js';
-run(async (assert) => {
-  const clicked = [], opened = [];
-  document.querySelectorAll('.nav-item').forEach(el => { el.onclick = () => clicked.push(el.dataset.view); });
-  S.openSettings = (section, focus) => opened.push(section + '/' + focus);
-  S.connected = true; S.identityExists = true; S.identity = null; S.work = null; S.cont = null; S.projects = [];
-
-  S.stats = { name: 'TestIdentity', voice_state: 'setup' };
-  renderHome();
-  let talk = document.getElementById('home-talk');
-  assert(talk && talk.classList.contains('faint') && talk.title === 'Voice isn\'t set up — opens Speech settings', 'with nothing set up Home offers the way to set it up: ' + (talk && talk.outerHTML));
-  talk.click();
-  assert(opened.join() === 'speech/sp-provider-stt' && !clicked.includes('chat'), 'and it opens Speech settings, not Chat');
-
-  S.stats = { name: 'TestIdentity', voice_state: 'cloud' };
-  renderHome();
-  document.getElementById('home-talk').click();
-  assert(clicked.includes('chat') && document.activeElement === document.getElementById('mic'), 'with cloud speech it lands on Chat\'s push-to-talk microphone');
-
-  clicked.length = 0;
-  S.stats = { name: 'TestIdentity', voice_state: 'plugin' };
-  renderHome();
-  document.getElementById('home-talk').click();
-  assert(clicked.includes('chat') && document.activeElement === document.getElementById('converse'), 'with a voice plugin it lands on the conversation microphone');
-
-  S.stats = { name: 'TestIdentity', voice_state: 'safe' };
-  renderHome();
-  talk = document.getElementById('home-talk');
-  assert(talk.disabled && talk.title === 'Voice is paused while this identity is in SAFE', 'under SAFE it is paused, and says why');
-});
-</script></body></html>`
-	modules := map[string][]byte{}
-	for _, path := range []string{"static/views/home.js", "static/state.js", "static/util.js"} {
-		data, err := staticFS.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		modules["/"+strings.TrimPrefix(path, "static/")] = data
-	}
-	modules["/views/projects.js"] = []byte(`export function viewProject() {}`)
-	modules["/views/work.js"] = []byte(`export function workSectionHTML() { return ''; } export function wireWork() {}`)
-	runPageInEngines(t, page, modules)
-}
-
-func TestTheChatChooserOffersOnlyEntriesThatChat(t *testing.T) {
-	page := `<!doctype html><html><body>
-<div id="chat-substrate-wrap"><select id="chat-provider"></select><select id="chat-model"></select><button id="chat-substrate-apply"></button><div id="chat-substrate-status"></div></div>
-<div id="thread"><div id="thread-inner"></div></div><textarea id="msg-input"></textarea><button id="send-btn"></button>
-<script type="module">
-import { run } from '/__harness.js';
-import { S } from '/state.js';
-import { renderChatSubstrate } from '/views/chat.js';
-run(async (assert) => {
-  S.identityExists = true;
-  S.config = { llm: { provider: 'OpenAI', model: 'gpt-5.6-sol', resolved_provider: 'OpenAI', resolved_model: 'gpt-5.6-sol' } };
-  S.providers = [
-    { name: 'OpenAI', chat: true, models: ['gpt-5.6-sol'], speech: { stt: { models: ['whisper-1'] } } },
-    { name: 'ElevenLabs', chat: false, speech: { tts: { models: ['eleven_v3'] } } },
-    { name: 'Older payload' }
-  ];
-  renderChatSubstrate();
-  const names = [...document.getElementById('chat-provider').options].map(o => o.value);
-  assert(names.indexOf('ElevenLabs') < 0, 'a speech-only entry was offered for chat: ' + names.join(','));
-  assert(names.indexOf('OpenAI') >= 0 && names.indexOf('Older payload') >= 0, 'chat entries, and a payload with no chat flag, stay offered: ' + names.join(','));
-});
-</script></body></html>`
-	runPageInEngines(t, page, chatModuleRig(t))
-}
-
+// FIRSTBOOT OFFERS ONLY ENTRIES THAT CHAT, and keeps each option pointing
+// at the entry it names: options are indexed by position, so a speech-only
+// entry is skipped in place rather than filtered out of the list.
 func TestFirstbootOffersOnlyEntriesThatChat(t *testing.T) {
 	page := `<!doctype html><html><body>
 <select id="fb-provider"></select><div id="fb-cred-why"></div>
@@ -452,9 +410,9 @@ run(assert=>{
  const history=Array.from({length:200},(_,i)=>({role:'operator',content:'message '+i}));
  history.push({role:'system',content:'→ read({"path":"fixture"})\n← a result'});
  renderHistory(history);
- const tool=inner.querySelector('details');tool.open=true;
+ const tool=inner.querySelector('details.tool-ev');tool.open=true;
  renderAsks([{id:'q1',kind:'clarify',text:'What next?'}]);
- const input=inner.querySelector('.ask-input');input.value='keep my answer';input.focus();
+ const input=inner.querySelector('.c-ask__input');input.value='keep my answer';input.focus();
  S.thinking=true;toggleThinkingDots(true);
  const marker=inner.lastElementChild;
  thread.scrollTop=0;thread.dispatchEvent(new WheelEvent('wheel',{deltaY:-80,bubbles:true}));
@@ -467,8 +425,8 @@ run(assert=>{
  renderHistory(history);
  assert(reads<=8 && writes===0,'history measured/scrolled per row: '+reads+' reads, '+writes+' writes');
  assert(thread.scrollTop===0,'restoration dragged the reader to the end');
- assert(inner.querySelector('details')===tool && tool.open,'restoration lost an expanded tool');
- assert(inner.querySelector('.ask-input')===input && input.value==='keep my answer' && document.activeElement===input,
+ assert(inner.querySelector('details.tool-ev')===tool && tool.open,'restoration lost an expanded tool');
+ assert(inner.querySelector('.c-ask__input')===input && input.value==='keep my answer' && document.activeElement===input,
   'restoration lost a live question, input or focus');
  assert(inner.lastElementChild===marker,'restoration lost or misplaced activity marker');
  const observer=new MutationObserver(()=>{});observer.observe(inner,{childList:true});
@@ -509,7 +467,11 @@ func TestInformationalToastsNeverInterceptMobileControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/layout.css"></head><body>
+	theme, err := staticFS.ReadFile("static/theme.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/layout.css"></head><body>
 <button id="control" style="position:fixed;bottom:60px;left:0;width:100%;height:100px">Microphone</button>
 <div class="toast" id="toast">A connection notice with enough text to cover the control</div>
 <script type="module">
@@ -523,5 +485,5 @@ run(assert=>{
   assert(target===control,'a '+(shown?'visible':'faded')+' informational toast intercepted the microphone: '+target?.id);
  }
 });</script></body></html>`
-	runPageInEnginesAtSize(t, page, map[string][]byte{"/layout.css": css}, 375, 812)
+	runPageInEnginesAtSize(t, page, map[string][]byte{"/theme.css": theme, "/layout.css": css}, 375, 812)
 }

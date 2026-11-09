@@ -2,7 +2,6 @@ package identity
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -47,10 +46,7 @@ func (s *storeTimers) ListTimers() ([]TimerInfo, error) {
 		return nil, fmt.Errorf("list fired timers: %w", err)
 	}
 	for _, f := range fired {
-		id := strings.TrimPrefix(f.ID, "timer_")
-		if i := strings.LastIndexByte(id, '_'); i > 0 {
-			id = id[:i]
-		}
+		id := TimerFiringAlarmID(f.ID)
 
 		out = append(out, TimerInfo{ID: id, Message: f.Content, Fired: true, FiredAtMs: f.CreatedMs})
 	}

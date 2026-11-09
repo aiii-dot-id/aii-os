@@ -15,6 +15,13 @@ const harvestFusionInstruction = "Harvest it: state what the branches collective
 	"what deserves memory. Deliverables that fulfill a commitment are " +
 	"yours to complete deliberately."
 
+func (a *App) harvestChoice(waited string) string {
+	if waited == "" {
+		return ""
+	}
+	return " " + a.unpromptedSentence()
+}
+
 func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) {
 
 	if a.currentMode() == ModeSafe {
@@ -35,10 +42,17 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		time.Now().UTC().Format("15:04:05 MST Mon Jan 2"))
 
 	if err := a.acquireTurn(ctx); err != nil {
-		logsink.Info("harvest.refusal", "%s: gate unavailable (mid-turn or coalesced): %v", sessionID, err)
+
+		logsink.Info("harvest.decision", "%s: a turn holds the gate; the delivery waits and is harvested after it", sessionID)
 		return
 	}
 	defer a.releaseTurn()
+
+	held, waiting := a.deliveryHeld(sessionID)
+	if held {
+		logsink.Info("harvest.refusal", "%s: held by the operator (supervised); the delivery waits for their word", sessionID)
+		return
+	}
 
 	if unharvested, err := a.store.UnharvestedDeliveries(1); err != nil {
 		logsink.Warn("harvest.error", "%s: emptiness check failed (proceeding to harvest): %v", sessionID, err)
@@ -49,7 +63,12 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 
 	turnCtx, cancelTurn := context.WithTimeout(withTurnSource(a.lifetime(), turnSourceHarvest), a.turnWall(harvestWallSetting))
 	defer cancelTurn()
-	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), notice+" — your sub-agent finished. "+harvestFusionInstruction)
+
+	waited, owner := a.deliveryCame(waiting)
+	if owner != "" {
+		turnCtx = interaction.WithResumeSession(turnCtx, owner)
+	}
+	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), notice+" — your sub-agent finished. "+harvestFusionInstruction+waited+a.harvestChoice(waited))
 	switch {
 	case err != nil && spoken != "":
 
@@ -62,8 +81,14 @@ func (a *App) wakeSubagentDelivery(ctx context.Context, sessionID, goal string) 
 		return
 	}
 	wakeID := fmt.Sprintf("wake_subagent_%s_%d", sessionID, time.Now().UTC().UnixNano())
-	if err := a.deliverReply(wakeID, spoken, recorded); err != nil {
-		logsink.Warn("harvest.error", "outbox write failed: %v", err)
+	var derr error
+	if waited != "" {
+		derr = a.deliverUnprompted(turnCtx, wakeID, spoken, recorded)
+	} else {
+		derr = a.deliverReply(wakeID, spoken, recorded)
+	}
+	if derr != nil {
+		logsink.Warn("harvest.error", "outbox write failed: %v", derr)
 	}
 	logsink.Info("harvest.end", "%s: woke and spoke (%d chars)", sessionID, len(spoken))
 }

@@ -309,6 +309,11 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 		}
 	}
 	for _, v := range shellVersions(cmd) {
+		text, docs := hereDocs(cmd, v)
+		words := shellWords(text, v)
+		bare := outsideQuotes(text)
+		textOnly := len(words) > 0 && shellTextCommands[filepath.Base(words[0])] && !strings.ContainsAny(bare, ";|&`\n<>") &&
+			!strings.Contains(bare, "$(") && !strings.Contains(bare, "${")
 		var read func(arg string, fragment, literal bool, code map[string]bool)
 		read = func(arg string, fragment, literal bool, code map[string]bool) {
 			tok := shellToken{text: arg, fragment: fragment, literal: literal, code: code[arg]}
@@ -322,11 +327,14 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 				(r.inExtraRoot(from(base, arg)) || isRooted(arg) && !r.isOutsideSandbox(arg))
 			add(tok)
 			for i, p := range pieces {
+
+				if textOnly && slashesOnly(p) {
+					continue
+				}
 				read(p, tok.name && (i == 0 || !escapeShaped(p)), literal, code)
 			}
 		}
-		text, docs := hereDocs(cmd, v)
-		for _, w := range shellWords(text, v) {
+		for _, w := range words {
 			read(w, false, false, nil)
 		}
 		for _, d := range docs {
@@ -337,6 +345,43 @@ func (r *Registry) shellTokens(base, cmd string) []shellToken {
 		}
 	}
 	return out
+}
+
+var shellTextCommands = map[string]bool{"echo": true, "printf": true}
+
+func slashesOnly(w string) bool {
+	return w != "" && strings.Trim(w, "/") == ""
+}
+
+func outsideQuotes(cmd string) string {
+	var b strings.Builder
+	in := rune(0)
+	for i := 0; i < len(cmd); i++ {
+		c := rune(cmd[i])
+		switch {
+		case in == '\'':
+			if c == '\'' {
+				in = 0
+			}
+		case in == '"':
+			if c == '\\' && i+1 < len(cmd) {
+				i++
+			} else if c == '"' {
+				in = 0
+			} else if c == '$' || c == '`' || c == '(' || c == ')' || c == '{' || c == '}' {
+				b.WriteRune(c)
+			}
+		case c == '\'' || c == '"':
+			in = c
+		case c == '\\' && i+1 < len(cmd):
+			b.WriteByte(cmd[i])
+			i++
+			b.WriteByte(cmd[i])
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 type hereDoc struct {

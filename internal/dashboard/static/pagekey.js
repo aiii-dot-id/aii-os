@@ -1,4 +1,5 @@
 const NAME = 'aii.signin';
+export const PAGE_KEY_STORE = NAME;
 const HEADER = 'Aii-Page-Key';
 
 let held = '';
@@ -21,7 +22,7 @@ function keep(key) {
 
 export function keptInMemoryOnly() { return inMemory; }
 
-export const MEMORY_ONLY = 'This browser does not let the dashboard keep its sign-in, so it lasts until this tab is reloaded or closed.';
+export const MEMORY_ONLY = 'This browser won\'t remember your sign-in. Reload or close this tab and you\'ll sign in again.';
 
 export function keepPageKey(reply) {
   const key = reply.headers.get(HEADER);

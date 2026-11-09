@@ -41,43 +41,43 @@ func TestTheSendGlyphReturnsOnTheSharedSendStopControl(t *testing.T) {
 	}
 }
 
-func TestTheLevelSitsBesideTheMicrophone(t *testing.T) {
+// THE REPLY BOX IS ONE ROW (the board ReplyBox, spec step 6): the text,
+// then "+", Talk and Send, in one box; the thinking level is in the "+"
+// menu beside the model, no longer a chip beside the microphone. This
+// supersedes the earlier rulings that put the level beside the microphone
+// and the controls under the text box.
+func TestTheReplyBoxIsOneRowAndTheLevelIsInItsMenu(t *testing.T) {
 	b, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(b)
-	order := []string{`class="composer-tools"`, `class="composer-actions"`, `id="effort"`, `id="converse"`, `id="send-btn"`}
+	row := strings.Index(html, `<div class="composer-row c-reply__box">`)
+	end := strings.Index(html, `id="reply-line"`)
+	if row < 0 || end < row {
+		t.Fatal("index.html has no reply box row, or no line under it")
+	}
+	box := html[row:end]
+	order := []string{`id="attach-btn"`, `id="plus-menu"`, `id="msg-input"`, `id="mic"`, `id="send-btn"`}
 	last := -1
 	for _, mark := range order {
-		i := strings.Index(html, mark)
+		i := strings.Index(box, mark)
 		if i < 0 {
-			t.Fatalf("index.html has no %s", mark)
+			t.Fatalf("the reply box has no %s", mark)
 		}
 		if i < last {
-			t.Fatalf("%s comes before the element it should follow; the row order is %v", mark, order)
+			t.Fatalf("%s comes before the element it should follow; the row is %v", mark, order)
 		}
 		last = i
 	}
-}
-
-func TestTheControlsSitUnderTheTextBox(t *testing.T) {
-	b, err := staticFS.ReadFile("static/index.html")
-	if err != nil {
-		t.Fatal(err)
+	menu := box[strings.Index(box, `id="plus-menu"`):strings.Index(box, `<input type="file" id="attach-input"`)]
+	for _, item := range []string{`id="plus-files"`, `id="effort"`, `id="effort-menu"`, `id="plus-model"`} {
+		if !strings.Contains(menu, item) {
+			t.Fatalf("the + menu has no %s:\n%s", item, menu)
+		}
 	}
-	html := string(b)
-	open := strings.Index(html, `<div class="composer">`)
-	row := strings.Index(html, `<div class="composer-row">`)
-	if open < 0 || row < 0 {
-		t.Fatal("index.html has no composer box or no controls row")
-	}
-	box := html[open:row]
-	if strings.Count(box, "<div") != strings.Count(box, "</div>") {
-		t.Fatalf("the controls row opens inside the text box:\n%s", box)
-	}
-	if !strings.Contains(box, `id="msg-input"`) || strings.Contains(box, "<button") {
-		t.Fatalf("the text box holds more than the text:\n%s", box)
+	if strings.Contains(box[strings.Index(box, `class="composer-actions"`):], `id="effort"`) {
+		t.Fatal("the thinking level is still beside the microphone")
 	}
 }
 

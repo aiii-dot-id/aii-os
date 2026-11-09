@@ -44,7 +44,7 @@ func TestCuriosityCueRendersAndIsSuppressed(t *testing.T) {
 	}
 	// The decision is authored, so it stays in the working state (the
 	// system prompt); the cue it displaces rides the turn's facts.
-	authored, _ := a.buildWorkState()
+	authored, _ := a.buildWorkState(t.Context())
 	if !strings.Contains(authored, "Decision needed") {
 		t.Fatalf("the owed decision must be shown in its place:\n%s", authored)
 	}

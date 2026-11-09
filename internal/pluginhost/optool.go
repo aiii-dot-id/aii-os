@@ -399,7 +399,8 @@ func decodeReply(reply []byte) (tools.Result, error) {
 		if eo.Data.ReasonCode != "" {
 			msg += fmt.Sprintf(" (reasonCode %s)", eo.Data.ReasonCode)
 		}
-		return tools.Result{Error: msg, ReasonCode: eo.Data.ReasonCode}, nil
+
+		return tools.Result{Error: msg, ReasonCode: firstNonEmpty(eo.Data.ReasonCode, ReasonPluginUncoded)}, nil
 	}
 
 	var resultMembers map[string]json.RawMessage
@@ -432,6 +433,8 @@ func decodeReply(reply []byte) (tools.Result, error) {
 		case reason == "":
 			reason = firstNonEmpty(code, "no reason given")
 		}
-		return tools.Result{Error: fmt.Sprintf("operation %s: %s", ir.Status, reason), ReasonCode: code}, nil
+		return tools.Result{Error: fmt.Sprintf("operation %s: %s", ir.Status, reason), ReasonCode: firstNonEmpty(code, ReasonPluginUncoded)}, nil
 	}
 }
+
+const ReasonPluginUncoded = "PLUGIN_UNCODED"

@@ -3,6 +3,7 @@ package cognitive
 import (
 	"context"
 	"errors"
+	"github.com/aiii-dot-id/aii-os/internal/quiesce"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -699,7 +700,10 @@ func TestNextWakeHidesInFlightDispatch(t *testing.T) {
 	// queue): after release, the still-due row leads again — the bounded-
 	// retry semantics. In production ApplyAlarmTransitions deletes or
 	// rearms the row as part of the same release.
-	tm.ClearPendingDispatch("due")
+	tm.mu.Lock()
+	dueToken := tm.pendingDispatch["due"].token
+	tm.mu.Unlock()
+	tm.ClearPendingDispatch("due", dueToken)
 	next, has = tm.nextWake()
 	if !has || next.UnixMilli() != past {
 		t.Fatalf("post-release nextWake = %v, want the due row again (retry semantics)", next)
@@ -708,7 +712,7 @@ func TestNextWakeHidesInFlightDispatch(t *testing.T) {
 
 type captureEnqueuer struct{ items []store.Alarm }
 
-func (c *captureEnqueuer) EnqueueAlarm(a store.Alarm) error {
+func (c *captureEnqueuer) EnqueueAlarm(a store.Alarm, token uint64) error {
 	c.items = append(c.items, a)
 	return nil
 }
@@ -776,4 +780,463 @@ func mustDue(t *testing.T, st *store.Store, clock string, nowOrLess int64) []sto
 		t.Fatal(err)
 	}
 	return alarms
+}
+
+// heldOwner declines because the identity is in a turn. It is deliberately
+// not recordingOwner: Deferred is the whole point of these tests, and a
+// shared double that could return it would make the flag look exercised by
+// tests that never set it.
+// heldOwner declines because a turn holds, and keeps declining until it is
+// released. ONE OWNER CARRIES BOTH HALVES of the lifecycle test (host
+// 0630, ruling 3): the row is not reset and the owner is not swapped, so
+// the decline and the later run are the same alarm's behaviour and not
+// two different fixtures agreeing with each other.
+type heldOwner struct {
+	name string
+	held bool
+}
+
+func (h *heldOwner) Name() string { return h.name }
+func (h *heldOwner) OnAlarm(ctx context.Context, alarmID, clock string, deadline int64, payload string) AlarmResult {
+	if h.held {
+		return AlarmResult{Deferred: true}
+	}
+	return AlarmResult{Accepted: true}
+}
+
+// A RECURRING TICK THE RHYTHM DECLINES BECAUSE A TURN HOLDS KEEPS ITS
+// DEADLINE. Before this, applyTransitions caught a declined recurring tick
+// in the same branch as a run and rearmed it a whole period on, so an
+// operator's "run their next pass now" that met a turn was answered a
+// period later, and the page's "Asked at {time}" stood until then with no
+// pass in the record.
+// TestHeldRecurringTickIsRetriedAtTheFloorNotThePeriod asserts the bound
+// the host named: a held tick is retried at the anti-spin FLOOR, never
+// rearmed at now + period. "Under an hour" would accept a nearly full
+// period, so the bound is stated explicitly.
+func TestHeldRecurringTickIsRetriedAtTheFloorNotThePeriod(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000) // one hour
+	tm.RegisterOwner(&heldOwner{name: "held", held: true})
+	if err := st.SetAlarm("held", "held", "wall", 1, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	before := WallNow()
+	tm.EvaluateAll(context.Background())
+
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatalf("a held recurring alarm must SURVIVE the firing: %v", err)
+	}
+	if deadline >= before+period {
+		t.Fatalf("a held tick was rearmed a whole period on: deadline %d >= %d+%d. "+
+			"The cadence continues from the pass that RAN, not from an attempt that was held.",
+			deadline, before, period)
+	}
+	if deadline < before {
+		t.Fatalf("a held tick was moved backwards: deadline %d < %d", deadline, before)
+	}
+	// THE BOUND ITSELF, not "less than an hour": the retry floor.
+	floor := declinedRetryAfterMS("wall")
+	if deadline > before+floor+1000 {
+		t.Fatalf("a held tick was deferred past the retry floor: deadline %d > %d+%d (+1s slack). "+
+			"A held tick is retried at the floor, never rearmed at now+period.",
+			deadline, before, floor)
+	}
+}
+
+// TestAHeldTickIsRetriedAtTheFloorThenRearmsFromTheRun is the one
+// lifecycle the host asked for (0630, ruling 3): ONE ROW carried through,
+// never reset and with no owner swap between halves, so neither fact can
+// pass by being a different alarm's behaviour:
+//
+//	press -> the owner declines (a turn holds) -> retried at the floor
+//	-> the owner runs -> rearmed at run + period.
+//
+// The press is real: it moves the deadline to now, which is what makes
+// the decline a DECLINE OF AN ASKED-FOR PASS rather than an ordinary tick.
+func TestAHeldTickIsRetriedAtTheFloorThenRearmsFromTheRun(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	// Due an hour out: not due, so the only thing that can make it fire is
+	// the press.
+	if err := st.SetAlarm("held", "held", "wall", WallNow()+period, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	tm.RegisterOwner(&heldOwner{name: "held", held: true})
+
+	// 1. The press brings it forward.
+	asked := WallNow()
+	press, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward: %v", err)
+	}
+	if !press.Moved || press.Reason != "" {
+		t.Fatalf("the press must move a future recurring alarm: %+v", press)
+	}
+
+	// 2. It meets a turn and declines: retried at the FLOOR, not a period.
+	before := WallNow()
+	tm.EvaluateAll(context.Background())
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatalf("a held recurring alarm must SURVIVE the firing: %v", err)
+	}
+	floor := declinedRetryAfterMS("wall")
+	if deadline > before+floor+1000 {
+		t.Fatalf("held step deferred past the floor: deadline %d > %d+%d. A held tick keeps its deadline; "+
+			"it is not rearmed a whole period on.", deadline, before, floor)
+	}
+	if deadline < asked {
+		t.Fatalf("held step moved the deadline before the press: %d < %d", deadline, asked)
+	}
+
+	// 3. The turn ends and the SAME row runs. No SetAlarm, no owner swap:
+	//    the owner's decline is a field it flips, so the row is carried.
+	held := tm.owners["held"].(*heldOwner)
+	held.held = false
+	// THE ROW IS NOT RESET (host 0630, ruling 3). Its deadline is still the
+	// floor the held tick left it at, so the due-walk has nothing to hand
+	// us yet; rewriting the deadline to 1 would make the test pass by
+	// changing the thing under test. Dispatching the row directly runs it
+	// through the same inline path and the same transition law, and the
+	// assertion below proves the row carried over untouched.
+	row, ok, err := st.AlarmByID("held")
+	if err != nil || !ok {
+		t.Fatalf("read the held row: ok=%v err=%v", ok, err)
+	}
+	if row.Deadline != deadline {
+		t.Fatalf("the row was reset between the held tick and the run: %d != %d", row.Deadline, deadline)
+	}
+	// The same row, never rewritten: the wall clock is moved past the floor
+	// and the due walk itself finds the row eligible and runs it.
+	later := time.UnixMilli(deadline + 1_000)
+	wallNowFn = func() time.Time { return later }
+	t.Cleanup(func() { wallNowFn = time.Now })
+	ran := WallNow()
+	tm.EvaluateAll(context.Background())
+
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatalf("an accepted recurring alarm must SURVIVE the firing: %v", err)
+	}
+	if deadline < ran+period {
+		t.Fatalf("after a run the alarm must be rearmed a period from the RUN: %d < %d+%d. "+
+			"The cadence continues from the pass that ran.", deadline, ran, period)
+	}
+}
+
+// TestAPressSurvivesARestartBeforeTheTick is the restart case host 0630
+// ruling 3 asks for as its own: the press moves a durable deadline, the
+// daemon is replaced before any tick runs, and the new process finds the
+// row due and runs the pass. Nothing about the ask lived in the old
+// process's memory, which is why the door moves the row rather than
+// holding a flag.
+func TestAPressSurvivesARestartBeforeTheTick(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	if err := st.SetAlarm("held", "held", "wall", WallNow()+period, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	tm.RegisterOwner(&heldOwner{name: "held", held: false})
+
+	press, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward: %v", err)
+	}
+	if !press.Moved || press.Reason != "" {
+		t.Fatalf("the press must move a future recurring alarm: %+v", press)
+	}
+
+	// The daemon is replaced: a new TIME over the same store, with no
+	// memory of the press. Its owner is a fresh one that reports firing.
+	fired := make(chan int64, 1)
+	tm2 := NewTIME(st, st)
+	tm2.RegisterOwner(&recordingOwner{name: "held", accepted: true, fired: fired})
+
+	row, ok, err := st.AlarmByID("held")
+	if err != nil || !ok {
+		t.Fatalf("read the row after the restart: ok=%v err=%v", ok, err)
+	}
+	if row.Deadline != press.To {
+		t.Fatalf("the ask did not survive the restart: the durable deadline %d is not the one the press wrote, %d", row.Deadline, press.To)
+	}
+	if row.Deadline > WallNow() {
+		t.Fatalf("the moved row must be due at the later clock: deadline %d > now %d", row.Deadline, WallNow())
+	}
+
+	tm2.EvaluateAll(context.Background())
+
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first tick after the restart did not run the pass the press asked for")
+	}
+}
+
+// TestAPressClaimsTheRowSoATickCannotDispatchIt is a review's 0439 finding 1
+// in its exact interval. The press's claim and the tick's mark are one map
+// entry under t.mu, so a claimed row is not dispatched and no owner runs
+// against a row whose deadline is being moved.
+func TestAPressClaimsTheRowSoATickCannotDispatchIt(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	if err := st.SetAlarm("held", "held", "wall", 1, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	owner := &recordingOwner{name: "held", accepted: true, fired: make(chan int64, 1)}
+	tm.RegisterOwner(owner)
+
+	alarm, ok, err := st.AlarmByID("held")
+	if err != nil || !ok {
+		t.Fatalf("read alarm: ok=%v err=%v", ok, err)
+	}
+
+	// The press's claim, taken exactly as BringAlarmForward takes it.
+	// Take the claim exactly as BringAlarmForward takes it: one locked
+	// act, so the check and the write cannot be separated.
+	tm.mu.Lock()
+	tm.acquireHoldLocked("held")
+	tm.mu.Unlock()
+
+	tm.dispatchAlarm(context.Background(), alarm)
+
+	select {
+	case <-owner.fired:
+		t.Fatal("a tick dispatched a row the press had claimed: an owner ran while the press was moving that row's deadline")
+	default:
+	}
+}
+
+// TestAPressReleaseDoesNotDropARetakenHold is the release half of the
+// host's 0630 ruling 1. A release must drop only the reservation it took.
+// A hold that expired and was retaken by someone else carries a different
+// token, and the press's release must leave it standing — otherwise a
+// press that finished late would clear a RUNNING dispatch's hold and let
+// the same row be dispatched a second time against a moved deadline.
+func TestAPressReleaseDoesNotDropARetakenHold(t *testing.T) {
+	tm, _ := newTIME(t)
+
+	tm.mu.Lock()
+	mine, took := tm.acquireHoldLocked("held")
+	tm.mu.Unlock()
+	if !took {
+		t.Fatal("the first claim must succeed on a free row")
+	}
+
+	// That hold expires and the row is claimed again, so the entry now
+	// belongs to someone else.
+	tm.mu.Lock()
+	delete(tm.pendingDispatch, "held")
+	theirs, retook := tm.acquireHoldLocked("held")
+	tm.mu.Unlock()
+	if !retook {
+		t.Fatal("the row was free; the second claim must succeed")
+	}
+	if theirs == mine {
+		t.Fatalf("the retaken hold reused the first token %d; the tokens must differ", mine)
+	}
+
+	// The late press releases ITS token and nothing else.
+	tm.releaseHold("held", mine)
+
+	tm.mu.Lock()
+	held, ok := tm.pendingDispatch["held"]
+	tm.mu.Unlock()
+	if !ok {
+		t.Fatal("a press release dropped a hold it did not own: a running dispatch's reservation " +
+			"was cleared, so the row can be dispatched a second time against a moved deadline")
+	}
+	if held.token != theirs {
+		t.Fatalf("the surviving hold is token %d, want the retaken %d", held.token, theirs)
+	}
+}
+
+// TestAPressIsRefusedWhileAPassIsInFlight is the other direction of the
+// same hold, and it is typed so the page never has to match prose.
+func TestAPressIsRefusedWhileAPassIsInFlight(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	if err := st.SetAlarm("held", "held", "wall", WallNow()+period, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Take the claim exactly as BringAlarmForward takes it: one locked
+	// act, so the check and the write cannot be separated.
+	tm.mu.Lock()
+	tm.acquireHoldLocked("held")
+	tm.mu.Unlock()
+
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward: %v", err)
+	}
+	if res.Moved || res.Reason != PressInFlight {
+		t.Fatalf("a press under a running pass must be refused %q, not moved: %+v", PressInFlight, res)
+	}
+}
+
+// TestAPressOnAnAlreadyDueAlarmIsRefusedNotSucceeded pins the ruling that
+// already_due is a refusal: nothing moved, and a caller that read it as a
+// success would show the operator an ask that was never made.
+func TestAPressOnAnAlreadyDueAlarmIsRefusedNotSucceeded(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	if err := st.SetAlarm("held", "held", "wall", 1, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward: %v", err)
+	}
+	if res.Moved || res.Reason != PressAlreadyDue {
+		t.Fatalf("an already-due alarm must be refused %q, not reported as a move: %+v", PressAlreadyDue, res)
+	}
+}
+
+// The other side of the same law: a run still rearms at run + period.
+// Without this, the test above would pass on an implementation that never
+// rearms at all.
+func TestAcceptedRecurringTickRearmsAtRunPlusPeriod(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	tm.RegisterOwner(&recordingOwner{name: "runs", accepted: true})
+	if err := st.SetAlarm("runs", "runs", "wall", 1, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	before := WallNow()
+	tm.EvaluateAll(context.Background())
+
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'runs'`).Scan(&deadline); err != nil {
+		t.Fatalf("an accepted recurring alarm must SURVIVE the firing: %v", err)
+	}
+	if deadline < before+period {
+		t.Fatalf("a run did not rearm at run+period: deadline %d < %d+%d", deadline, before, period)
+	}
+}
+
+// BringAlarmForward is the whole of what the page's press does.
+func TestBringAlarmForwardMovesTheDeadlineToNow(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	future := WallNow() + period
+	if err := st.SetAlarm("held", "held", "wall", future, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward: %v", err)
+	}
+	if !res.Moved {
+		t.Fatalf("the press did not move the deadline: %+v", res)
+	}
+	if res.From != future {
+		t.Fatalf("From = %d, want the deadline it read, %d", res.From, future)
+	}
+
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	if deadline != res.To {
+		t.Fatalf("row deadline %d does not match what the press reported, %d", deadline, res.To)
+	}
+	if deadline > WallNow() {
+		t.Fatalf("the deadline was not brought to now: %d > %d", deadline, WallNow())
+	}
+}
+
+// The refusals the spec names, each read before the deadline moves.
+func TestBringAlarmForwardRefusesUnderSafe(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	future := WallNow() + period
+	if err := st.SetAlarm("held", "held", "wall", future, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	tm.safeSource = func() bool { return true }
+
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward under SAFE: %v", err)
+	}
+	if res.Moved {
+		t.Fatalf("the press moved a deadline under SAFE: %+v", res)
+	}
+	if res.Reason != PressSafe {
+		t.Fatalf("Reason = %q, want SAFE", res.Reason)
+	}
+
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	if deadline != future {
+		t.Fatalf("the deadline moved under SAFE: %d, want %d", deadline, future)
+	}
+}
+
+func TestBringAlarmForwardRefusesWhileAPassIsInFlight(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	future := WallNow() + period
+	if err := st.SetAlarm("held", "held", "wall", future, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Take the claim exactly as BringAlarmForward takes it: one locked
+	// act, so the check and the write cannot be separated.
+	tm.mu.Lock()
+	tm.acquireHoldLocked("held")
+	tm.mu.Unlock()
+
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward while in flight: %v", err)
+	}
+	if res.Moved {
+		t.Fatalf("the press moved a deadline underneath a running pass: %+v", res)
+	}
+	if res.Reason != PressInFlight {
+		t.Fatalf("Reason = %q, want the in-flight refusal", res.Reason)
+	}
+
+	var deadline int64
+	if err := st.QueryRowForTest(`SELECT deadline FROM alarms WHERE alarm_id = 'held'`).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	if deadline != future {
+		t.Fatalf("the deadline moved while a pass was in flight: %d, want %d", deadline, future)
+	}
+}
+
+// A paused daemon dispatches no pass, so the press is refused "paused"
+// rather than moving a deadline nothing will take (host ruling
+// 2026-10-31 07:48Z). The row is untouched.
+func TestBringAlarmForwardRefusesWhilePaused(t *testing.T) {
+	tm, st := newTIME(t)
+	period := int64(3_600_000)
+	future := WallNow() + period
+	if err := st.SetAlarm("held", "held", "wall", future, &period, ""); err != nil {
+		t.Fatal(err)
+	}
+	g := quiesce.NewGate()
+	g.Pause()
+	tm.SetQuiesceGate(g)
+
+	res, err := tm.BringAlarmForward("held")
+	if err != nil {
+		t.Fatalf("BringAlarmForward while paused: %v", err)
+	}
+	if res.Moved || res.Reason != PressPaused {
+		t.Fatalf("the press must be refused %q while the daemon is paused, not %+v", PressPaused, res)
+	}
+	row, ok, err := st.AlarmByID("held")
+	if err != nil || !ok {
+		t.Fatalf("alarm row after the refusal: ok=%v err=%v", ok, err)
+	}
+	if row.Deadline != future {
+		t.Fatalf("a refused press must leave the deadline where it was: %d, want %d", row.Deadline, future)
+	}
 }

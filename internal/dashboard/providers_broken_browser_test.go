@@ -19,7 +19,7 @@ run(() => {
   ];
   S.config = { llm: { provider: 'A', model: 'm', resolved_provider: 'A', resolved_model: 'm', timeout_seconds: 120 } };
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   const stack = () => document.querySelector('#settings-stack').textContent;
   const rows = [...document.querySelectorAll('[data-prov-broken]')];
   assert(rows.length === 3, 'broken entries are not listed: ' + rows.length);

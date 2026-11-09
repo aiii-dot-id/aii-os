@@ -31,7 +31,7 @@ run(() => {
     },
   };
   renderSettings();
-  document.querySelector('[data-sec="speech"]').click();
+  S.settingsSection('speech'); S.requestSettingsSection(); renderSettings();
 
   ['stt', 'tts'].forEach(dir => {
     const sel = document.getElementById('sp-provider-' + dir);

@@ -1,0 +1,19 @@
+.beliefs { display:flex; flex-direction:column; gap:var(--s-4); margin-bottom:var(--s-6); }
+.beliefs__search { display:flex; flex-wrap:wrap; gap:var(--s-2); align-items:center; }
+.beliefs__search-field { flex:1 1 18rem; min-width:0; min-height:40px; padding:var(--s-2) var(--s-3); border:1px solid var(--control); border-radius:var(--r-control); background:var(--surface); color:var(--text); font-family:var(--font-page); font-size:var(--t-md); line-height:var(--t-md-lh); }
+.beliefs__search-field:focus-visible { outline:2px solid var(--focus); outline-offset:1px; }
+.beliefs__show { display:flex; flex-wrap:wrap; gap:var(--s-1); }
+.beliefs__show [aria-pressed="true"] { color:var(--accent); border-color:var(--accent); }
+.c-belief--gone .c-belief__held::before { content:none; }
+.beliefs__recalled { display:flex; flex-direction:column; gap:var(--s-2); padding:var(--s-4); border:1px solid var(--line); border-radius:var(--r-object); background:var(--surface); }
+.beliefs__recalled-title { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); font-weight:600; color:var(--text-2); }
+.beliefs__recalled-text { margin:0; max-height:24rem; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); }
+.beliefs__recalled-text a { color:var(--accent); }
+.beliefs__body { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--s-5); align-items:start; }
+.beliefs__body--open { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); }
+.beliefs__list { display:flex; flex-direction:column; gap:var(--s-1); margin:0; padding:0; list-style:none; }
+.beliefs__trail { position:sticky; top:var(--s-4); }
+.beliefs__trail-row { list-style:none; padding:0 0 var(--s-3); }
+.beliefs__empty, .beliefs__more { margin:0; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text-2); }
+@media (max-width: 1099px) { .beliefs__body--open { grid-template-columns:minmax(0, 1fr); } .beliefs__trail { position:static; } }
+@media (max-width: 767px) { .beliefs__search-field { min-height:var(--target-phone); font-size:16px; } }

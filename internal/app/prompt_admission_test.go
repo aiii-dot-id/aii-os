@@ -27,7 +27,7 @@ func TestOmittedCoreWorkHasAnExecutableWholeReadback(t *testing.T) {
 	if err := a.store.UpdateWorkPlan(t.Context(), "ws_folded", nil, nil, &plan, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestAPromptComposedToItsBudgetIsAdmitted(t *testing.T) {
 			}
 			// The composed prompt with no pressure at all, to size the budget from.
 			app.composer.SetMaxTokens(10_000_000)
-			workState, err := app.buildWorkState()
+			workState, err := app.buildWorkState(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,7 +120,7 @@ func TestAPromptComposedToItsBudgetIsAdmitted(t *testing.T) {
 func TestTheContractIsComposedIntoTheSystemText(t *testing.T) {
 	app, _ := promptCacheApp(t)
 	closing := conversation.SystemAdditions()
-	workState, err := app.buildWorkState()
+	workState, err := app.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

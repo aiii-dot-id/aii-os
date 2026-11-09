@@ -116,7 +116,7 @@ func wordsKeepTheirPlace(t *testing.T, restricted bool) {
 		defer a.turnMu.Unlock()
 		return len(a.steers) == 1
 	})
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 	if len(said) != 1 || !strings.Contains(said[0], "second words") {
 		t.Fatalf("the second words lost their place when their session ended: %v", said)
 	}

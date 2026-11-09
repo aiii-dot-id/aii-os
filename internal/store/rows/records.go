@@ -149,6 +149,8 @@ type Relationship struct {
 	CounterpartRole  string
 	TrustLevel       string
 	AutonomyLevel    string
+	ApprovedLevel    string
+	ApprovalDigest   string
 	RelationshipType string
 	CharterText      string
 	CreatedSeq       uint64

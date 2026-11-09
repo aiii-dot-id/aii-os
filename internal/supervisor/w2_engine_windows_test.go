@@ -18,15 +18,24 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// W2a (R97, the joint qualification's first measurement): the voice
+// side's FROZEN CP1 carrier, launched by the production supervisor
+// under the wall exactly as an activation would launch it, observed —
+// never helped. What is recorded: the containment line, the readiness
+// line and how long it took, every descendant with its container token,
+// and whether the out-of-band kill reaps the whole tree. A failure is
+// reported by name; no grant is added, no variable is copied from the
+// workstation, the frozen carrier is not touched. An opt-in measurement:
+// the required Windows qualification is voice's journeys, not this.
+//
+//	set AII_WALL_ENGINE=<carrier.exe> AII_WALL_MODELS=<models dir> AII_WALL_EVIDENCE=<dir>
+//	go test ./internal/supervisor/ -run TestW2FrozenEngineStartsUnderTheWall -v
 func TestW2FrozenEngineStartsUnderTheWall(t *testing.T) {
 	carrier := filepath.Clean(os.Getenv("AII_WALL_ENGINE"))
 	models := filepath.Clean(os.Getenv("AII_WALL_MODELS"))
 	evidence := os.Getenv("AII_WALL_EVIDENCE")
 	if os.Getenv("AII_WALL_ENGINE") == "" || os.Getenv("AII_WALL_MODELS") == "" {
-		if os.Getenv("AII_REQUIRED_WINDOWS_QUALIFICATION") == "1" {
-			t.Fatal("required Windows qualification inputs missing")
-		}
-		t.Skip("set AII_WALL_ENGINE and AII_WALL_MODELS (isolated qualification fixtures) to run the native engine probe")
+		t.Skip("set AII_WALL_ENGINE and AII_WALL_MODELS (the voice side's prepared copies) to run W2a")
 	}
 	root := filepath.Dir(carrier)
 	readyTimeout := DefaultReadyTimeout

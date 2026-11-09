@@ -19,40 +19,25 @@ func TestSubstratePickerIsSearchableAndAcknowledged(t *testing.T) {
 		}
 		return string(b)
 	}
+	// THE MODEL IS CHOSEN IN SETTINGS ALONE (step 4): Chat carries no
+	// picker, and the one in Settings → Model is the transaction below.
 	shell := read("static/index.html")
-	for _, required := range []string{
-		`id="chat-provider"`, `id="chat-model"`,
-		`<select id="chat-provider"`, `<select id="chat-model"`,
-		`id="chat-substrate-apply"`, `id="chat-substrate-status"`,
-	} {
-		if !strings.Contains(shell, required) {
-			t.Errorf("chat substrate picker is missing %s", required)
+	for _, gone := range []string{`id="chat-substrate-wrap"`, `id="chat-provider"`, `id="chat-model"`, `list="chat-model-list"`} {
+		if strings.Contains(shell, gone) {
+			t.Errorf("Chat still carries a model picker: %s", gone)
 		}
 	}
-	if strings.Contains(shell, `list="chat-model-list"`) {
-		t.Fatal("the retired datalist picker returned; the picker is now bounded selects")
+	if strings.Contains(read("static/views/chat.js"), "llm.provider") {
+		t.Error("Chat still saves the model it thinks with")
 	}
 
-	chat := read("static/views/chat.js")
-	for _, required := range []string{
-		"Checking real inference", "acceptSubstrateConfig", "rejectSubstrateConfig",
-		"current provider remains active",
-	} {
-		if !strings.Contains(chat, required) {
-			t.Errorf("chat substrate transaction is missing %q", required)
-		}
+	// Settings is a group of modules (settingsGroup). The guard reads them as
+	// one text, so a line that moved between them is still held, and every
+	// absence below is checked in all of them.
+	var settings string
+	for _, p := range settingsGroup(t) {
+		settings += read(p) + "\n"
 	}
-	if strings.Contains(chat, "filter(p => p.status === 'ok'") {
-		t.Fatal("catalogue status still hides configured providers before the real inference gate")
-	}
-	// The correlation moved into pending.js (claim matches the request id
-	// and clears), so this asserts the call that carries it rather than
-	// the comparison that used to be written out here.
-	if !strings.Contains(chat, "substrate.claim(requestID)") {
-		t.Fatal("substrate acknowledgement is not correlated to the request")
-	}
-
-	settings := read("static/views/settings.js")
 	if strings.Contains(settings, "if (!S.providers.length) query('providers')") {
 		t.Fatal("an empty provider registry still causes a query/render loop")
 	}
@@ -90,7 +75,7 @@ func TestSubstratePickerIsSearchableAndAcknowledged(t *testing.T) {
 	ws := read("static/ws.js")
 	for _, required := range []string{
 		"msg.request_id", "acceptDiscoveryResponse(msg.request_id, msg.provider)",
-		"substrateConnectionLost()", "settingsConnectionLost()", "firstbootConnectionLost()",
+		"settingsConnectionLost()", "firstbootConnectionLost()",
 	} {
 		if !strings.Contains(ws, required) {
 			t.Fatalf("WebSocket correlation is missing %q", required)

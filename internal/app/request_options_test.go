@@ -37,7 +37,7 @@ func TestConstrainedChatNeverSteersOrQueuesItsOptions(t *testing.T) {
 	if err := a.admitConstrainedChat(ctx, "second"); err == nil {
 		t.Fatal("busy request admitted")
 	}
-	if pending := a.DrainSteering(); len(pending) != 0 {
+	if pending := steeredWords(a.DrainSteering()); len(pending) != 0 {
 		t.Fatalf("contract entered a different turn: %v", pending)
 	}
 	a.EndTurn()

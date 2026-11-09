@@ -14,6 +14,7 @@ func (a *App) wireTurnHooks(h *dashboard.WSHandler) {
 
 	h.TurnActive = a.TurnActive
 	h.Steer = a.Steer
+	h.PassNow = a.PassNow
 	h.CancelTurn = a.CancelTurn
 	h.PendingSteers = a.PendingSteers
 }

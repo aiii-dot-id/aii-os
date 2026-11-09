@@ -31,27 +31,27 @@ func TestWhatASessionRecordsIsDrawnAsTextOnHome(t *testing.T) {
 <script type="module">
 import { assert, run } from './__harness.js';
 import { S } from './state.js';
-import { workSectionHTML, wireWork } from './views/work.js';
+import { deliveredHTML, wireDelivered } from './views/delivered.js';
 ` + recordedScript + `
 run(() => {
   const root = document.getElementById('home-inner');
   // Today's drawing of the bare session, before any session records anything.
   S.work = { live: [], queued: 0, delivered: [bare] };
-  root.innerHTML = workSectionHTML(); wireWork(root);
+  root.innerHTML = deliveredHTML();
+  wireDelivered(root);
   const today = root.querySelector('[data-work="ws_bare"]').outerHTML;
 
   S.work = { live: [live], queued: 0, delivered: [full, bare] };
-  root.innerHTML = workSectionHTML(); wireWork(root);
+  root.innerHTML = deliveredHTML();
+  wireDelivered(root);
   checkFull(root.querySelector('[data-work="ws_full"] .work-rec'), 'home delivered');
-  const l = root.querySelector('.work-row.live .work-rec');
-  assert(l && l.textContent === 'Next move open <script>x<\/script> next' && !l.querySelector('script'), 'home live: ' + (l && l.innerHTML));
   const b = root.querySelector('[data-work="ws_bare"]');
   assert(!b.querySelector('.work-rec'), 'a session with none got rows under it');
   assert(b.outerHTML === today, 'a session with none is drawn otherwise than today:\n' + b.outerHTML + '\n' + today);
 });
 </script>`
 	modules := map[string][]byte{}
-	for _, path := range []string{"static/views/work.js", "static/views/work-recorded.js"} {
+	for _, path := range []string{"static/views/work-recorded.js"} {
 		data, err := staticFS.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

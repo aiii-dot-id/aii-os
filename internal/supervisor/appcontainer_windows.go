@@ -87,6 +87,11 @@ func createChildProfile(scope string) (string, *windows.SID, error) {
 	return name, copied, nil
 }
 
+var (
+	revokeGrant   = func(dir string, sid *windows.SID) error { return changeContainerGrant(dir, sid, false) }
+	deleteProfile = deleteChildProfile
+)
+
 func deleteChildProfile(name string) error {
 	name16, err := windows.UTF16PtrFromString(name)
 	if err != nil {
@@ -94,10 +99,14 @@ func deleteChildProfile(name string) error {
 	}
 	r, _, _ := procDeleteAppContainerProfile.Call(uintptr(unsafe.Pointer(name16)))
 	if uint32(r) != 0 {
-		return fmt.Errorf("delete AppContainer %s: HRESULT 0x%08x", name, uint32(r))
+		return fmt.Errorf("delete AppContainer %s: %w", name, hresult(r))
 	}
 	return nil
 }
+
+type hresult uint32
+
+func (h hresult) Error() string { return fmt.Sprintf("HRESULT 0x%08x", uint32(h)) }
 
 func containerFolder(sid *windows.SID) (string, error) {
 	s, err := windows.UTF16PtrFromString(sid.String())
@@ -130,7 +139,8 @@ func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (res
 	}
 	var granted []string
 	var cwdAlias string
-	releaseGrants := func() error {
+
+	revokeGrants := func() error {
 		var errs []error
 		if cwdAlias != "" {
 			if err := os.Remove(cwdAlias); err != nil && !os.IsNotExist(err) {
@@ -140,14 +150,17 @@ func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (res
 			}
 		}
 		for _, dir := range granted {
-			if err := changeContainerGrant(dir, sid, false); err != nil {
+			if err := revokeGrant(dir, sid); err != nil {
 				errs = append(errs, err)
 			}
 		}
-		if len(errs) == 0 {
-			errs = append(errs, deleteChildProfile(name))
-		}
 		return errors.Join(errs...)
+	}
+	releaseGrants := func() error {
+		if err := revokeGrants(); err != nil {
+			return err
+		}
+		return deleteProfile(name)
 	}
 	defer func() {
 		if result == nil {
@@ -351,7 +364,19 @@ func launchContained(cmd *exec.Cmd, ac *AppContainer, rlimitASBytes uint64) (res
 		if err != nil {
 			return err
 		}
-		return releaseGrants()
+		if err := revokeGrants(); err != nil {
+			return err
+		}
+
+		if err := deleteProfile(name); err != nil {
+			left := &ProfileLeftError{Name: name, Reason: err.Error(), Err: err}
+			var h hresult
+			if errors.As(err, &h) {
+				left.Reason = h.Error()
+			}
+			return left
+		}
+		return nil
 	}
 	return &launched{
 		stdin: stdinW, stdout: stdoutR, stderr: stderrR, contained: onceCleanup(cleanup),

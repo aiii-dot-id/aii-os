@@ -9,6 +9,8 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+
+	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
 
 func TestThePromptStatesTheNumbersItIsHeldTo(t *testing.T) {
@@ -51,7 +53,7 @@ func TestThePromptStatesTheNumbersItIsHeldTo(t *testing.T) {
 	if err := NewSelfModel(smStore, smModel, &mockSelfModelCommitter{}).Execute(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"at most 1234 tokens", "about 3702 characters", "at least four distinct"} {
+	for _, want := range []string{tokenestimate.Stated(1234), "at least four distinct"} {
 		if !strings.Contains(smModel.lastSystem, want) {
 			t.Errorf("SELF_MODEL's prompt does not state %q:\n%s", want, smModel.lastSystem)
 		}

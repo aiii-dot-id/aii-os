@@ -122,6 +122,8 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 	a.briefFacility.SetAttention(func(ctx context.Context) ([]memory.AttentionItem, error) {
 		return a.engine.Instruments().Attention(ctx, time.Now(), attention.CostLow)
 	})
+
+	a.briefFacility.SetNote(operatorNoteKeeper{a.store}, a.outcomesBetween)
 	a.timeFac.RegisterOwner(a.briefFacility)
 
 	selfModelFac.SetDoor(door)
@@ -140,6 +142,7 @@ func (a *App) wireCognitive(bgCtx context.Context, anchorer *witness.Anchorer, d
 			logsink.Warn("rhythm.error", "attention outbox: %v", err)
 		}
 	})
+	rhythmFac.SetTick(func() { a.releaseHeldPromise(releasedAtTick) })
 	a.timeFac.RegisterOwner(rhythmFac)
 
 	a.cognition.rhythm.Store(&rhythmSet{dream: dreamFac, consolidate: consolidateFac, selfModel: selfModelFac, brief: a.briefFacility, rhythm: rhythmFac,

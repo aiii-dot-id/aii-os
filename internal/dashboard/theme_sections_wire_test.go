@@ -12,8 +12,8 @@ The static half of the theme/section join. TestThemeTokensAreInvisibleToRuleWalk
 proves in both engines WHY this wiring is needed; this proves the wiring
 is actually there.
 
-Not a browser test on purpose: sections.js imports ws.js, app.js,
-bridge.js and panel.js, so loading it in a bare page exercises the
+Not a browser test on purpose: sections.js imports ws.js, app.js and
+bridge.js, so loading it in a bare page exercises the
 module graph rather than the fix. What can drift here is the wiring
 itself, and wiring is visible in the source.
 
@@ -29,6 +29,7 @@ func TestThemePropagatesToSections(t *testing.T) {
 		}
 		return string(body)
 	}
+	frames := read("sections-frames.js")
 	sections := read("sections.js")
 	ws := read("ws.js")
 	bridge := read("bridge.js")
@@ -37,7 +38,7 @@ func TestThemePropagatesToSections(t *testing.T) {
 	//    root element. Without this, a section handshaking after a
 	//    theme edit is handed the compiled defaults — the rule walk
 	//    cannot see what setProperty wrote.
-	if !strings.Contains(sections, "document.documentElement.style") {
+	if !strings.Contains(frames, "document.documentElement.style") {
 		t.Error("collectTokens no longer reads documentElement.style: " +
 			"themed tokens are invisible to a stylesheet rule walk, so sections " +
 			"would receive the compiled defaults with nothing logged")
@@ -47,8 +48,8 @@ func TestThemePropagatesToSections(t *testing.T) {
 	//    because that is the order the frame's own cascade resolves.
 	//    Reversed, the compiled default would win and the whole fix
 	//    would be inert while still looking present.
-	ruleWalk := strings.Index(sections, "document.styleSheets")
-	inline := strings.Index(sections, "document.documentElement.style")
+	ruleWalk := strings.Index(frames, "document.styleSheets")
+	inline := strings.Index(frames, "document.documentElement.style")
 	if ruleWalk < 0 || inline < 0 || inline < ruleWalk {
 		t.Errorf("inline token overlay must follow the rule walk (rules at %d, inline at %d)", ruleWalk, inline)
 	}
@@ -61,8 +62,8 @@ func TestThemePropagatesToSections(t *testing.T) {
 
 	// 4. pushTokens was a seam with no caller for two tiers. If it goes
 	//    callerless again, propagation is dead and nothing fails.
-	if !strings.Contains(sections, "pushTokens") {
-		t.Error("nothing in sections.js calls bridge.pushTokens; the propagation seam is dead again")
+	if !strings.Contains(frames, "pushTokens") {
+		t.Error("nothing in sections-frames.js calls bridge.pushTokens; the propagation seam is dead again")
 	}
 	if !strings.Contains(bridge, "function pushTokens") {
 		t.Error("bridge.js no longer defines pushTokens")

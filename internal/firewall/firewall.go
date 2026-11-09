@@ -43,6 +43,9 @@ type Rule struct {
 
 	ReadOpen bool `json:"read_open,omitempty"`
 
+	placeLower  string
+	exceptLower []string
+
 	NativeReads bool `json:"native_reads,omitempty"`
 }
 
@@ -219,6 +222,16 @@ func (r *Rule) CoversResolved(path string) bool {
 	return covers(r, canonical(path))
 }
 
+func AnyCoversResolved(rules []*Rule, path string) bool {
+	lower := canonical(path)
+	for _, r := range rules {
+		if covers(r, lower) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Policy) Covered(path string) (*Rule, error) { return p.CoveredFor("", path) }
 
 func (p *Policy) CoveredFor(tool, path string) (*Rule, error) {
@@ -290,52 +303,8 @@ func (p *Policy) respelled(resolved string) (string, error) {
 	if !filepath.IsAbs(resolved) {
 		return "", nil
 	}
-	p.mu.RLock()
-	var places []*Rule
-	for _, r := range p.rules {
-		if r.Enforced && r.Kind == KindSubstrate && r.Path != "" {
-			places = append(places, r)
-		}
-	}
-	p.mu.RUnlock()
-	type known struct {
-		path string
-		info os.FileInfo
-	}
-	var kept, entries []known
-	var cannot []unchecked
-	asked := map[string]error{}
-	for _, place := range places {
-		for _, start := range placeStarts(place) {
-			for at := start; ; at = filepath.Dir(at) {
-				err, seen := asked[at]
-				if !seen {
-					var info os.FileInfo
-					if p.isGone(at) {
-						err = fs.ErrNotExist
-					} else if info, err = os.Stat(at); err == nil {
-						kept = append(kept, known{at, info})
-					} else if at == place.Path && notMade(err) {
-
-						if li, lerr := os.Lstat(at); lerr == nil {
-							entries = append(entries, known{at, li})
-						}
-					}
-					asked[at] = err
-				}
-				if err == nil {
-					break
-				}
-				if !notMade(err) {
-					cannot = append(cannot, unchecked{place, err, stopOf(at)})
-					break
-				}
-				if filepath.Dir(at) == at {
-					break
-				}
-			}
-		}
-	}
+	placed := p.placeAnswers()
+	kept, entries, cannot := placed.kept, placed.entries, placed.cannot
 	if len(cannot) > 0 {
 		return "", unasked(cannot)
 	}
@@ -381,6 +350,80 @@ func (p *Policy) respelled(resolved string) (string, error) {
 		return "", err
 	}
 	return inner, nil
+}
+
+type placed struct {
+	kept, entries []known
+	cannot        []unchecked
+}
+
+type known struct {
+	path string
+	info os.FileInfo
+}
+
+func (p *Policy) placeAnswers() *placed {
+	p.mu.RLock()
+	var places []*Rule
+	for _, r := range p.rules {
+		if r.Enforced && r.Kind == KindSubstrate && r.Path != "" {
+			places = append(places, r)
+		}
+	}
+	gone := strings.Join(p.gone, "\x00")
+	p.mu.RUnlock()
+	l := p.links
+	if l != nil && l.steady {
+		l.placedMu.Lock()
+		got, ok := l.placed[gone]
+		l.placedMu.Unlock()
+		if ok {
+			return got
+		}
+	}
+	out := &placed{}
+
+	asked := map[string]error{}
+	for _, place := range places {
+		for _, start := range placeStarts(place) {
+			for at := start; ; at = filepath.Dir(at) {
+				err, seen := asked[at]
+				if !seen {
+					var info os.FileInfo
+					if p.isGone(at) {
+						err = fs.ErrNotExist
+					} else if info, err = p.statPlace(at); err == nil {
+						out.kept = append(out.kept, known{at, info})
+					} else if at == place.Path && notMade(err) {
+
+						if li, lerr := p.lstatPlace(at); lerr == nil {
+							out.entries = append(out.entries, known{at, li})
+						}
+					}
+					asked[at] = err
+				}
+				if err == nil {
+					break
+				}
+				if !notMade(err) {
+					out.cannot = append(out.cannot, unchecked{place, err, stopOf(at)})
+					break
+				}
+				if filepath.Dir(at) == at {
+					break
+				}
+			}
+		}
+	}
+	if l != nil && l.steady {
+		l.placedMu.Lock()
+		if l.placed == nil {
+			l.placed = map[string]*placed{}
+		}
+		l.placed[gone] = out
+		l.placedMu.Unlock()
+	}
+	return out
 }
 
 func placeStarts(place *Rule) []string {
@@ -630,6 +673,11 @@ func (r *Rule) resolved() *Rule {
 	for i, path := range r.Except {
 		copyRule.Except[i] = ResolveSlot(path)
 	}
+	copyRule.placeLower = strings.TrimSuffix(canonical(copyRule.Path), "/")
+	copyRule.exceptLower = make([]string, len(copyRule.Except))
+	for i, e := range copyRule.Except {
+		copyRule.exceptLower[i] = strings.TrimSuffix(canonical(e), "/")
+	}
 	return &copyRule
 }
 
@@ -710,7 +758,10 @@ func covers(r *Rule, pathLower string) bool {
 	if r.Path == "" {
 		return false
 	}
-	place := strings.TrimSuffix(canonical(r.Path), "/")
+	place := r.placeLower
+	if place == "" {
+		place = strings.TrimSuffix(canonical(r.Path), "/")
+	}
 	if r.Stem {
 		if !strings.HasPrefix(pathLower, place) {
 			return false
@@ -718,8 +769,14 @@ func covers(r *Rule, pathLower string) bool {
 	} else if pathLower != place && !strings.HasPrefix(pathLower, place+"/") {
 		return false
 	}
-	for _, e := range r.Except {
-		open := strings.TrimSuffix(canonical(e), "/")
+	for i, e := range r.Except {
+		open := ""
+		if i < len(r.exceptLower) {
+			open = r.exceptLower[i]
+		}
+		if open == "" {
+			open = strings.TrimSuffix(canonical(e), "/")
+		}
 		if pathLower == open || strings.HasPrefix(pathLower, open+"/") {
 			return false
 		}

@@ -19,13 +19,13 @@ export function _accept(connect, port) {
   port.onmessage = function (e) {
     const m = e.data || {};
     if (m.kind === 'topic') {
-      (subs.get(m.topic) || []).forEach(function (cb) { cb(m.data); });
+      (subs.get(m.topic) || []).forEach(function (cb) { cb(m.data, m.before); });
     } else if (m.kind === 'reply') {
       const p = pending.get(m.id);
       if (p) {
         pending.delete(m.id);
         if (m.ok) p.resolve(m.data !== undefined ? m.data : true);
-        else p.reject(new Error(m.error || 'refused'));
+        else p.reject(Object.assign(new Error(m.error || 'refused'), { code: m.code }));
       }
     } else if (m.kind === 'tokens') {
       tokens = m.tokens || {};

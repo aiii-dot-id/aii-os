@@ -386,13 +386,29 @@ func (t appTranscript) diverts(err error) bool {
 }
 
 func (t appTranscript) RecordToolStart(turnID string, ordinal int, callID, tool, args, model string) error {
+	return t.recordToolStart(turnID, ordinal, callID, tool, args, model, nil)
+}
+
+func (t appTranscript) RecordToolStartOfRequest(turnID string, ordinal int, callID, tool, args, model string, request interaction.RequestFacts) error {
+	return t.recordToolStart(turnID, ordinal, callID, tool, args, model, &request)
+}
+
+func (t appTranscript) recordToolStart(turnID string, ordinal int, callID, tool, args, model string, request *interaction.RequestFacts) error {
 	actor := t.actor
 	if actor == "" {
 		actor = "main"
 	}
-	err := t.st.RecordToolStart(turnID, ordinal, actor, model, callID, tool, args)
+	err := t.st.RecordToolStartOfRequest(turnID, ordinal, actor, model, callID, tool, args, request)
 	if t.diverts(err) {
-		return t.safe.RecordToolStart(turnID, ordinal, callID, tool, args, model)
+
+		if actor == "main" {
+			actor = "safe"
+		}
+		seat, lookup := t.st.StartSeat(turnID, actor)
+		if lookup != nil {
+			seat = store.CallSeat{Actor: actor, Reason: "session_lookup_failed"}
+		}
+		return t.safe.recordToolStart(turnID, ordinal, tool, model, seat)
 	}
 	return err
 }
@@ -407,7 +423,7 @@ func (t appTranscript) RecordToolDoneDurable(turnID string, ordinal int, tool, a
 }
 
 func (t appTranscript) recordToolDoneObservedDurable(turnID string, ordinal int, tool, args string, obs conversation.Observation) (bool, error) {
-	return t.recordToolDoneDurable(turnID, ordinal, tool, args, obs.Text, observedOutcome(obs), obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS, ExitStatus: obs.ExitStatus, WorkSession: obs.WorkSession, SessionReason: obs.SessionReason, ReasonCode: obs.ReasonCode})
+	return t.recordToolDoneDurable(turnID, ordinal, tool, args, obs.Text, observedOutcome(obs), obs.Truncated, store.ToolMeasurement{DurationMS: obs.DurationMS, ExitStatus: obs.ExitStatus, ReasonCode: obs.ReasonCode})
 }
 
 func (t appTranscript) recordToolDoneDurable(turnID string, ordinal int, tool, args, result string, outcome interaction.Outcome, truncated bool, m store.ToolMeasurement) (bool, error) {
@@ -447,7 +463,8 @@ type appToolExecutor struct{ a *App }
 
 func (x appToolExecutor) Execute(ctx context.Context, call llm.ToolCall) conversation.Observation {
 	started := time.Now()
-	obs := x.a.executeToolCall(ctx, call)
+
+	obs := x.a.executeSeated(ctx, call, x.a.startedSeat(ctx, call))
 
 	var note string
 	obs.Text, note = observedTextAndNote(obs.Text)
@@ -555,6 +572,27 @@ func (e appEmitter) EmitToolEvent(kind, name, args string) {
 		}
 		emit(kind, name, args)
 	}
+}
+
+func (e appEmitter) ReplyText(call int, piece string) {
+	if re := e.replyEmit(); re != nil {
+		re.ReplyText(call, piece)
+	}
+}
+
+func (e appEmitter) ReplyEnded(call int, taken, withdrawn string) {
+	if re := e.replyEmit(); re != nil {
+		re.ReplyEnded(call, taken, withdrawn)
+	}
+}
+
+func (e appEmitter) replyEmit() conversation.ReplyEmitter {
+	if e.actor != "" {
+		return nil
+	}
+	e.a.turn.mu.Lock()
+	defer e.a.turn.mu.Unlock()
+	return e.a.turn.replyEmit
 }
 
 type toolDiscovererAdapter struct{ reg *tools.Registry }

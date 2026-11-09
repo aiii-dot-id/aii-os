@@ -37,7 +37,7 @@ func queuedLeg(t *testing.T, change func(ctx context.Context, app *App)) (*App, 
 	if _, err := app.recordReply(capped, "capped here, the rest follows", conversation.Result{}); err != nil {
 		t.Fatal(err)
 	}
-	if scheduled, why := app.scheduleContinuation(capDeclared, "turn_capped"); !scheduled {
+	if scheduled, why := app.scheduledOrWhy(capDeclared, "turn_capped"); !scheduled {
 		t.Fatalf("rig: the leg was not scheduled: %s", why)
 	}
 	change(ctx, app)
@@ -59,15 +59,6 @@ func TestAQueuedNextPartStandsDownWhenWhatQueuedItChanged(t *testing.T) {
 			app.cfgMu.Lock()
 			app.cfg.Agency.TurnContinuation = &off
 			app.cfgMu.Unlock()
-			return nil
-		},
-	}, {
-		name: "another session became the active one",
-		why:  "the active work changed before it began",
-		change: func(t *testing.T, ctx context.Context, app *App) func() {
-			if err := app.store.StartWorkSession(ctx, "ws_other", "other work"); err != nil {
-				t.Fatal(err)
-			}
 			return nil
 		},
 	}, {
@@ -121,6 +112,25 @@ func TestAQueuedNextPartStandsDownWhenWhatQueuedItChanged(t *testing.T) {
 				t.Fatalf("after the reply that promised the next part the identity reads %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A LEG RUNS ON ITS OWN SESSION, active or not (a review, 2026-11-05, round
+// 5; every continuing leg since 2026-11-06): another session becoming the
+// active one does not stand it down, and its fact names its own session.
+func TestAQueuedNextPartRunsOnItsOwnSessionWhenAnotherBecameActive(t *testing.T) {
+	app, obs := queuedLeg(t, func(ctx context.Context, app *App) {
+		if err := app.store.StartWorkSession(ctx, "ws_other", "other work"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	waitUntil(t, sawRequest(obs, "Work session ws_q is still active"), "the leg's request on its own session")
+	if err := app.acquireTurn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.releaseTurn()
+	if n := len(obs.snapshot()); n != 1 {
+		t.Fatalf("the leg asked the model %d time(s), want once", n)
 	}
 }
 

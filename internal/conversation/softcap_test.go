@@ -299,17 +299,42 @@ func TestNoCapWithoutTheResidentWiring(t *testing.T) {
 	}
 }
 
-// The model finishes inside the grace window: the ask was sent, the
-// work wrapped naturally, and nothing flags — a natural ending always
-// outranks the cap.
-func TestNaturalFinishInsideGraceDoesNotFlag(t *testing.T) {
+// A reply in words to the checkpoint's ask ends the turn at the checkpoint: the
+// ask said what follows, so the ending is the grace's end, said and flagged as
+// that is, and the caller decides. It was a natural finish, unflagged: nothing was
+// scheduled and nothing said, under the handoff the ask invited.
+func TestAnAnswerToTheCheckpointEndsTheTurnAtIt(t *testing.T) {
 	client, res := runCapTurn(t, 8, 60, func() int { return 3 })
 
-	if res.ContinuedAtCap {
-		t.Fatal("a turn that ended naturally inside the grace window flagged ContinuedAtCap")
+	if !res.ContinuedAtCap {
+		t.Fatal("a turn that answered the checkpoint in words did not flag ContinuedAtCap")
 	}
 	if got := checkpointCount(client); got != 1 {
-		t.Errorf("checkpoint ask appeared %d times, want 1 — it should have fired before the natural end", got)
+		t.Errorf("checkpoint ask appeared %d times, want 1", got)
+	}
+	if !strings.Contains(res.Said(), "the work continues automatically in a fresh turn") {
+		t.Errorf("the turn does not say how it ended: %q", res.Said())
+	}
+	if notes := res.NothingContinues("the reason"); !strings.Contains(strings.Join(notes, " "), "Nothing continues by itself: the reason") {
+		t.Errorf("the caller cannot close it on why nothing continues: %q", notes)
+	}
+	if notes := res.Delivered(); strings.Contains(strings.Join(notes, " "), "continues") {
+		t.Errorf("a turn whose work was delivered still says the work continues: %q", notes)
+	}
+}
+
+// A turn that finishes before any checkpoint was armed asked nothing, was told
+// nothing of what follows, and is a natural finish.
+func TestAFinishBeforeTheCheckpointIsNatural(t *testing.T) {
+	client, res := runCapTurn(t, 2, 60, func() int { return 30 })
+	if res.ContinuedAtCap || res.ContinuedAtRounds {
+		t.Fatal("a turn that finished before its checkpoint was flagged")
+	}
+	if got := checkpointCount(client); got != 0 {
+		t.Errorf("checkpoint ask appeared %d times, want 0", got)
+	}
+	if strings.Contains(res.Said(), "continues") {
+		t.Errorf("a natural finish says the work continues: %q", res.Said())
 	}
 }
 
@@ -370,4 +395,55 @@ func budgetAtStart(predicted func() int) func() (remaining, ordinal int) {
 // text: what the tests of a turn's ending read.
 func said(r Result, notes []string) string {
 	return Result{Spoken: r.Spoken, Notes: notes}.Said()
+}
+
+// runCheckpointTurnEndingWith is runCapTurn whose reply after the tool rounds is last.
+func runCheckpointTurnEndingWith(t *testing.T, toolRounds int, predicted func() int, last llm.Response) (*captureLLM, Result) {
+	t.Helper()
+	script := make([]llm.Response, 0, toolRounds+2)
+	for i := 0; i < toolRounds; i++ {
+		script = append(script, resp("", toolCall("c", "bash", `{}`)))
+	}
+	script = append(script, last, textResp("done"))
+	client := &captureLLM{script: script}
+	loop := New(client, &fakeTools{results: map[string]string{"bash": "ok"}}, &fakeDefs{}, nil, nil,
+		testBounds(Config{MaxIterations: limits.Of(60), PredictedThisTurn: budgetAtStart(predicted)}))
+	res, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, res
+}
+
+// EVERY ENDING AFTER THE CHECKPOINT IS THE CHECKPOINT'S. A last reply the
+// provider refused, or one that degenerated into repetition, ends the turn as
+// an answer in words does once the ask has said what follows: flagged and said,
+// so the caller decides and the record does not hold a promise nothing kept.
+// Before the checkpoint is armed, the same replies are a natural finish.
+func TestEveryEndingAfterTheCheckpointIsTheCheckpoints(t *testing.T) {
+	refused := textResp("")
+	refused.Choices[0].FinishReason = "refusal"
+	degenerate := textResp(strings.Repeat("I will now write the reply now. ", 40))
+	for name, last := range map[string]llm.Response{"a refused stop": refused, "a degenerate answer": degenerate} {
+		t.Run(name, func(t *testing.T) {
+			client, res := runCheckpointTurnEndingWith(t, 8, func() int { return 3 }, last)
+			if got := checkpointCount(client); got != 1 {
+				t.Fatalf("checkpoint ask appeared %d times, want 1", got)
+			}
+			if !res.ContinuedAtCap {
+				t.Errorf("%s after the checkpoint ended the turn unflagged: nothing would follow, and nothing would be said", name)
+			}
+			if !strings.Contains(res.Said(), "the work continues automatically in a fresh turn") {
+				t.Errorf("%s after the checkpoint does not say how the turn ended: %q", name, res.Said())
+			}
+
+			client, res = runCheckpointTurnEndingWith(t, 1, func() int { return 30 }, last)
+			if got := checkpointCount(client); got != 0 {
+				t.Fatalf("checkpoint ask appeared %d times before its floor, want 0", got)
+			}
+			if res.ContinuedAtCap || res.ContinuedAtRounds || strings.Contains(res.Said(), "continues automatically") {
+				t.Errorf("%s before any checkpoint was flagged or said to continue: %q", name, res.Said())
+			}
+		})
+	}
 }

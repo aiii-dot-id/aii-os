@@ -62,7 +62,7 @@ func lineageFixture(t *testing.T) (*App, *project.Project) {
 
 func TestClosingAProjectLeavesALineageLine(t *testing.T) {
 	a, p := lineageFixture(t)
-	if _, err := a.projects.Update(p.ID, "", "", "prove the sidecar verifies", nil, nil, nil); err != nil {
+	if _, err := a.projects.Update(p.ID, "operator", "", "", "prove the sidecar verifies", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (projectsAdapter{a}).SetState(p.ID, "closed"); err != nil {

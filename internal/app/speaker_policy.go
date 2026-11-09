@@ -78,9 +78,6 @@ func (a *App) speakerVoices(c Config) ([]dashboard.SpeakerVoice, bool) {
 	out := make([]dashboard.SpeakerVoice, 0, len(heard)+len(named))
 	for _, v := range heard {
 		sv := dashboard.SpeakerVoice{UUID: v.UUID, Label: v.Label, Heard: true, Enrolled: v.Enrolled, Mine: named[v.UUID]}
-		if !v.Enrolled {
-			sv.WhyNot = voiceNotEnrolled
-		}
 		delete(named, v.UUID)
 		out = append(out, sv)
 	}
@@ -93,8 +90,7 @@ func (a *App) speakerVoices(c Config) ([]dashboard.SpeakerVoice, bool) {
 }
 
 const (
-	voiceNotEnrolled = "This voice cannot count as yours: the speech engine has not identified it as an enrolled voice. It is a grouping of what it heard, which no enrollment stands behind. Enroll your voice with the speech engine's guided capture, then name the UUID it reports."
-	voiceNotHeard    = "No speech engine has reported this voice in this identity's record, so it is not known to be an enrolled one. Your words count as yours once the engine identifies them as this enrolled voice."
+	voiceNotHeard = "No speech engine has reported this voice in this identity's record yet. Your words count as yours once the engine matches them to this voice."
 )
 
 func validateSpeakerPolicy(c SpeakerPolicyConfig) error {

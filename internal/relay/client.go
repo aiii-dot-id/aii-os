@@ -300,6 +300,8 @@ func (c *Client) Run(ctx context.Context) {
 		var refused *Refused
 		c.mu.Lock()
 		c.connected = false
+
+		c.servers, c.serversTo = nil, time.Time{}
 		if err != nil {
 			c.lastErr, c.refused = err.Error(), ""
 			if errors.As(err, &refused) {

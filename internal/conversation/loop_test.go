@@ -85,14 +85,17 @@ func TestSetModelLimitsAppliesToNextWholeTurn(t *testing.T) {
 
 type fakeTools struct {
 	results map[string]string // by tool name
+	failing map[string]bool   // by tool name: the observation is a failure
 	calls   []string
 	models  []string
+	// refused: a call to this tool is refused before it runs.
+	refused map[string]bool
 }
 
 func (f *fakeTools) Execute(ctx context.Context, call llm.ToolCall) Observation {
 	f.calls = append(f.calls, call.Function.Name)
 	f.models = append(f.models, llm.ModelIDFromContext(ctx))
-	return Observation{Text: f.results[call.Function.Name]}
+	return Observation{Text: f.results[call.Function.Name], Failed: f.failing[call.Function.Name] || f.refused[call.Function.Name], Refused: f.refused[call.Function.Name]}
 }
 
 // fakeTranscript records tool events VERBATIM (what the durable record

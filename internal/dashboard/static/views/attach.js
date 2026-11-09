@@ -2,6 +2,7 @@ import { $ } from '../util.js';
 import { signedFetch, ticketed } from '../pagekey.js';
 import { S } from '../state.js';
 import { toast } from '../app.js';
+import { fragment as inWords, fenced } from '../components/in-words/in-words.js';
 
 const DRAWN = /\.(png|jpe?g|gif|webp|svg)$/i;
 const isPath = t => !!t && !/^[a-z][a-z0-9+.-]*:(?![\\/])/i.test(t) && !/^[a-z][a-z0-9+.-]+:/i.test(t) && !t.startsWith('//');
@@ -150,18 +151,21 @@ function shownImage(path, label) {
   return fig;
 }
 export function drawReply(body, content) {
-  const lines = String(content || '').split('\n');
-  if (!lines.some(l => shownLine(l))) { if (body.dataset.shown) { delete body.dataset.shown; body.textContent = ''; } return false; }
+  const lines = String(content || '').split('\n'), code = fenced(lines);
+  const shownAt = i => code.has(i) ? null : shownLine(lines[i]);
+  if (!lines.some((_, i) => shownAt(i))) { if (body.dataset.shown) { delete body.dataset.shown; body.textContent = ''; } return false; }
   if (body.dataset.shown === content) return true;
-  body.dataset.shown = content; body.textContent = '';
+  body.dataset.shown = content; delete body.dataset.words; body.textContent = '';
   let text = [];
-  const flush = () => { if (text.length) { body.appendChild(document.createTextNode(text.join('\n') + '\n')); text = []; } };
-  for (const line of lines) {
-    const shown = shownLine(line);
-    if (!shown) { text.push(line); continue; }
+  const flush = () => { if (text.length) { body.appendChild(inWords(text.join('\n') + '\n')); text = []; } };
+  lines.forEach((line, i) => {
+    const shown = shownAt(i);
+    if (!shown) { text.push(line); return; }
     flush();
-    body.appendChild(shown.image && DRAWN.test(shown.path) ? shownImage(shown.path, shown.label) : fileChip(shown.path, shown.label));
-  }
+    const own = document.createElement('div');
+    own.append(fileChip(shown.path, shown.label));
+    body.appendChild(shown.image && DRAWN.test(shown.path) ? shownImage(shown.path, shown.label) : own);
+  });
   flush();
   return true;
 }

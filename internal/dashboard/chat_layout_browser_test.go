@@ -91,6 +91,8 @@ func TestChatSurfaceHoldsItsLayoutInBrowser(t *testing.T) {
 const phoneChatPage = `<!doctype html>
 <style>__LAYOUT_CSS__</style>
 <div class="app" id="app">
+	<header class="c-top-bar"><a class="c-top-bar__who" href="#/home"><span class="c-top-bar__name">Mira</span></a>
+		<nav class="c-top-bar__nav" id="nav"><a class="c-top-bar__place c-top-bar__home" href="#/home"><span>Home</span></a><a class="c-top-bar__place" href="#/projects"><span>Projects</span></a><a class="c-top-bar__place" href="#/identity"><span>Mira</span></a><a class="c-top-bar__place" href="#/settings"><span>Settings</span></a></nav></header>
 	<main class="stage">
 		<div class="views" id="views">
 			<section class="view on" id="view-chat">
@@ -119,19 +121,37 @@ run(() => {
 	assert(fs(ta) >= 16,
 		'#msg-input computes to ' + fs(ta) + 'px at phone width - iOS will zoom on focus and never zoom back out');
 
-	const stage = q('.stage');
-	const pad = parseFloat(getComputedStyle(stage).paddingTop);
-	assert(pad >= 52,
-		'.stage padding-top is ' + pad + 'px at phone width - the fixed presence strip paints over the thread');
+	// 2. THE PLACES' BAR COVERS THE BOTTOM, NOT THE CHAT.
+	//    At 767px the top bar's places go position:fixed along the
+	//    bottom, and .stage keeps padding-bottom to clear them. An
+	//    overlay that drops the padding, or a taller bar, slams the
+	//    composer under the places.
+	const stage = q('.stage'), bar = q('.c-top-bar__nav').getBoundingClientRect();
+	const pad = parseFloat(getComputedStyle(stage).paddingBottom);
+	assert(getComputedStyle(q('.c-top-bar__nav')).position === 'fixed' && Math.abs(bar.bottom - innerHeight) < 1,
+		'the places are not fixed along the bottom at phone width - the fixture no longer draws what it guards');
+	assert(pad >= bar.height - 0.5,
+		'.stage padding-bottom is ' + pad + 'px at phone width and the places\' bar is ' + bar.height + 'px - it paints over the composer');
 });
 </script>`
 
-func TestPhoneWidthFrameHoldsInBrowser(t *testing.T) {
-	layoutCSS, err := staticFS.ReadFile("static/layout.css")
-	if err != nil {
-		t.Fatal(err)
+// phoneCSS is what the phone fixture is drawn with: the tokens, the frame's
+// stylesheet and the top bar's, in the page's order.
+func phoneCSS(t *testing.T) string {
+	t.Helper()
+	var css []string
+	for _, name := range []string{"static/tokens/tokens.css", "static/layout.css", "static/components/top-bar/top-bar.css"} {
+		b, err := staticFS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		css = append(css, string(b))
 	}
-	page := strings.Replace(phoneChatPage, "__LAYOUT_CSS__", string(layoutCSS), 1)
+	return strings.Join(css, "\n")
+}
+
+func TestPhoneWidthFrameHoldsInBrowser(t *testing.T) {
+	page := strings.Replace(phoneChatPage, "__LAYOUT_CSS__", phoneCSS(t), 1)
 	if page == phoneChatPage {
 		t.Fatal("stylesheet placeholder not substituted")
 	}
@@ -139,11 +159,7 @@ func TestPhoneWidthFrameHoldsInBrowser(t *testing.T) {
 }
 
 func TestPhoneWidthFixtureDetectsOverlayHazard(t *testing.T) {
-	layoutCSS, err := staticFS.ReadFile("static/layout.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hazard := string(layoutCSS) + "\n.composer textarea { font-size: 14px; }\n"
+	hazard := phoneCSS(t) + "\n.composer textarea { font-size: 14px; }\n"
 	page := strings.Replace(phoneChatPage, "__LAYOUT_CSS__", hazard, 1)
 	if page == phoneChatPage {
 		t.Fatal("stylesheet placeholder not substituted")

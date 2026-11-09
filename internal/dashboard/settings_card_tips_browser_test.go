@@ -37,10 +37,10 @@ run(async (assert) => {
   };
   const st = document.getElementById('settings-stack');
   renderSettings();
-  const ids = [...document.querySelectorAll('[data-sec]')].map(b => b.dataset.sec);
+  const ids = ['substrate', 'providers', 'speech', 'dashboard', 'backups', 'sandbox', 'tools', 'messages', 'updates'];
   const seen = new Map();
   for (const id of ids) {
-    document.querySelector('[data-sec="' + id + '"]').click();
+    S.settingsSection(id); S.requestSettingsSection(); renderSettings();
     if (id === 'messages') {
       const asked = frames.filter(f => f.query === 'messages').at(-1);
       assert(asked, 'opening Messages did not ask for them');
@@ -49,7 +49,11 @@ run(async (assert) => {
     const heads = [...st.querySelectorAll('h3')];
     assert(heads.length > 0, id + ' draws no card');
     for (const h of heads) {
-      const tip = h.title.trim(), label = h.textContent.trim();
+      // A card says it in its heading's title; a part drawn from a board (App,
+      // step 18) says it in the visible hint the part names (aria-describedby).
+      const part = h.closest('[aria-describedby]');
+      const hinted = part && document.getElementById(part.getAttribute('aria-describedby'));
+      const tip = (h.title || (hinted ? hinted.textContent : '')).trim(), label = h.textContent.trim();
       assert(tip.length > 20 && tip.endsWith('.'), id + ': the card ' + label + ' has no sentence of its own: "' + tip + '"');
       assert(tip.toLowerCase() !== label.toLowerCase(), id + ': the card ' + label + ' is explained by its own label');
       assert(!seen.has(tip) || seen.get(tip) === label, id + ': the cards ' + label + ' and ' + seen.get(tip) + ' share one sentence: "' + tip + '"');
@@ -57,9 +61,7 @@ run(async (assert) => {
     }
   }
   const labels = new Set(seen.values());
-  for (const drawn of ['SUBSTRATE — LLM', 'Conversation', 'Who is heard', 'VOICE INPUT — SPEECH TO TEXT', 'VOICE REPLIES — TEXT TO SPEECH',
-    'PUBLIC NAME', 'THEME', 'NOTIFICATIONS', 'RESTORE', 'KEYS — THE ESCROW', 'COGNITION', 'VIEWER', 'SANDBOX — WHERE THEY MAY REACH',
-    'EXPORT A COPY', 'ARRIVALS', 'NOT DELIVERED', 'DELIVERED', 'YOUR NOTICES', 'CONTACTS', 'HELD MAIL', 'UNINSTALL']) {
+  for (const drawn of ['The model', 'Talk', 'Hearing you', "your identity's voice", 'Who can open this page', 'Address for other devices', 'Appearance', 'Notifications', 'Updates', 'What is kept', 'Your way back · the escrow file', 'What a restore does', 'Folders their tools may reach', 'Your contacts', 'Your notices', 'Messages', 'Remove AII OS from this computer']) {
     assert(labels.has(drawn), 'the card ' + drawn + ' was not drawn, so its sentence was not read');
   }
 });

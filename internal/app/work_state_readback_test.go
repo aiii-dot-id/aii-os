@@ -323,7 +323,7 @@ func TestSessionNotesUseOrdinaryFileToolsAndTheirSafeAndPathBoundaries(t *testin
 		if err := a.store.StartWorkSession(t.Context(), id, "file notes"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := a.buildWorkState(); err != nil {
+		if _, err := a.buildWorkState(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		requireReadbackTargetAbsent(t, home)
@@ -340,7 +340,7 @@ func TestSessionNotesUseOrdinaryFileToolsAndTheirSafeAndPathBoundaries(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		state, err := a.buildWorkState()
+		state, err := a.buildWorkState(t.Context())
 		if err != nil || !strings.Contains(state, sessionNotesLine(id)) || strings.Contains(state, "WRITTEN_NOTE_界") {
 			t.Fatalf("rendering read scratch into authored state or lost its target: %q, %v", state, err)
 		}

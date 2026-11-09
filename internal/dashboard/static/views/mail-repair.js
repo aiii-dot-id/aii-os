@@ -1,16 +1,19 @@
 import { S } from '../state.js';
-import { cardHead, esc } from '../util.js';
+import { esc, fill } from '../util.js';
 import { send } from '../ws.js';
 import { pendingSlot } from '../pending.js';
+import { say } from './settings/people-say.js';
+import W from '../strings/settings-people.js';
 
 const pending = pendingSlot();
 let state = { messages: [], routes: [] };
 let cursor = '';
-let notice = 'Refresh to inspect held historical mail. Viewing never sends it.';
+let routeChosen = null;
+let notice = W.unsentHow;
 const render = () => { if (S.renderMailRepair) S.renderMailRepair(); };
 function ask(payload) {
   if (pending.waiting()) return;
-  if (!pending.arm(payload, send(payload))) { notice = 'Not connected; nothing was requested.'; render(); return; }
+  if (!pending.arm(payload, send(payload))) { notice = W.notConnected; render(); return; }
   notice = 'Waiting for the runtime to confirm…'; render();
 }
 export function requestHeldMail(after = '') {
@@ -20,7 +23,7 @@ export function acceptMailRepair(reply) {
   if (!pending.claim(reply.request_id)) return false;
   const value = reply.mail_repair || {};
   state = { ...value, messages: value.messages || [], routes: value.routes || [] };
-  notice = state.queued ? 'Correction saved; ' + state.queued + ' is queued on the chosen channel. Delivery is not yet confirmed.' : (state.messages.length ? 'Only held historical mail is shown.' : 'No held mail on this page.');
+  notice = state.queued ? fill(W.queued, { contact: routeChosen?.name || state.queued, channel: routeChosen?.channel || '' }) : (state.messages.length ? W.onlyHeld : W.unsentNone);
   render(); return true;
 }
 export function rejectMailRepair(requestID, text) {
@@ -30,18 +33,25 @@ export function rejectMailRepair(requestID, text) {
 export function mailRepairDisconnected() {
   if (pending.drop()) { notice = 'Connection lost before confirmation. Refresh to learn the actual state; nothing is automatically retried.'; render(); }
 }
+let open = false;
+export function openUnsent() { open = true; }
 export function mailRepairHTML() {
-  const disabled = pending.waiting() ? ' disabled' : '';
-  return '<div class="card">' + cardHead('HELD MAIL', 'Messages to people held undelivered because their recipient or channel could not be resolved; one never attempted can be given a recipient and channel from your contacts and queued, one attempted, parked or of uncertain effect cannot.') + '<p>Correct one historical message using a recipient and channel already in your current contacts. This queues that message on the chosen channel; it does not change contacts or claim delivery. Messages already attempted or of uncertain effect cannot be repaired here.</p>' +
-    '<p data-mail-notice data-announce>' + esc(notice) + '</p><button class="btn" data-mail-refresh' + disabled + '>Refresh from first page</button>' +
-    (state.next ? '<button class="btn" data-mail-next' + disabled + '>Next page</button>' : '') +
-    state.messages.map((m, i) => '<section data-held-message><h4>' + esc(m.id) + '</h4><p>Recorded recipient: ' + esc(m.recipient) + '; requested channel: ' + esc(m.channel || 'none') + '. ' + esc(m.reason) + '</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(m.preview) + '</pre>' +
-      (m.truncated ? '<p>Preview truncated.</p><button class="btn" data-mail-inspect="' + i + '"' + disabled + '>Read complete message</button>' : '') +
-      '<label>Correct recipient and channel: <select data-mail-route="' + i + '"' + disabled + '><option value="">Choose an existing contact route</option>' +
-      state.routes.map((r, n) => '<option value="' + n + '">' + esc(r.name + ' via ' + r.channel) + '</option>').join('') + '</select></label>' +
-      '<button class="btn" data-mail-repair="' + i + '"' + disabled + '>Correct and queue</button></section>').join('') + '</div>';
+  const disabled = pending.waiting() ? ' disabled' : '', n = state.messages.length;
+  const count = n === 1 ? W.unsentCountOne : n ? fill(W.unsentCount, { n }) : W.unsentNone;
+  return '<details class="settings-people__more" data-unsent' + (open ? ' open' : '') + '><summary>' + esc(W.unsent) + ' <span class="settings-people__more-hint">· ' + esc(count) + '</span></summary><div class="settings-people__more-body">' +
+    '<p class="settings-people__hint">' + esc(say(W.unsentHint)) + ' ' + esc(W.unsentHow) + '</p>' +
+    '<p class="settings-people__said" data-mail-notice data-announce>' + esc(notice) + '</p>' +
+    '<div class="settings-people__acts"><button type="button" class="c-button c-button--quiet" data-mail-refresh' + disabled + '>' + esc(W.firstPage) + '</button>' +
+    (state.next ? '<button type="button" class="c-button c-button--quiet" data-mail-next' + disabled + '>' + esc(W.nextPage) + '</button>' : '') + '</div>' +
+    state.messages.map((m, i) => '<section class="settings-people__part" data-held-message><p class="settings-people__to"><span class="settings-people__who">' + esc(fill(W.unsentRow, { name: m.recipient })) + '</span></p>' +
+      '<p class="settings-people__hint">' + esc(fill(W.unsentWhy, { name: m.recipient })) + ' ' + esc(m.reason) + '</p><pre class="settings-people__body">' + esc(m.preview) + '</pre>' +
+      (m.truncated ? '<p class="settings-people__hint">Preview truncated.</p><div class="settings-people__acts"><button type="button" class="c-button c-button--quiet" data-mail-inspect="' + i + '"' + disabled + '>' + esc(W.readIt) + '</button></div>' : '') +
+      '<div class="settings-people__line"><select class="settings-people__select" data-mail-route="' + i + '" aria-label="' + esc(W.chooseRecipient) + '"' + disabled + '><option value="">' + esc(W.chooseRoute) + '</option>' +
+      state.routes.map((r, k) => '<option value="' + k + '">' + esc(fill(W.sendTo, { contact: r.name, channel: r.channel })) + '</option>').join('') + '</select>' +
+      '<button type="button" class="c-button c-button--secondary" data-mail-repair="' + i + '"' + disabled + '>' + esc(W.queue) + '</button></div></section>').join('') + '</div></details>';
 }
 export function wireMailRepair(root) {
+  root.querySelectorAll('[data-unsent]').forEach(d => { d.ontoggle = () => { open = d.open; }; });
   const refresh = root.querySelector('[data-mail-refresh]');
   if (refresh) refresh.onclick = () => requestHeldMail();
   const next = root.querySelector('[data-mail-next]');
@@ -51,8 +61,9 @@ export function wireMailRepair(root) {
     button.onclick = () => {
       const i = Number(button.dataset.mailRepair);
       const selected = root.querySelector('[data-mail-route="' + i + '"]').value;
-      if (selected === '') { notice = 'Choose the intended recipient and channel; nothing changed.'; render(); return; }
+      if (selected === '') { notice = W.chooseRecipient; render(); return; }
       const route = state.routes[Number(selected)], message = state.messages[i];
+      routeChosen = route;
       ask({ type: 'repair_mail', name: cursor, mail_repair: { id: message.id, sha256: message.sha256, recipient: route.name, channel: route.channel } });
     };
   });

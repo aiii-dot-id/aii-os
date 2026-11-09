@@ -217,7 +217,7 @@ func (r *Runtime) putBackSnapshotKey(sealed, pass []byte) (string, error) {
 	}
 	if recipient, rerr := escrow.SnapshotRecipient(c.SnapshotKey); rerr == nil {
 		if _, published, werr := escrow.WriteReceipt(kp, recipient, r.w.Active(cfg.Identity).KeyPath, time.Now()); werr != nil && !published {
-			logsink.Error("escrow.error", "the snapshot key is in place and the escrow receipt could NOT be written (%v): snapshots made here are not encrypted until the escrow file is checked in Settings → Backups & Keys", werr)
+			logsink.Error("escrow.error", "the snapshot key is in place and the escrow receipt could NOT be written (%v): snapshots made here are not encrypted until the escrow file is checked in Settings → Backups", werr)
 		}
 	}
 	logsink.Warn("restore.decision", "the escrow's snapshot key of identity %s is in place: it opens %s", kp.Fingerprint(), snapshot)

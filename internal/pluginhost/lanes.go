@@ -43,6 +43,8 @@ type Activation struct {
 	Plugin                     *ActivePlugin
 	Section                    *sections.Section
 
+	Asset *AssetFacts
+
 	ManifestHash string
 
 	watching atomic.Bool
@@ -51,6 +53,11 @@ type Activation struct {
 }
 
 func (r *Activation) PluginID() string { return r.ID }
+
+type AssetFacts struct {
+	Tier                                       packagefmt.Tier
+	Title, Description, Publisher, PublisherID string
+}
 
 func (r *Activation) HostBytesHeld() (int64, bool) {
 	if r.Plugin == nil {
@@ -238,6 +245,8 @@ func (h *Runtime) Start(ctx context.Context, p pluginfacility.Prepared, lease *p
 	out := &Activation{ID: ev.ID, Version: ev.Version, Package: ev.Package, Hash: ev.PackageHash, ManifestHash: ev.ManifestHash}
 	switch handle := p.Handle.(type) {
 	case assetLane:
+		m := handle.res.Manifest
+		out.Asset = &AssetFacts{Tier: handle.res.Tier, Title: m.Title, Description: m.Description, Publisher: m.Publisher, PublisherID: handle.res.PublisherID}
 		sec, serr := sections.ActivateFromPackage(ev.Package, h.roots())
 		switch {
 		case serr == nil:

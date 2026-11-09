@@ -20,7 +20,7 @@ run(() => {
   S.view='settings'; S.identityExists=true; S.providersLoaded=true; S.config={llm:{}};
   const view = {enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[]};
   backup.applyBackups({action:'status',view});
-  renderSettings(); document.querySelector('[data-sec="backups"]').click();
+  renderSettings(); S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
   el('bk-keep').value='14'; el('bk-enabled').checked=false;
   el('bk-pass').value='fixture secret phrase'; el('bk-again').value='fixture secret phrase';
   el('bk-pass').focus(); el('bk-pass').setSelectionRange(2,5);
@@ -52,11 +52,11 @@ run(() => {
   backup.backupsConnectionLost();
   assert(!backup.acceptBackupPreferences(lost.request_id),'late lost-socket reply accepted');
   assert(el('bk-keep').value==='33' && el('bk-pass').value==='' && el('bk-again').value==='','disconnect lost preferences or kept secrets');
-  assert(el('settings-stack').textContent.includes('completion is unknown'),'disconnect hid uncertainty');
+  assert(el('settings-stack').textContent.includes('whether it finished is unknown'),'disconnect hid uncertainty');
   const after=frames.length; backup.backupsReconnected();
   assert(frames.length===after+1 && frames.at(-1).backups.action==='status','reconnect must read status, never replay preferences');
   el('bk-pass').value='navigation secret';
-  document.querySelector('[data-sec="sandbox"]').click(); document.querySelector('[data-sec="backups"]').click();
+  S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings(); S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
   assert(el('bk-pass').value==='' && el('bk-keep').value==='33','navigation retained secret or discarded preferences');
 });
 </script>`
@@ -73,7 +73,7 @@ import { assert, run } from './__harness.js';
 run(() => {
   S.view='settings'; S.identityExists=true; S.providersLoaded=true; S.config={llm:{}};
   S.sandbox={root:'/identity',extra_roots:['/existing']};
-  renderSettings(); document.querySelector('[data-sec="sandbox"]').click();
+  renderSettings(); S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
   const input=document.getElementById('sbx-add'); input.value='/my/project'; input.focus(); input.setSelectionRange(3,7);
   S.sandbox={root:'/identity',extra_roots:['/existing','/another-client']}; renderSettings();
   assert(document.getElementById('sbx-add').value==='/my/project','sandbox readback discarded root draft');
@@ -121,7 +121,7 @@ import * as backup from './views/backups.js';
 import { assert, run } from './__harness.js';
 run(() => {
  const el=id=>document.getElementById(id), last=()=>frames.at(-1);
- const nav=name=>document.querySelector('[data-sec="'+name+'"]').click();
+ const nav=name => { S.settingsSection(name); S.requestSettingsSection(); renderSettings(); };
  S.view='settings'; S.identityExists=true; S.providersLoaded=true; S.config={llm:{}};
  const view={enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[{name:'one',record:3},{name:'two',record:5}]};
  backup.applyBackups({action:'status',view}); renderSettings(); nav('backups');
@@ -176,7 +176,7 @@ run(() => {
  backup.backupsConnectionLost();const count=frames.filter(f=>f.backups?.action==='restore').length;
  backup.applyBackups({action:'restore',restarting:true},restoring.request_id);backup.backupsReconnected();
  assert(!document.querySelector('[data-restarting]') && !el('bk-confirm'),'late restore revived plan');
- assert(el('settings-stack').textContent.includes('completion is unknown'),'lost restore hid uncertainty');
+ assert(el('settings-stack').textContent.includes('whether it finished is unknown'),'lost restore hid uncertainty');
  assert(frames.filter(f=>f.backups?.action==='restore').length===count,'restore replayed at reconnect');
  assert(writes===0 && !el('settings-stack').innerHTML.includes('fixture escrow phrase'),'secret persisted or serialized');
 });
@@ -190,7 +190,7 @@ import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderSettings } from './views/settings.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {
@@ -200,7 +200,7 @@ run(() => {
  };
  S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};
  connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
- const el=id=>document.getElementById(id), nav=name=>document.querySelector('[data-sec="'+name+'"]').click();
+ const el=id=>document.getElementById(id), nav=name => { S.settingsSection(name); S.requestSettingsSection(); renderSettings(); };
  const last=()=>socket.frames.at(-1);
  renderSettings();nav('backups');
  const view={enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[]};
@@ -209,7 +209,7 @@ run(() => {
  socket.recv({type:'config',request_id:'foreign',config:{llm:{},maintenance:{enabled:true,backup_keep:20}}});
  assert(el('bk-save').disabled,'unrelated config cleared pending preferences');
  socket.recv({type:'config',request_id:save.request_id,config:{llm:{},maintenance:{enabled:true,backup_keep:20}}});
- assert(!el('bk-save').disabled && el('settings-stack').textContent.includes('Preferences saved'),'socket config reply not routed');
+ assert(!el('bk-save').disabled && document.querySelector('[data-said="keep"]')?.textContent==='Saved.','socket config reply not routed');
  el('bk-take').click();const take=last();
  socket.recv({type:'backups',request_id:'foreign',backups:{action:'take',view}});
  assert(el('bk-take').disabled,'foreign backup reply consumed action');
@@ -259,7 +259,7 @@ import { renderSettings } from './views/settings.js';
 import * as backup from './views/backups.js';
 S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};
 backup.applyBackups({action:'status',view:{enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[]}});
-renderSettings();document.querySelector('[data-sec="backups"]').click();
+renderSettings();S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
 window.client={read:keep=>backup.applyBackups({action:'status',view:{...S.backups,backup_keep:keep}})};
 </script>`
 	page := `<!doctype html><script type="module">
@@ -287,16 +287,19 @@ import { S } from './state.js';
 import { go } from './app.js';
 import { openBackups } from './views/settings.js';
 import { applyBackups, backupsHolding } from './views/backups.js';
-import { assert, run } from './__harness.js';
-run(()=>{
+import { assert, run, until } from './__harness.js';
+run(async ()=>{
  S.connected=true;S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};
  applyBackups({action:'status',view:{enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[]}});
  openBackups();go('settings');
  const el=id=>document.getElementById(id);
+ // Settings is fetched when first opened (step 21) and draws once it is in.
+ await until(()=>el('bk-pass'),3000);
  el('bk-pass').value='router secret';el('bk-again').value='router secret';el('bk-keep').value='19';
  const old=el('bk-pass');go('chat');
  assert(old.value==='' && !backupsHolding().holding,'router retained secret in hidden Settings DOM');
- go('settings');assert(el('bk-pass').value==='' && el('bk-keep').value==='19','return revived secret or lost preferences');
+ go('settings');await until(()=>el('bk-pass')!==old,3000);
+ assert(el('bk-pass').value==='' && el('bk-keep').value==='19','return revived secret or lost preferences');
 });
 </script>`
 	modules := wsPageModules(nil, []byte(`export const S={providers:[]};`))

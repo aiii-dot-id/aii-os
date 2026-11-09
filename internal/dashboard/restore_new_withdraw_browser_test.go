@@ -66,7 +66,7 @@ func TestAPersonWithdrawsTheKeysAtFirstBoot(t *testing.T) {
 
   // IT ASKS FIRST, and a person who declines has sent nothing.
   $('fbr-withdraw').click();
-  assert(question === 'Withdraw the keys of identity 501265c63ca1065f… from this machine? Only the keys this page put here from your escrow file are removed. The escrow file is not touched, and the keys can be put back from it here. This identity cannot be restored on this machine until they are.', 'the question is not the one row 9.35 approved: ' + question);
+  assert(question === 'Remove this identity\'s keys from this computer? Only the keys this page put here from your escrow file are removed. You can\'t restore it here until you add them again.', 'the question is not the one row 9.35 approved: ' + question);
   assert(acts('withdraw').length === 0 && restoreDoorState().step === 'snapshot' && !$('fbr-withdraw').disabled, 'declined: nothing was sent and the door is as it was');
 
   // CONFIRMED: one act, and every button waits under its own name.
@@ -74,7 +74,7 @@ func TestAPersonWithdrawsTheKeysAtFirstBoot(t *testing.T) {
   $('fbr-withdraw').click();
   assert(acts('withdraw').length === 1 && Object.keys(acts('withdraw')[0].restore_new).join() === 'action', 'the act is sent once, and carries nothing but its name: ' + JSON.stringify(frames.at(-1)));
   assert($('fbr-withdraw').disabled && $('fbr-withdraw').textContent === 'Withdrawing…' && $('fbr-close').disabled, 'the door waits for the answer');
-  assert($('fbr-send').disabled && $('fbr-send').textContent === 'Send it to this machine', 'the other buttons wait and do not say they are doing what they are not');
+  assert($('fbr-send').disabled && $('fbr-send').textContent === 'Send it here', 'the other buttons wait and do not say they are doing what they are not');
 
   // A REFUSAL is said in the door, and the keys stay where they are.
   applyRestoreNew({ action: 'withdraw', secrets_ok: true, error: 'Nothing was withdrawn: a snapshot is on this machine.' });
@@ -86,7 +86,7 @@ func TestAPersonWithdrawsTheKeysAtFirstBoot(t *testing.T) {
   assert(acts('withdraw').length === 2, 'asked again');
   applyRestoreNew({ action: 'withdraw', secrets_ok: true, withdrawn: true });
   assert($('fb-restore-body').hidden && !$('fb-restore-open').hidden && !$('fbr-withdraw'), 'the door is closed and the first-boot page is back');
-  assert(text('#fb-result [data-withdrawn]') === 'The keys of identity 501265c63ca1065f… are withdrawn from this machine, and nothing else here was changed. Your escrow file still holds them. You can birth a new identity here now, or restore one.', 'what was done is said where a birth says its outcome: ' + text('#fb-result'));
+  assert(text('#fb-result [data-withdrawn]') === 'This identity\'s keys were removed from this computer. Your escrow file still holds them. You can birth a new identity here now, or restore one.', 'what was done is said where a birth says its outcome: ' + text('#fb-result'));
   const door = restoreDoorState();
   assert(door.step === 'closed' && !door.keys && !door.begun && !door.busy && door.snapshot === '', 'the page keeps nothing of the restore: ' + JSON.stringify(door));
 
@@ -113,7 +113,7 @@ func TestAReloadedDoorSaysARestoreStandsAndOffersBothWaysOn(t *testing.T) {
   assert(document.querySelector('[data-nosecrets]') && !document.querySelector('[data-begun]') && !$('fbr-withdraw') && !$('fb-restore-body').textContent.includes('501265c6'), 'a connection that is not private is shown nothing of the restore');
 
   applyRestoreNew({ action: 'hello', secrets_ok: true, begun: { identity: whole } });
-  assert(text('[data-begun]') === 'A restore of identity 501265c63ca1065f… was begun on this machine and has been neither finished nor withdrawn. To go on with it, open the escrow file again below; to end it, press "Withdraw these keys".', 'the page says a restore stands here: ' + text('[data-begun]'));
+  assert(text('[data-begun]') === 'A restore was started here and not finished. To go on with it, open the escrow file again below; to end it, press "Withdraw these keys".', 'the page says a restore stands here: ' + text('[data-begun]'));
   assert(!document.querySelector('[data-keys-ok]') && !document.querySelector('[data-step="snapshot"]'), 'no key is said to be in place, and no snapshot is asked for');
   assert($('fbr-escrow') && $('fbr-pass') && $('fbr-keys') && $('fbr-withdraw'), 'both ways on are offered: the first act again, and the withdrawal');
 
@@ -134,7 +134,7 @@ func TestAReloadedDoorSaysARestoreStandsAndOffersBothWaysOn(t *testing.T) {
   applyRestoreNew({ action: 'hello', secrets_ok: true, begun: { identity: whole } });
   answer = true;
   $('fbr-withdraw').click();
-  assert(/^Withdraw the keys of identity 501265c63ca1065f… from this machine\?/.test(question) && acts('withdraw').length === 1 && restoreDoorState().step === 'withdrawing', 'it asks first, in the same words, and sends the act: ' + question);
+  assert(/^Remove this identity's keys from this computer\?/.test(question) && acts('withdraw').length === 1 && restoreDoorState().step === 'withdrawing', 'it asks first, in the same words, and sends the act: ' + question);
   applyRestoreNew({ action: 'withdraw', secrets_ok: true, error: 'Nothing was withdrawn: the key at /h/identity.sec cannot be shown to be the one this restore put in place.' });
   assert(/Nothing was withdrawn/.test(text('[data-restore-said]')) && document.querySelector('[data-begun]') && $('fbr-escrow') && restoreDoorState().step === 'keys', 'a refusal returns the door to the step it was on: ' + JSON.stringify(restoreDoorState()));
   $('fbr-withdraw').click();
@@ -151,7 +151,7 @@ func TestAWithdrawalSaysTheSnapshotsItTakes(t *testing.T) {
   $('fb-restore-open').click();
   applyRestoreNew({ action: 'hello', secrets_ok: true, begun: { identity: whole, received: [one] } });
   $('fbr-withdraw').click();
-  assert(question === 'Withdraw the keys of identity 501265c63ca1065f… from this machine? Only the keys this page put here from your escrow file are removed, with the snapshot this page received (' + one + '); your own copy of it is not touched. The escrow file is not touched, and the keys can be put back from it here. This identity cannot be restored on this machine until they are.', 'THE QUESTION DOES NOT SAY THE SNAPSHOT GOES: ' + question);
+  assert(question === 'Remove this identity\'s keys from this computer? Only the keys this page put here from your escrow file are removed, with the snapshot this page received (' + one + '); your own copy of it is not touched. You can\'t restore it here until you add them again.', 'THE QUESTION DOES NOT SAY THE SNAPSHOT GOES: ' + question);
   assert(acts('withdraw').length === 0, 'declined: nothing was sent');
 
   // The keys act again, and one more snapshot sent from this page: both are named.
@@ -165,6 +165,6 @@ func TestAWithdrawalSaysTheSnapshotsItTakes(t *testing.T) {
   answer = true;
   $('fbr-withdraw').click();
   applyRestoreNew({ action: 'withdraw', secrets_ok: true, withdrawn: true, snapshots: [one, two] });
-  assert(text('#fb-result [data-withdrawn]') === 'The keys of identity 501265c63ca1065f… are withdrawn from this machine, with the snapshots this page received, and nothing else here was changed. Your escrow file still holds them. You can birth a new identity here now, or restore one.', 'the line after says they went: ' + text('#fb-result'));
+  assert(text('#fb-result [data-withdrawn]') === 'This identity\'s keys were removed from this computer. Your escrow file still holds them. You can birth a new identity here now, or restore one.', 'the line after says they went: ' + text('#fb-result'));
 `)
 }

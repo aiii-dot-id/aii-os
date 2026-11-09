@@ -12,7 +12,7 @@ import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderSettings } from './views/settings.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {
@@ -26,7 +26,7 @@ run(() => {
  const said=()=>document.getElementById('settings-stack').textContent;
  const press=name=>{const s=sw(name);s.checked=!s.checked;s.dispatchEvent(new Event('change',{bubbles:true}));return socket.frames.at(-1);};
  const list=shell=>[{name:'shell',description:'run a command',enabled:shell},{name:'web_fetch',description:'read a page',enabled:true}];
- renderSettings();document.querySelector('[data-sec="tools"]').click();
+ renderSettings();S.settingsSection('tools'); S.requestSettingsSection(); renderSettings();
  socket.recv({type:'tools',tools:list(true)});
  assert(sw('shell') && sw('shell').checked && !sw('shell').disabled,'rig: the tools card did not draw the host\'s list');
 

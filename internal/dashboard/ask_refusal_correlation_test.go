@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A refused answer to an ask is answered under the request's id, and is
@@ -145,6 +146,147 @@ func TestAnAnswerNotRecordedIsToldUnderItsRequestAndItsQuestionReachesEveryPage(
 			for {
 				if m := carried.until(t, "asks", "its card stays closed on an open question"); len(m.Asks) == 1 && m.Asks[0].ID == "ask-1" {
 					break
+				}
+			}
+		})
+	}
+}
+
+// A QUESTION THAT STAYS ANSWERED IS NOT TOLD TO THE PAGE AS OPEN. A Yes on a voice card
+// has named its voice whatever became of the words, so when its message is not recorded
+// the record still has the question closed. The page learns that from the record: it is
+// not told the question is open, and no page gets the card back.
+func TestAFailedYesIsNotToldAsAnOpenQuestion(t *testing.T) {
+	const why = "fixture: the record would not take it"
+	settled := make(chan bool, 1)
+	h := &WSHandler{
+		AnswerAsk: func(AskAnswer) (string, func(bool), error) {
+			return "yes, that voice is mine", func(recorded bool) { settled <- recorded }, nil
+		},
+		GetAsks: func() []AskView { return []AskView{} },
+		HandleMessage: func(ctx context.Context, _ string) (string, error) {
+			ChatRecorded(ctx, nil, errors.New(why))
+			return "noted", nil
+		},
+		Channels: carriedChannels(t),
+	}
+	s := New("127.0.0.1", 0, h)
+	addr, err := s.Start(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	asker := dialWS(t, addr)
+	waitForConns(t, s, 1)
+	sendMsg(t, asker, ClientMessage{Type: "ask", RequestID: "press", Ask: &AskAnswer{ID: "ask-voice-1", Answer: "confirm"}})
+	select {
+	case recorded := <-settled:
+		if recorded {
+			t.Fatal("the fixture's message was recorded")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the answer was never settled")
+	}
+	// The asks frame after the settle, and no error before it.
+	for lists := 0; lists < 2; {
+		m := readMsg(t, asker)
+		if m.Type == "error" && m.RequestID == "press" {
+			t.Fatalf("the page was told %q about a question the record has closed", m.Message)
+		}
+		if m.Type == "asks" {
+			lists++
+			if len(m.Asks) != 0 {
+				t.Fatalf("a closed question came back: %+v", m.Asks)
+			}
+		}
+	}
+}
+
+// A VOICE NAMED IN SETTINGS CHANGES WHICH QUESTIONS ARE OPEN ON EVERY SCREEN. A connected
+// second screen would otherwise keep showing a card about a voice already named.
+func TestNamingAVoiceInSettingsSendsEveryScreenTheQuestions(t *testing.T) {
+	for name, change := range map[string]map[string]any{
+		"alone":               {"speech.operator_speakers": []any{"a-voice"}},
+		"with a speech field": {"speech.operator_speakers": []any{"a-voice"}, "speech.stt.provider": "fixture"},
+		"with the substrate":  {"speech.operator_speakers": []any{"a-voice"}, "llm.model": "fixture"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			open := []AskView{{ID: "voice-1", Kind: "voice", Text: "Was that you?"}}
+			h := &WSHandler{
+				GetAsks: func() []AskView {
+					mu.Lock()
+					defer mu.Unlock()
+					return open
+				},
+				SetConfig: func(map[string]any) (*ConfigState, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					open = []AskView{}
+					return &ConfigState{}, nil
+				},
+			}
+			s := New("127.0.0.1", 0, h)
+			addr, err := s.Start(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Shutdown(context.Background()) })
+			settings, other := dialWS(t, addr), dialWS(t, addr)
+			waitForConns(t, s, 2)
+			sendMsg(t, settings, ClientMessage{Type: "config_set", RequestID: "name", Config: change})
+			for {
+				m := readMsg(t, other)
+				if m.Type == "asks" {
+					if len(m.Asks) != 0 {
+						t.Fatalf("the other screen still holds %+v", m.Asks)
+					}
+					return
+				}
+			}
+		})
+	}
+}
+
+// A save that publishes a name and reports a durability error has changed which questions
+// are open, as a clean save has, whichever way the save went out.
+func TestASaveThatPublishesWithAnErrorSendsTheQuestions(t *testing.T) {
+	for name, change := range map[string]map[string]any{
+		"alone":               {"speech.operator_speakers": []any{"a-voice"}},
+		"with a speech field": {"speech.operator_speakers": []any{"a-voice"}, "speech.stt.provider": "fixture"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			open := []AskView{{ID: "voice-1", Kind: "voice", Text: "Was that you?"}}
+			h := &WSHandler{
+				GetAsks: func() []AskView {
+					mu.Lock()
+					defer mu.Unlock()
+					return open
+				},
+				SetConfig: func(map[string]any) (*ConfigState, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					open = []AskView{}
+					return nil, errors.New("fixture: published, and the folder did not sync")
+				},
+			}
+			s := New("127.0.0.1", 0, h)
+			addr, err := s.Start(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Shutdown(context.Background()) })
+			settings, other := dialWS(t, addr), dialWS(t, addr)
+			waitForConns(t, s, 2)
+			sendMsg(t, settings, ClientMessage{Type: "config_set", RequestID: "name", Config: change})
+			for {
+				m := readMsg(t, other)
+				if m.Type == "asks" {
+					if len(m.Asks) != 0 {
+						t.Fatalf("the other screen still holds %+v", m.Asks)
+					}
+					return
 				}
 			}
 		})

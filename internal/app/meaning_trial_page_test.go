@@ -63,10 +63,10 @@ func meaningTrialPage(t *testing.T, a *App, card, cue, expect string) map[string
 	// ---- SIGN-IN, when the page asks: the token goes into the page's own
 	// form and the form is submitted, as a person does it.
 	state, err := page.evalRetry(awaitJS(`
-    if (document.querySelector('#mem-meaning')) return 'in';
+    if (document.querySelector('iframe.section-frame[title="About"]')) return 'in';
     const f = document.querySelector('#dashboard-signin form');
     if (f && !f.hidden) return 'asked';
-    last = 'neither the meaning card nor the sign-in form is on the page';
+    last = 'neither the section nor the sign-in form is on the page';
     return null;
   `, 30000), true, 40*time.Second, 5)
 	if err != nil || strings.HasPrefix(state, "TIMEOUT") {
@@ -85,13 +85,13 @@ func meaningTrialPage(t *testing.T, a *App, card, cue, expect string) map[string
 		}
 	}
 
-	// ---- THE CARD. Read as text, item by item; each sentence the page
-	// must carry is built here from the App's own account.
-	raw, err := page.evalRetry(awaitJS(`
+	// ---- THE CARD. Read as text, item by item, in About's own frame; each
+	// sentence the page must carry is built here from the App's own account.
+	const about = "/built-in-sections/about/"
+	raw, err := page.evalInFrame(about, awaitJS(`
     const c = document.querySelector('#mem-meaning');
     if (!c) {
-      const s = document.querySelector('#dashboard-signin p');
-      last = 'no meaning card' + (s ? '; the sign-in says: ' + s.textContent : '');
+      last = 'no meaning card';
       return null;
     }
     const sel = document.querySelector('#mem-source');
@@ -99,7 +99,7 @@ func meaningTrialPage(t *testing.T, a *App, card, cue, expect string) map[string
     last = items.join(' | ');
     if (!sel || !items.some(x => x.startsWith('Source: '))) return null;
     return JSON.stringify({choice: sel.value, label: sel.options[sel.selectedIndex].textContent, items: items});
-  `, 30000), true, 40*time.Second, 5)
+  `, 30000), 40*time.Second)
 	if err != nil || strings.HasPrefix(raw, "TIMEOUT") {
 		t.Fatalf("the meaning card never named a source: %v %s", err, raw)
 	}
@@ -145,21 +145,21 @@ func meaningTrialPage(t *testing.T, a *App, card, cue, expect string) map[string
 	// ---- A RECALL FROM THE VIEW'S BOX. The cue is typed and Enter
 	// pressed; the page asks the host and draws what it answers.
 	q, _ := json.Marshal(cue)
-	if _, err := page.eval(`(function(){
+	if _, err := page.evalInFrame(about, `(function(){
       const box = document.querySelector('#mem-search');
       box.focus();
       box.value = `+string(q)+`;
       box.dispatchEvent(new Event('input', {bubbles: true}));
       document.querySelector('#mem-search').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
       return 'asked';
-    })()`, false, 10*time.Second); err != nil {
+    })()`, 10*time.Second); err != nil {
 		t.Fatalf("the view's box could not be typed into: %v", err)
 	}
-	text, err := page.evalRetry(awaitJS(`
+	text, err := page.evalInFrame(about, awaitJS(`
     const r = document.querySelector('#mem-recall');
     if (!r) { last = 'no recall on the page'; return null; }
     return r.textContent;
-  `, 60000), true, 70*time.Second, 3)
+  `, 60000), 70*time.Second)
 	if err != nil || strings.HasPrefix(text, "TIMEOUT") {
 		t.Fatalf("the page never showed a recall for the cue: %v %s", err, text)
 	}

@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // The observer hears every boundary after the write and outside the
 // lock, with the actor, the project and the delivery's classes — and
@@ -26,7 +29,7 @@ func TestWorkObserverHearsBoundariesOutsideTheLock(t *testing.T) {
 	if err := s.DeliverWorkSession(t.Context(), "ws_child", "served: the numbers", EvidenceWorkerReportOnly, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkHarvested("ws_child", 42); err != nil {
+	if _, err := s.TakeInDelivery(context.Background(), "ws_child", 42, "taken in"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeliverWorkSession(t.Context(), "ws_main", "partial: most of it", EvidenceCompletedLocally, ""); err != nil {
@@ -37,7 +40,7 @@ func TestWorkObserverHearsBoundariesOutsideTheLock(t *testing.T) {
 		t.Fatal("a second delivery over a real result must be refused")
 	}
 	// Harvesting a session that does not exist changes nothing and says nothing.
-	if err := s.MarkHarvested("ws_absent", 1); err != nil {
+	if _, err := s.TakeInDelivery(context.Background(), "ws_absent", 1, "taken in"); err != nil {
 		t.Fatal(err)
 	}
 	want := []WorkEvent{

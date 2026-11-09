@@ -2,10 +2,7 @@
 
 package dashboard
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 const fileViewerFocusPage = `<!doctype html>
 <div id="proj-space"></div>
@@ -61,41 +58,4 @@ func TestTheFileViewerIsAModalThatGivesFocusBack(t *testing.T) {
 		"/state.js", []byte("export const S = { view:'projects', projects:[], activeProject:null, viewedProject:null, dockFilter:'', identityExists:true, stats:{}, workspace:null, workspaceFor:'', projTab:'overview', focusDraft:null };"),
 		"/util.js", utilStub("export const $ = id => document.getElementById(id); export const esc = value => String(value ?? ''); export const hueOf = id => 200;"),
 	))
-}
-
-func TestAProjectCardIsANativeButton(t *testing.T) {
-	page := `<!doctype html><div id="home-inner"></div>
-<script type="module">
-import { assert, run } from '/__harness.js';
-import { S } from '/state.js';
-import { renderHome } from '/views/home.js';
-import { opened } from '/views/projects.js';
-run(() => {
-  S.connected = true; S.identityExists = true; S.stats = { name: 'Fixture' };
-  S.projects = [{ id: 'p1', name: 'Product strategy', description: 'Q3', state: 'open', active: true, focus: 'positioning' }];
-  renderHome();
-  const card = document.querySelector('#home-inner .proj-card[data-id="p1"]');
-  const open = card && card.querySelector('.proj-open');
-  assert(open && open.tagName === 'BUTTON' && open.textContent === 'Product strategy', 'the card has no native button named by its project');
-  open.focus();
-  assert(document.activeElement === open, 'the card cannot take focus');
-  open.click();
-  assert(opened.length === 1 && opened[0] === 'p1', 'pressing the card did not open its project once: ' + opened.join(','));
-});
-</script>`
-	modules := browserModuleStubs()
-	for _, path := range []string{"static/views/home.js", "static/state.js", "static/util.js"} {
-		data, err := staticFS.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		modules["/"+strings.TrimPrefix(path, "static/")] = data
-	}
-	modules["/views/projects.js"] = []byte(`export const opened = []; export function viewProject(id) { opened.push(id); }`)
-	modules["/views/work.js"] = []byte(`export function workSectionHTML() { return ''; } export function wireWork() {}`)
-	modules["/views/identity.js"] = []byte(`export function renderIdentity() {}`)
-	modules["/app.js"] = []byte(`export function go() {}`)
-	modules["/views/backups.js"] = []byte(`export function requestBackups() {}`)
-	modules["/views/settings.js"] = []byte(`export function openBackups() {}`)
-	runPageInEngines(t, page, modules)
 }

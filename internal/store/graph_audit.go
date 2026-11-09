@@ -48,7 +48,7 @@ func (s *Store) GraphAudit() (GraphAudit, error) {
 	}
 	a.OrphansSample = sample
 
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM edges WHERE edge_type = 'CONTRADICTS' AND archived = 0`).Scan(&a.Tensions); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM edges e WHERE ` + LiveContradiction("e")).Scan(&a.Tensions); err != nil {
 		return a, fmt.Errorf("tensions: %w", err)
 	}
 	return a, nil

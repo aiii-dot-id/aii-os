@@ -16,7 +16,7 @@ run(() => {
   S.identityExists = true; S.providersLoaded = true;
   S.config = { llm: { provider: claude.name, model: 'm1', resolved_provider: claude.name, resolved_model: 'm1', timeout_seconds: 120 }, credential_kinds: ['claude-code', 'codex'] };
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   document.querySelector('[data-prov-row="0"]').click();
   const button = () => document.querySelector('#settings-stack [data-prov-signin]');
   const stack = () => document.querySelector('#settings-stack').textContent;

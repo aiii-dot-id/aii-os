@@ -32,7 +32,7 @@ run(() => {
     },
   };
   renderSettings();
-  document.querySelector('[data-sec="speech"]').click();
+  S.settingsSection('speech'); S.requestSettingsSection(); renderSettings();
   const field = key => document.querySelector('#speech-form [data-pset-key="' + key + '"]');
   const edit = (key, f) => { const el = field(key); f(el); el.dispatchEvent(new Event('change', { bubbles: true })); };
   assert(field('punctuate') && field('beam') && field('lexicon') && field('old_rate') && field('pitch'), 'the Speech card did not draw every tunable');

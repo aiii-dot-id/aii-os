@@ -41,7 +41,7 @@ func (s *Store) RingSnapshots() ([]RingSnapshot, error) {
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		`SELECT ring_level, section, content, updated_at FROM ring_snapshots WHERE section <> ?`, briefSection)
+		`SELECT ring_level, section, content, updated_at FROM ring_snapshots WHERE section NOT IN (?, ?)`, briefSection, operatorNoteSection)
 	if err != nil {
 		return nil, err
 	}
@@ -82,3 +82,28 @@ func (s *Store) Brief() (content string, written time.Time, err error) {
 }
 
 const briefSection = "__brief__"
+
+const operatorNoteSection = "__operator_note__"
+
+func (s *Store) SaveOperatorNote(content string) error {
+	return s.SaveRingSection(0, operatorNoteSection, content)
+}
+
+func (s *Store) RemoveOperatorNote() error {
+	return s.RemoveRingSection(0, operatorNoteSection)
+}
+
+func (s *Store) OperatorNote() (content string, written time.Time, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var at string
+	err = s.db.QueryRow(`SELECT content, updated_at FROM ring_snapshots WHERE section = ?`, operatorNoteSection).Scan(&content, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	written, _ = time.Parse(time.RFC3339Nano, at)
+	return content, written, nil
+}

@@ -16,7 +16,7 @@ import (
 func TestAProducedReleaseIsAdmittedByTheVerifier(t *testing.T) {
 	dir := t.TempDir()
 	archive := releaseArchive(t, []byte("the shipped binary"))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 
 	want := ReleasePayload{

@@ -29,7 +29,7 @@ func TestSpokenWordsWaitForRoomInAFullQueue(t *testing.T) {
 		t.Fatalf("the words did not wait for room: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	if said := a.DrainSteering(); len(said) != maxPendingSteers {
+	if said := steeredWords(a.DrainSteering()); len(said) != maxPendingSteers {
 		t.Fatalf("the tool boundary took %d of the queued messages, want %d", len(said), maxPendingSteers)
 	}
 	select {

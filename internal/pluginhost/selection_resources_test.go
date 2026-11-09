@@ -125,7 +125,7 @@ func TestPreferenceChoosesBeforeAcquiringAnyMaterial(t *testing.T) {
 
 func provePreferenceBeforeMaterial(t *testing.T, constraint string) {
 	const id = "org.example.componentsets"
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	fullFX, smallFX := newRuntimeFixtureWith(t, "full"), newRuntimeFixtureWith(t, "small")
 	fullFX.decl.VariantID, smallFX.decl.VariantID = "full", "small"
 	fullFX.decl.URL, smallFX.decl.URL = "https://example.com/full-runtime", "https://example.com/small-runtime"

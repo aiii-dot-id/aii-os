@@ -42,16 +42,16 @@ func TestAndroidBackgroundIsTheNight(t *testing.T) {
 
 // Every committed icon file is what the generator makes from the
 // master today. Pixels may differ by 2 levels: floating point is not
-// bit-identical across architectures.
+// bit-identical across architectures. The containers are read and held
+// to their table of sizes first; then every asset is rendered from the
+// master and compared in a subtest of its own, in parallel — the master
+// is only read, and a render is seconds under the race detector, 27 s
+// in all when they ran one after another.
 func TestCommittedIconsMatchMaster(t *testing.T) {
 	m, err := loadMaster(repoRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range pngAssets() {
-		samePixels(t, a.path, readPNG(t, filepath.Join(repoRoot, a.path)), a.make(m))
-	}
-
 	icoData, err := os.ReadFile(filepath.Join(repoRoot, icoPath))
 	if err != nil {
 		t.Fatal(err)
@@ -67,13 +67,7 @@ func TestCommittedIconsMatchMaster(t *testing.T) {
 		if e.size != icoSizes[i] {
 			t.Fatalf("%s entry %d is %d px, want %d", icoPath, i, e.size, icoSizes[i])
 		}
-		img, err := decodeIconImage(e.data)
-		if err != nil {
-			t.Fatalf("%s %dpx: %v", icoPath, e.size, err)
-		}
-		samePixels(t, fmt.Sprintf("%s %dpx", icoPath, e.size), img, free(m, e.size))
 	}
-
 	icnsData, err := os.ReadFile(filepath.Join(repoRoot, icnsPath))
 	if err != nil {
 		t.Fatal(err)
@@ -83,15 +77,36 @@ func TestCommittedIconsMatchMaster(t *testing.T) {
 		t.Fatalf("%s: %v", icnsPath, err)
 	}
 	for _, e := range icnsEntries {
-		data, ok := parsed[e.kind]
-		if !ok {
+		if _, ok := parsed[e.kind]; !ok {
 			t.Fatalf("%s lacks %s", icnsPath, e.kind)
 		}
-		img, err := decodeIconImage(data)
-		if err != nil {
-			t.Fatalf("%s %s: %v", icnsPath, e.kind, err)
-		}
-		samePixels(t, icnsPath+" "+e.kind, img, plate(m, e.size))
+	}
+
+	for _, a := range pngAssets() {
+		t.Run(a.path, func(t *testing.T) {
+			t.Parallel()
+			samePixels(t, a.path, readPNG(t, filepath.Join(repoRoot, a.path)), a.make(m))
+		})
+	}
+	for _, e := range entries {
+		t.Run(fmt.Sprintf("%s %dpx", icoPath, e.size), func(t *testing.T) {
+			t.Parallel()
+			img, err := decodeIconImage(e.data)
+			if err != nil {
+				t.Fatalf("%s %dpx: %v", icoPath, e.size, err)
+			}
+			samePixels(t, fmt.Sprintf("%s %dpx", icoPath, e.size), img, free(m, e.size))
+		})
+	}
+	for _, e := range icnsEntries {
+		t.Run(icnsPath+" "+e.kind, func(t *testing.T) {
+			t.Parallel()
+			img, err := decodeIconImage(parsed[e.kind])
+			if err != nil {
+				t.Fatalf("%s %s: %v", icnsPath, e.kind, err)
+			}
+			samePixels(t, icnsPath+" "+e.kind, img, plate(m, e.size))
+		})
 	}
 }
 
@@ -346,4 +361,40 @@ func decodeIconImage(data []byte) (*image.NRGBA, error) {
 		}
 	}
 	return img, nil
+}
+
+// THE DASHBOARD'S ICON IS THE RINGS (rings.go): the committed SVG is the
+// drawing, the committed home-screen PNG its pixels at 180 px, opaque and
+// under 10 KB (spec step 2), and the page links no other icon.
+func TestTheDashboardIconsAreTheRings(t *testing.T) {
+	svg, err := os.ReadFile(filepath.Join(repoRoot, svgPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(svg, ringsSVG()) {
+		t.Fatalf("%s is not the drawing rings.go makes — run: go run ./packaging/icon assets", svgPath)
+	}
+	want := ringsPNG(touchSize)
+	drawn := image.NewNRGBA(want.Bounds())
+	for y := 0; y < touchSize; y++ {
+		for x := 0; x < touchSize; x++ {
+			drawn.Set(x, y, want.At(x, y))
+		}
+	}
+	samePixels(t, touchPath, readPNG(t, filepath.Join(repoRoot, touchPath)), drawn)
+	if fi, err := os.Stat(filepath.Join(repoRoot, touchPath)); err != nil || fi.Size() >= 10*1024 {
+		t.Fatalf("%s must be under 10 KB: %v %v", touchPath, fi, err)
+	}
+	index, err := os.ReadFile(filepath.Join(repoRoot, "internal/dashboard/static/index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{`<link rel="icon" type="image/svg+xml" href="./icon.svg">`, `<link rel="apple-touch-icon" href="./apple-touch-icon.png">`} {
+		if !bytes.Contains(index, []byte(link)) {
+			t.Errorf("index.html does not link %s", link)
+		}
+	}
+	if n := bytes.Count(index, []byte(`rel="icon"`)) + bytes.Count(index, []byte(`rel="apple-touch-icon"`)); n != 2 {
+		t.Errorf("index.html links %d icons, want the SVG and the home-screen PNG", n)
+	}
 }

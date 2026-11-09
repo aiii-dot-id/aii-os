@@ -16,16 +16,22 @@ import (
 // These assert on scriptLLM.requests — what the MODEL SAW — rather than
 // on the loop's internals, because the wire shape is the whole property.
 
-// scriptSteering hands over its words once, the way a real drain does.
+// scriptSteering hands over its words once, the way a real drain does:
+// words as arrivals no one typed at the operator's door, unless steered
+// names each arrival itself.
 type scriptSteering struct {
-	words  []string
-	drains int
+	words   []string
+	steered []Steered
+	drains  int
 }
 
-func (s *scriptSteering) DrainSteering() []string {
+func (s *scriptSteering) DrainSteering() []Steered {
 	s.drains++
-	said := s.words
-	s.words = nil
+	said := s.steered
+	for _, w := range s.words {
+		said = append(said, Steered{Words: w})
+	}
+	s.words, s.steered = nil, nil
 	return said
 }
 
@@ -242,12 +248,12 @@ func TestAnsweredSteeringIsNotReplayedByALaterFailure(t *testing.T) {
 	}
 }
 
-// THE FRAME CLAIMS NO AUTHORITY. Words from someone who is not the
-// operator — a participant on a channel, a voice in a meeting room —
-// arrive on the same mid-turn channel as the operator's, and the channel
-// hands the loop only words. A frame naming the operator gave a
-// stranger's instruction the operator's authority. Who spoke rides the
-// words themselves, as the channel delivered them (a spoken utterance's
+// THE FRAME CLAIMS NO AUTHORITY FOR WORDS THE OPERATOR DID NOT TYPE.
+// Words from someone who is not the operator — a participant on a
+// channel, a voice in a meeting room — arrive on the same mid-turn channel
+// as the operator's. A frame naming the operator gave a stranger's
+// instruction the operator's authority. Who spoke rides those words
+// themselves, as the channel delivered them (a spoken utterance's
 // "[voice · …]" marker, a participant's framing), and the frame only says
 // when.
 func TestTheSteeringFrameClaimsNoAuthority(t *testing.T) {
@@ -272,5 +278,38 @@ func TestTheSteeringFrameClaimsNoAuthority(t *testing.T) {
 		if strings.Contains(strings.ToLower(last), "operator") {
 			t.Fatalf("THE FRAME GAVE THESE WORDS THE OPERATOR'S AUTHORITY: %q", last)
 		}
+	}
+}
+
+// THE OPERATOR'S TYPED WORDS ARE FRAMED AS THEIRS (an identity's log,
+// 2026-11-08: the operator's typed ruling reached it as "Someone spoke",
+// and it asked them whether it was them). The host says which arrivals
+// the operator typed or pressed on an ask card (Steered.By); those are read
+// under the operator's frames, the rest under the frame that names no one,
+// in the order they came, one frame for each run of one kind.
+func TestTheOperatorsTypedWordsMidTurnAreFramedAsTheirs(t *testing.T) {
+	client := &scriptLLM{script: []llm.Response{
+		resp("", toolCall("c1", "note", `{}`)),
+		textResp("done"),
+	}}
+	loop := New(client, &fakeTools{results: map[string]string{"note": "ok"}}, &fakeDefs{}, nil, nil, testBounds(Config{}))
+	loop.SetSteering(&scriptSteering{steered: []Steered{
+		{Words: "a participant's word"},
+		{Words: "keep the archive", By: ByOperatorTyped},
+		{Words: "and the notes", By: ByOperatorTyped},
+		{Words: "[ask a1] chose: B", By: ByOperatorAnswer},
+		{Words: "[voice] someone in the room"},
+	}})
+	if _, err := loop.Run(context.Background(), "system", []llm.Message{{Role: "user", Content: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	second := client.requests[1]
+	got := second[len(second)-1].Content
+	want := "Someone spoke while you were working:\n\na participant's word" +
+		"\n\nYour operator wrote while you were working:\n\nkeep the archive\n\nand the notes" +
+		"\n\nYour operator answered while you were working:\n\n[ask a1] chose: B" +
+		"\n\nSomeone spoke while you were working:\n\n[voice] someone in the room"
+	if got != want {
+		t.Fatalf("the boundary read\n%q\nwant\n%q", got, want)
 	}
 }

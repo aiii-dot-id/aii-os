@@ -80,6 +80,42 @@ func postureShapes() []requestShape {
 			},
 		},
 		requestShape{
+			name:  "pressured_spoken",
+			about: "a Talk turn on the realistic identity in a window too small for its whole prompt: what the identity reads about voices stands, and the working state folds",
+			tools: "resident_with_plugin",
+			send: func(t *testing.T) sentRequest {
+				a, dir := realisticApp(t)
+				obs := fixtureModel(t, a, answerNoted)
+				reserve, err := a.promptReserve(llm.Message{Role: "user", Content: voiceMarker + "GOLDEN_SPOKEN the spoken words"}, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				workState, err := a.buildWorkState(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				facts, err := a.buildTurnFacts(t.Context(), true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				unpressed, err := a.composer.ComposeTurn(workState, facts, "", reserve)
+				if err != nil {
+					t.Fatal(err)
+				}
+				budget := reserve + (tokenestimate.EstimateWire(unpressed.Text)+tokenestimate.EstimateWire(unpressed.Turn))*82/100
+				a.composer.SetMaxTokens(budget)
+				a.promptGate.SetMaxTokens(budget)
+				a.conv.SetModelLimits(budget, 0)
+				for _, p := range turnPaths() {
+					if p.name == "spoken" {
+						p.run(t, a)
+					}
+				}
+				waitUntil(t, func() bool { return !a.TurnActive() }, "the turn to end")
+				return sentRequest{body: onlyRequest(t, obs.snapshot()), dir: dir}
+			},
+		},
+		requestShape{
 			name:  "pressured_operator",
 			about: "the operator's typed words to the realistic identity in a window too small for its whole prompt: folds, receipts, Ring 2's evidence elided",
 			tools: "resident_with_plugin",
@@ -91,7 +127,7 @@ func postureShapes() []requestShape {
 				if err != nil {
 					t.Fatal(err)
 				}
-				workState, err := a.buildWorkState()
+				workState, err := a.buildWorkState(t.Context())
 				if err != nil {
 					t.Fatal(err)
 				}

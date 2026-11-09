@@ -21,14 +21,15 @@ export function query(n, e) { return send(Object.assign({ type: 'query', query: 
 
 // settingsConfig is a configuration enough to draw Agency and Dashboard.
 const settingsConfig = `{ llm: { provider: 'p', model: 'm' }, dashboard: { host: '127.0.0.1', port: 1, tls: false },
-    prompt: {}, witness: {}, logs: {}, plugins: {}, agency: { prefer_local_for_roles: false }, restart_required: [] }`
+    prompt: {}, witness: {}, logs: {}, plugins: {}, agency: {}, restart_required: [] }`
 
-// THE SWITCH ON SETTINGS → DASHBOARD. This browser's, off at
-// first; checking it asks the browser once, inside the click, and the card
-// then reads on, kept in this browser; unchecking turns it off without
-// asking. Blocked, it says how to allow it; with no Notification it is
-// disabled and says it is not available. The heading carries its sentence.
-func TestTheNotificationSwitchOnSettingsDashboard(t *testing.T) {
+// THE SWITCH ON SETTINGS → APP (step 18; it was a card on Dashboard). This
+// browser's, off at first; checking it asks the browser once, inside the
+// click, and the part then reads on, kept in this browser; unchecking turns
+// it off without asking. Blocked, it says how to allow it; with no
+// Notification it is disabled and says so. Its heading is explained by the
+// hint the part names (aria-describedby), and the switch names the identity.
+func TestTheNotificationSwitchOnSettingsApp(t *testing.T) {
 	page := `<!doctype html>
 <div id="settings-stack"></div>
 <script type="module">
@@ -40,15 +41,16 @@ run(async () => {
   S.config = ` + settingsConfig + `;
   S.providersLoaded = true; S.view = 'settings';
   renderSettings();
-  document.querySelector('[data-sec="dashboard"]').click();
-  const card = () => document.querySelector('[data-notify-card]');
-  const box = () => card().querySelector('[data-notify-asks]');
-  const said = () => card().querySelector('[data-notify-said]');
-  assert(card(), 'no notification card on Settings → Dashboard');
-  const head = card().querySelector('h3');
-  assert(head.textContent === 'NOTIFICATIONS' && head.title.length > 20 && head.title.endsWith('.'), 'the heading’s sentence: ' + head.title);
-  assert(card().textContent.includes('Notify me in this browser when the identity asks me something'), 'the switch’s words');
-  assert(!box().checked && !box().disabled && said().hidden, 'the switch is not off at first');
+  S.settingsSection('updates'); S.requestSettingsSection(); renderSettings();
+  const part = () => document.querySelector('[data-notify-card]');
+  const box = () => part().querySelector('[data-notify-asks]');
+  const said = () => part().querySelector('[data-notify-said]');
+  assert(part(), 'no notification part on Settings → App');
+  const head = part().querySelector('h3');
+  const hint = document.getElementById(part().getAttribute('aria-describedby'));
+  assert(head.textContent === 'Notifications' && hint && hint.textContent === "In this browser, while the page is in another tab or window. The page's title also counts open questions.", 'the heading and its hint: ' + head.textContent + ' / ' + (hint && hint.textContent));
+  assert(part().textContent.includes('Get a notification when they ask you something'), 'the switch’s words, unnamed: ' + part().textContent);
+  assert(box().getAttribute('role') === 'switch' && !box().checked && !box().disabled && said().hidden, 'the switch is not off at first');
 
   // On: the browser is asked once, from the click.
   const press = async () => { const old = box(); old.click(); await until(() => box() !== old); };
@@ -59,17 +61,22 @@ run(async () => {
   await press();
   assert(!box().checked && StubNotification.asked === 1 && localStorage.getItem('aii.notify.asks') === null, 'off asked the browser or kept the switch');
 
+  // Named: the switch says who asks.
+  S.stats = { name: 'Taylor' };
+  renderSettings();
+  assert(part().textContent.includes('Get a notification when Taylor asks you something'), 'the switch’s words, named: ' + part().textContent);
+
   // Blocked: the sentence, and the switch stays off.
   StubNotification.permission = 'denied';
   renderSettings();
-  assert(!said().hidden && said().textContent === 'This browser has blocked notifications for this page. Allow them in the browser’s site settings, then turn this on again.', 'blocked: ' + said().textContent);
+  assert(!said().hidden && said().textContent === 'This browser has blocked notifications for this page. Allow them in its site settings, then turn this on again.', 'blocked: ' + said().textContent);
   await press();
   assert(!box().checked && StubNotification.asked === 1, 'a blocked switch turned on or asked');
 
   // Not available: no Notification in this browser.
   delete window.Notification;
   renderSettings();
-  assert(box().disabled && said().textContent === 'This browser cannot show this page’s notifications here; the page’s title counts the open questions.', 'not available: ' + said().textContent);
+  assert(box().disabled && said().textContent === "This browser cannot show notifications for this page. The page's title counts the open questions.", 'not available: ' + said().textContent);
 });
 </script>`
 	runPageInEngines(t, page, settingsPageModules())

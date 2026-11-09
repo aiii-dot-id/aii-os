@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	predecessorVersion      = "0.1.23"
-	predecessorSchemaDigest = "aa140ab565a810b58b5fd1aaa9c03ef598d250a0be738b91610e6e52001505fa"
-	predecessorReadsMarks   = false
+	predecessorVersion      = "0.2.0"
+	predecessorSchemaDigest = "5703e649248d169f7f1cda23042fc99bf53e1581f2bc0d92f28a0eb09817983e"
+	predecessorReadsMarks   = true
 )
 
 // schemaReading renders what the successor rule reads of a schema, in a

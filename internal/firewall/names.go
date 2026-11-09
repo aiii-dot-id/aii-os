@@ -22,17 +22,75 @@ type inside struct {
 var walks atomic.Int64
 
 type look struct {
-	once sync.Once
-	in   *inside
+	once   sync.Once
+	in     *inside
+	steady bool
+	mu     sync.Mutex
+	stats  map[string]pathAnswer
+	lstats map[string]pathAnswer
+
+	placedMu sync.Mutex
+	placed   map[string]*placed
+}
+
+type pathAnswer struct {
+	info os.FileInfo
+	err  error
+}
+
+var placeStats atomic.Int64
+
+func (p *Policy) statPlace(path string) (os.FileInfo, error) {
+	return p.askPlace(path, os.Stat, func(l *look) map[string]pathAnswer {
+		if l.stats == nil {
+			l.stats = map[string]pathAnswer{}
+		}
+		return l.stats
+	})
+}
+
+func (p *Policy) lstatPlace(path string) (os.FileInfo, error) {
+	return p.askPlace(path, os.Lstat, func(l *look) map[string]pathAnswer {
+		if l.lstats == nil {
+			l.lstats = map[string]pathAnswer{}
+		}
+		return l.lstats
+	})
+}
+
+func (p *Policy) askPlace(path string, ask func(string) (os.FileInfo, error), kept func(*look) map[string]pathAnswer) (os.FileInfo, error) {
+	l := p.links
+	if l == nil || !l.steady {
+		placeStats.Add(1)
+		return ask(path)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	answers := kept(l)
+	if a, ok := answers[path]; ok {
+		return a.info, a.err
+	}
+	placeStats.Add(1)
+	info, err := ask(path)
+	answers[path] = pathAnswer{info, err}
+	return info, err
 }
 
 func (p *Policy) Look() *Policy {
+	return p.lookAs(false)
+}
+
+func (p *Policy) SteadyLook() *Policy {
+	return p.lookAs(true)
+}
+
+func (p *Policy) lookAs(steady bool) *Policy {
 	if p.links != nil {
 		return p
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return &Policy{rules: slices.Clone(p.rules), gone: slices.Clone(p.gone), links: &look{}}
+	return &Policy{rules: slices.Clone(p.rules), gone: slices.Clone(p.gone), links: &look{steady: steady}}
 }
 
 func (p *Policy) inside() *inside {

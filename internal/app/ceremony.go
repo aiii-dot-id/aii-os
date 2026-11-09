@@ -232,7 +232,26 @@ func (a *App) buildFirstbootHandler() *dashboard.WSHandler {
 
 		UpdateCheck:    func() (*dashboard.UpdateState, error) { return nil, errUpdatesUnavailable },
 		DiscoverModels: a.discoverModels,
+
+		GetConfig: a.firstbootConfig,
+		SetConfig: a.firstbootSetConfig,
 	}
+}
+
+func (a *App) firstbootConfig() *dashboard.ConfigState {
+	return &dashboard.ConfigState{Genesis: a.configState().Genesis}
+}
+
+func (a *App) firstbootSetConfig(changes map[string]any) (*dashboard.ConfigState, error) {
+	for key := range changes {
+		if key != "genesis.agent_memory.off" {
+			return nil, fmt.Errorf("%s: before a birth, first run sets genesis.agent_memory.off and nothing else", key)
+		}
+	}
+	if _, err := a.applyConfigChange(changes); err != nil {
+		return nil, err
+	}
+	return a.firstbootConfig(), nil
 }
 
 type firstbootRings struct{ a *App }
@@ -321,7 +340,8 @@ func (a *App) handleGenesis(ctx context.Context, req *dashboard.GenesisRequest) 
 		!refusal.AuthFailure() && llm.DialectFor(bootConfig.Provider) == llm.DialectOpenAI {
 		logsink.Warn("genesis.refusal", "%s refused the firstboot prompt as the only system message (HTTP %d) — birth makes one more request, the same bytes as the only user message", req.Endpoint, refusal.StatusCode)
 		first := err
-		if bootResp, err = bootClient.Chat(ctx, []llm.Message{{Role: "user", Content: a.bootstrapText}}, llm.ChatOptions{}); err != nil {
+
+		if bootResp, err = bootClient.Chat(llm.WithSystemText(ctx, a.bootstrapText), []llm.Message{{Role: "user", Content: a.bootstrapText}}, llm.ChatOptions{}); err != nil {
 			err = fmt.Errorf("%w — and as the only user message: %v", first, err)
 		}
 		foundingReason += fmt.Sprintf(" (the founding prompt was sent as the only user message: the provider refused it as the only system message, HTTP %d)", refusal.StatusCode)

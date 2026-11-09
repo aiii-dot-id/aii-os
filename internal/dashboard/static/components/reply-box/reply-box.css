@@ -1,0 +1,59 @@
+.composer-row.c-reply__box { position:relative; width:var(--column); max-width:none; margin:0 auto; display:flex; align-items:flex-end; justify-content:flex-start; gap:var(--s-2);
+  padding:var(--s-2); background:var(--surface); border:1px solid var(--control); border-radius:var(--r-large); }
+.c-reply__box:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.c-reply__box .composer { flex:1 1 auto; min-width:0; max-width:none; margin:0; padding:0; background:transparent; border:0; border-radius:0; box-shadow:none; }
+.c-reply__box .composer:focus-within { border:0; box-shadow:none; }
+.c-reply__box .composer textarea { padding:var(--s-2) 0; font-family:var(--font-page); font-size:var(--t-md); line-height:var(--t-md-lh); color:var(--text); }
+.c-reply__box .composer textarea::placeholder { color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.c-reply__box .composer-tools, .c-reply__box .composer-actions { flex:0 0 auto; gap:var(--s-2); min-height:40px; }
+.c-reply__box .composer-tools { position:static; }
+.c-reply__box .attach-btn, .c-reply__box .mic, .c-reply__box .converse, .c-reply__box .sendb { width:40px; height:40px; }
+.c-reply__box .attach-btn { border-color:var(--control); color:var(--text-2); background:var(--surface); }
+.c-reply__box .attach-btn:hover, .c-reply__box .attach-btn[aria-expanded="true"] { background:var(--surface-2); color:var(--text); }
+.c-reply__box .attach-btn:focus-visible, .c-reply__box .sendb:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.c-reply__box .sendb { background:var(--accent); color:var(--on-accent); }
+.c-reply__box .sendb.stopping { background:var(--text); color:var(--bg); }
+.c-reply__box .sendb svg rect { fill:currentColor; stroke:none; }
+
+.c-reply__menu { position:absolute; left:0; bottom:calc(100% + var(--s-2)); z-index:8; min-width:300px; max-width:min(400px, 100%);
+  display:flex; flex-direction:column; padding:var(--s-1); background:var(--surface); border:1px solid var(--line); border-radius:var(--r-object);
+  box-shadow:0 8px 28px color-mix(in srgb, var(--text) 16%, transparent); }
+.c-reply__menu[hidden] { display:none; }
+.c-reply__item { display:flex; align-items:center; gap:var(--s-2); width:100%; min-height:40px; padding:var(--s-2) var(--s-3); border:0; border-radius:var(--r-control);
+  background:none; color:var(--text); font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); text-align:left; cursor:pointer; }
+.c-reply__item:hover, .c-reply__item:focus-visible { background:var(--surface-2); outline:none; }
+.c-reply__item[hidden] { display:none; }
+.c-reply__menu .effort { position:static; }
+.c-reply__menu .effort-btn { height:auto; border-radius:var(--r-control); justify-content:flex-start; }
+.c-reply__menu .effort-btn b { font-weight:600; }
+.c-reply__menu .effort-btn svg { margin-left:auto; }
+.c-reply__menu .effort-menu { position:static; min-width:0; margin:0 0 var(--s-1) var(--s-3); padding:0; border:0; box-shadow:none; background:none; }
+.c-reply__model { overflow-wrap:break-word; }
+.c-reply__change { margin-left:auto; padding-left:var(--s-2); color:var(--accent); white-space:pre; }
+
+.c-reply__project { display:block; box-sizing:border-box; width:var(--column); max-width:none; margin:0 auto var(--s-1); overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+  font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); text-decoration:none; }
+.c-reply__project:hover { color:var(--text); }
+.c-reply__project[hidden] { display:none; }
+
+.c-reply__box .mic:has(+ .mic-more-wrap > .mic-more:not([hidden])) { border-radius:var(--r-large) 0 0 var(--r-large); }
+.c-reply__box .mic:has(+ .mic-more-wrap > .mic-more:not([hidden])) + .mic-more-wrap { margin-left:calc(-1 * var(--s-2)); }
+.c-reply__box .mic-more { width:var(--s-6); height:40px; border-radius:0 var(--r-large) var(--r-large) 0; border-left:1px solid var(--line); }
+.c-reply__box .mic.faint:not(.live) + .mic-more-wrap > .mic-more { opacity:.55; }
+.c-reply__box .mic.live:has(+ .mic-more-wrap > .mic-more:not([hidden])) { box-shadow:none; transform:none; }
+
+.c-reply__line { width:var(--column); margin:var(--s-1) auto 0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-3); }
+.c-reply__line:empty { display:none; }
+.c-reply__line[data-state="offline"] { color:var(--text-2); }
+
+@media (max-width: 767px) {
+  .composer-row.c-reply__box { flex-wrap:wrap; padding:var(--s-1); border-radius:22px; }
+  .c-reply__box .composer { order:-1; flex-basis:100%; }
+  .c-reply__box .composer textarea { padding:var(--s-2) var(--s-3) 0; }
+  .c-reply__box .attach-btn, .c-reply__box .mic, .c-reply__box .converse, .c-reply__box .sendb { width:var(--target-phone); height:var(--target-phone); }
+  .c-reply__box .composer-actions { flex-wrap:nowrap; gap:var(--s-1); margin-left:auto; }
+  .c-reply__box .mic-more { height:var(--target-phone); }
+  .c-reply__box .mic:has(+ .mic-more-wrap > .mic-more:not([hidden])) + .mic-more-wrap { margin-left:calc(-1 * var(--s-1)); }
+  .c-reply__item { min-height:var(--target-phone); }
+  .c-reply__menu { left:0; right:0; min-width:0; max-width:none; }
+}

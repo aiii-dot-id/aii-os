@@ -42,7 +42,7 @@ func newSharedRelease(t *testing.T, binary string) *sharedRelease {
 func newSharedReleaseAt(t *testing.T, binary, ver string) *sharedRelease {
 	t.Helper()
 	archive := releaseArchive(t, []byte(binary))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	trust := t.TempDir()
 	signer.provisionTrustDir(t, trust)
 	sig := signer.signReleasePayload(t, releaseArchivePayload{

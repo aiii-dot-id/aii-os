@@ -22,7 +22,7 @@ data: [DONE]
 // The exact reported failure: one item collected, then the connection
 // drops. It used to return actionable text with unknown final status.
 func TestATruncatedStreamIsNotAResponse(t *testing.T) {
-	_, err := readResponsesStream(strings.NewReader(streamOneItem))
+	_, err := readResponsesStream(strings.NewReader(streamOneItem), nil)
 	if err == nil {
 		t.Fatal("a stream that ended after one item with no terminal event was accepted as complete — " +
 			"the identity would act on text it does not know is all of it")
@@ -33,7 +33,7 @@ func TestATruncatedStreamIsNotAResponse(t *testing.T) {
 }
 
 func TestAnEmptyStreamIsStillRefused(t *testing.T) {
-	if _, err := readResponsesStream(strings.NewReader("")); err == nil {
+	if _, err := readResponsesStream(strings.NewReader(""), nil); err == nil {
 		t.Fatal("an empty stream was accepted")
 	}
 }
@@ -42,7 +42,7 @@ func TestAnEmptyStreamIsStillRefused(t *testing.T) {
 // event is where cost comes from, so requiring it also stops a truncated
 // turn from reporting a spend of zero.
 func TestACompleteStreamIsAccepted(t *testing.T) {
-	resp, err := readResponsesStream(strings.NewReader(streamOneItem + "\n" + streamTerminal))
+	resp, err := readResponsesStream(strings.NewReader(streamOneItem+"\n"+streamTerminal), nil)
 	if err != nil {
 		t.Fatalf("a complete stream was refused: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestACompleteStreamIsAccepted(t *testing.T) {
 func TestAnIncompleteResponseIsNotATruncatedStream(t *testing.T) {
 	const incomplete = `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}
 `
-	resp, err := readResponsesStream(strings.NewReader(streamOneItem + "\n" + incomplete))
+	resp, err := readResponsesStream(strings.NewReader(streamOneItem+"\n"+incomplete), nil)
 	if err != nil {
 		t.Fatalf("a provider-reported incomplete response was treated as a broken stream: %v", err)
 	}

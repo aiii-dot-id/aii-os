@@ -1,0 +1,8 @@
+.c-filter { display:inline-flex; align-items:center; gap:var(--s-2); font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); }
+.c-filter__label { white-space:nowrap; }
+.c-filter--check { min-height:40px; }
+.c-filter__select { min-height:40px; box-sizing:border-box; padding:0 34px 0 var(--s-3); border:1px solid var(--control); border-radius:var(--r-control); background-color:var(--surface); color:var(--text); font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); }
+.c-filter__select:focus-visible, .c-filter--check input:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.c-filter__dates { display:inline-flex; flex-wrap:wrap; gap:var(--s-2) var(--s-3); }
+.c-filter__dates[hidden] { display:none; }
+@media (max-width: 767px) { .c-filter__select, .c-filter--check { min-height:var(--target-phone); } }

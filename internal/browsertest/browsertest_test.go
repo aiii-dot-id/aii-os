@@ -123,3 +123,62 @@ func TestTheWindowsNamesAreAskedForOnWindowsAlone(t *testing.T) {
 		}
 	}
 }
+
+// WEBKIT IS FOUND ONLY WHOLE: node on PATH, AII_PLAYWRIGHT_DIR holding
+// playwright-core and an installed WebKit build, and this package's script
+// that starts it. Each missing part is where the search stopped, and it
+// says so; a half-installed Playwright must skip the engine, never start
+// a script that fails inside every test.
+func TestWebKitIsFoundOnlyWhenPlaywrightAndItsBuildAreThere(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if got, looked := Find(WebKit); got != "" || len(looked) == 0 {
+			t.Fatalf("WebKit on Windows: found %q, looked %q", got, looked)
+		}
+		return
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	dir := t.TempDir()
+
+	t.Setenv("AII_PLAYWRIGHT_DIR", "")
+	if got, looked := Find(WebKit); got != "" || !strings.Contains(strings.Join(looked, "\n"), "AII_PLAYWRIGHT_DIR unset") {
+		t.Errorf("unset AII_PLAYWRIGHT_DIR: found %q, looked %q", got, looked)
+	}
+
+	t.Setenv("AII_PLAYWRIGHT_DIR", dir)
+	core := filepath.Join(dir, "node_modules", "playwright-core", "package.json")
+	if got, looked := Find(WebKit); got != "" || !strings.Contains(strings.Join(looked, "\n"), core) {
+		t.Errorf("no playwright-core: found %q, looked %q", got, looked)
+	}
+	if err := os.MkdirAll(filepath.Dir(core), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := Find(WebKit); got != "" {
+		t.Errorf("no WebKit build installed, yet found %q", got)
+	}
+	build := filepath.Join(dir, "browsers", "webkit-1", "INSTALLATION_COMPLETE")
+	if err := os.MkdirAll(filepath.Dir(build), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(build, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, looked := Find(WebKit)
+	if filepath.Base(got) != "webkit-playwright.mjs" {
+		t.Fatalf("whole install: found %q, looked %q", got, looked)
+	}
+	if fi, err := os.Stat(got); err != nil || fi.Mode()&0o111 == 0 {
+		t.Errorf("the script the rig starts is not an executable file: %v %v", fi, err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if got, looked := Find(WebKit); got != "" || !strings.Contains(strings.Join(looked, "\n"), "node on PATH") {
+		t.Errorf("no node on PATH: found %q, looked %q", got, looked)
+	}
+}

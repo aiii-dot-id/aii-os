@@ -30,7 +30,9 @@ run(() => {
  const cards = id => document.querySelectorAll('[data-ask-id="' + id + '"]');
  const card = id => cards(id)[0];
  const live = id => card(id).querySelectorAll('button:not([disabled])').length > 0;
- const note = id => card(id).querySelector('.ask-note').textContent;
+ const note = id => card(id).querySelector('.c-ask__note').textContent;
+ const press = (id, words) => [...card(id).querySelectorAll('button')].find(b => b.textContent === words).click();
+ const closed = id => card(id).dataset.state === 'answered';
  const last = () => socket.frames.at(-1);
  const choose = { id: 'ask-1', kind: 'choose', from: 'identity', text: 'Aisle or window?', choices: ['aisle', 'window'] };
  const clarify = { id: 'ask-2', kind: 'clarify', from: 'identity', text: 'Which week?' };
@@ -41,8 +43,8 @@ run(() => {
 
  socket.readyState = 3;
  const before = socket.frames.length;
- card('ask-1').querySelector('[data-ask-choice="window"]').click();
- card('ask-3').querySelector('[data-ask-connect="read"]').click();
+ press('ask-1', 'window');
+ press('ask-3', 'Connect, to read');
  assert(socket.frames.length === before, 'rig: an answer was sent with no connection');
  assert(live('ask-1') && note('ask-1').includes('Not connected'),
    'AN ANSWER THAT WAS NEVER SENT SETTLED ITS CARD: the page says the operator chose, and the identity is still waiting');
@@ -50,9 +52,9 @@ run(() => {
  socket.readyState = 1;
 
  // Refused at the press, through the socket's own error handling.
- card('ask-1').querySelector('[data-ask-choice="window"]').click();
+ press('ask-1', 'window');
  const chose = last();
- assert(chose.type === 'ask' && chose.ask.id === 'ask-1' && !live('ask-1') && note('ask-1') === 'You chose: window', 'rig: a sent answer did not quiet its card');
+ assert(chose.type === 'ask' && chose.ask.id === 'ask-1' && !live('ask-1') && note('ask-1') === 'Sending your answer…', 'rig: a sent answer did not quiet its card');
  // An overlay change while the answer waits holds the reload (DR08): the
  // card's wait is one of the slots the reload asks.
  onOverlayChanged(1, ['/views/home.js']);
@@ -65,41 +67,41 @@ run(() => {
  assert(live('ask-1') && note('ask-1') === 'Not taken: fixture: the grant was not written', 'A REFUSED ANSWER LEFT A DEAD CARD: ' + note('ask-1'));
  assert(!anyPending(), 'a settled answer still holds the reload an overlay change asked for');
 
- card('act-9').querySelector('[data-ask-act="confirm"]').click();
+ press('act-9', 'Allow this once');
  const confirmed = last();
- assert(confirmed.type === 'plugin' && !live('act-9') && note('act-9') === 'Running…', 'rig: a confirmed act did not quiet its card');
+ assert(confirmed.type === 'plugin' && !live('act-9') && note('act-9') === 'Sending your answer…', 'rig: a confirmed act did not quiet its card');
  socket.recv({ type: 'error', request_id: confirmed.request_id, message: 'fixture: the act expired' });
- assert(live('act-9') && note('act-9').includes('the act expired'), 'a refused act left a card that says Running');
+ assert(live('act-9') && note('act-9').includes('the act expired'), 'a refused act left a card that says it is on its way');
 
  // Not recorded at the receipt, after the card closed.
- card('ask-1').querySelector('[data-ask-choice="aisle"]').click();
+ press('ask-1', 'aisle');
  const again = last(); const drawn = card('ask-1');
  socket.recv({ type: 'asks', asks: [clarify, connectAsk, act] });
- assert(card('ask-1').classList.contains('closed') && note('ask-1') === 'You chose: aisle', 'rig: the answered card did not close');
+ assert(closed('ask-1') && note('ask-1').startsWith('Answered '), 'rig: the answered card did not close');
  const why = 'your answer was not recorded (fixture: eight messages already wait), so the question is still open.';
  socket.recv({ type: 'error', request_id: again.request_id, message: why });
  assert(note('ask-1') === 'Not taken: ' + why, 'AN ANSWER THAT WAS NOT RECORDED WAS NOT SAID ON ITS CARD: ' + note('ask-1'));
  socket.recv({ type: 'asks', asks: [choose, clarify, connectAsk, act] });
- assert(cards('ask-1').length === 1 && card('ask-1') === drawn && !drawn.classList.contains('closed') && live('ask-1') && note('ask-1') === 'Not taken: ' + why,
+ assert(cards('ask-1').length === 1 && card('ask-1') === drawn && !closed('ask-1') && live('ask-1') && note('ask-1') === 'Not taken: ' + why,
    'A CARD WHOSE ANSWER WAS NOT RECORDED STAYED CLOSED, or was drawn a second time: ' + cards('ask-1').length + ' ' + note('ask-1'));
  assert(window.__think === 'untouched', 'a refused answer was read as a turn\'s error');
 
  // A question another page answered, and which came back.
  socket.recv({ type: 'asks', asks: [choose, connectAsk, act] });
- assert(note('ask-2') === 'closed', 'rig: a card another page answered did not close');
+ assert(closed('ask-2') && note('ask-2') === 'Answered', 'rig: a card another page answered did not close, or said when this page answered it');
  socket.recv({ type: 'asks', asks: [choose, clarify, connectAsk, act] });
  assert(cards('ask-2').length === 1 && live('ask-2') && note('ask-2') === '', 'a question that came back is not asked again where it was');
 
- const inp = card('ask-2').querySelector('.ask-input'); inp.value = 'the week of the 21st';
- card('ask-2').querySelector('[data-ask-say]').click();
- assert(!live('ask-2') && note('ask-2').startsWith('You said'), 'rig: a typed answer did not quiet its card');
+ const inp = card('ask-2').querySelector('.c-ask__input'); inp.value = 'the week of the 21st';
+ press('ask-2', 'Send');
+ assert(!live('ask-2') && note('ask-2') === 'Sending your answer…', 'rig: a typed answer did not quiet its card');
  socket.readyState = 3; socket.onclose();
- assert(live('ask-2') && note('ask-2').includes('Connection lost') && card('ask-2').querySelector('.ask-input').value === 'the week of the 21st',
+ assert(live('ask-2') && note('ask-2').includes('The connection dropped') && card('ask-2').querySelector('.c-ask__input').value === 'the week of the 21st',
    'A CONNECTION LOST UNDER AN ANSWER LEFT A DEAD CARD, or lost what was typed');
  assert(live('ask-1') && note('ask-1').includes('Not taken'), 'a lost connection rewrote a card that was not waiting');
  connect(); const next = sockets.at(-1); next.readyState = 1; next.onopen();
  next.recv({ type: 'asks', asks: [choose] });
- assert(card('ask-2').classList.contains('closed') && note('ask-2') === 'closed', 'a card put back after a loss closed still saying the answer may not have arrived');
+ assert(closed('ask-2') && note('ask-2') === 'Answered', 'a card put back after a loss closed still saying the answer may not have arrived, or claimed this page answered it');
 });
 </script>`
 

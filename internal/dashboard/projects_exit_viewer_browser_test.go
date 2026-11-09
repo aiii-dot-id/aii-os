@@ -20,7 +20,7 @@ import { __sent, __reset } from '/ws.js';
    body returns. report() is idempotent, so the first failure wins. */
 function fail(e) { report('FAIL: ' + ((e && e.message) || String(e))); }
 
-const P = { id: 'alpha', name: 'Alpha', state: 'open', description: 'first', dir: '/p/alpha', focus: 'fa' };
+const P = { id: 'alpha', name: 'Alpha', state: 'open', description: 'first', dir: '/p/alpha', focus: 'fa', active: true };
 
 try {
   /* ---- the exit an operator can actually reach ---- */
@@ -33,7 +33,7 @@ try {
   S.workspace = null; S.workspaceFor = '';
   renderProjects();
 
-  const btn = document.getElementById('proj-deselect');
+  const btn = document.getElementById('proj-leave');
   assert(btn, 'no way out: the project the identity is working in offers no deselect control, so the only exit from a focus is to CLOSE the project');
   btn.click();
   assert(__sent.length === 1 && __sent[0].project && __sent[0].project.action === 'deselect',
@@ -41,9 +41,10 @@ try {
 
   /* It must not offer to leave a project you are not in. */
   __reset();
+  S.projects = [{ ...P, active: false }];
   S.activeProject = null;
   renderProjects();
-  assert(!document.getElementById('proj-deselect'),
+  assert(!document.getElementById('proj-leave'),
     'offered to leave a project the identity is not working in');
 } catch (e) { fail(e); }
 

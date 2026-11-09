@@ -72,7 +72,7 @@ func TestDrainedSteersDoNotFlush(t *testing.T) {
 	if steered, err := a.admitOperatorChat(t.Context(), "heard mid-turn"); !steered || err != nil {
 		t.Fatalf("steer: steered=%v err=%v", steered, err)
 	}
-	if got := a.DrainSteering(); len(got) != 1 || got[0] != "heard mid-turn" {
+	if got := steeredWords(a.DrainSteering()); len(got) != 1 || got[0] != "heard mid-turn" {
 		t.Fatalf("drain returned %v", got)
 	}
 	var flushes int

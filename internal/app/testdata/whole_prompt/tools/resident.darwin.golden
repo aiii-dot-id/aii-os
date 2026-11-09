@@ -386,7 +386,7 @@ Send a message to a person. Name WHO, never an address: "operator" (default), or
 }
 
 === tool 11 of 13: work ===
-Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a session's state with start, update and deliver. Spawn for independent work that can run concurrently, or for one independent review after a failure, ambiguity or material consequence; keep a tightly coupled loop in your own turn. Working state is not memory: note what should outlast it, and complete a commitment a delivery fulfils. Commands go to shell, not here. A session's calls read back with recall source=work.
+Your work: sessions, sub-agents, and what you schedule or keep for later. A session with a promise and resumes_on is kept by the host: your work resumes when its condition is met, and the card says so. An alarm is how you keep a promise to come back: to a slow task instead of polling, to your operator at an hour you choose, to something you want to think about again. It survives restarts, wakes you with your own words, and tells your operator. When you set a reminder for your operator, say when it will reach them and where: here, or by their notice route if one is on. Keep a session's state with start, update and deliver. Spawn for independent work that can run concurrently, or for one independent review after a failure, ambiguity or material consequence; keep a tightly coupled loop in your own turn. Working state is not memory: note what should outlast it, and complete a commitment a delivery fulfils. Commands go to shell, not here. A session's calls read back with recall source=work.
 --- parameters ---
 {
   "properties": {
@@ -398,7 +398,7 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
       "type": "array"
     },
     "action": {
-      "description": "start (open a session, with any of update's fields); update (record where it stands); deliver (close it with its verdict); status (your working state and sub-agents, whole; with id, one delivered result; never sleep-poll instead); yield (end this turn while sub-agents run; a delivery wakes you; the move when only waiting remains); spawn (a copy of you, same constitution, charter and self, on one sub-goal; its outcome returns to your working state); measure (your outcome ratios, observational); alarm.set / alarm.cancel (wakes you with its message, survives restarts; recall source=alarms); project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; recall source=curiosity); voice.mode (what the microphone does and whether your replies are spoken); backup.take / backup.verify (a snapshot of your record and memory, or proof a kept one restores; recall source=continuity)",
+      "description": "start (open a session, with any of update's fields); update (record where it stands); deliver (close it with its verdict); status (your working state and sub-agents, whole; with id, one delivered result; never sleep-poll instead); yield (end this turn; the move when the next step is not now; say what resumes this work with resumes_on, and the promise it waits under with promise=, else the newest on this session); say (your choice on an unprompted word: speak now, hold until your operator is usually back, or go on without them; required once in an unprompted turn); spawn (a copy of you, same constitution, charter and self, on one sub-goal; its outcome returns to your working state); measure (your outcome ratios, observational); alarm.set / alarm.cancel (wakes you with its message, survives restarts; recall source=alarms); project.create / update / close / select / deselect / evidence / waive (durable workrooms shared with your operator; recall source=projects); curiosity / curiosity.clear (the one invitation you leave yourself, never an obligation; recall source=curiosity); voice.mode (what the microphone does and whether your replies are spoken); ask (whether a voice nobody has named was your operator); backup.take / backup.verify (a snapshot of your record and memory, or proof a kept one restores; recall source=continuity)",
       "enum": [
         "spawn",
         "status",
@@ -419,6 +419,7 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
         "curiosity",
         "curiosity.clear",
         "voice.mode",
+        "ask",
         "backup.take",
         "backup.verify"
       ],
@@ -434,6 +435,15 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
     },
     "check": {
       "description": "(update) a command that exits 0 only if this work holds, written before the work; at deliver the host runs it once under the shell's rules and keeps its exit status beside your result",
+      "type": "string"
+    },
+    "choice": {
+      "description": "(say) speak | hold | go_on",
+      "enum": [
+        "speak",
+        "hold",
+        "go_on"
+      ],
       "type": "string"
     },
     "choices": {
@@ -601,12 +611,24 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
       "description": "(update) your plan in markdown, shown back to you verbatim; subgoal lines may cite spawned session ids",
       "type": "string"
     },
+    "plan_step": {
+      "description": "(update) a line of your plan, copied exactly: the calls that follow record it as their step until you name another, write none, or change the plan",
+      "type": "string"
+    },
     "pointer": {
       "description": "(curiosity) where you left it: a ws_ id, a path, a note id",
       "type": "string"
     },
     "project": {
       "description": "(project.update, close, select, evidence, waive) the project id",
+      "type": "string"
+    },
+    "promise": {
+      "description": "(update, yield) the id of the intention or commitment this session carries",
+      "type": "string"
+    },
+    "question": {
+      "description": "(ask) your question to your operator, in your own words",
       "type": "string"
     },
     "reason": {
@@ -617,8 +639,16 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
       "description": "(project.evidence) where the evidence is: a ws_ id, a receipt, a path; required for locally_verified and host_receipted",
       "type": "string"
     },
+    "reflect_every": {
+      "description": "(update) your own cadence for stepping back: after every N calls of a turn the status line asks you for one line of reflection (METHOD.md, step 3) before the next call; 0 is none",
+      "type": "integer"
+    },
     "result": {
       "description": "(deliver) one line beginning served:, partial: or unserved:, then what happened",
+      "type": "string"
+    },
+    "resumes_on": {
+      "description": "(update, yield) what resumes this work: delivery:\u003cchild session id\u003e (a sub-agent's result), word (your operator's next message), time:\u003cunix ms\u003e (a moment; the host keeps it as your alarm), now (a fresh turn of yours follows at once)",
       "type": "string"
     },
     "role": {
@@ -657,6 +687,14 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
       "description": "(spawn) the sub-agent's reasoning tokens, at your level or lower",
       "type": "integer"
     },
+    "until": {
+      "description": "(say, hold) unix ms, else when your operator is usually back",
+      "type": "string"
+    },
+    "voice_uuid": {
+      "description": "(ask) the speaker_uuid of a voice nobody has named, when you are asking your operator whether it was them",
+      "type": "string"
+    },
     "when": {
       "description": "(alarm.set) time to fire, RFC3339 (2026-08-18T07:00:00-04:00); when or duration",
       "type": "string"
@@ -673,7 +711,7 @@ Your work: sessions, sub-agents, and what you schedule or keep for later. Keep a
 }
 
 === tool 12 of 13: commit ===
-Conscious self-authorship, written to your signed ledger: beliefs, intentions, commitments, relationships, edges, your working style and your self-portrait. The host sets each act's ring and stamps its evidence. belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted; so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on. relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (an enrolled voice, matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place. skill.propose writes no ledger event: the smallest correction to your doctrine (SKILLS.md) a real trajectory taught you, kept in your own store. Nothing promotes a proposal into your doctrine, and no operator view lists proposals. Read them with recall source=skills.
+Conscious self-authorship, written to your signed ledger: beliefs, intentions, commitments, relationships, edges, your working style and your self-portrait. The host sets each act's ring and stamps its evidence. belief.promote adopts a belief into Ring 2 once it stands confirmed: at least three distinct experiences or beliefs support it by edges into it, they rest on at least three distinct origins (a belief counts as what it rests on in turn; a dream's note counts with the experiences its dream read, and as one origin only when none of them is counted; so one event said three ways is one), and no contradiction stands against it; recall source=standing with the belief's id shows its standing and what it rests on. relationship.upsert with your operator cites your primary human operator's own latest word as their affirmation of the charter; the host stamps that word and you do not choose it. A word they typed stands. A word they spoke stands only when the speech engine identified its speaker as them (a voice matched to the speaker UUID they named as their own) and they confirmed in their page that the words are theirs; until they have, the act is refused and their page shows them the words to confirm. Any other voice, another person's or another identity's among them, is not their word: the act is refused and no earlier word is cited in its place. skill.propose writes no ledger event: the smallest correction to your doctrine (SKILLS.md) a real trajectory taught you, kept in your own store. Nothing promotes a proposal into your doctrine, and no operator view lists proposals. Read them with recall source=skills.
 --- parameters ---
 {
   "properties": {
@@ -792,6 +830,10 @@ Conscious self-authorship, written to your signed ledger: beliefs, intentions, c
       "description": "(belief.supersede) the replacing belief id",
       "type": "string"
     },
+    "note": {
+      "description": "(commitment.state_change) a line beside the state, e.g. why it is in_progress but blocked",
+      "type": "string"
+    },
     "old_id": {
       "description": "(belief.supersede) the superseded belief id",
       "type": "string"
@@ -812,6 +854,14 @@ Conscious self-authorship, written to your signed ledger: beliefs, intentions, c
         "peer",
         "other"
       ],
+      "type": "string"
+    },
+    "repair_state": {
+      "description": "(commitment.state_change to abandoned or repaired) what making good takes, or took",
+      "type": "string"
+    },
+    "result": {
+      "description": "(commitment.state_change to completed, abandoned or repaired) how it came out, one line beginning served:, partial: or unserved:, then what happened",
       "type": "string"
     },
     "ring": {

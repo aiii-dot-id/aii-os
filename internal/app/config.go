@@ -541,6 +541,10 @@ type AgencyConfig struct {
 	TurnCheckpointGraceRounds int            `json:"turn_checkpoint_grace_rounds,omitempty"`
 	MaxTurnContinuations      limits.Ceiling `json:"max_turn_continuations,omitzero"`
 
+	DailyTokenCeiling limits.Ceiling `json:"daily_token_ceiling,omitzero"`
+
+	AutonomyWideningCompletions int `json:"autonomy_widening_completions,omitempty"`
+
 	TurnCheckpointSlack int `json:"turn_checkpoint_slack,omitempty"`
 
 	ContinuationWallSeconds int `json:"continuation_wall_seconds,omitempty"`

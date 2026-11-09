@@ -510,7 +510,7 @@ func (r *Runtime) learnService(pub NamePublisher) error {
 	}
 	r.mu.Unlock()
 	if moved {
-		logsink.Warn("route.refusal", "the certificate service now serves %s and %s is under another zone — move the name under Settings → Dashboard → Public name", zone, name)
+		logsink.Warn("route.refusal", "the certificate service now serves %s and %s is under another zone — move the name under Settings → Access", zone, name)
 	}
 	return nil
 }
@@ -587,7 +587,7 @@ func (r *Runtime) issue(mgr CertificateManager) {
 	r.mu.Unlock()
 	if err != nil {
 		logsink.Warn("route.error", "%s: certificate not obtained: %v", name, err)
-		r.w.Alert("certificate", fmt.Sprintf("the certificate for %s was not obtained: %v — Settings → Dashboard → Public name → Retry", name, err))
+		r.w.Alert("certificate", fmt.Sprintf("the certificate for %s was not obtained: %v. Settings → Access → \"Retry now\".", name, err))
 		return
 	}
 	logsink.Info("route.start", "%s: certificate obtained, served now", name)
@@ -842,7 +842,7 @@ func (r *Runtime) PrepareAtBirth(cfg Settings) {
 		r.mu.Lock()
 		r.lastError = err.Error()
 		r.mu.Unlock()
-		logsink.Warn("route.refusal", "the new identity's name was not claimed (%v) — the identity runs as it is, and the name is claimed when its dashboard is opened on another device (Settings → Dashboard)", err)
+		logsink.Warn("route.refusal", "the new identity's name was not claimed (%v) — the identity runs as it is, and the name is claimed when its dashboard is opened on another device (Settings → Phone and other devices)", err)
 	}
 }
 
@@ -888,7 +888,7 @@ func dashboardAdvice(tlsOn bool, host string, st dashboard.PublicNameState, mat 
 	case StatusHeld:
 		return []string{"Public name: " + st.Origin + " — serving the certificate it holds; " + heldWhy}
 	case StatusClaiming, StatusFailing:
-		return []string{"Public name: " + st.Origin + " — certificate being issued; the URL is trusted once it is (Settings → Dashboard → Public name)"}
+		return []string{"Public name: " + st.Origin + " — certificate being issued; the URL is trusted once it is (Settings → Access)"}
 	}
 	var lines []string
 	switch {

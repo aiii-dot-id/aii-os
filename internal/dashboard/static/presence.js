@@ -1,6 +1,6 @@
 
 import { S } from './state.js';
-import { $, esc } from './util.js';
+import { $ } from './util.js';
 import { toggleThinkingDots } from './views/chat.js';
 
 export function phoneAsleep(connected, stats, hostname) {
@@ -9,20 +9,16 @@ export function phoneAsleep(connected, stats, hostname) {
 }
 
 export function renderPresence() {
-  const orb = $('orb');
   const mode = S.cont ? (S.cont.mode || 'normal') : 'normal';
-  orb.className = 'orb-wrap';
-  if (!S.connected) orb.classList.add('offline');
-  else if (mode === 'safe') orb.classList.add('safe');
-  else if (mode === 'degraded_witness' || mode === 'degraded_ring5') orb.classList.add('degraded');
-  if (S.thinking) orb.classList.add('thinking');
-  $('p-name').textContent = S.identityExists ? S.stats.name : 'AII OS';
+  if (S.renderTopBar) S.renderTopBar();
+  else $('p-name').textContent = S.identityExists && S.stats.name !== 'Unnamed' ? S.stats.name : 'AII OS';
   const st = $('p-state');
-  st.className = 'p-state' + (mode === 'safe' ? ' safe' : mode === 'degraded_witness' || mode === 'degraded_ring5' ? ' degraded' : '');
+  const connecting = S.firstConnect || (S.connected && !S.stats);
+  st.className = 'p-state' + (S.firstConnect ? ' connecting' : mode === 'safe' ? ' safe' : mode === 'degraded_witness' || mode === 'degraded_ring5' ? ' degraded' : '');
   const asleep = phoneAsleep(S.connected, S.stats, location.hostname);
-  const state = asleep ? '<b>asleep</b> \u2014 this identity runs on a phone and answers while its app is open; this page reconnects by itself'
+  const state = connecting ? 'connecting'
+    : asleep ? '<b>asleep</b>'
     : !S.connected ? '<b>offline</b>'
-    : !S.stats ? 'connecting'
     : !S.identityExists ? 'awaiting <b>birth</b>'
     : S.thinking ? '<b>thinking</b>'
     : mode === 'safe' ? '<b>SAFE</b> — record frozen'
@@ -30,21 +26,17 @@ export function renderPresence() {
     : mode === 'degraded_ring5' ? '<b>degraded</b> — waiting for Ring 5'
     : '<b>present</b>';
   if (st.innerHTML !== state) st.innerHTML = state;
-
-  if (S.cont) {
-    const pm = $('pill-mode');
-    pm.style.display = '';
-    pm.className = 'pill mode-' + mode;
-    pm.innerHTML = 'mode <b>' + esc(mode) + '</b>';
-  }
+  S.phoneAsleepNow = asleep;
 }
 const SEND_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>';
 export function setThinking(on) {
   S.thinking = on;
+  S.sectionsTurn?.();
   if (S.chipsRedraw) S.chipsRedraw();
   renderPresence();
   toggleThinkingDots(on);
 
+  if (S.renderComposer) { S.renderComposer(); return; }
   const button = $('send-btn');
   if (button) {
     button.classList.toggle('stopping', !!on);
@@ -52,9 +44,4 @@ export function setThinking(on) {
     button.innerHTML = on ? '&#9632;' : SEND_ICON;
     button.setAttribute('aria-label', button.title);
   }
-}
-export function toolPulse() {
-  const orb = $('orb'); orb.classList.add('tool');
-  if (S.toolBusyTimer) clearTimeout(S.toolBusyTimer);
-  S.toolBusyTimer = setTimeout(() => orb.classList.remove('tool'), 1600);
 }

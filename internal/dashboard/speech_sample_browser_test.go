@@ -60,13 +60,15 @@ run(async () => {
   button.click();
   assert(button.textContent === 'Playing…' && button.disabled, 'the button did not say it was working: ' + button.textContent);
   await settle();
-  assert(asks.length === 1 && asks[0].url === '/speech/say', 'the sample was not asked for: ' + JSON.stringify(asks));
-  const ask = asks[0].body;
+  // The speech asks (the page reads its record for their mark, too).
+  const speech = asks.filter(a => a.url.startsWith('/speech/'));
+  assert(speech.length === 1 && speech[0].url === '/speech/say', 'the sample was not asked for: ' + JSON.stringify(asks));
+  const ask = speech[0].body;
   assert(ask.sample === true && ask.provider === 'Cartesia' && ask.voice === 'c-2' && ask.api_key === 'only-typed-1234',
     'the card is not what was asked with: ' + JSON.stringify(ask));
   assert(played.length === 1 && played[0] === '/speech/say/sample-1', 'the sample was not played from its own address: ' + played.join(','));
   assert(spoken.length === 0, 'the browser read the sample instead of the service');
-  assert(button.textContent === 'Play sample' && !button.disabled, 'the button stayed busy after the sample');
+  assert(button.textContent === 'Play a sample' && !button.disabled, 'the button stayed busy after the sample');
   assert(byId('sp-sample-state').textContent === 'Playing Cartesia.', 'the sample did not say whose voice it was: ' + byId('sp-sample-state').textContent);
 
   answer = () => Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({ error: 'no API key is stored for Cartesia' }) });
@@ -75,7 +77,7 @@ run(async () => {
   assert(byId('sp-sample-state').textContent === 'no API key is stored for Cartesia',
     'the refusal is not beside the button: ' + byId('sp-sample-state').textContent);
   assert(spoken.length === 0 && played.length === 1, 'a refused sample was read by the browser');
-  assert(!button.disabled && button.textContent === 'Play sample', 'the button did not come back after a refusal');
+  assert(!button.disabled && button.textContent === 'Play a sample', 'the button did not come back after a refusal');
 
   answer = wav;
   button.click();
@@ -107,7 +109,7 @@ run(async () => {
   await settle();
   assert(byId('sp-sample-state').textContent.includes('would not play'),
     'a sample the browser refused to play said nothing: ' + byId('sp-sample-state').textContent);
-  assert(!button.disabled && button.textContent === 'Play sample', 'the button stayed busy after a source that would not play');
+  assert(!button.disabled && button.textContent === 'Play a sample', 'the button stayed busy after a source that would not play');
 
   const noFocusout = e => e.stopImmediatePropagation();
   window.addEventListener('focusout', noFocusout, true);

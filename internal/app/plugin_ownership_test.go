@@ -4,9 +4,22 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aiii-dot-id/aii-os/internal/packagefmt"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
 	"github.com/aiii-dot-id/aii-os/internal/sections"
 )
+
+// WHAT AN ACTIVATION REGISTERED IS WHAT IT TAKES BACK (platform review
+// of b7f8a6ad, F1). Every release of a package shares its id, on
+// purpose — so a teardown that names the id instead of the activation
+// reaches whatever answers under that id NOW: the successor of an
+// update, whose predecessor retires after the commit; or the release a
+// failed candidate did not replace. The platform's two probes are
+// adopted beside this file; these are the acceptance cases the finding
+// names: an ordinary update, a failed candidate's cleanup, a late Stop
+// repeated, the same package path, and the final uninstall — which must
+// still take the current owner's registration away. The installed list
+// (step 16b) follows the same owner.
 
 func ownedSection(id string) *sections.Section {
 	return &sections.Section{Decl: sections.Decl{ID: id}}
@@ -20,11 +33,19 @@ func TestASectionRouteBelongsToTheActivationThatRegisteredIt(t *testing.T) {
 	answers := func(when string, want *pluginhost.Activation) {
 		t.Helper()
 		got, ok := a.sections.Get(id)
+		installed, listed := a.installedReleases()[id]
 		if want == nil {
 			if ok {
 				t.Fatalf("%s: the id is still answered", when)
 			}
+			if listed {
+				t.Fatalf("%s: the package is still listed installed: %+v", when, installed)
+			}
 			return
+		}
+		// The installed list says the release that holds the id (step 16b).
+		if !listed || installed.version != want.Version {
+			t.Fatalf("%s: installed says %+v (listed %v), not %s", when, installed, listed, want.Version)
 		}
 		if !ok || got != want.Section {
 			t.Fatalf("%s: the id is not answered by the activation that should hold it", when)
@@ -36,7 +57,8 @@ func TestASectionRouteBelongsToTheActivationThatRegisteredIt(t *testing.T) {
 			t.Fatalf("%s: the metadata does not name that activation", when)
 		}
 	}
-	first := &pluginhost.Activation{ID: id, Package: "plugins/x/one.aiiospkg", Section: ownedSection(id)}
+	asset := &pluginhost.AssetFacts{Tier: packagefmt.TierT0, Title: "A page"}
+	first := &pluginhost.Activation{ID: id, Version: "0.1.0", Package: "plugins/x/one.aiiospkg", Section: ownedSection(id), Asset: asset}
 	if err := h.Redirect(nil, first); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +66,7 @@ func TestASectionRouteBelongsToTheActivationThatRegisteredIt(t *testing.T) {
 
 	// A candidate that never served is stopped; what serves is untouched.
 	// It was built from the SAME PATH — an archive rewritten in place.
-	failed := &pluginhost.Activation{ID: id, Package: first.Package, Section: ownedSection(id)}
+	failed := &pluginhost.Activation{ID: id, Version: "0.2.0", Package: first.Package, Section: ownedSection(id), Asset: asset}
 	if _, err := h.Stop(ctx, failed); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +74,7 @@ func TestASectionRouteBelongsToTheActivationThatRegisteredIt(t *testing.T) {
 
 	// An ordinary update; the predecessor retires AFTER the commit, and
 	// is asked to more than once.
-	next := &pluginhost.Activation{ID: id, Package: "plugins/x/two.aiiospkg", Section: ownedSection(id)}
+	next := &pluginhost.Activation{ID: id, Version: "0.2.0", Package: "plugins/x/two.aiiospkg", Section: ownedSection(id), Asset: asset}
 	if err := h.Redirect(first, next); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +87,7 @@ func TestASectionRouteBelongsToTheActivationThatRegisteredIt(t *testing.T) {
 
 	// A successor that cannot be registered leaves the one that answers
 	// answering: the predecessor is not removed on the way to a refusal.
-	stale := &pluginhost.Activation{ID: id, Package: "plugins/x/three.aiiospkg", Section: ownedSection(id)}
+	stale := &pluginhost.Activation{ID: id, Version: "0.3.0", Package: "plugins/x/three.aiiospkg", Section: ownedSection(id), Asset: asset}
 	if err := h.Redirect(first, stale); err == nil {
 		t.Fatal("a redirect from an activation that no longer holds the id was accepted")
 	}

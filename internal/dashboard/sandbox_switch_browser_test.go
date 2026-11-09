@@ -10,7 +10,7 @@ import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderSettings } from './views/settings.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {
@@ -18,7 +18,7 @@ run(() => {
    send(bytes){this.frames.push(JSON.parse(bytes));}
    recv(frame){this.onmessage({data:JSON.stringify(frame)});}
  };
- S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};
+ S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};S.stats={name:'Taylor'};
  connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
  const el=id=>document.getElementById(id), one=sel=>document.querySelector(sel);
  const words=()=>el('settings-stack').textContent;
@@ -26,9 +26,11 @@ run(() => {
  const box=()=>el('sbx-off');
  const tick=()=>{ assert(!box().disabled,'the box was clicked while disabled'); box().checked=!box().checked; box().dispatchEvent(new Event('change',{bubbles:true})); };
  const host=(off,id)=>socket.recv({type:'sandbox',request_id:id,sandbox:{root:'/home',extra_roots:['/project'],off}});
- renderSettings();one('[data-sec="sandbox"]').click();
+ renderSettings();S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
  host(false);
  assert(box() && !box().checked && !box().disabled && !one('[data-sandbox-warning]') && !one('[data-sandbox-off]'),'a sandbox that is on shows an unticked box and no warning');
+ const reach=()=>one('[data-folders]').getAttribute('aria-describedby');
+ assert(reach()==='sbx-hint' && one('#sbx-hint').textContent==="Taylor's tools read and change files only here. A plugin you granted files reaches the same folders.",'while it is on the folders are said to be their reach: '+(one('#sbx-hint')||{}).textContent);
 
  tick();
  assert(asked().length===0,'ticking the box sent a request');
@@ -54,6 +56,7 @@ run(() => {
  host(true,asked()[0].request_id);
  assert(box().checked && !box().disabled,'the host confirmed off and the box does not show it');
  assert(one('[data-sandbox-off]') && words().includes('The sandbox is off.'),'while it is off the card says so');
+ assert(!one('#sbx-hint') && !words().includes('only here') && reach()==='sbx-offline' && one('#sbx-offline'),'WHILE IT IS OFF THE FOLDERS ARE STILL SAID TO BE THEIR ONLY REACH');
  assert(one('[data-roots-idle]') && words().includes('/project') && !words().includes('their world is their home tree'),'while it is off the roots are shown as not limiting them');
 
  tick();
@@ -66,6 +69,7 @@ run(() => {
  host(true,reread.request_id);
  tick();host(false,asked().at(-1).request_id);
  assert(asked().length===3 && !box().checked && !one('[data-sandbox-off]') && words().includes('The sandbox is on.'),'the host confirmed on and the card does not show it');
+ assert(reach()==='sbx-hint' && one('#sbx-hint'),'back on, the folders are not said to be their reach again');
 
  tick();el('sbx-off-allow').click();
  socket.recv({type:'error',request_id:asked().at(-1).request_id,message:'fixture: config could not be saved'});

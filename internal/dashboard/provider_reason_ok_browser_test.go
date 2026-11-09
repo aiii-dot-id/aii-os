@@ -17,7 +17,7 @@ run(() => {
   S.identityExists = true; S.providersLoaded = true;
   S.config = { llm: { provider: relay.name, model: 'm1', resolved_provider: relay.name, resolved_model: 'm1', timeout_seconds: 120 }, credential_kinds: [] };
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   const stack = () => document.querySelector('#settings-stack').textContent;
   assert(stack().includes(why), 'a row whose status is ok does not say the reason sent with it: ' + stack().slice(0, 400));
   delete relay.status_reason;

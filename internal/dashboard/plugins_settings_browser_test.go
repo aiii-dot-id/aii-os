@@ -46,8 +46,8 @@ run(() => {
   renderPlugins();
   const st = document.getElementById('plugins-stack');
   assert(st.textContent.includes('com.example.memory') && st.textContent.includes('0.1.0'), 'the release is named');
-  assert(st.textContent.includes('2 operations, available through the tools organ; selected operations carry their full arguments in the prompt'), 'the card names the operation count and selected argument visibility: ' + st.textContent);
-  assert(st.textContent.includes('no settings declared'), 'a plugin without a declaration says so');
+  assert(st.textContent.includes('2 tools'), 'the card names its tools: ' + st.textContent);
+  assert(st.textContent.includes('No settings.'), 'a plugin without a declaration says so');
   const limit = st.querySelector('[data-pset-key="recall_limit"]');
   assert(limit && limit.type === 'number' && limit.value === '8' && limit.min === '1' && limit.max === '50', 'the number field carries the value and its bounds');
   assert(st.textContent.includes('default 5'), 'the declared default is stated');
@@ -104,7 +104,7 @@ run(() => {
   renderPlugins();
   const kv = st.querySelector('[data-grant-plugin="com.example.memory"][data-grant-field="kv"]');
   assert(kv, 'the signed capability offers its grant');
-  assert(st.querySelector('[data-save="grants:com.example.memory"]').textContent === 'Save grants', 'a button keeps its own words');
+  assert(st.querySelector('[data-save="grants:com.example.memory"]').textContent === 'Save', 'a button keeps its own words');
   kv.checked = true;
   st.querySelector('[data-save="grants:com.example.memory"]').click();
   const gsent = frames.filter(f => f.type === 'config_set').pop().config;
@@ -133,7 +133,7 @@ run(() => {
   filter.value = ''; filter.dispatchEvent(new Event('input'));
   assert(lang.options.length === 42 && lang.value === 'de-DE', 'an empty filter lists every choice again, the chosen one still chosen');
   assert(!st.querySelector('[data-choice-filter-for="voice"]'), 'a short list has no filter box');
-  const voice = st.querySelector('[data-pset-key="voice"]');
+  const voice = st.querySelector('[data-manage-of="id.example.voice"] [data-pset-key="voice"]');
   assert(voice.value === 'retired-voice' && voice.options[0].textContent.includes('saved, not offered by this release'), 'a stored choice this release no longer offers stays visible as such: ' + voice.options[0].textContent);
   assert(voice.querySelector('option[value="alba"]').textContent === 'Alba (Scottish English)', 'labels on the offered choices');
   const card = voice.closest('.card');

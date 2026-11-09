@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,7 +28,6 @@ func TestTheWorkDeclarationReachesEveryReader(t *testing.T) {
 	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "chain probe contents"); err != nil {
 		t.Fatal(err)
 	}
-	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 
 	type seen struct {
 		mu         sync.Mutex
@@ -56,7 +54,7 @@ func TestTheWorkDeclarationReachesEveryReader(t *testing.T) {
 				toolCall("c1b", "work", `{"action":"update","plan":"chain plan: read three things","steps":3,"independent":2}`),
 			))
 		case n <= 11: // keeps reading through the checkpoint's four grace rounds
-			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", string(readArgs))))
+			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n))))
 		default: // the checkpoint's final call, and the second turn
 			_, _ = io.WriteString(w, textReply("done"))
 		}

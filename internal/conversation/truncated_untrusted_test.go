@@ -16,8 +16,9 @@ func TestTruncatedWebFetchKeepsItsUntrustedSourceAroundTheModelTail(t *testing.T
 		textResp("done"),
 	}}
 	tr := &fakeTranscript{limit: 4000}
+	// 300: room for the boundary, a tail, and the status line's reservation.
 	loop := New(client, &fakeTools{results: map[string]string{"web_fetch": full}}, &fakeDefs{}, tr, nil,
-		testBounds(Config{MaxToolResultChars: 180}))
+		testBounds(Config{MaxToolResultChars: 300}))
 	if _, err := loop.Run(t.Context(), "system", []llm.Message{{Role: "user", Content: "read the page"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +36,10 @@ func TestTruncatedWebFetchKeepsItsUntrustedSourceAroundTheModelTail(t *testing.T
 		strings.Count(seen, untrusted.Open) != 1 || strings.Count(seen, untrusted.Close) != 1 ||
 		!strings.Contains(seen[open:close], "source: "+source) {
 		t.Fatalf("model got a tail outside its source boundary: %q", seen)
+	}
+	// After the boundary only the host's status line follows (2026-11-06).
+	if rest := seen[close+len(untrusted.Close):]; !strings.HasPrefix(rest, "\n[status · ") || strings.Count(rest, "\n") != 1 {
+		t.Fatalf("after the source boundary the model got %q, want the status line alone", rest)
 	}
 }
 

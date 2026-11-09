@@ -44,7 +44,7 @@ func TestAnInterruptedTurnIsMarkedBesideItNotInsideIt(t *testing.T) {
 	a.engine = identity.NewEngine(st, &ledgerAdapter{Ledger: lg, kp: kp, st: st}, a.rings, nil, identity.Ports{})
 
 	const said = "I have read the file and I think the bug is in the parser."
-	a.recordInterruptedTurnContext(t.Context(), conversation.Result{Spoken: said, Interrupted: "stopped by the operator"})
+	a.recordInterruptedTurnContext(t.Context(), conversation.Result{Spoken: said, Interrupted: "stopped by the operator"}, "")
 
 	turns, err := st.RecentTurnsIncludingSystem(10)
 	if err != nil {
@@ -80,5 +80,5 @@ func TestAnInterruptedTurnIsMarkedBesideItNotInsideIt(t *testing.T) {
 // Nothing said, nothing to preserve — and no marker about silence.
 func TestASilentInterruptionRecordsNothing(t *testing.T) {
 	a := New(&Config{SourcePath: filepath.Join(t.TempDir(), "config.json")})
-	a.recordInterruptedTurnContext(t.Context(), conversation.Result{}) // would panic on a nil engine if it recorded
+	a.recordInterruptedTurnContext(t.Context(), conversation.Result{}, "") // would panic on a nil engine if it recorded
 }

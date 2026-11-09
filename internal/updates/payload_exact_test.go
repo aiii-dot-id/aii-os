@@ -6,7 +6,7 @@ import (
 )
 
 func TestAReleasePayloadIsReadExactly(t *testing.T) {
-	s := newTestReleaseSigner(t)
+	s := sharedReleaseSigner(t)
 	hash := sha256hex([]byte("an archive"))
 	verify := func(change func(payload map[string]any)) error {
 		payload := map[string]any{"archive_hash": hash, "version": "v1.2.3", "platform": "linux", "arch": "amd64", "source_rev": "cafebabe1234"}

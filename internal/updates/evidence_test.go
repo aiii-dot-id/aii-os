@@ -7,7 +7,7 @@ import (
 
 func TestEvidenceAndReleaseSignaturesNeverPassForEachOther(t *testing.T) {
 	dir := t.TempDir()
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 	trust := dir + "/trust" // the loader reads the status file from the trust directory itself
 	bundle := []byte("the sealed evidence tarball")

@@ -19,7 +19,7 @@ const moved = () => new Promise(done => addEventListener('hashchange', done, { o
 run(async () => {
   const did = window.__did = [];
   S.connected = true;
-  for (const [address, view, shown] of [['#/record/6', 'record', 'renderRecord'], ['#/projects/p1', 'projects', 'viewProject:p1']]) {
+  for (const [address, view, shown] of [['#/identity/record/6', 'record', 'renderRecord'], ['#/projects/p1', 'projects', 'viewProject:p1']]) {
     if (location.hash !== '#/chat') { const m = moved(); go('chat'); await m; }
     assert(S.view === 'chat' && location.hash === '#/chat', 'the page is not on chat: ' + S.view + ' ' + location.hash);
     did.length = 0;
@@ -52,7 +52,9 @@ func TestADeepAddressSurvivesTheSocketOpening(t *testing.T) {
 	modules["/util.js"] = read("util.js")
 	modules["/ws.js"] = []byte("export function send() { return ''; }\nexport function query() {}\nexport function connect() {}\nexport function wake() {}\n")
 	modules["/panel.js"] = []byte("export function renderPanel() {}\n")
-	modules["/views/record.js"] = rec("renderRecord")
+	modules["/views/record.js"] = append(rec("renderRecord"), stubModule("readRest", "payloadBox")...) // step 19's sent panel imports the record's readers
+	modules["/views/identity/record.js"] = append(rec("renderRecord"), stubModule("readRest", "payloadBox")...)
+	modules["/views/identity/experiences.js"] = rec("renderExperiences")
 	modules["/views/projects.js"] = append(rec("renderProjects"), []byte("export function renderProjPill() {}\nexport function viewProject(id) { (window.__did ||= []).push('viewProject:' + id); }\n")...)
 	modules["/views/settings.js"] = append(rec("renderSettings"), []byte("export function acceptSettingsConfig() {}\nexport function rejectSettingsConfig() {}\nexport function acceptProviderSave() {}\nexport function rejectProviderSave() {}\nexport function acceptSpeechLists() {}\nexport function rejectSpeechLists() {}\nexport function settingsConnectionLost() {}\n")...)
 	modules["/views/backups.js"] = stubModule("forgetBackupsSecrets")

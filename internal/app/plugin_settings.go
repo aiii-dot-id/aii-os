@@ -128,6 +128,7 @@ func (a *App) pluginSettingsSource(id string) map[string]any {
 func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 	a.pluginMu.Lock()
 	active := append([]*pluginhost.ActivePlugin(nil), a.plugins...)
+	assets := a.assetActivationsLocked()
 	a.pluginMu.Unlock()
 	contracts := sync.OnceValues(a.oauthContracts)
 
@@ -138,7 +139,7 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
 	views := make([]dashboard.PluginView, 0, len(active))
 	for _, ap := range active {
-		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Mode: ap.Mode, Variant: ap.VariantID, Tools: ap.Tools()}
+		view := dashboard.PluginView{ID: ap.ID, Version: ap.Version, Tier: ap.Tier.String(), Kind: "plugin", Mode: ap.Mode, Variant: ap.VariantID, Tools: ap.Tools()}
 		if a.toolReg != nil {
 			for _, name := range view.Tools {
 				c, err := a.toolReg.Show(name)
@@ -200,6 +201,17 @@ func (a *App) pluginViews(c *Config) []dashboard.PluginView {
 		}
 		views = append(views, view)
 	}
+
+	for _, act := range assets {
+		f := act.Asset
+		view := dashboard.PluginView{ID: act.ID, Version: act.Version, Tier: f.Tier.String(), Kind: "asset", PackageHash: act.Hash,
+			Title: f.Title, Description: f.Description, Publisher: f.Publisher, PublisherID: f.PublisherID}
+		if v, ok := life[act.ID]; ok {
+			view.Lifecycle = lifecycleView(v)
+		}
+		views = append(views, view)
+	}
+	sort.SliceStable(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 	return views
 }
 

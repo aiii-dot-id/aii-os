@@ -539,6 +539,63 @@ func TestTheRelaysServersAreHeldReplacedAndNotHandedOutPastTheirTime(t *testing.
 	})
 }
 
+// A CREDENTIAL IS DISCARDED WHEN THE CONTROL CONNECTION DROPS (C2, the
+// 0.2.1 relay client). Between the drop and the next registration the
+// client hands a page no servers at all, though the dropped connection's
+// credential had hours left; what the next registration names is then the
+// one set held. A channel is made only with the credential of the latest
+// registered or servers message.
+func TestACredentialIsDiscardedWhenTheControlConnectionDrops(t *testing.T) {
+	c := leanClient(t, 0)
+	// A long wait before the client tries again, so the gap can be read.
+	c.Tune = func() Tuning { return Tuning{BackoffBase: time.Minute, BackoffMax: time.Minute} }
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		at := func(d time.Duration) string { return start.Add(d).UTC().Format(time.RFC3339) }
+		turn := func(credential string) []SessionServer {
+			return []SessionServer{{URLs: []string{"turn:turn.example.test:3478?transport=udp"}, Username: "1:fixture.example.test", Credential: credential}}
+		}
+		drop := make(chan struct{})
+		p := &played{}
+		p.play = func(n int, relay net.Conn) {
+			if n > 0 {
+				hold(admit(t, relay, Message{SessionServers: turn("next"), SessionServersExpireAt: at(12 * time.Hour)}))
+				return
+			}
+			r := admit(t, relay, Message{SessionServers: turn("dropped"), SessionServersExpireAt: at(12 * time.Hour)})
+			go answer(relay, r, nil)
+			<-drop
+		}
+		stop := run(c, p)
+		synctest.Wait()
+		if held, _ := c.SessionServers(); len(held) != 1 || held[0].Credential != "dropped" {
+			t.Fatalf("what registered named was not held: %+v", held)
+		}
+		close(drop)
+		synctest.Wait()
+		if held, to := c.SessionServers(); held != nil || !to.IsZero() {
+			t.Fatalf("the dropped connection's credential was still handed out before the next registration: %+v until %s", held, to)
+		}
+		if d := p.dialed(); len(d) != 1 {
+			t.Fatalf("the gap was not read before the next registration: %d connections", len(d))
+		}
+		// The client tries again at 30 s; the relay holds that connection,
+		// which the silence limit would end at 2 min. Read it in between.
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if held, _ := c.SessionServers(); len(held) != 1 || held[0].Credential != "next" {
+			t.Fatalf("the next registration's servers are not the ones held: %+v", held)
+		}
+		stop()
+	})
+}
+
+// A DEVICE THAT COMES BACK FINDS OUT AT ONCE WHETHER ITS CONNECTION HELD.
+// A phone's app returns to the foreground after the system suspended it: the connection it holds may have died in the sleep, and the silence
+// limit that would say so was counted while it slept. Wake asks now. A
+// connection that does not answer is replaced within the answer time, not
+// the silence limit; one that answers is left alone; and a client that was
+// waiting to try again tries at once.
 func TestADeviceThatComesBackFindsOutAtOnceWhetherItsConnectionHeld(t *testing.T) {
 	dead, alive, waiting := leanClient(t, 0), leanClient(t, 0), leanClient(t, 0)
 	// A long wait between attempts, so that only Wake can explain an early one.

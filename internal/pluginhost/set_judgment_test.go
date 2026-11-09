@@ -69,7 +69,7 @@ func shapeFor(t *testing.T, name string, build func(t *testing.T) (shape, map[st
 		c := &signedComponentSets
 		c.Lock()
 		if c.role == nil {
-			c.roots, c.role = platformRootsForTest(t)
+			c.roots, c.role = sharedPlatformRoots(t)
 		}
 		roots, role := c.roots, c.role
 		c.Unlock()

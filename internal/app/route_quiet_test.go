@@ -34,7 +34,27 @@ func TestAnUnchangedRouteRenewalIsNotNews(t *testing.T) {
 	buf := logsink.CaptureForTest(t)
 
 	name := app.pn.State().Name
-	lines := func() int { return strings.Count(buf.String(), name+" is ") }
+	// COUNT THE PUBLICATION SENTENCE, NOT EVERY SENTENCE THAT NAMES THE
+	// ROUTE. "<name> is withdrawn (generation N)" is the background owner
+	// telling a withdrawal when the host changes under it — a different
+	// event with its own owner, and counting it as a renewal made this
+	// test fail "got 2" on a loaded gate (2026-10-30, load 24 to 57).
+	// The publication this test measures always names the address; a
+	// withdrawal never does, so the exclusion is exact rather than a
+	// guess at wording.
+	lines := func() int {
+		n := 0
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if !strings.Contains(line, name+" is ") {
+				continue
+			}
+			if strings.Contains(line, name+" is withdrawn") {
+				continue
+			}
+			n++
+		}
+		return n
+	}
 	writes := func() int {
 		pub.Mu.Lock()
 		defer pub.Mu.Unlock()

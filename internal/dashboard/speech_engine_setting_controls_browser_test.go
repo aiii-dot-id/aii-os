@@ -35,7 +35,7 @@ run(() => {
     },
   };
   renderSettings();
-  document.querySelector('[data-sec="speech"]').click();
+  S.settingsSection('speech'); S.requestSettingsSection(); renderSettings();
   const asks = () => frames.filter(f => f.type === 'plugin_setting_choices');
   const box = dir => document.getElementById('sp-engine-settings-' + dir);
   const field = key => document.querySelector('#speech-form [data-pset-key="' + key + '"]');
@@ -70,7 +70,8 @@ run(() => {
   S.config.plugins.installed[0].settings[0].key_kept = true;
   assert(acceptSettingsConfig(keyed[0].request_id), 'the key reply was not claimed');
   const set = frames.filter(f => f.type === 'config_set').at(-1);
-  assert(set && set.config['speech.stt.provider'] === id && !JSON.stringify(set).includes('sk-voice-PASTED'), 'the settings did not follow the key, or carried it: ' + JSON.stringify(set));
+  // The engine holds the default here, so its provider stays as left, empty.
+  assert(set && set.config['speech.stt.provider'] === '' && set.config['plugins.settings.' + id + '.model'] === 'big-v1' && !JSON.stringify(set).includes('sk-voice-PASTED'), 'the settings did not follow the key, or carried it: ' + JSON.stringify(set));
 
   const connect = document.querySelector('#sp-engine-settings-tts [data-pacct-connect]');
   assert(connect, 'the Speech card offers no way to connect the account: ' + box('tts').textContent);

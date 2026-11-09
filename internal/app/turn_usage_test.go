@@ -251,3 +251,37 @@ func TestATurnsUsageRowNamesTheTurnItsMessageNames(t *testing.T) {
 		t.Fatalf("the turn %s has %d usage row(s) of %d call(s); want one row of one call", said, rows, calls)
 	}
 }
+
+// SPEND WITH NO TURN STILL REACHES AN OPEN STATUS (step 5's last item,
+// carried into step 6). Each usage row written, a turn's or a cognitive
+// facility's, moves the status frame's count of accounted calls, which
+// Status reads the month again on; the turn's sentence would not move for a
+// second turn of the same usage, and a facility's call has no turn at all.
+func TestEveryAccountedCallMovesTheStatusCount(t *testing.T) {
+	a := meteredApp(t, func(w http.ResponseWriter, r *http.Request) {})
+	count := func() uint64 {
+		t.Helper()
+		st, err := a.statsState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Accounted
+	}
+	if got := count(); got != 0 {
+		t.Fatalf("a daemon that wrote nothing says %d calls were accounted", got)
+	}
+	same := conversation.TurnUsage{Calls: 2, PromptTokens: 1400, CompletionTokens: 100, TotalTokens: 1500}
+	a.recordTurnCost(withTurnSource(t.Context(), turnSourceOperator), conversation.Result{Usage: same, ModelID: "m"})
+	first := a.lastTurnCost()
+	a.recordTurnCost(withTurnSource(t.Context(), turnSourceOperator), conversation.Result{Usage: same, ModelID: "m"})
+	if a.lastTurnCost() != first {
+		t.Fatalf("fixture: two turns of the same usage read differently: %q, %q", first, a.lastTurnCost())
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("two turns of the same usage moved the count to %d, want 2", got)
+	}
+	a.recordFacilityCall("dream", "m", llm.Usage{PromptTokens: 800, TotalTokens: 800, Reported: true})
+	if got := count(); got != 3 {
+		t.Fatalf("a facility's call moved the count to %d, want 3", got)
+	}
+}

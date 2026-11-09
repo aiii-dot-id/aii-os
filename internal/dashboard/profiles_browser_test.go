@@ -34,11 +34,12 @@ run(() => {
   renderPlugins();
   const st = document.getElementById('plugins-stack');
   const text = st.textContent;
-  assert(text.includes('CONNECTED ACCOUNTS'), 'the card is missing');
-  assert(text.includes('used by org.example.issues'), 'the profile names who uses it');
-  assert(text.includes('secret: set') && !text.includes('csecret'), 'a secret is said to be set, never shown');
+  assert(st.querySelector('[data-accounts-part]') && text.includes('Connected accounts'), 'the card is missing');
+  assert(text.includes('Used by org.example.issues'), 'the profile names who uses it');
+  assert(text.includes('Not connected · Used by org.example.issues') && text.includes('Connected · No plugin uses it yet'), 'an account\'s state is not said in words');
+  assert(text.includes('client secret kept') && !text.includes('csecret'), 'a secret is said to be set, never shown');
   assert(text.includes('WXYZ-1234'), 'a pending device code is shown on its profile');
-  assert(text.includes('api.twilio.com:443') && text.includes('edited in the config file'), 'a header-scheme profile is listed read-only');
+  assert(text.includes('api.twilio.com:443') && text.includes('Set in the config file'), 'a header-scheme profile is listed read-only');
   const revocation = st.querySelector('[data-profile-revocation="gh"]');
   assert(revocation && revocation.textContent.includes('not available for github') && revocation.textContent.includes('account page'), 'the profile says what revocation there is, with the route');
   assert(st.querySelector('[data-profile-revocation="google-cal"]') === null, 'a profile with nothing to say about revocation says nothing');
@@ -51,7 +52,7 @@ run(() => {
   let asked = '';
   window.confirm = q => { asked = q; return true; };
   st.querySelector('[data-profile-delete="lent"]').click();
-  assert(asked.includes('left where it is') && !asked.includes('tokens and client secret are removed'), 'deleting a borrowed profile says its token file stays: ' + asked);
+  assert(asked.includes('stays where it is') && !asked.includes('sign-in and client secret are removed'), 'deleting a borrowed profile says its token file stays: ' + asked);
   assert(frames.some(f => f.type === 'auth_profile_delete' && f.profile === 'lent'), 'Delete sends the profile');
   window.confirm = () => true;
   assert(st.querySelector('[data-profile-device="gh"]') !== null, 'the device route is offered where the authority allows it');
@@ -94,7 +95,7 @@ run(() => {
   S.connectRequest = { connector: 'gmail', scope: 'read' };
   renderPlugins();
   assert(document.getElementById('pf-provider') && document.getElementById('pf-provider').value === 'google', 'the form opens on the connector\'s template');
-  assert(document.getElementById('plugins-stack').textContent.includes('Your identity asked to connect gmail'), 'the form says why it opened');
+  assert(document.getElementById('plugins-stack').textContent.includes('asked to connect gmail'), 'the form says why it opened');
   assert(S.connectRequest === null, 'the request is consumed');
   document.getElementById('pf-provider').value='manual-service';
   document.getElementById('pf-provider').dispatchEvent(new Event('change'));

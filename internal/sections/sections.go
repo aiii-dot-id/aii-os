@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -143,6 +144,12 @@ type Section struct {
 
 	PackageID string
 
+	BuiltIn bool
+
+	FS fs.FS
+
+	Views []string
+
 	Allowed func() bool
 }
 
@@ -222,7 +229,7 @@ func (r *Registry) Replace(prev, next *Section) error {
 	if !next.allowed() {
 		return ErrWithdrawn
 	}
-	if cur, dup := r.byID[next.Decl.ID]; dup && cur != prev {
+	if cur, dup := r.byID[next.Decl.ID]; dup && (cur != prev || cur.BuiltIn != next.BuiltIn) {
 		return fmt.Errorf("sections: id %q is already registered — refusing the duplicate (deactivate one)", next.Decl.ID)
 	}
 	if prev != nil {

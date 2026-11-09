@@ -100,7 +100,7 @@ around the disc, its interior opaque), makes every platform's icon:
 | Ubuntu | `deb/icons/hicolor/*/apps/aii-os.png` | the disc, free-standing |
 | iOS | `../shells/ios/AIIOS/Assets.xcassets/AppIcon.appiconset` | opaque: iOS draws the corners |
 | Android | `../shells/android/app/src/main/res/mipmap-*` | adaptive: the disc in the 66dp safe zone over the night colour |
-| Dashboard | `../internal/dashboard/static/icon-*.png`, `apple-touch-icon.png` | the tab and the home screen |
+| Dashboard | `../internal/dashboard/static/icon.svg`, `apple-touch-icon.png` | the tab and the home screen: not the master but the page's own flat rings, drawn by `icon/rings.go` (0.2.1) |
 
 The generated files are checked in, so no build needs the generator,
 and `go test ./packaging/icon` fails when any of them no longer matches

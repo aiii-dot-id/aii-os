@@ -20,6 +20,8 @@ type TurnPart struct {
 	From  int
 	Whole bool
 
+	AsRecorded *TurnPart
+
 	TurnID string
 }
 
@@ -45,12 +47,23 @@ func (b ConversationBatch) Keep(n, runes int) ConversationBatch {
 	if n == len(b.Parts) && (runes <= 0 || runes >= lastLen) {
 		return b
 	}
+	if recorded := b.Parts[n-1].AsRecorded; recorded != nil && runes > 0 && runes < lastLen {
+		if n > 1 {
+			return b.Keep(n-1, 0)
+		}
+		through := TurnCursor{Turn: recorded.ID, Position: TurnLength(recorded.Text)}
+		return ConversationBatch{Start: b.Start, Through: through, Parts: []TurnPart{*recorded}}.Keep(1, runes)
+	}
 	kept := append([]TurnPart(nil), b.Parts[:n]...)
 	last := &kept[n-1]
 	if runes > 0 && runes < lastLen {
 		last.Text, last.Whole, lastLen = RuneSlice(last.Text, 0, runes), false, runes
 	}
-	return ConversationBatch{Start: b.Start, Parts: kept, Through: TurnCursor{Turn: last.ID, Position: last.From + lastLen}}
+	end := last.From + lastLen
+	if last.AsRecorded != nil {
+		end = TurnLength(last.AsRecorded.Text)
+	}
+	return ConversationBatch{Start: b.Start, Parts: kept, Through: TurnCursor{Turn: last.ID, Position: end}}
 }
 
 func TurnLength(content string) int { return utf8.RuneCountInString(content) }

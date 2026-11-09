@@ -1,0 +1,46 @@
+const COGNITION_APPLIES = {
+  'agency.turn_token_budget': 'applies from the next turn',
+  'agency.turn_seconds_local': 'applies from the next turn',
+  'agency.tool_schema_refusals': 'applies from the next turn',
+  'agency.turn_checkpoint_calls': 'applies from the next turn',
+  'agency.turn_checkpoint_grace_rounds': 'applies from the next turn',
+  'agency.turn_checkpoint_slack': 'applies from the next turn',
+  'agency.max_turn_continuations': 'applies when the next turn ends',
+  'agency.continuation_wall_seconds': 'applies from the next continued turn',
+  'agency.alarm_wall_seconds': 'applies from the next alarm turn',
+  'agency.harvest_wall_seconds': 'applies from the next such turn',
+  'prompt.alarm_firings': 'applies at the next read of the alarms',
+  'agency.work_line_max_chars': 'applies at the next write',
+  'prompt.standing_max_chars': 'applies at the next write',
+  'prompt.playbook_max_bytes': 'applies from the next turn',
+  'prompt.work_card_beliefs': 'applies from the next turn',
+  'record.tool_result_runes': 'applies from the next tool result',
+  'plugins.context_providers': 'applies from the next turn',
+  'plugins.context_timeout_ms': 'applies from the next turn',
+  'plugins.runtime.stop_ms': 'applies to each plugin from its next start',
+  'plugins.runtime.hand_over_ms': 'applies from the next update',
+  'plugins.runtime.session_control_ms': 'applies to each plugin from its next start',
+  'plugins.runtime.restart_attempts': 'applies now, and to each plugin from its next start',
+};
+export function cognitionApplies(key) {
+  if (key === 'overrides') return 'the overrides apply from the next turn';
+  return COGNITION_APPLIES[key] || LIMIT_APPLIES[key] || 'applies at the next pass';
+}
+const LIMIT_APPLIES = {
+  'agency.max_tool_rounds': 'applies from the next turn',
+  'agency.max_tool_calls': 'applies from the next turn',
+  'agency.subagent_max_tool_rounds': 'applies from the next helper run',
+  'agency.subagent_max_tool_calls': 'applies from the next helper run',
+  'agency.subagent_max_legs': 'applies from the next helper',
+  'agency.subagent_wall_seconds': 'applies from the next helper',
+  'agency.subagent_wall_seconds_local': 'applies from the next helper',
+  'prompt.max_tokens': 'applies after a restart',
+  'prompt.max_tool_result_chars': 'applies after a restart',
+  'llm.timeout_seconds': 'applies to the next request',
+  'llm.retries': 'applies to the next request',
+  'llm.retry_backoff_ms': 'applies to the next request',
+  'llm.model_list_timeout_seconds': 'applies to the next check',
+  'llm.model_list_cache_seconds': 'applies to the next check',
+  'tools.webfetch_max_bytes': 'applies from the next fetch',
+  'updates.check_interval_minutes': 'applies now',
+};

@@ -372,11 +372,11 @@ func TestAChildLegEndsAtTheOperatorsCheckpoint(t *testing.T) {
 	}
 }
 
-// THE CHAIN'S BOUND IS THE OPERATOR'S, AND READ WHEN A TURN ENDS. Two
-// continuations in a row and the third stands down; raised, the next
-// capped turn is continued again. (That the operator's message starts a
-// new chain is held beside the default bound:
-// TestTheContinuationChainStandsDownAfterEightLegs.)
+// THE CHAIN'S BOUND IS THE OPERATOR'S, AND READ WHEN A TURN ENDS. It
+// governs the one chain left to it, a deadline's resume with no session
+// (an active session's work is carried on by the record's brakes,
+// 2026-11-06): two resumes in a row and the third stands down; raised,
+// the next is continued again.
 func TestTheContinuationChainStandsDownAtTheOperatorsBound(t *testing.T) {
 	app, _ := dispatchApp(t)
 	bound := func(n int) {
@@ -385,9 +385,6 @@ func TestTheContinuationChainStandsDownAtTheOperatorsBound(t *testing.T) {
 		app.cfgMu.Unlock()
 	}
 	bound(2)
-	if err := app.store.StartWorkSession(t.Context(), "ws_bound", "a task that never finishes"); err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := app.acquireTurn(ctx); err != nil {
@@ -409,18 +406,18 @@ func TestTheContinuationChainStandsDownAtTheOperatorsBound(t *testing.T) {
 
 	logs := logsink.CaptureForTest(t)
 	for leg := 1; leg <= 2; leg++ {
-		if scheduled, why := app.scheduleContinuation(capDeclared, ""); !scheduled {
-			t.Fatalf("capped turn %d was not continued (%q); the bound is two", leg, why)
+		if scheduled, why := app.scheduledOrWhy(capDeadline, ""); !scheduled {
+			t.Fatalf("timed-out turn %d was not resumed (%q); the bound is two", leg, why)
 		}
 	}
-	if scheduled, _ := app.scheduleContinuation(capDeclared, ""); scheduled {
-		t.Fatal("a third consecutive capped turn was continued past agency.max_turn_continuations 2")
+	if scheduled, _ := app.scheduledOrWhy(capDeadline, ""); scheduled {
+		t.Fatal("a third consecutive resume was continued past agency.max_turn_continuations 2")
 	}
-	if want := "2 consecutive capped turns on ws_bound, and agency.max_turn_continuations is 2"; !strings.Contains(logs.String(), want) {
+	if want := "2 consecutive capped turns on , and agency.max_turn_continuations is 2"; !strings.Contains(logs.String(), want) {
 		t.Errorf("the stand-down does not say the chain and the bound (%q):\n%s", want, logs.String())
 	}
 	bound(10)
-	if scheduled, why := app.scheduleContinuation(capDeclared, ""); !scheduled {
+	if scheduled, why := app.scheduledOrWhy(capDeadline, ""); !scheduled {
 		t.Fatalf("the bound raised to 10 and the fourth capped turn was still refused (%q): it is not read when the turn ends", why)
 	}
 }

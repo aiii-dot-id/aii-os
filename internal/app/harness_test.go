@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,14 +159,28 @@ func maintenancePass(t testing.TB, a *App) {
 // spaced): the snapshot it made, as the page then lists it, newest first.
 func askedSnapshot(t testing.TB, a *App) (dashboard.ContinuitySnapshot, error) {
 	t.Helper()
-	v, err := continuityDoor(a).Take(t.Context())
-	if err != nil {
-		return dashboard.ContinuitySnapshot{}, err
+	door := continuityDoor(a)
+	// THE FIXTURE'S OWN MAINTENANCE PASS MAKES THE DOOR SAY BUSY, AND THAT
+	// IS NOT WHAT THIS ASKS ABOUT. The r3 run (2026-10-30, load from the
+	// scope's own shards, 12 for internal/app) failed here with "A
+	// maintenance pass is running right now. Try again when it is done.":
+	// the test's backup request landed while the fixture's pass held the
+	// door. Wait for the pass, then ask again. Every assertion below is
+	// unchanged — a refusal that is NOT the pass is returned as before.
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		v, err := door.Take(t.Context())
+		if err == nil {
+			if len(v.Snapshots) == 0 {
+				return dashboard.ContinuitySnapshot{}, errors.New("the page lists no snapshot after Back up now")
+			}
+			return v.Snapshots[0], nil
+		}
+		if !strings.Contains(err.Error(), "maintenance pass is running") || time.Now().After(deadline) {
+			return dashboard.ContinuitySnapshot{}, err
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	if len(v.Snapshots) == 0 {
-		return dashboard.ContinuitySnapshot{}, errors.New("the page lists no snapshot after Back up now")
-	}
-	return v.Snapshots[0], nil
 }
 
 // askRestore is a person's restore from the page: the plan read, its

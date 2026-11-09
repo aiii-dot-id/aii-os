@@ -151,7 +151,7 @@ func TestAuditAcquirerReplacesChangedFetchURL(t *testing.T) {
 // Real signed T3 package and Activate, no native child is launched. Its runtime
 // fetch remains in flight across a second activation with a short deadline.
 func TestAuditActivationDoesNotWaitForRuntimeDownload(t *testing.T) {
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	rt := newRuntimeFixture(t)
 	child := []byte("synthetic native entrypoint; this probe refuses before launch")
 	pkg := nativePackageWithModels(t, "org.example.runtime-wait", child, role, runtimesJSON(t, rt), nil)

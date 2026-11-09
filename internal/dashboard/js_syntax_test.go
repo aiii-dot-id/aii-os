@@ -37,8 +37,13 @@ var expectedModules = []string{
 	"static/sandbox.js",
 	"static/scripts.js",
 	"static/tools.js",
+	// Settings → Plugins and permissions (step 16a): its words and its stylesheet.
+	"static/strings/settings-permissions.js",
+	"static/views/settings/permissions.css",
 	"static/announce.js",
 	"static/overlay.js",
+	// The right column's cards moved to Status (step 5); panel.js stays as a
+	// stand-in for an identity's own copy of a module that calls it.
 	"static/panel.js",
 	"static/pending.js",
 	// The half of the sign-in the page holds: every request to the
@@ -54,17 +59,133 @@ var expectedModules = []string{
 	// at boot: a missing embed is not a degraded feature, it is a module
 	// resolution failure that stops the whole shell.
 	"static/voice.js",
+	// voice.js, split by what each part does (step 21).
+	"static/voice/playback.js",
+	"static/voice/state.js",
+	"static/voice/capture.js",
+	"static/voice/speech.js",
+	"static/voice/session.js",
+	"static/voice/modes.js",
+	// What a view fetched when first opened gives the socket (step 21).
+	"static/shell/later.js",
+	// The socket's way to the voice, which is fetched once the shell has
+	// started (step 22).
+	"static/shell/voice-later.js",
+	// The page's keys, heard from the start; Search is fetched once the shell
+	// has started, and a view's sheets come with it (step 22).
+	"static/shell/keys.js",
+	"static/shell/sheet.js",
 	// The streaming frame's codec, lane and pre-roll; voice.js imports it
 	// and re-exports every name.
 	"static/voice-stream.js",
 	"static/voice-echo.js",
 	// Loaded by voice.js as an AudioWorklet module (new URL(..., import.meta.url)).
 	"static/voice-capture.worklet.js",
-
+	// R66 UP2 — the section lane: the slot renderer and its frames (fetched
+	// with the first section to show), the pure bridge core (with a section's
+	// first hello), and the frame-owned client sections import.
 	"static/sections.js",
+	"static/sections-frames.js",
 	"static/bridge.js",
 	"static/section-api.js",
+	// The shell (spec section 8, step 3): the router, the table of where
+	// everything lives, the components app.js draws, and the words.
+	"static/shell/project-pill.js",
+	"static/shell/router.js",
+	"static/registry.js",
+	"static/components/button/button.js",
+	"static/components/chip/chip.js",
+	"static/components/os-note/os-note.js",
+	"static/components/tabs/tabs.js",
+	"static/components/top-bar/top-bar.js",
+	"static/components/model-switch/model-switch.js",
+	"static/shell/reload-keep.js",
+	"static/shell/keep.js",
+	"static/shell/visit.js",
+	"static/components/side-nav/side-nav.js",
+	// First run (spec step 7): the one screen, and its words.
+	"static/views/firstrun/start.js",
+	"static/strings/firstrun.js",
+	"static/strings/shell.js",
+	"static/strings/identity.js",
 	"static/views/chat.js",
+	// The conversation (step 4): views/chat.js re-exports it. Its parts
+	// (step 6): the shared DOM steps, the questions, what became of a sent
+	// message, long words, a stretch of work, a reply's thinking and the
+	// reply box's presses.
+	"static/views/chat/thread.js",
+	"static/views/chat/draft.js",
+	"static/views/chat/draft.css",
+	"static/views/chat/dom.js",
+	"static/views/chat/asks.js",
+	"static/views/chat/sends.js",
+	"static/views/chat/long-text.js",
+	"static/views/chat/receipts.js",
+	"static/views/chat/thinking.js",
+	"static/views/chat/reply.js",
+	"static/components/ask/ask.js",
+	"static/components/reply-box/reply-box.js",
+	// Home (step 6): their note, the one thread and reply box placed under
+	// it, and the words.
+	"static/views/home/note.js",
+	"static/components/note/note.js",
+	"static/shell/thread-place.js",
+	"static/strings/home.js",
+	// The channel straight between two devices, moved from ws.js.
+	"static/transport/channel.js",
+	// About {name} → Beliefs (step 9): the view, the trail's read, and
+	// their components.
+	"static/views/identity/beliefs.js",
+	"static/views/identity/trail.js",
+	"static/views/chat/why.js",
+	"static/components/belief-row/belief-row.js",
+	"static/components/why-trail/why-trail.js",
+	// The Show chips and the beliefs no longer held, fetched when the tab
+	// first draws, and their words.
+	"static/views/identity/beliefs-show.js",
+	"static/strings/beliefs-show.js",
+	// About {name} → Who they are and Between you, and their mark (step 10).
+	"static/views/identity/who.js",
+	"static/views/identity/between.js",
+	"static/views/identity/experiences.js",
+	"static/views/identity/record.js",
+	"static/components/in-words/in-words.js",
+	"static/views/identity/relationships.js",
+	"static/views/identity/page.js",
+	"static/views/identity/record-read.js",
+	"static/views/identity/when.js",
+	"static/components/mark/look.js",
+	"static/components/mark/mark.js",
+	"static/shell/mark-place.js",
+	"static/shell/menu.js",
+	"static/components/outcome-row/outcome-row.js",
+	"static/strings/chat.js",
+	"static/strings/chat-draft.js",
+	// AII OS's note at the top of every page, and its words.
+	"static/shell/page-note.js",
+	"static/strings/status.js",
+	// Settings → Status (step 5), and the words the components share.
+	"static/views/settings/status.js",
+	// Settings → App (step 18): theme, notifications, updates, uninstall, and its words.
+	"static/views/settings/app.js",
+	"static/views/settings/app.css",
+	"static/strings/settings-app.js",
+	"static/strings/settings-voice.js",
+	"static/views/settings/voice.css",
+	"static/views/settings/access.css",
+	"static/strings/settings-access.js",
+	"static/strings/settings-phone.js",
+	"static/views/settings/people.css",
+	"static/views/settings/people-say.js",
+	"static/strings/settings-people.js",
+	// Settings → Model (step 15 Model b): its words.
+	"static/strings/settings-model.js",
+	// Settings → Technical (step 19): the page, its first panel and its words.
+	"static/views/settings/technical/technical.js",
+	"static/views/settings/technical/sent.js",
+	"static/views/settings/technical/logs.js",
+	"static/strings/settings-technical.js",
+	"static/strings/components.js",
 	"static/views/attach.js",
 	"static/views/model-picker.js",
 	"static/views/home.js",
@@ -74,12 +195,59 @@ var expectedModules = []string{
 	// The page's title and the notifications of an open question.
 	"static/waiting.js",
 	"static/views/projects.js",
+	"static/views/projects.css",
+	// The progress card's words (step 12); the rest of the view's come with its rebuild.
+	"static/strings/projects.js",
+	// The single owner of the delivered list's grade state (step 12,
+	// host disposition 12.1): projects.js draws it on the Projects page.
+	"static/views/delivered.js",
 	"static/views/memory.js",
 	"static/views/identity.js",
 	"static/views/plugins.js",
+	// Plugins and permissions, split by part (step 16b): views/plugins.js
+	// keeps the page and imports these.
+	"static/views/plugins/catalog.js",
+	"static/views/plugins/card.js",
+	"static/views/plugins/stored.js",
+	"static/views/plugins/accounts.js",
 	"static/views/settings.js",
+	// Settings, split by section (step 14): views/settings.js keeps the
+	// page and imports these.
+	"static/views/settings/parts.js",
+	"static/views/settings/state.js",
+	"static/views/settings/save.js",
+	"static/views/settings/applies.js",
+	"static/views/settings/modelwords.js",
+	"static/views/settings/keep.js",
+	"static/views/settings/access.js",
+	"static/views/settings/access-routes.js",
+	"static/views/settings/phone.js",
+	"static/views/settings/people.js",
+	"static/views/settings/permissions.js",
+	"static/views/settings/model.js",
+	// The Model page's local-model part (0.2.1 item F): the part, its
+	// visibility rule apart from the socket, and its words.
+	"static/views/settings/local.js",
+	"static/views/settings/local-rule.js",
+	"static/strings/settings-local.js",
+	"static/views/settings/capabilities.js",
+	"static/views/settings/voice.js",
+	"static/views/settings/voice-speakers.js",
+	"static/views/settings/technical/forms.js",
+	"static/views/settings/technical/record-state.js",
+	"static/views/settings/technical/savebar.js",
+	"static/views/settings/technical/reflection.js",
+	"static/views/settings/technical/limits.js",
+	"static/views/settings/technical/in-force.js",
+	"static/views/settings/technical/layout.js",
+	"static/views/settings/pass-now.js",
+	"static/views/settings/limit-row.css",
+	"static/strings/settings-technical-forms.js",
 	"static/views/plugin-setting.js",
+	// Settings → Backups (step 18): the view, its stylesheet and its words.
 	"static/views/backups.js",
+	"static/views/backups.css",
+	"static/strings/settings-backups.js",
 	"static/views/mail-repair.js",
 	"static/views/messages.js",
 	"static/views/expert.js",
@@ -190,6 +358,14 @@ func TestEmbeddedJSSyntax(t *testing.T) {
 	}
 
 	for _, m := range expectedModules {
+		// A stylesheet a module loads (Settings → App's) is listed with the
+		// modules; it is checked for presence, not as JavaScript.
+		if !strings.HasSuffix(m, ".js") {
+			if _, err := staticFS.ReadFile(m); err != nil {
+				t.Errorf("expected file %s is not embedded — a view would load unstyled", m)
+			}
+			continue
+		}
 		if !found[m] {
 			t.Errorf("expected module %s is not embedded — a view would load blank", m)
 		}

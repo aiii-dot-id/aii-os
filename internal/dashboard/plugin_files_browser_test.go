@@ -27,7 +27,7 @@ run(() => {
   const box = st.querySelector('[data-grant-plugin="id.aiii.codequality"][data-grant-field="files"]');
   assert(box && !box.checked, 'a plugin signed for fs.sandbox is offered files');
   const row = box.closest('.grant-row').textContent;
-  assert(row.includes('Settings → Sandbox') && row.includes('never its data directory') && row.includes('read only'), 'the box says where the plugin works: ' + row);
+  assert(row.includes('Files in their folders'), 'the box says where the plugin works: ' + row);
   assert(!st.querySelector('[data-grant-plugin="org.example.plain"][data-grant-field="files"]'), 'a plugin not signed for it is not');
   assert(!st.querySelector('[data-root-field]') && !st.textContent.includes('.roots'), 'no folders of the plugin\'s own');
   box.checked = true;

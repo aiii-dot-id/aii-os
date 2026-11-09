@@ -21,7 +21,7 @@ func BenchmarkReadChatStreamLongArguments(b *testing.B) {
 	stream := sse.String()
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := readChatStream(strings.NewReader(stream)); err != nil {
+		if _, err := readChatStream(strings.NewReader(stream), nil); err != nil {
 			b.Fatal(err)
 		}
 	}

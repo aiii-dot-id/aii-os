@@ -89,7 +89,7 @@ func TestAReplyTheRecordRefusedIsReturnedWithTheFailure(t *testing.T) {
 		if err := a.store.StartWorkSession(t.Context(), "ws_d2", "d2 work"); err != nil {
 			t.Fatal(err)
 		}
-		a.continueCappedTurn("ws_d2", 1, capDeclared, "")
+		a.continueCappedTurn("ws_d2", 1, capDeclared, "", false, "")
 		if got := outboxReply(t, a, "wake_cont_"); got != "noted" {
 			t.Errorf("continuation: the operator's outbox holds %q, want the leg's answer", got)
 		}

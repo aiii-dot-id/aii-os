@@ -648,7 +648,7 @@ func TestADoorMarkerNeverSendsABornIdentitysHomeToFirstBoot(t *testing.T) {
 }
 
 func TestWithdrawingRemovesTheSnapshotsTheDoorReceived(t *testing.T) {
-	mine, other := oldMachine(t), oldMachine(t)
+	mine, other := oldMachine(t), anotherOldMachine(t)
 	a, dir := blankMachine(t)
 	defer stopApp(t, a)
 	before := homeAsItIs(t, dir)

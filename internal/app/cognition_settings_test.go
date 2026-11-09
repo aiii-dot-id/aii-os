@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -379,5 +380,35 @@ func TestTheRhythmsSettingsApplyAtOnceOnALiveIdentity(t *testing.T) {
 	}
 	if at := time.UnixMilli(deadline).In(time.UTC); at.Hour() != 8 || at.Minute() != 30 {
 		t.Errorf("the brief's alarm is set for %s; the door set 08:30 (UTC, no zone configured)", at.Format("15:04"))
+	}
+}
+
+// EVERY NUMBER THE HOST HOLDS HAS A PLACE ON TECHNICAL, in words: a setting
+// the table gains and no panel lists would be settable nowhere on the page.
+func TestEverySettingHasAPlaceOnTechnical(t *testing.T) {
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "dashboard", "static", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	panels := read("views/settings/technical/reflection.js") + read("views/settings/technical/limits.js")
+	words := read("strings/settings-technical-forms.js")
+	for _, set := range cognitionSettings {
+		if set.key == "prompt.max_tokens" { // the request budget, drawn with its own field
+			if !strings.Contains(read("views/settings/technical/limits.js"), "'"+set.key+"'") {
+				t.Errorf("%s is not on the limits panel", set.key)
+			}
+			continue
+		}
+		m := regexp.MustCompile(`\['` + regexp.QuoteMeta(set.key) + `', '([a-zA-Z]+)'\]`).FindStringSubmatch(panels)
+		if m == nil {
+			t.Errorf("%s has no place on Technical", set.key)
+			continue
+		}
+		if !strings.Contains(words, m[1]+": \"") {
+			t.Errorf("%s names words %q that do not exist", set.key, m[1])
+		}
 	}
 }

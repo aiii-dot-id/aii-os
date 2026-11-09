@@ -25,6 +25,7 @@ run(() => {
   S.config = card(fresh, true);
   renderPlugins();
   const st = document.getElementById('plugins-stack');
+  st.querySelector('[data-manage="id.aiii.codequality"]').click(); // its card opens under Manage (step 16b)
   let inp = st.querySelector('[data-pkey-input]');
   assert(inp && inp.type === 'password' && inp.value === '', 'the key is pasted into an empty password field');
   assert(st.textContent.includes('no key yet') && st.textContent.includes('rides only to api.typesafe.ai:443'), 'the card names the one host the key rides to');

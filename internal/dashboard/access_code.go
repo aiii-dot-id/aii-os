@@ -50,13 +50,13 @@ type AccessCodeState struct {
 }
 
 var (
-	ErrAccessCodeNeedsToken = errors.New("an access code signs a device in to a dashboard that asks for its access token, and this one asks for none — Ask for an access token (Settings → Dashboard) first")
+	ErrAccessCodeNeedsToken = errors.New("to make a code, first turn on \"Ask every device to sign in\" in Settings → Access")
 
 	ErrAccessCodeNotPrivate = errors.New("this connection is not private, so no access code was made: it would cross the network in the clear. Open this page on the machine itself, or over HTTPS")
 
 	ErrAccessCodeSeen = errors.New("this connection is not private, so the access code sent over it has been seen in the clear: it is ended and signed nothing in. Make another and sign in with it over HTTPS")
 
-	ErrAccessCodeStale = errors.New("the access token changed while the code was being made — sign in again, then ask for a code")
+	ErrAccessCodeStale = errors.New("your devices were signed out meanwhile. Sign in, then make a new code")
 
 	ErrAccessCodeNotLocal = errors.New("this access code signs in a browser on the AII OS machine or on its own network only, and it was offered from elsewhere: it is ended and signed nothing in. From another network, sign in with a code from Open on another device")
 )
@@ -235,7 +235,7 @@ func (s *Server) handleLauncherLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" {
-		http.Error(w, "a sign-in link is made here for the launcher on this machine, never for a page: a page that is signed in makes an access code with Settings → Dashboard → Open on another device", http.StatusForbidden)
+		http.Error(w, "a sign-in link is made here for the launcher on this machine, never for a page: a page that is signed in makes a code on Settings → Phone and other devices", http.StatusForbidden)
 		return
 	}
 	p := s.auth.Load()

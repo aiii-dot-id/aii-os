@@ -103,7 +103,8 @@ func TestSectionServingCSPAndWalls(t *testing.T) {
 	// The exact wall, byte for byte, on every servable type.
 	wantCSP := "default-src 'none'; " +
 		"script-src 'self' https://" + addr + "/sections/hello/ https://" + addr + "/section-api.js; " +
-		"style-src 'self' https://" + addr + "/sections/hello/; " +
+		"style-src 'self' https://" + addr + "/sections/hello/ https://" + addr + "/fonts/; " +
+		"font-src https://" + addr + "/fonts/; " +
 		"img-src 'self' https://" + addr + "/sections/hello/ data:; " +
 		"connect-src 'none'; " +
 		"frame-ancestors 'self'; " +
@@ -306,6 +307,7 @@ func TestThePagePolicyIsTheOneTheDocumentsDescribe(t *testing.T) {
 		"style-src-elem 'self'; " +
 		"style-src-attr 'unsafe-inline'; " +
 		"img-src 'self'; " +
+		"font-src 'self'; " +
 		"media-src 'self' blob:; " +
 		"connect-src 'self'; " +
 		"frame-src 'self'; " +

@@ -328,7 +328,9 @@ func TestARefusalAfterARoundOfToolsIsSaidAtTheTailOfTheNewestResult(t *testing.T
 	if len(seen) != 3 || seen[1].said != http.StatusBadRequest || fmt.Sprint(seen[2].tools) != "[read]" || !strings.Contains(result.Spoken, "done") {
 		t.Fatalf("want the call, the refusal of the second request, and the third without the tool: %+v", seen)
 	}
-	if strings.Contains(seen[1].body, line("correct")) || !strings.Contains(seen[2].body, "what was read\\n["+line("correct")+"]") {
+	// The result's tail carries the host's status line first (every result
+	// does, 2026-11-06), then the refusal.
+	if strings.Contains(seen[1].body, line("correct")) || !strings.Contains(seen[2].body, "what was read\\n[status · ") || !strings.Contains(seen[2].body, "]\\n["+line("correct")+"]") {
 		t.Fatalf("THE IDENTITY WAS NOT TOLD, AT THE TAIL OF THE RESULT IT HAD JUST BEEN GIVEN, THAT THE TOOL IS LEFT OUT:\n%s", seen[2].body)
 	}
 }

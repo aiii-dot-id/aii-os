@@ -173,7 +173,11 @@ func TestADeclaredStartupAllowanceReachesTheSupervisor(t *testing.T) {
 	if !errors.As(err, &exit) || exit.Phase != "start" || !strings.Contains(exit.Meaning, "30ms") {
 		t.Fatalf("the build's declared allowance must be the deadline the child is held to: %v", err)
 	}
-	if time.Since(started) > 5*time.Second {
+	// Half the default tells the declared 30 ms from the default it would
+	// otherwise be: on the Windows guest, building the container alone took
+	// five seconds under the whole suite's load (2026-11-07), where a fixed
+	// five-second bound failed with the allowance enforced.
+	if time.Since(started) > supervisor.DefaultReadyTimeout/2 {
 		t.Fatal("the declared allowance was not enforced")
 	}
 

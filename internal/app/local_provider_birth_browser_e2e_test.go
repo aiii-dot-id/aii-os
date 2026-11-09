@@ -125,13 +125,14 @@ func TestBirthOnALocalServerFromTheFormInARealBrowser(t *testing.T) {
     const row = document.getElementById('fb-url-row'), hint = document.getElementById('fb-hint').textContent;
     last = 'row shown: ' + !row.hidden + ', url: ' + document.getElementById('fb-url').value + ', hint: ' + hint;
     if (!row.hidden && document.getElementById('fb-url').value === 'http://127.0.0.1:1/v1' &&
-        hint.startsWith('Nothing at http://127.0.0.1:1/v1 answered with its models')) return last;
+        hint.startsWith('Begin waits until the server at http://127.0.0.1:1/v1 answers.')) return last;
     return null;`)
 
-	// 3. Birth waits.
-	said, err := page.eval(`document.getElementById('fb-birth').click(); document.getElementById('fb-result').textContent`, false, 10*time.Second)
-	if err != nil || !strings.Contains(said, "Birth waits until the server at http://127.0.0.1:1/v1 lists its models") {
-		t.Fatalf("Birth at a silent address was not refused on the page: %q %v", said, err)
+	// 3. Birth waits: Begin cannot be pressed until a model is listed (the
+	// walk's first finding), and the hint above has said why.
+	said, err := page.eval(`const b = document.getElementById('fb-birth'); b.click(); String(b.disabled)`, false, 10*time.Second)
+	if err != nil || said != "true" {
+		t.Fatalf("Begin could be pressed at a silent address: disabled=%q %v", said, err)
 	}
 	if fileExists(cfg.Identity.LedgerPath) {
 		t.Fatal("Birth at a silent address minted a ledger")

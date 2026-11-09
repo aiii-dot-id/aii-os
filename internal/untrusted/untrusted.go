@@ -12,12 +12,30 @@ const (
 	forgedNotice = "(forged sentinel removed)"
 )
 
+var lineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "\u2028", " ", "\u2029", " ")
+
+func OneLine(s string) string { return lineBreaks.Replace(s) }
+
 func Wrap(source, content string) string {
 	head := Open
-	if s := scrub(source); s != "" {
+	if s := OneLine(scrub(source)); s != "" {
 		head = Open + " source: " + s
 	}
 	return head + "\n" + scrub(content) + "\n" + Close
+}
+
+func Split(s string) (source, content string, ok bool) {
+	at := strings.Index(s, Open)
+	if at < 0 {
+		return "", "", false
+	}
+	rest := s[at+len(Open):]
+	line := strings.IndexByte(rest, '\n')
+	end := strings.LastIndex(rest, "\n"+Close)
+	if line < 0 || end <= line {
+		return "", "", false
+	}
+	return strings.TrimPrefix(rest[:line], " source: "), rest[line+1 : end], true
 }
 
 func scrub(s string) string {

@@ -42,30 +42,33 @@ run(() => {
       ],
     } };
   S.openSettings('speech', 'sp-provider-stt');
-  assert(document.querySelector('[data-sec="speech"]'), 'Settings does not list Speech');
+  assert(document.querySelector('#settings-stack [data-section="speech"]'), 'the way in from the microphone does not open Speech');
   assert(document.activeElement === byId('sp-provider-stt'), 'the way in from the microphone does not land on the engine field');
 
   assert(offered(byId('sp-provider-stt')) === '|OpenAI|Deepgram|' + own8000 + '|own-server:', 'input engines: ' + offered(byId('sp-provider-stt')));
   assert(offered(byId('sp-provider-tts')) === '|OpenAI|Deepgram|Hume|' + own8000 + '|own-server:', 'reply engines: ' + offered(byId('sp-provider-tts')));
-  assert(byId('sp-provider-stt').options[0].textContent === 'Off' && byId('sp-provider-tts').options[0].textContent === 'Browser voice', 'the first engines are not Off and Browser voice');
-  assert([...byId('sp-provider-tts').options].at(-1).textContent === 'OpenAI-compatible…', 'no way to name an OpenAI-compatible server');
-  assert(byId('sp-provider-stt').title === 'No speech-to-text engine. The microphone opens this section until one is chosen.', 'a blank engine does not explain itself: ' + byId('sp-provider-stt').title);
-  assert(byId('sp-readback-stt').textContent === 'Voice input is off.' && byId('sp-key-row-stt').hidden, 'input that is off asks for something');
+  assert(byId('sp-provider-stt').options[0].textContent === 'Off' && byId('sp-provider-tts').options[0].textContent === 'This browser', 'the first engines are not Off and This browser');
+  assert([...byId('sp-provider-tts').options].at(-1).textContent === 'A server you run', 'no way to name an OpenAI-compatible server');
+  assert(byId('sp-provider-stt').title === 'No service hears you yet. The Talk button opens this page until one is chosen.', 'a blank engine does not explain itself: ' + byId('sp-provider-stt').title);
+  assert(byId('sp-readback-stt').textContent === 'No service hears you yet. The Talk button opens this page until one is chosen.' && byId('sp-key-row-stt').hidden, 'input that is off asks for something');
   const replies = byId('sp-readback-tts').textContent;
-  assert(replies.includes('https://api.openai.com/v1/audio/speech') && replies.includes('key none'), 'the readback does not say what is in force: ' + replies);
+  assert(replies === 'Replies spoken by OpenAI.' && (byId('sp-endpoint-tts') || {}).textContent === 'Server address: https://api.openai.com/v1/audio/speech', 'the page does not say what is in force: ' + replies);
+  // THE SPEAKING CHOICE IS EVERY REPLY'S, a conversation's too, and the
+  // card says so where the voice is chosen (the operator, 2026-10-01).
   const promise = byId('sp-note-tts') ? byId('sp-note-tts').textContent : '';
   assert(promise.includes('to what you say in a conversation') && promise.includes('cannot speak, the browser\'s own voice does') && !byId('sp-note-stt'),
     'the reply voice card does not say it speaks a conversation\'s replies: ' + JSON.stringify(promise));
 
-  assert(!byId('sp-key-row-tts').hidden && byId('sp-key-label-tts').textContent === 'API KEY (NONE STORED)', 'no place for the chosen engine\'s key: ' + byId('sp-key-label-tts').textContent);
+  // THE KEY IS SHARED WITH A CHAT PROVIDER OF THE SAME NAME, AND SAYS SO.
+  assert(!byId('sp-key-row-tts').hidden && byId('sp-key-label-tts').textContent === 'OpenAI key · none kept', 'no place for the chosen engine\'s key: ' + byId('sp-key-label-tts').textContent);
   assert(byId('sp-key-tts').title === 'No key is stored for OpenAI — cloud speech services refuse a request without one.', 'a missing key does not explain itself: ' + byId('sp-key-tts').title);
   assert(byId('sp-key-note-tts').textContent.indexOf('Shared with the OpenAI chat provider') === 0 && byId('sp-key-note-tts').textContent.includes('OPENAI_API_KEY'), 'the shared key is not named as shared: ' + byId('sp-key-note-tts').textContent);
   assert(byId('sp-base-row-tts').hidden, 'a vendor engine asks for a base URL');
 
   choose('sp-provider-tts', 'Hume');
   assert(byId('sp-voice-tts') && !byId('sp-model-tts'), 'Hume was asked for a model it never reads');
-  assert(byId('sp-key-label-tts').textContent === 'API KEY (ONE STORED — ENTER TO REPLACE)' && byId('sp-key-tts').title === 'Blank keeps the key stored for Hume.', 'a stored key is not said to be kept');
-  assert(byId('sp-readback-tts').textContent.includes('https://api.openai.com/v1/audio/speech'), 'the readback stopped saying what is still in force');
+  assert(byId('sp-key-label-tts').textContent === 'Hume key · kept' && byId('sp-key-tts').title === 'Blank keeps the key stored for Hume.', 'a stored key is not said to be kept');
+  assert(byId('sp-readback-tts').textContent.includes('Replies spoken by OpenAI'), 'the readback stopped saying what is still in force');
   choose('sp-provider-tts', 'OpenAI');
   assert(byId('sp-model-tts') && byId('sp-voice-tts'), 'OpenAI asks for both a model and a voice');
 
@@ -83,7 +86,7 @@ run(() => {
   assert(rejectSettingsConfig('voice input refused: ' + own8000 + ' did not transcribe a moment of silence: connection refused', straight.request_id), 'the refusal was not claimed');
   const said = document.querySelector('[data-said="speech"]');
   assert(said && said.textContent.includes('connection refused'), 'the refusal is not beside the button that asked: ' + stack());
-  assert(saveButton().textContent === 'Save speech settings' && !saveButton().disabled, 'the button stayed busy after the answer');
+  assert(saveButton().textContent === 'Save' && !saveButton().disabled, 'the button stayed busy after the answer');
   assert(!document.querySelector('#settings-stack > .config-result'), 'the answer was also put at the top of the page');
   assert(!document.querySelector('[data-said="speech_tts"]'), 'the other card was told about a save it did not make');
 
@@ -101,7 +104,7 @@ run(() => {
 
   ['', 'localhost:8000', 'ftp://localhost:8000'].forEach(address => {
     choose('sp-provider-stt', 'own-server:');
-    assert(!byId('sp-base-row-stt').hidden && byId('sp-key-label-stt').textContent === 'API KEY (OPTIONAL)', 'a new server does not ask for its address with an optional key');
+    assert(!byId('sp-base-row-stt').hidden && byId('sp-key-label-stt').textContent === 'API key (optional)', 'a new server does not ask for its address with an optional key');
     byId('sp-base-stt').value = address;
     const before = frames.length;
     save('stt');
@@ -143,7 +146,7 @@ run(() => {
   S.config.speech.services.find(s => s.name === 'Deepgram').added = true;
   assert(acceptSettingsConfig(set.request_id), 'the checked save was not accepted');
   renderSettings();
-  assert(stack().includes('Speech settings saved.'), 'the combined save is not confirmed: ' + stack());
+  assert(stack().includes('Saved.') && !stack().includes('echo choice'), 'a save that leaves the echo alone is not confirmed as "Saved." alone: ' + stack());
 
   choose('sp-voice-tts', 'by-id:');
   byId('sp-voice-tts-typed').value = 'nobody';
@@ -157,7 +160,7 @@ run(() => {
   renderSettings();
   const stale = [...byId('sp-provider-stt').options].find(o => o.value === 'Anthropic');
   assert(stale && stale.selected && stale.textContent === 'Anthropic (not a speech service)', 'the pointer in force vanished from its list: ' + offered(byId('sp-provider-stt')));
-  assert(byId('sp-key-label-stt').textContent === 'API KEY (ONE STORED — ENTER TO REPLACE)' && byId('sp-key-note-stt').textContent === 'Shared with the Anthropic chat provider.',
+  assert(byId('sp-key-label-stt').textContent === 'Anthropic key · kept' && byId('sp-key-note-stt').textContent === 'Shared with the Anthropic chat provider.',
     'the pointer in force lost its entry\'s key facts: ' + byId('sp-key-label-stt').textContent + ' / ' + byId('sp-key-note-stt').textContent);
 });
 </script>`

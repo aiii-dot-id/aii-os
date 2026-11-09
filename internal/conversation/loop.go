@@ -108,13 +108,57 @@ type durableToolTranscript interface {
 	RecordToolDoneDurable(turnID string, ordinal int, tool, args string, obs Observation) (bool, error)
 }
 
+type requestToolTranscript interface {
+	RecordToolStartOfRequest(turnID string, ordinal int, callID, tool, args, model string, request interaction.RequestFacts) error
+}
+
 type Emitter interface {
 	EmitToolEvent(kind, name, args string)
 }
 
-type Steering interface {
-	DrainSteering() []string
+type ReplyEmitter interface {
+	ReplyText(call int, piece string)
+	ReplyEnded(call int, taken, withdrawn string)
 }
+
+type replyObserverKey struct{}
+
+func WithReplyObserver(ctx context.Context, re ReplyEmitter) context.Context {
+	if re == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, replyObserverKey{}, re)
+}
+
+func ReplyObserverFrom(ctx context.Context) ReplyEmitter {
+	re, _ := ctx.Value(replyObserverKey{}).(ReplyEmitter)
+	return re
+}
+
+const (
+	WithdrawnStopped    = "stopped"
+	WithdrawnProvider   = "provider"
+	WithdrawnAskedAgain = "asked again"
+)
+
+type Steering interface {
+	DrainSteering() []Steered
+}
+
+type Steered struct {
+	Words string
+	By    SteeredBy
+}
+
+type SteeredBy int
+
+const (
+	BySomeone SteeredBy = iota
+
+	ByOperatorTyped
+
+	ByOperatorAnswer
+)
 
 type Config struct {
 	MaxIterations       limits.Ceiling
@@ -133,6 +177,8 @@ type Config struct {
 	TurnTime time.Duration
 
 	PredictedThisTurn func() (remaining, ordinal int)
+
+	ReflectEvery func(ctx context.Context) int
 
 	Checkpoint Checkpoint
 
@@ -206,6 +252,12 @@ type Result struct {
 
 	Notes []string
 
+	StatusLine string
+
+	RefusedCalls int
+
+	CallsDone int
+
 	ContractErr error
 
 	Reasoning []CallReasoning
@@ -247,6 +299,10 @@ func (r Result) NothingContinues(why string) []string {
 		notes[i] = declare("This turn ended at its budget after %d tool calls. Nothing continues by itself: %s. Ask again to continue.", r.ToolCallsUsed, why)
 	}
 	return notes
+}
+
+func (r Result) Delivered() []string {
+	return slices.DeleteFunc(slices.Clone(r.Notes), func(n string) bool { return r.budgetLine != "" && n == r.budgetLine })
 }
 
 func (r Result) Said() string {
@@ -443,6 +499,22 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 	exhaustedCallBudget := false
 	budgetLine := ""
 
+	checkpointLine := func() string {
+		if checkpointByRounds {
+			return declare("This turn ended at its checkpoint after %d tool calls, before its limit of %d rounds; the work continues automatically in a fresh turn.", t.toolCallsSoFar, t.cfg.MaxIterations.N)
+		}
+		return declare("This turn ended at its declared budget after %d tool calls; the work continues automatically in a fresh turn.", t.toolCallsSoFar)
+	}
+
+	endsAtCheckpoint := func() {
+		if softCapFinal < 0 {
+			return
+		}
+		continuedAtCap, continuedAtRounds = !checkpointByRounds, checkpointByRounds
+		budgetLine = checkpointLine()
+		t.notes = append(t.notes, budgetLine)
+	}
+
 	silentSpent := 0
 	degenNudged := false
 	truncated := false
@@ -538,7 +610,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 
 		t.drainedSteering = t.drainedSteering[:0]
 
-		choice := t.numberEmissions(resp.Choices[0])
+		choice := t.numberEmissions(resp)
 		if !resp.Usage.Reported {
 			silentSpent += estimateSilentCall(t.messages, t.toolDefs, choice.Message.Content)
 		}
@@ -571,6 +643,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 				return t.fail(err)
 			}
 			t.notes = append(t.notes, note)
+			endsAtCheckpoint()
 			break
 		}
 
@@ -581,12 +654,14 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			if degenNudged {
 				t.notes = append(t.notes, declare("Degenerate repetition was detected in the model's output twice this turn; the turn ends here rather than spending further."))
 				logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: second detection (len %d) — turn ended", len(choice.Message.Content))
+				endsAtCheckpoint()
 				break
 			}
 			degenNudged = true
 			if len(choice.Message.ToolCalls) == 0 {
 				logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in a final answer (len %d) — marked", len(choice.Message.Content))
 				t.notes = append(t.notes, declare("Degenerate repetition was detected in this reply; treat its repeating tail as noise, not conclusions."))
+				endsAtCheckpoint()
 				break
 			}
 			logsink.WarnCtx(t.ctx, "turn.decision", "DEGENERATE OUTPUT: repetition detected in emission (len %d) — tool calls discarded, corrective note sent", len(choice.Message.Content))
@@ -600,6 +675,8 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			if strings.TrimSpace(t.finalText) == "" && choice.FinishReason != "length" {
 				return t.fail(emptyReply("LLM response has no text or tool calls"))
 			}
+
+			endsAtCheckpoint()
 			break
 		}
 
@@ -671,7 +748,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 					note, armed = roundCheckpointNote(i+1, t.cfg.MaxIterations.N, grace), "rounds"
 				}
 				t.messages[len(t.messages)-1].Content += note
-				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %s, armed by %s) — turn will continue in a fresh turn after %d more rounds",
+				logsink.InfoCtx(t.ctx, "nudge.decision", "NUDGE checkpoint sent: round %d, %d calls spent in budget window (declared %d at ordinal %d, limit %s, armed by %s) — the turn ends at its checkpoint after %d more rounds, and its caller decides what follows",
 					i+1, spent, declared, declarationOrdinal, limit, armed, grace)
 			}
 		}
@@ -697,7 +774,9 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 		if st := l.steering(); st != nil {
 			if said := st.DrainSteering(); len(said) > 0 {
-				t.drainedSteering = append(t.drainedSteering, said...)
+				for _, s := range said {
+					t.drainedSteering = append(t.drainedSteering, s.Words)
+				}
 				boundary = append(boundary, steeringNote(said))
 			}
 		}
@@ -729,11 +808,8 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 			exhaustedBudget = !yielded && !continuedAtCap && !continuedAtRounds
 			if yielded {
 				capLine = declare("Turn yielded after %d tool calls — the gate is free; a delivery or message wakes the next turn.", t.toolCallsSoFar)
-			} else if continuedAtCap {
-				capLine = declare("This turn ended at its declared budget after %d tool calls; the work continues automatically in a fresh turn.", t.toolCallsSoFar)
-				budgetLine = capLine
-			} else if continuedAtRounds {
-				capLine = declare("This turn ended at its checkpoint after %d tool calls, before its limit of %d rounds; the work continues automatically in a fresh turn.", t.toolCallsSoFar, t.cfg.MaxIterations.N)
+			} else if continuedAtCap || continuedAtRounds {
+				capLine = checkpointLine()
 				budgetLine = capLine
 			}
 			if yielded && yieldAnswer != "" {
@@ -747,7 +823,7 @@ func (l *Loop) RunTurn(ctx context.Context, system llm.Message, history []llm.Me
 		}
 	}
 
-	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), Notes: t.notes, FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, ContinuedAtCap: continuedAtCap, ContinuedAtRounds: continuedAtRounds, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, ContinuedAtTimeFence: continuedAtTimeFence, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), Reasoning: t.reasoning, budgetLine: budgetLine}
+	result := Result{Spoken: strings.Join(t.spoken, "\n\n"), Notes: t.notes, FinalText: t.finalText, ModelID: t.modelID, Usage: t.turnUsage, StatusLine: t.lastStatus, RefusedCalls: t.callsRefused, CallsDone: t.callsOK + t.callsFailed, ContinuedAtCap: continuedAtCap, ContinuedAtRounds: continuedAtRounds, ContinuedAtPressure: continuedAtPressure, ContinuedAtTokenBudget: continuedAtTokenBudget, ContinuedAtTimeFence: continuedAtTimeFence, Yielded: yielded, ExhaustedBudget: exhaustedBudget, ExhaustedCallBudget: exhaustedCallBudget, RoundsUsed: t.roundsUsed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), Reasoning: t.reasoning, budgetLine: budgetLine}
 
 	if format := requestResponseFormat(t.ctx); format != nil {
 		result.ContractErr = llm.ValidateStructuredOutput(format, t.finalText)
@@ -770,13 +846,19 @@ type turn struct {
 	toolDefs           []llm.ToolDefinition
 	previousResponseID string
 
-	spoken                     []string
-	finalText                  string
-	modelID                    string
-	turnUsage                  TurnUsage
-	toolCallsSoFar             int
-	toolCallsRecorded          int
-	emissionCoverageIncomplete bool
+	spoken         []string
+	finalText      string
+	modelID        string
+	turnUsage      TurnUsage
+	toolCallsSoFar int
+
+	lastStatus string
+
+	doneOrdinals []int
+
+	callsOK, callsFailed, callsRefused int
+	toolCallsRecorded                  int
+	emissionCoverageIncomplete         bool
 
 	schemaRefusals int
 
@@ -793,6 +875,11 @@ type turn struct {
 
 	turnID  string
 	ordinal int
+
+	requests  int
+	requestOf map[int]interaction.RequestFacts
+
+	replyCalls int
 
 	scoped  bool
 	offered map[string]bool
@@ -895,7 +982,7 @@ func (t *turn) keepReasoning(r *llm.Response) {
 }
 
 func (t *turn) fail(err error) (Result, error) {
-	r := Result{Usage: t.turnUsage, ModelID: t.modelID, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), RoundsUsed: t.roundsUsed, Reasoning: t.reasoning}
+	r := Result{Usage: t.turnUsage, ModelID: t.modelID, StatusLine: t.lastStatus, RefusedCalls: t.callsRefused, CallsDone: t.callsOK + t.callsFailed, ToolCallsUsed: t.toolCallsSoFar, ToolCallsEmitted: t.ordinal, ToolCallCoverageComplete: t.emissionCoverageComplete(), RoundsUsed: t.roundsUsed, Reasoning: t.reasoning}
 	if len(t.drainedSteering) > 0 {
 		r.Unanswered = append([]string(nil), t.drainedSteering...)
 	}
@@ -1036,13 +1123,22 @@ func (t *turn) leaveOutRefusedImages(err error) bool {
 }
 
 func (t *turn) ask(opts func() llm.ChatOptions) (*llm.Response, error) {
-	resp, err := t.l.llm.Chat(t.ctx, t.messages, opts())
+	call, resp, err := t.chat(opts())
 	for err != nil && (t.leaveOutRefusedTool(err) || t.leaveOutRefusedImages(err)) {
+		t.replyEnded(call, nil, WithdrawnAskedAgain)
 		if llm.UnknownAttempts(err) > 0 {
 			t.emissionCoverageIncomplete = true
 		}
 		t.turnUsage.failed(err)
-		resp, err = t.l.llm.Chat(t.ctx, t.messages, opts())
+		call, resp, err = t.chat(opts())
+	}
+	switch {
+	case err == nil && resp != nil && len(resp.Choices) > 0:
+		t.replyEnded(call, resp, "")
+	case t.ctx.Err() != nil:
+		t.replyEnded(call, nil, WithdrawnStopped)
+	default:
+		t.replyEnded(call, nil, WithdrawnProvider)
 	}
 
 	if err != nil || resp == nil || len(resp.Choices) == 0 {
@@ -1053,17 +1149,66 @@ func (t *turn) ask(opts func() llm.ChatOptions) (*llm.Response, error) {
 	return resp, err
 }
 
-func (t *turn) numberEmissions(choice llm.Choice) llm.Choice {
+func (t *turn) chat(o llm.ChatOptions) (int, *llm.Response, error) {
+	t.requests++
+	if _, ok := t.l.emit.(ReplyEmitter); !ok || requestResponseFormat(t.ctx) != nil {
+		resp, err := t.l.llm.Chat(t.ctx, t.messages, o)
+		return 0, resp, err
+	}
+	t.replyCalls++
+	call, re := t.replyCalls, t.l.emit.(ReplyEmitter)
+	o.OnText = func(piece string) { re.ReplyText(call, piece) }
+	resp, err := t.l.llm.Chat(t.ctx, t.messages, o)
+	return call, resp, err
+}
+
+func (t *turn) replyEnded(call int, resp *llm.Response, withdrawn string) {
+	if call == 0 {
+		return
+	}
+	taken := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		taken = resp.Choices[0].Message.Content
+	}
+	t.l.emit.(ReplyEmitter).ReplyEnded(call, taken, withdrawn)
+}
+
+func (t *turn) numberEmissions(resp *llm.Response) llm.Choice {
+	choice := resp.Choices[0]
 	if choice.FinishReason == "length" || choice.FinishReason == "model_context_window_exceeded" {
 
 		t.emissionCoverageIncomplete = true
 	}
 	choice.Message.ToolCalls = slices.Clone(choice.Message.ToolCalls)
+	if len(choice.Message.ToolCalls) == 0 {
+		return choice
+	}
+	if t.requestOf == nil {
+		t.requestOf = map[int]interaction.RequestFacts{}
+	}
+	facts := requestFacts(t.requests, resp)
 	for i := range choice.Message.ToolCalls {
 		t.ordinal++
 		choice.Message.ToolCalls[i].EmissionOrdinal = t.ordinal
+		t.requestOf[t.ordinal] = facts
 	}
 	return choice
+}
+
+func requestFacts(ordinal int, resp *llm.Response) interaction.RequestFacts {
+	u := resp.Usage
+	f := interaction.RequestFacts{Ordinal: ordinal, Model: resp.ModelID, UnknownAttempts: u.UnknownAttempts}
+	if !u.Reported {
+		return f
+	}
+	f.PromptTokens, f.CompletionTokens, f.TotalTokens = &u.PromptTokens, &u.CompletionTokens, &u.TotalTokens
+	if u.CacheReadReported {
+		f.CachedPromptTokens = &u.CachedPromptTokens
+	}
+	if u.CacheWriteReported {
+		f.CacheWriteTokens = &u.CacheWriteTokens
+	}
+	return f
 }
 
 func (t *turn) emissionCoverageComplete() bool {
@@ -1071,10 +1216,18 @@ func (t *turn) emissionCoverageComplete() bool {
 }
 
 func (t *turn) recordToolStart(model string, tc llm.ToolCall) error {
-	if t.l.transcript != nil {
-		if err := t.l.transcript.RecordToolStart(t.turnID, tc.EmissionOrdinal, tc.ID, tc.Function.Name, tc.Function.Arguments, model); err != nil {
-			return fmt.Errorf("record tool start: %w", err)
-		}
+	if t.l.transcript == nil {
+		return nil
+	}
+	var err error
+	tr, keeps := t.l.transcript.(requestToolTranscript)
+	if request, emitted := t.requestOf[tc.EmissionOrdinal]; keeps && emitted {
+		err = tr.RecordToolStartOfRequest(t.turnID, tc.EmissionOrdinal, tc.ID, tc.Function.Name, tc.Function.Arguments, model, request)
+	} else {
+		err = t.l.transcript.RecordToolStart(t.turnID, tc.EmissionOrdinal, tc.ID, tc.Function.Name, tc.Function.Arguments, model)
+	}
+	if err != nil {
+		return fmt.Errorf("record tool start: %w", err)
 	}
 	return nil
 }
@@ -1118,7 +1271,7 @@ func (t *turn) refuseCalls(model string, calls []llm.ToolCall, reason, text stri
 	return nil
 }
 
-func (t *turn) execute(ctx context.Context, tc llm.ToolCall) Observation {
+func (t *turn) execute(ctx context.Context, tc llm.ToolCall, window int) Observation {
 	name := tc.Function.Name
 	if t.refusedDefs[name] {
 		return Observation{Text: "Error: " + toolNotOffered(name), Failed: true, Refused: true, ReasonCode: ReasonToolDefinitionRefused}
@@ -1128,7 +1281,7 @@ func (t *turn) execute(ctx context.Context, tc llm.ToolCall) Observation {
 		return Observation{Text: "Error: " + toolOutsideRequest(name), Failed: true, Refused: true, ReasonCode: ReasonToolOutsideRequest}
 	}
 
-	return t.l.tools.Execute(limits.WithToolResultChars(ctx, t.cfg.MaxToolResultChars), tc)
+	return t.l.tools.Execute(limits.WithToolResultChars(ctx, window), tc)
 }
 
 const ReasonToolDefinitionRefused = "TOOL_DEFINITION_REFUSED"
@@ -1148,6 +1301,8 @@ func withoutRefused(defs []llm.ToolDefinition, refused map[string]bool) []llm.To
 
 func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, yieldAnswer string, err error) {
 	t.toolCallsSoFar += len(calls)
+
+	told := make([]int, len(calls))
 
 	preObs := map[int]Observation{}
 	preStarted := map[int]bool{}
@@ -1176,8 +1331,12 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 			var mu sync.Mutex
 			var wg sync.WaitGroup
 			for idx := range calls {
+				told[idx] = t.resultWindowFor(idx + 1)
+			}
+			for idx := range calls {
 				idx := idx
 				tc := calls[idx]
+				window := told[idx]
 				wg.Add(1)
 				sem <- struct{}{}
 				go func() {
@@ -1186,7 +1345,7 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 
 					o := notRun()
 					if t.ctx.Err() == nil {
-						o = t.execute(llm.WithModelID(t.ctx, model), tc)
+						o = t.execute(llm.WithModelID(t.ctx, model), tc, window)
 					}
 					mu.Lock()
 					preObs[idx] = o
@@ -1229,7 +1388,9 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 
 				obs = notRun()
 			} else {
-				obs = t.execute(llm.WithModelID(t.ctx, model), tc)
+
+				told[tcIdx] = t.resultWindowFor(1)
+				obs = t.execute(llm.WithModelID(t.ctx, model), tc, told[tcIdx])
 			}
 		}
 		if obs.EndTurn {
@@ -1256,7 +1417,21 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 		if heard && retained > 0 {
 			retained = retainedWhole
 		}
+
+		if obs.Refused {
+			t.callsRefused++
+		}
+		if obs.Failed || obs.Refused || obs.Cancelled {
+			t.callsFailed++
+		} else {
+			t.callsOK++
+		}
+		t.doneOrdinals = append(t.doneOrdinals, tc.EmissionOrdinal)
+
+		status := t.statusLine()
+		t.lastStatus = status
 		window, scope := t.cfg.MaxToolResultChars, ""
+		window = max(0, window-max(utf8.RuneCountInString(status)+1, t.cfg.MaxToolResultChars-told[tcIdx]))
 
 		if obs.HostNote != "" {
 			window = max(0, window-utf8.RuneCountInString(obs.HostNote)-1)
@@ -1278,9 +1453,62 @@ func (t *turn) executeCalls(model string, calls []llm.ToolCall) (yielded bool, y
 		if obs.HostNote != "" {
 			modelResult = obs.HostNote + "\n" + modelResult
 		}
+		modelResult += "\n" + status
 		t.messages = append(t.messages, llm.FormatToolResult(tc.ID, modelResult))
 	}
 	return yielded, yieldAnswer, nil
+}
+
+func (t *turn) resultWindowFor(k int) int {
+	done := t.callsOK + t.callsFailed
+
+	reserve := utf8.RuneCountInString(t.statusLineFor(done+k, t.callsOK+k, t.callsFailed+k, t.callsRefused+k))
+	return max(0, t.cfg.MaxToolResultChars-reserve-1-4)
+}
+
+func (t *turn) statusLine() string {
+	return t.statusLineFor(t.callsOK+t.callsFailed, t.callsOK, t.callsFailed, t.callsRefused)
+}
+
+func (t *turn) statusLineFor(done, ok, failed, refused int) string {
+	calls := fmt.Sprintf("calls %d: %d ok, %d failed", done, ok, failed)
+
+	if refused > 0 {
+		calls += fmt.Sprintf(", %d refused before running", refused)
+	}
+	parts := []string{calls}
+	declared := "undeclared"
+	if t.cfg.PredictedThisTurn != nil {
+		if p, ordinal := t.cfg.PredictedThisTurn(); p > 0 && ordinal >= 0 && ordinal <= t.ordinal {
+
+			spent := 0
+			for _, o := range t.doneOrdinals {
+				if o > ordinal {
+					spent++
+				}
+			}
+			declared = fmt.Sprintf("declared %d, %d spent since, %d remain", p, spent, max(p-spent, 0))
+		}
+	}
+	parts = append(parts, declared)
+	tokens := fmt.Sprintf("tokens %d", t.turnUsage.TotalTokens)
+	if !t.cfg.TurnTokenBudget.IsZero() && !t.cfg.TurnTokenBudget.Unlimited {
+		tokens += fmt.Sprintf(" of %d", t.cfg.TurnTokenBudget.N)
+	}
+	parts = append(parts, tokens)
+	ran := t.l.clock().Sub(t.started).Round(time.Second)
+	clock := ran.String()
+	if t.cfg.TurnTime > 0 {
+		clock += " of " + t.cfg.TurnTime.Round(time.Second).String()
+	}
+	parts = append(parts, clock)
+	line := "[status · " + strings.Join(parts, " · ") + "]"
+	if t.cfg.ReflectEvery != nil {
+		if n := t.cfg.ReflectEvery(t.ctx); n > 0 && done > 0 && done%n == 0 {
+			line += fmt.Sprintf("\nReflect (METHOD.md, step 3): one line on the pattern of the last %d steps, before the next call.", n)
+		}
+	}
+	return line
 }
 
 func (t *turn) finalCall(failed, circumstance string, afterTools bool) error {
@@ -1309,7 +1537,7 @@ func (t *turn) finalCall(failed, circumstance string, afterTools bool) error {
 		t.turnUsage.add(resp.Usage)
 		t.keepReasoning(resp)
 		if len(resp.Choices) > 0 {
-			choice := t.numberEmissions(resp.Choices[0])
+			choice := t.numberEmissions(resp)
 			t.modelID = resp.ModelID
 			if err := t.refuseCalls(resp.ModelID, choice.Message.ToolCalls, ReasonToolDisabled, "Not run: tools were disabled for this closing response."); err != nil {
 				return err
@@ -2003,8 +2231,24 @@ func providerAnswer(e *llm.HTTPError) string {
 
 const toolBudgetWarnAt = 2
 
-func steeringNote(said []string) string {
-	return "Someone spoke while you were working:\n\n" + strings.Join(said, "\n\n")
+func steeringNote(said []Steered) string {
+	var b strings.Builder
+	for i, s := range said {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		if i == 0 || said[i-1].By != s.By {
+			b.WriteString(steeredFrames[s.By])
+		}
+		b.WriteString(s.Words)
+	}
+	return b.String()
+}
+
+var steeredFrames = map[SteeredBy]string{
+	BySomeone:        "Someone spoke while you were working:\n\n",
+	ByOperatorTyped:  "Your operator wrote while you were working:\n\n",
+	ByOperatorAnswer: "Your operator answered while you were working:\n\n",
 }
 
 func checkpointNote(declared, spent, grace int) string {

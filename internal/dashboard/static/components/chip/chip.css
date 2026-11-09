@@ -1,0 +1,13 @@
+.c-chip {
+  display: inline-flex; align-items: center; gap: var(--s-1);
+  padding: 0 var(--s-2); border: 1px solid var(--line); border-radius: var(--r-control);
+  background: var(--surface-2); color: var(--text-2);
+  font-family: var(--font-page); font-size: var(--t-xs); line-height: var(--t-xs-lh);
+}
+button.c-chip { min-height: var(--target); cursor: pointer; }
+button.c-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.c-chip--accent { color: var(--accent); border-color: var(--accent); }
+.c-chip--good { color: var(--good); border-color: var(--good); }
+.c-chip--warn { color: var(--warn); border-color: var(--warn); }
+.c-chip--bad { color: var(--bad); border-color: var(--bad); }
+@media (max-width: 767px) { button.c-chip { min-height: var(--target-phone); } }

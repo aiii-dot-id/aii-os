@@ -214,3 +214,39 @@ func TestHeadKeepsAMarkerThatEndsAtTheCut(t *testing.T) {
 		t.Fatalf("a cut just after the closing marker keeps it and adds nothing: shown %d\n%q", shown, got)
 	}
 }
+
+// A SOURCE IS ONE LINE. The frame cuts the source from the words at the first line
+// break, so a source that kept one would move part of itself into the words.
+func TestASourceIsOneLine(t *testing.T) {
+	for _, source := range []string{"Alice\nRoom 2", "Alice\rRoom 2", "Alice\r\nRoom 2", "Alice Room 2", "Alice Room 2"} {
+		head, body, ok := Split(Wrap(source, "Hello"))
+		if !ok || body != "Hello" {
+			t.Fatalf("source %q: head %q, body %q, ok %v", source, head, body, ok)
+		}
+		if strings.ContainsAny(head, "\r\n  ") || !strings.HasPrefix(head, "Alice") || !strings.HasSuffix(head, "Room 2") {
+			t.Fatalf("source %q reads %q", source, head)
+		}
+	}
+	if head, body, ok := Split(Wrap("Alice", "Room 2\nHello")); !ok || head != "Alice" || body != "Room 2\nHello" {
+		t.Fatalf("words on two lines: %q %q %v", head, body, ok)
+	}
+	if head, body, ok := Split(Wrap("", "Hello")); !ok || head != "" || body != "Hello" {
+		t.Fatalf("no source: %q %q %v", head, body, ok)
+	}
+	if _, _, ok := Split("no frame here"); ok {
+		t.Fatal("found a frame in plain words")
+	}
+}
+
+// AN OPENING LINE THAT REACHES THE CLOSE HOLDS NOTHING. Text a person typed can be built like
+// a frame with no room for its content, and the reader must say so rather than slice past it.
+func TestAnOpeningLineThatReachesTheCloseHoldsNothing(t *testing.T) {
+	for _, s := range []string{Open + "\n" + Close, Open + " source: voice\n" + Close, "before " + Open + "\n" + Close + " after"} {
+		if source, content, ok := Split(s); ok {
+			t.Errorf("Split(%q) = %q, %q, true", s, source, content)
+		}
+	}
+	if source, content, ok := Split(Wrap("voice", "")); !ok || source != "voice" || content != "" {
+		t.Errorf("a wrapped region with no words reads %q, %q, %v", source, content, ok)
+	}
+}

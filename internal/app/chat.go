@@ -53,12 +53,24 @@ func (a *App) observeChat(ctx context.Context, msg string, emit func(kind, name,
 	ctx, cancel := a.beginCancellableTurn(ctx)
 	defer cancel()
 	defer a.withToolEmit(emit)()
+	defer a.withReplyEmit(conversation.ReplyObserverFrom(ctx))()
 	reply, err := a.handleMessageLocked(ctx, msg)
 	if a.voiceReplyShown.Swap(false) {
 
 		return "", err
 	}
 	return reply, err
+}
+
+func (a *App) withReplyEmit(re conversation.ReplyEmitter) (detach func()) {
+	a.turn.mu.Lock()
+	a.turn.replyEmit = re
+	a.turn.mu.Unlock()
+	return func() {
+		a.turn.mu.Lock()
+		a.turn.replyEmit = nil
+		a.turn.mu.Unlock()
+	}
 }
 
 func (a *App) withToolEmit(emit func(kind, name, args string)) (detach func()) {
@@ -138,14 +150,23 @@ func (a *App) runTurnLockedInner(ctx context.Context, msg string) (string, error
 	return finalText, nil
 }
 
-func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversation.Result) bool {
+func (a *App) recordInterruptedTurnContext(ctx context.Context, result conversation.Result, cause string) bool {
 	kept := true
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	a.recordTurnCost(ctx, result)
 	about := ""
 	if result.Spoken == "" {
-		a.recordLoopNotes(ctx, "", result.Notes)
+		notes := result.Notes
+
+		if cause != "" && len(result.Unanswered) == 0 {
+
+			notes = append(append([]string(nil), notes...), "[This turn ended without a reply: "+cause+".]")
+		}
+
+		if !a.recordLoopNotes(ctx, "", notes) {
+			kept = false
+		}
 	}
 	if result.Spoken != "" {
 		ref, err := a.recordReply(ctx, result.Spoken, result)

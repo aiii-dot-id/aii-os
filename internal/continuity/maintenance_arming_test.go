@@ -150,7 +150,7 @@ func TestAFiringRearmsTheNextAbsoluteDailyHour(t *testing.T) {
 	}
 
 	fired := time.Now()
-	if err := tf.ApplyAlarmTransitions(due, tf.InvokeAlarmOwner(t.Context(), owner, due)); err != nil {
+	if err := tf.ApplyAlarmTransitions(due, tf.InvokeAlarmOwner(t.Context(), owner, due), 1); err != nil {
 		t.Fatal(err)
 	}
 

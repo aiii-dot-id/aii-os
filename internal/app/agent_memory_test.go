@@ -357,6 +357,19 @@ func TestTheCopyKeepsWhatTheWallKeepsAsTheWallMatchesIt(t *testing.T) {
 	}
 }
 
+// THE KEPT PLACES ARE MATCHED AT THE COST OF A STRING, NOT A WALK OF THE
+// DISK. The copy asks for every name it looks at, up to max_entries
+// (100,000 by default) inside birthMu, before the identity is live; the
+// places are resolved once, and each name is matched as the wall folds
+// it. The work is counted, not timed: two wall-clock bounds failed on a
+// loaded gate while the matcher was right (2026-10-30, 6.24 s for 5,000
+// names; 2026-11-04, 6.99 s against a same-run baseline of 166 ms).
+// Making the matcher resolves every place once; resolving them again at
+// each name costs a name about what making the matcher costs. So one
+// match is held under a tenth of the allocations of making the matcher,
+// both counted in this run: on the development Mac (2026-11-04), 116
+// against 6,245; resolving the places at each name, 2,622; the places and
+// the name, 10,005.
 func TestTheKeptPlacesAreMatchedWithoutResolvingEachName(t *testing.T) {
 	a := birthApp(t, providerEntry{Name: "Local", APIType: "openai", URL: "http://127.0.0.1:1/v1", APIKey: "k", DefaultModel: "m", Default: true})
 	t.Cleanup(func() { stopApp(t, a) })
@@ -365,15 +378,21 @@ func TestTheKeptPlacesAreMatchedWithoutResolvingEachName(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := realPath(t.TempDir())
-	start := time.Now()
-	for i := 0; i < 5000; i++ {
-		if kept(filepath.Join(store, "projects", fmt.Sprintf("p%03d", i%100), "memory", fmt.Sprintf("n%05d.md", i))) {
+	name := func(i int) string {
+		return filepath.Join(store, "projects", fmt.Sprintf("p%03d", i%100), "memory", fmt.Sprintf("n%05d.md", i))
+	}
+	for i := 0; i < 500; i++ {
+		if kept(name(i)) {
 			t.Fatal("a note in a store the host does not keep is kept")
 		}
 	}
-	if took := time.Since(start); took > 6*time.Second {
-		t.Fatalf("5,000 names took %v to match against the kept places", took)
+	one := name(0)
+	making := testing.AllocsPerRun(10, func() { _, _ = agentMemoryKept(*a.cfg, a.cfg.Tools.CWD) })
+	matching := testing.AllocsPerRun(1000, func() { kept(one) })
+	if matching*10 >= making {
+		t.Fatalf("matching one name took %.0f allocations, making the matcher %.0f: the places are being resolved at each name", matching, making)
 	}
+	t.Logf("matching one name took %.0f allocations, making the matcher %.0f", matching, making)
 }
 
 func TestTheOperatorsPressCopiesTheNotesIntoAnIdentityAlreadyBorn(t *testing.T) {
@@ -603,5 +622,23 @@ func TestTheCopysOffSetWhileTheFormShowsIsReadAndKept(t *testing.T) {
 	}
 	if after.Genesis.AgentMemory == nil || !after.Genesis.AgentMemory.Off {
 		t.Errorf("the birth wrote over the operator's genesis.agent_memory.off: %+v", after.Genesis.AgentMemory)
+	}
+}
+
+// FIRST RUN IS TOLD WHETHER OTHER AGENTS' NOTES ARE HERE (the first-session
+// review, change 2): its notes step and box are shown only where a store a
+// birth would read is on this machine.
+func TestFirstRunIsToldWhetherOtherAgentsNotesAreHere(t *testing.T) {
+	saved := otherAgentStores
+	t.Cleanup(func() { otherAgentStores = saved })
+	a, _ := formShown(t)
+	otherAgentStores = func() []agentmemory.Store { return nil }
+	if a.firstbootConfig().Genesis.AgentMemoryFound {
+		t.Error("with no other agent's notes on this machine, first run is told there are some")
+	}
+	store := otherAgent(t)
+	otherAgentStores = func() []agentmemory.Store { return []agentmemory.Store{store} }
+	if !a.firstbootConfig().Genesis.AgentMemoryFound {
+		t.Error("with another agent's notes on this machine, first run is not told so")
 	}
 }

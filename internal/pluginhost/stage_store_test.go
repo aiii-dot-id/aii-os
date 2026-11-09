@@ -24,7 +24,7 @@ import (
 // gigabytes is in exactly that state for minutes at a time.
 func TestMaterialIsSettledBeforeTheBrokerIsTouched(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestAStagedPackageWithMaterialIsNeverAlreadyPresent(t *testing.T) {
 	// A native engine with a runtime declaration does, and must be
 	// acquired however much of it is already on disk.
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, rerr := os.ReadFile(fakechildBin)
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -105,7 +105,7 @@ func TestAStagedPackageWithMaterialIsNeverAlreadyPresent(t *testing.T) {
 // runtime root. The work was destroyed on the way to a certain failure.
 func TestStartingUnacquiredMaterialRefusesBeforeAnythingIsBound(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestSelectionAndPreparationWalkThePackageOnce(t *testing.T) {
 // Acquire verified, and refuses, typed, when one was replaced meanwhile.
 func TestStartPinsWhatAcquireVerifiedOrRefuses(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +223,7 @@ func TestStartPinsWhatAcquireVerifiedOrRefuses(t *testing.T) {
 // candidates that are not. Prepare names them absolute.
 func TestANeedNamesItsPackageAndItsOwnCopiesAbsolute(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)

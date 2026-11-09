@@ -88,7 +88,7 @@ func TestInteractionProjectCriteriaPreservePriorAndReportPartialWrite(t *testing
 		t.Fatal(err)
 	}
 	after := &project.Contract{Outcome: "outcome", Acceptance: []string{"after"}}
-	if _, err = a.projects.ApplyPatch(p.ID, nil, nil, nil, nil, after, nil); err != nil {
+	if _, err = a.projects.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, after, nil); err != nil {
 		t.Fatal(err)
 	}
 	page, err := st.QueryInteractions(t.Context(), interaction.Query{Version: 1})
@@ -100,7 +100,7 @@ func TestInteractionProjectCriteriaPreservePriorAndReportPartialWrite(t *testing
 		t.Fatalf("criteria history %+v", change)
 	}
 	st.SetFrozen(true, "injected failure")
-	_, err = a.projects.ApplyPatch(p.ID, nil, nil, nil, nil, first, nil)
+	_, err = a.projects.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, first, nil)
 	var partial *project.ContractRecordError
 	if !errors.As(err, &partial) {
 		t.Fatalf("partial result hidden: %v", err)

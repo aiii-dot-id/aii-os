@@ -3,13 +3,18 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 	"uuid"
 
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
+	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -61,12 +66,73 @@ type workStore interface {
 	SetWorkCheck(ctx context.Context, id, command string) error
 	SetStandingState(text string) error
 	UpdateWorkState(ctx context.Context, sessionID, state string) error
-	UpdateWorkPlan(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error
+	SetWorkPromise(ctx context.Context, sessionID string, promise, resumesOn *string, reason string) error
+	SetWorkReflectEvery(ctx context.Context, sessionID string, every int) error
+	ApprovedStage() (string, error)
+	LatestOperatorPress(digest string) (*store.ConversationTurn, error)
+	RecordSayChoice(ctx context.Context, choice string, until int64) error
+	UpdateWorkPlanStep(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded, planStep *string) error
 	DeliverWorkSession(ctx context.Context, id, result, evidence, readback string) error
 	ActiveWorkSession() (*store.WorkSession, error)
 }
 
+const workStatusSessions = 5
+
+const (
+	workStatusSessionsHead   = "Recent sessions, newest first (read one's calls with recall source=work id=<its id>):\n"
+	workStatusSessionLine    = "%s · %s · %s · last %s · %s\n"
+	workStatusNoPromise      = "no promise"
+	workStatusTimeUnreadable = "time unreadable"
+)
+
+func activityClock(at time.Time) string {
+	at = at.UTC()
+	if now := time.Now().UTC(); at.Year() == now.Year() && at.YearDay() == now.YearDay() {
+		return at.Format("15:04Z")
+	}
+	return at.Format("Jan 2 15:04Z")
+}
+
+func (e *Engine) sessionLastActivity(ws store.WorkSession) string {
+	if r, ok := e.store.(interface {
+		WorkSessionLastActivity(sessionID string) (time.Time, bool, error)
+	}); ok {
+		at, found, err := r.WorkSessionLastActivity(ws.ID)
+		switch {
+		case err != nil:
+			logsink.Warn("work.error", "session %s: its last activity's time could not be read: %v", ws.ID, err)
+			return workStatusTimeUnreadable
+		case found:
+			return activityClock(at)
+		}
+	}
+	if ws.StartedAt > 0 {
+		return activityClock(time.UnixMilli(ws.StartedAt))
+	}
+	seq := ws.UpdatedSeq
+	if seq == 0 {
+		seq = ws.CreatedSeq
+	}
+	return fmt.Sprintf("seq %d", seq)
+}
+
 const workCheckParam = "(update) a command that exits 0 only if this work holds, written before the work; at deliver the host runs it once under the shell's rules and keeps its exit status beside your result"
+
+const (
+	workPlanStepParam  = "(update) a line of your plan, copied exactly: the calls that follow record it as their step until you name another, write none, or change the plan"
+	planStepNotALine   = "plan_step is not a line of your plan; copy one exactly, or write none"
+	planStepNeedsAPlan = "plan_step needs a plan: set plan= first"
+)
+
+func planStepRefused(err error) error {
+	switch {
+	case errors.Is(err, store.ErrPlanStepNotALine):
+		return withCode("update.plan_step", errors.New(planStepNotALine))
+	case errors.Is(err, store.ErrPlanStepNeedsPlan):
+		return withCode("update.plan_step", errors.New(planStepNeedsAPlan))
+	}
+	return err
+}
 
 const workFamilyParam = "(start, update, spawn) the kind of work as a short slug, such as deploy-preview; reuse a kind you have done (start lists them) so attempts compare; a spawn takes yours unless given; (measure) that kind's attempts, outcomes and shortest served path"
 
@@ -78,7 +144,7 @@ const (
 )
 
 var startReads = map[string]bool{"action": true, "description": true, "family": true, "state": true, "focus": true, "next_move": true,
-	"plan": true, "expected_evidence": true, "falsifier": true, "decision_needed": true, "choices": true, "connector": true,
+	"plan": true, "plan_step": true, "expected_evidence": true, "falsifier": true, "decision_needed": true, "choices": true, "connector": true,
 	"standing": true, "steps": true, "independent": true, "check": true}
 
 func startExtras(args map[string]any) []string {
@@ -128,6 +194,205 @@ func isEmptyArg(v any) bool {
 		return len(v) == 0
 	}
 	return false
+}
+
+func PromiseAlarmID(sessionID string) string { return "promise_" + sessionID }
+
+const PromiseAlarmTag = "promise"
+
+func promiseAlarmMessage(sessionID string) string {
+	return "Work session " + sessionID + " resumes now: the moment you named with resumes_on has come."
+}
+
+func PromiseAlarmPayload(sessionID, setIn string) string {
+	return encodeTimerPayload(PromiseAlarmTag, promiseAlarmMessage(sessionID), setIn)
+}
+
+func (e *Engine) keepPromiseAlarm(ctx context.Context, sessionID string, resumesOn *string) error {
+	if resumesOn == nil || e.timers == nil {
+		return nil
+	}
+	id := PromiseAlarmID(sessionID)
+	if ms, ok := strings.CutPrefix(*resumesOn, "time:"); ok {
+		deadline, err := strconv.ParseInt(ms, 10, 64)
+		if err != nil {
+			return rejectf("resumes_on", "%q is not a moment in unix ms", *resumesOn)
+		}
+		return e.timers.SetTimer(id, encodeTimerPayload(PromiseAlarmTag, promiseAlarmMessage(sessionID), interaction.TurnSource(ctx)), deadline)
+	}
+	_ = e.timers.CancelTimer(id)
+	return nil
+}
+
+type promiseReader interface {
+	ListIntentions() ([]store.Intention, error)
+	ListCommitments(activeOnly bool) ([]store.Commitment, error)
+}
+
+type openPromise struct{ id, words string }
+
+const promiseOpenLimit = 5
+
+func (e *Engine) promiseRule(ctx context.Context, id string) error {
+	r, ok := e.store.(promiseReader)
+	if !ok {
+		return nil
+	}
+	intentions, err := r.ListIntentions()
+	if err != nil {
+		return withCode("promise", err)
+	}
+	commitments, err := r.ListCommitments(false)
+	if err != nil {
+		return withCode("promise", err)
+	}
+	var open []openPromise
+	what := ""
+	for _, i := range intentions {
+		isOpen := i.State == "active"
+		if isOpen {
+			open = append(open, openPromise{i.ID, i.Statement})
+		}
+		if i.ID == id {
+			if isOpen {
+				return nil
+			}
+			what = "it is " + article(strings.ReplaceAll(i.State, "_", " ")) + " intention"
+		}
+	}
+	for _, c := range commitments {
+		isOpen := c.State == "promised" || c.State == "in_progress"
+		if isOpen {
+			open = append(open, openPromise{c.ID, c.Description})
+		}
+		if c.ID == id {
+			if isOpen {
+				return nil
+			}
+			what = "it is " + article(strings.ReplaceAll(c.State, "_", " ")) + " commitment"
+		}
+	}
+	if what == "" {
+		if session, _ := e.currentWorkSessionID(ctx); session != "" && id == PromiseAlarmID(session) {
+			what = "it is this session's alarm"
+		}
+	}
+	msg := fmt.Sprintf("promise %q is not an open intention or commitment in your record", id)
+	if what != "" {
+		msg += " (" + what + ")"
+	}
+	if len(open) == 0 {
+		return rejectf("promise", "%s. You have none open; leave promise empty.", msg)
+	}
+	if len(open) > promiseOpenLimit {
+		open = open[:promiseOpenLimit]
+	}
+	parts := make([]string, len(open))
+	for i, p := range open {
+		parts[i] = p.id + " \"" + p.words + "\""
+	}
+	return rejectf("promise", "%s. Open ones you could mean: %s. Or leave promise empty.", msg, strings.Join(parts, ", "))
+}
+
+func article(word string) string {
+	if word != "" && strings.ContainsRune("aeiou", rune(word[0])) {
+		return "an " + word
+	}
+	return "a " + word
+}
+
+func resumesOnForm(v string, now time.Time) error {
+	v = strings.TrimSpace(v)
+	switch {
+	case v == "", v == "word", v == "now":
+		return nil
+	case strings.HasPrefix(v, "delivery:") && strings.HasPrefix(strings.TrimPrefix(v, "delivery:"), "ws_"):
+		return nil
+	case strings.HasPrefix(v, "time:"):
+		if n, err := strconv.ParseInt(strings.TrimPrefix(v, "time:"), 10, 64); err == nil && n > 0 {
+			if n <= now.UnixMilli() {
+				return rejectf("resumes_on", "time:%d is %s, which is in the past; now is %s (%d). Name a moment after now in unix ms", n, momentWords(n), now.UTC().Format(time.RFC3339), now.UnixMilli())
+			}
+			return nil
+		}
+	}
+	return rejectf("resumes_on", "%q is not one of delivery:<child session id>, word, time:<unix ms>, now", v)
+}
+
+type deliveryWaitReader interface {
+	DeliveryNeverComes(ctx context.Context, sessionID, resumesOn string) error
+}
+
+func deliveryRefused(err error) error {
+	var never *store.ErrDeliveryNeverComes
+	if errors.As(err, &never) {
+		return rejectf("resumes_on", "a delivery can never come: %s. Wait for a sub-agent that is still working, or one that has delivered and not been taken in yet, or name word, time:<unix ms> or now", never.Why)
+	}
+	return err
+}
+
+func momentWords(ms int64) string {
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
+}
+
+func conditionLeft(resumesOn *string) string {
+	if resumesOn == nil {
+		return ""
+	}
+	switch v := *resumesOn; {
+	case v == "word":
+		return "this work waits for your operator's next message, as you set."
+	case strings.HasPrefix(v, "delivery:"):
+		return "this work waits for a delivery from " + strings.TrimPrefix(v, "delivery:") + ", as you set."
+	case v == "" || v == "now":
+		return "nothing holds this work now; it goes on when this turn ends."
+	}
+	return ""
+}
+
+func resumesAtWords(resumesOn *string) string {
+	if resumesOn == nil {
+		return ""
+	}
+	ms, ok := strings.CutPrefix(*resumesOn, "time:")
+	if !ok {
+		return ""
+	}
+	n, err := strconv.ParseInt(ms, 10, 64)
+	if err != nil {
+		return ""
+	}
+	return "you resume at " + momentWords(n) + " (" + ms + ")."
+}
+
+func (e *Engine) promiseArgs(ctx context.Context, args map[string]any) (promise, resumesOn *string, err error) {
+	if v, ok := args["promise"].(string); ok {
+		v = strings.TrimSpace(v)
+
+		if v != "" {
+			if err := e.promiseRule(ctx, v); err != nil {
+				return nil, nil, err
+			}
+		}
+		promise = &v
+	}
+	if v, ok := args["resumes_on"].(string); ok {
+		v = strings.TrimSpace(v)
+		if err := resumesOnForm(v, time.Now()); err != nil {
+			return nil, nil, err
+		}
+
+		if d, ok := e.store.(deliveryWaitReader); ok && strings.HasPrefix(v, "delivery:") {
+			if wsID, err := e.currentWorkSessionID(ctx); err == nil {
+				if err := deliveryRefused(d.DeliveryNeverComes(ctx, wsID, v)); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		resumesOn = &v
+	}
+
+	return promise, resumesOn, nil
 }
 
 func workFields(args map[string]any) store.WorkStart {
@@ -190,6 +455,15 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 	}
 
 	switch action {
+	case "ask":
+
+		if e.voiceAsker == nil {
+			return "", fmt.Errorf("work action=ask is not available here")
+		}
+		uuid, _ := args["voice_uuid"].(string)
+		question, _ := args["question"].(string)
+		return e.voiceAsker(uuid, question)
+
 	case "spawn":
 
 		goal, _ := args["goal"].(string)
@@ -222,6 +496,10 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			return "", withCode("spawn.depth", fmt.Errorf("spawn refused: depth %d would exceed agency.max_subagent_depth %d — finish this level's goal or ask your operator to raise the ceiling", depth+1, maxDepth))
 		}
 		parentSession, _ := ctx.Value(SubagentWorkSession{}).(string)
+		if parentSession == "" {
+
+			parentSession = interaction.ResumeSession(ctx)
+		}
 		if parentSession == "" {
 			parent, err := e.store.ActiveWorkSession()
 			if err != nil {
@@ -294,10 +572,103 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 				return "", fmt.Errorf("yield refused: %s. State the best current answer for the operator — answer= (what is established, what is missing, what would change it) — then yield", why)
 			}
 		}
-		if answer != "" {
-			return "Turn yielding with your answer carried to the operator — your gate frees when this round ends. Your session stays active; a delivery or message wakes you.", nil
+
+		promise, resumesOn, err := e.promiseArgs(ctx, args)
+		if err != nil {
+			return "", err
 		}
-		return "Turn yielding — your gate frees when this round ends. Your session stays active; a delivery or message wakes you.", nil
+		if promise != nil || resumesOn != nil {
+			wsID, serr := e.currentWorkSessionID(ctx)
+			if serr != nil {
+				return "", serr
+			}
+			if err := e.store.SetWorkPromise(ctx, wsID, promise, resumesOn, ""); err != nil {
+				return "", deliveryRefused(err)
+			}
+			if err := e.keepPromiseAlarm(ctx, wsID, resumesOn); err != nil {
+				return "", err
+			}
+		}
+
+		if stage, _ := e.store.ApprovedStage(); stage == store.StageSupervised && (promise != nil || resumesOn != nil) {
+			wsID, serr := e.currentWorkSessionID(ctx)
+			if serr != nil {
+				return "", serr
+			}
+			word := "word"
+			if err := e.store.SetWorkPromise(ctx, wsID, nil, &word, "Held by the operator (supervised): the work resumes on their word"); err != nil {
+				return "", err
+			}
+			_ = e.keepPromiseAlarm(ctx, wsID, &word)
+			return "Turn yielding — your gate frees when this round ends. Your operator holds this work; it resumes on their word.", nil
+		}
+
+		if e.ceilingGate != nil && (promise != nil || resumesOn != nil) {
+			if past, at := e.ceilingGate(); past {
+				wsID, serr := e.currentWorkSessionID(ctx)
+				if serr != nil {
+					return "", serr
+				}
+				tomorrow := "time:" + strconv.FormatInt(at, 10)
+				if err := e.store.SetWorkPromise(ctx, wsID, nil, &tomorrow, "Today's ceiling (agency.daily_token_ceiling) is reached; the work resumes tomorrow or on the operator's word"); err != nil {
+					return "", err
+				}
+				if err := e.keepPromiseAlarm(ctx, wsID, &tomorrow); err != nil {
+					return "", err
+				}
+				return "Turn yielding — your gate frees when this round ends. Today's ceiling is reached; this work resumes tomorrow or on your operator's word.", nil
+			}
+		}
+		wakes := "a delivery or message wakes you."
+		if resumesOn != nil {
+			switch v := *resumesOn; {
+			case v == "word":
+				wakes = "your operator's next message wakes you."
+			case strings.HasPrefix(v, "time:"):
+				wakes = resumesAtWords(resumesOn)
+			case v == "now":
+
+				wakes = "nothing holds this work now; it goes on when this turn ends."
+			}
+		}
+		if answer != "" {
+			return "Turn yielding with your answer carried to the operator — your gate frees when this round ends. Your session stays active; " + wakes, nil
+		}
+		return "Turn yielding — your gate frees when this round ends. Your session stays active; " + wakes, nil
+
+	case "say":
+
+		choice, _ := args["choice"].(string)
+		choice = strings.TrimSpace(choice)
+		if choice != "speak" && choice != "hold" && choice != "go_on" {
+			return "", rejectf("choice", "%q is not one of speak, hold, go_on", choice)
+		}
+		var until int64
+		if choice == "hold" {
+			switch v := args["until"].(type) {
+			case float64:
+				until = int64(v)
+			case string:
+				if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+					until = n
+				} else if strings.TrimSpace(v) != "" {
+					return "", rejectf("until", "%q is not a unix ms", v)
+				}
+			}
+		}
+		if err := e.store.RecordSayChoice(ctx, choice, until); err != nil {
+			return "", err
+		}
+		switch choice {
+		case "hold":
+			if until > 0 {
+				return "Noted: your words are held until " + strconv.FormatInt(until, 10) + " and come back to you then as your own alarm.", nil
+			}
+			return "Noted: your words are held until your operator is usually back and come back to you then as your own alarm.", nil
+		case "go_on":
+			return "Noted: you go on without them.", nil
+		}
+		return "Noted: you speak now.", nil
 
 	case "status":
 
@@ -338,6 +709,9 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if v, ok := args["check"].(string); ok {
 			with.Check = &v
 		}
+		if v, ok := args["plan_step"].(string); ok {
+			with.PlanStep = &v
+		}
 		wsID := "ws_" + uuid.New().String()
 
 		older, err := e.store.ActiveWorkSession()
@@ -349,7 +723,7 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		}
 
 		if err := e.store.StartWorkSessionWith(ctx, wsID, desc, with); err != nil {
-			return "", err
+			return "", planStepRefused(err)
 		}
 		startedID = wsID
 		out := fmt.Sprintf("Started work session %s: %s", wsID, desc)
@@ -382,13 +756,6 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 				return "", err
 			}
 		}
-		standingSet := false
-		if v, ok := args["standing"].(string); ok {
-			if err := e.store.SetStandingState(v); err != nil {
-				return "", fmt.Errorf("standing state not recorded: %w", err)
-			}
-			standingSet = true
-		}
 
 		f := workFields(args)
 		if f.State == nil {
@@ -406,7 +773,25 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			family = &v
 		}
 		check, hasCheck := args["check"].(string)
-		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil || family != nil || hasCheck
+		var planStep *string
+		if v, ok := args["plan_step"].(string); ok {
+			planStep = &v
+		}
+		promise, resumesOn, err := e.promiseArgs(ctx, args)
+		if err != nil {
+			return "", err
+		}
+
+		var reflectEvery *int
+		if v, ok := args["reflect_every"]; ok {
+			n, isNumber := v.(float64)
+			if !isNumber || n != float64(int(n)) || n < 0 || n > 1000 {
+				return "", rejectf("reflect_every", "%v: a count of calls from 0 (none) to 1000", v)
+			}
+			every := int(n)
+			reflectEvery = &every
+		}
+		sessionWork := state != nil || focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil || family != nil || hasCheck || planStep != nil || promise != nil || resumesOn != nil || reflectEvery != nil
 
 		for _, k := range []string{"steps", "independent"} {
 			if _, ok := args[k]; ok {
@@ -414,8 +799,22 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 			}
 		}
 
-		wsID, err := e.currentWorkSessionID(ctx)
-		if err != nil {
+		wsID, sessionErr := e.currentWorkSessionID(ctx)
+		planWritten := false
+		if sessionErr == nil && (plan != nil || planStep != nil) {
+			if err := e.store.UpdateWorkPlanStep(ctx, wsID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded, planStep); err != nil {
+				return "", planStepRefused(err)
+			}
+			planWritten = true
+		}
+		standingSet := false
+		if v, ok := args["standing"].(string); ok {
+			if err := e.store.SetStandingState(v); err != nil {
+				return "", fmt.Errorf("standing state not recorded: %w", err)
+			}
+			standingSet = true
+		}
+		if err := sessionErr; err != nil {
 
 			if standingSet && !sessionWork {
 				return "Standing state updated.", nil
@@ -441,8 +840,22 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 				return "", err
 			}
 		}
-		if focus != nil || nextMove != nil || plan != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil {
-			if err := e.store.UpdateWorkPlan(ctx, wsID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded); err != nil {
+		if !planWritten && (focus != nil || nextMove != nil || expectedEvidence != nil || falsifier != nil || decisionNeeded != nil) {
+			if err := e.store.UpdateWorkPlanStep(ctx, wsID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded, planStep); err != nil {
+				return "", planStepRefused(err)
+			}
+		}
+
+		if promise != nil || resumesOn != nil {
+			if err := e.store.SetWorkPromise(ctx, wsID, promise, resumesOn, ""); err != nil {
+				return "", deliveryRefused(err)
+			}
+			if err := e.keepPromiseAlarm(ctx, wsID, resumesOn); err != nil {
+				return "", err
+			}
+		}
+		if reflectEvery != nil {
+			if err := e.store.SetWorkReflectEvery(ctx, wsID, *reflectEvery); err != nil {
 				return "", err
 			}
 		}
@@ -450,11 +863,23 @@ func (e *Engine) verbWork(ctx context.Context, args map[string]any) (string, err
 		if err := e.putDecision(wsID, decisionNeeded, args); err != nil {
 			return "", err
 		}
+
+		resumesAt := ""
+		if at := resumesAtWords(resumesOn); at != "" {
+			resumesAt = " You " + strings.TrimPrefix(at, "you ")
+		}
+
 		switch {
 		case sessionWork && standingSet:
-			return "Work session updated, and standing state with it.", nil
+			if left := conditionLeft(resumesOn); left != "" {
+				return "Work session updated, and standing state with it: " + left, nil
+			}
+			return "Work session updated, and standing state with it." + resumesAt, nil
 		case sessionWork:
-			return "Work session updated.", nil
+			if left := conditionLeft(resumesOn); left != "" {
+				return "Work session updated: " + left, nil
+			}
+			return "Work session updated." + resumesAt, nil
 		case standingSet:
 			return "Standing state updated.", nil
 		}
@@ -547,6 +972,30 @@ func (e *Engine) workStatus(ctx context.Context) (string, error) {
 	}
 	if len(live) > 0 && len(delivered) == 0 {
 		b.WriteString("If only waiting remains, end the turn — a delivery wakes you. Never sleep or poll: your held turn is what blocks the wake.")
+	}
+
+	if r, ok := e.store.(interface {
+		RecentWorkSessions(limit int) ([]store.WorkSession, error)
+	}); ok {
+		current, _ := e.currentWorkSessionID(ctx)
+		recent, err := r.RecentWorkSessions(workStatusSessions + 1)
+		if err != nil {
+			return "", fmt.Errorf("work status: list sessions: %w", err)
+		}
+		var rows []string
+		for _, ws := range recent {
+			if ws.ID == current || len(rows) >= workStatusSessions {
+				continue
+			}
+			promise := ws.Promise
+			if promise == "" {
+				promise = workStatusNoPromise
+			}
+			rows = append(rows, fmt.Sprintf(workStatusSessionLine, ws.ID, ws.Status, promise, e.sessionLastActivity(ws), recallExcerpt(ws.Description, 60)))
+		}
+		if len(rows) > 0 {
+			b.WriteString("\n\n" + workStatusSessionsHead + strings.Join(rows, ""))
+		}
 	}
 	return e.boundWorkStatus(ctx, strings.TrimRight(b.String(), "\n"))
 }
@@ -643,6 +1092,10 @@ func resolveDeliveryEvidence(class, readback, result string, workerSeat bool) (s
 
 func (e *Engine) currentWorkSessionID(ctx context.Context) (string, error) {
 	if id, ok := ctx.Value(SubagentWorkSession{}).(string); ok && id != "" {
+		return id, nil
+	}
+
+	if id := interaction.ResumeSession(ctx); id != "" {
 		return id, nil
 	}
 	ws, err := e.store.ActiveWorkSession()

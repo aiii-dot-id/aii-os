@@ -31,7 +31,7 @@ func TestTheKeyIsPutBackAtTheDoor(t *testing.T) {
 		s.answerBackups(context.Background(), ClientMessage{Type: "backups", Backups: &req}, private, false, func(r ContinuityReply) { got = append(got, r) }, func(string) {})
 	}
 	send(false, "correct horse battery")
-	if len(got) != 1 || !strings.Contains(got[0].Error, "not private") || len(files) != 0 || restarts != 0 {
+	if len(got) != 1 || !strings.Contains(got[0].Error, "isn't private") || len(files) != 0 || restarts != 0 {
 		t.Fatalf("A PASSPHRASE FROM A CONNECTION THAT IS NOT PRIVATE REACHED THE HOST, or was not refused: %+v files=%q restarts=%d", got, files, restarts)
 	}
 	send(true, "a wrong passphrase")

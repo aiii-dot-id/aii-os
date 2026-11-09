@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 )
 
 type respInputContent struct {
@@ -227,14 +229,14 @@ func (c *Client) chatGPTResponses(ctx context.Context, messages []Message, opts 
 		}
 		return nil, refusal
 	}
-	response, err := readResponsesStream(httpResp.Body)
+	response, err := readResponsesStream(httpResp.Body, wire.TextObserver(ctx))
 	if response != nil {
 		response.RequestID = httpResp.Header.Get("x-request-id")
 	}
 	return response, c.idleVerdict(err)
 }
 
-func readResponsesStream(r io.Reader) (*Response, error) {
+func readResponsesStream(r io.Reader, say func(string)) (*Response, error) {
 	limited := &io.LimitedReader{R: r, N: maxResponseBytes + 1}
 	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
@@ -268,6 +270,14 @@ func readResponsesStream(r io.Reader) (*Response, error) {
 			generated = true
 		}
 		switch probe.Type {
+		case "response.output_text.delta":
+
+			var ev struct {
+				Delta string `json:"delta"`
+			}
+			if say != nil && json.Unmarshal([]byte(payload), &ev) == nil && ev.Delta != "" {
+				say(ev.Delta)
+			}
 		case "response.output_item.done":
 			var ev struct {
 				Item respOutputItem `json:"item"`

@@ -15,6 +15,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store"
+	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 	"github.com/aiii-dot-id/aii-os/internal/untrusted"
 )
 
@@ -891,6 +892,11 @@ func TestSelfModelPromptContract(t *testing.T) {
 		if strings.Contains(selfModelPrompt(2000, 4), forbidden) {
 			t.Errorf("SELF_MODEL prompt contains forbidden contract %q", forbidden)
 		}
+	}
+	// The portrait's limit is said in the sentence its gate counts by
+	// (tokenestimate.Stated), and in no other words.
+	if p := selfModelPrompt(900, 4); !strings.HasSuffix(p, tokenestimate.Stated(900)) || strings.Count(p, "900") != 1 || strings.Contains(p, "2700") {
+		t.Errorf("SELF_MODEL prompt does not state its limit as its gate counts it:\n%s", p)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 	"github.com/aiii-dot-id/aii-os/internal/firewall"
 	"net/http"
 	"net/http/httptest"
@@ -312,9 +313,13 @@ func TestAnAuthProfileIsCreatedConnectedAndDisconnectedFromThePage(t *testing.T)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	raw, _ = os.ReadFile(tokenFileOf(t, a, prof))
-	if !strings.Contains(string(raw), "at-device") {
-		t.Fatalf("the device tokens are stored: %s", raw)
+	// Read as the host reads it (atomicfile.ReadFile): on Windows a plain
+	// read while the token file is replaced fails with a sharing violation,
+	// and with its error dropped it read as an empty file (cut f and cut i,
+	// 2026-11-08: "the device tokens are stored: ").
+	raw, err = atomicfile.ReadFile(tokenFileOf(t, a, prof))
+	if err != nil || !strings.Contains(string(raw), "at-device") {
+		t.Fatalf("the device tokens are stored: %s (%v)", raw, err)
 	}
 
 	// Delete: disconnected (revoked again), the secret file gone, the entry gone.

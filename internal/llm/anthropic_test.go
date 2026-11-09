@@ -113,7 +113,7 @@ func TestAnthropicDialect(t *testing.T) {
 	// Unset thinking_mode sends NO thinking parameter. Adaptive was the
 	// default until claude-haiku-4-5 rejected it with a 400 live — a
 	// provider entry serves many models and cannot carry one shape for
-	// all of them. Opus 5 runs adaptive when the parameter is absent, so
+	// all of them. a review 5 runs adaptive when the parameter is absent, so
 	// omitting costs nothing where it matters.
 	if _, present := captured["thinking"]; present {
 		t.Fatalf("unset thinking_mode must send no thinking parameter: %v", captured["thinking"])

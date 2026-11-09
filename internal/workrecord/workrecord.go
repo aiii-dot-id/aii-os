@@ -9,6 +9,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/project"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
@@ -73,7 +74,46 @@ type Line struct {
 	ProjectUnavailable string        `json:"project_unavailable,omitempty"`
 	Grades             []GradeRecord `json:"grades"`
 	Turns              []TurnRecord  `json:"turns"`
-	Calls              []CallRecord  `json:"calls"`
+
+	Requests   []RequestRecord `json:"requests"`
+	RequestSum RequestSum      `json:"request_sum"`
+	Calls      []CallRecord    `json:"calls"`
+}
+
+type RequestRecord struct {
+	TurnID string `json:"turn_id"`
+	interaction.RequestFacts
+	Shared bool `json:"shared"`
+}
+
+type RequestSum struct {
+	Requests int `json:"requests"`
+
+	Shared int `json:"shared"`
+
+	CallsWithoutRequest int      `json:"calls_without_request"`
+	PromptTokens        CountSum `json:"prompt_tokens"`
+	CompletionTokens    CountSum `json:"completion_tokens"`
+	TotalTokens         CountSum `json:"total_tokens"`
+	CachedPromptTokens  CountSum `json:"cached_prompt_tokens"`
+	CacheWriteTokens    CountSum `json:"cache_write_tokens"`
+	UnknownAttempts     int64    `json:"unknown_attempts"`
+}
+
+type CountSum struct {
+	Sum         *int64 `json:"sum"`
+	NotReported int    `json:"not_reported"`
+}
+
+func (c *CountSum) add(n *int) {
+	if n == nil {
+		c.NotReported++
+		return
+	}
+	if c.Sum == nil {
+		c.Sum = new(int64)
+	}
+	*c.Sum += int64(*n)
 }
 
 type End struct {
@@ -174,6 +214,10 @@ type CallRecord struct {
 	ResultChars    *int   `json:"result_chars"`
 	ResultRecord   string `json:"result_record,omitempty"`
 
+	Request *interaction.RequestFacts `json:"request"`
+
+	PlanStep *string `json:"plan_step"`
+
 	Recovers []string `json:"recovers,omitempty"`
 }
 
@@ -231,7 +275,7 @@ func sessionLine(projects Projects, ws store.WorkRecordSession, parts *store.Wor
 	if parts == nil {
 		parts = &store.WorkRecordParts{}
 	}
-	line := Line{Schema: Schema, Kind: "session", Grades: []GradeRecord{}, Turns: []TurnRecord{}, Calls: []CallRecord{}, Session: SessionRecord{
+	line := Line{Schema: Schema, Kind: "session", Grades: []GradeRecord{}, Turns: []TurnRecord{}, Requests: []RequestRecord{}, Calls: []CallRecord{}, Session: SessionRecord{
 		ID: ws.ID, Description: ws.Description, Status: ws.Status, Family: ws.Family, ProjectID: ws.Project,
 		Focus: ws.Focus, NextMove: ws.NextMove, Plan: ws.Plan, ExpectedEvidence: ws.ExpectedEvidence, Falsifier: ws.Falsifier,
 		DecisionNeeded: ws.DecisionNeeded, State: ws.State, Result: ws.Result, Evidence: ws.Evidence, EvidenceReadback: ws.EvidenceReadback,
@@ -268,10 +312,27 @@ func sessionLine(projects Projects, ws store.WorkRecordSession, parts *store.Wor
 		n := parts.Check.SetAfterCalls
 		line.Session.Check, line.Session.CheckSetAfterCalls = parts.Check.Command, &n
 	}
+	sum := &line.RequestSum
+	for _, r := range parts.Requests {
+		line.Requests = append(line.Requests, RequestRecord{TurnID: r.TurnID, RequestFacts: r.Facts, Shared: r.Shared})
+		sum.Requests++
+		if r.Shared {
+			sum.Shared++
+		}
+		sum.PromptTokens.add(r.Facts.PromptTokens)
+		sum.CompletionTokens.add(r.Facts.CompletionTokens)
+		sum.TotalTokens.add(r.Facts.TotalTokens)
+		sum.CachedPromptTokens.add(r.Facts.CachedPromptTokens)
+		sum.CacheWriteTokens.add(r.Facts.CacheWriteTokens)
+		sum.UnknownAttempts += int64(r.Facts.UnknownAttempts)
+	}
 	recovers := store.Recoveries(parts.Calls)
 	for _, c := range parts.Calls {
 		r := callRecord(c)
 		r.Recovers = recovers[c.Tex]
+		if r.Request == nil {
+			sum.CallsWithoutRequest++
+		}
 		line.Calls = append(line.Calls, r)
 	}
 	return line
@@ -280,7 +341,7 @@ func sessionLine(projects Projects, ws store.WorkRecordSession, parts *store.Wor
 func callRecord(c store.WorkCall) CallRecord {
 	r := CallRecord{Tex: c.Tex, Seq: c.Seq, TurnID: c.TurnID, Ordinal: c.Ordinal, Tool: c.Tool, Actor: c.Actor, Model: c.Model,
 		ProviderCallID: c.ProviderCallID, WorkSession: c.WorkSession, SessionReason: c.SessionReason, ProjectID: c.ProjectID,
-		CalledAt: c.CalledAt, ArgsExcerpt: c.Args(), ArgsRecord: c.ArgsRecord, Ended: c.Ended}
+		CalledAt: c.CalledAt, ArgsExcerpt: c.Args(), ArgsRecord: c.ArgsRecord, Ended: c.Ended, Request: c.Request, PlanStep: c.PlanStep}
 	if n, ok := store.RecordChars(c.ArgsRecord); ok {
 		r.ArgsChars = &n
 	}

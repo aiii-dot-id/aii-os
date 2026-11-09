@@ -224,7 +224,9 @@ func goldenSignal(from Format, n int, seed uint32) []byte {
 // phase's fraction moves, so a slot kept by its phase alone would be
 // stale — and at a negative position only a peer's error declares. The
 // existing tests allow 2% (the tone) and would not see one LSB; this
-// one sees it.
+// one sees it. The pairs share nothing — each subtest's two resamplers
+// and signal are its own — so they run in parallel: serial, they were
+// 50 s of pure arithmetic under the race detector.
 func TestResamplerTableMatchesThePerTapFormula(t *testing.T) {
 	m := func(rate int) Format { return Format{Rate: rate, Channels: 1} }
 	s := func(rate int) Format { return Format{Rate: rate, Channels: 2} }
@@ -236,6 +238,7 @@ func TestResamplerTableMatchesThePerTapFormula(t *testing.T) {
 	}
 	for _, pr := range pairs {
 		t.Run(fmt.Sprintf("%dx%d-%dx%d", pr.from.Rate, pr.from.Channels, pr.to.Rate, pr.to.Channels), func(t *testing.T) {
+			t.Parallel()
 			want, got := newRefResampler(pr.from, pr.to), NewResampler(pr.from, pr.to)
 			n := 2 * pr.from.Rate
 			sig := goldenSignal(pr.from, n, uint32(pr.from.Rate+pr.to.Rate))

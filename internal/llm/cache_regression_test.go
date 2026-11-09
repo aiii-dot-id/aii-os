@@ -96,7 +96,7 @@ func TestCacheCacheWritesSurviveNormalization(t *testing.T) {
 }
 func TestCacheChatGPTReportsCacheHits(t *testing.T) {
 	s := "data: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1000,"output_tokens":10,"total_tokens":1010,"input_tokens_details":{"cached_tokens":800}}}}` + "\n\n"
-	resp, err := readResponsesStream(strings.NewReader(s))
+	resp, err := readResponsesStream(strings.NewReader(s), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestAResponsesUsageThatReportsNoWritesShowsNone(t *testing.T) {
 	read := func(usage string) Usage {
 		t.Helper()
 		s := "data: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":` + usage + `}}` + "\n\n"
-		resp, err := readResponsesStream(strings.NewReader(s))
+		resp, err := readResponsesStream(strings.NewReader(s), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -18,7 +18,7 @@ run(() => {
  S.providersLoaded=true;
  S.providers=[{name:'Claude',api_type:'anthropic',endpoint:'https://example.test',default_model:'m',configured_models:[],cache_modes:['auto','explicit','off'],cache_ttls:['5m','1h'],cache_diagnostics:true,cache:{ttl:'1h',tail_ttl:'5m',diagnostics:true}}];
  renderSettings();
- document.querySelector('[data-sec="providers"]').click();
+ S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
  document.querySelector('[data-prov-row="0"]').click();
  assert(document.getElementById('pv-cache-ttl-0').value==='1h','stored retention must render');
  assert(document.getElementById('pv-cache-diag-0').checked,'diagnostics must render');

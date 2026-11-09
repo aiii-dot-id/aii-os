@@ -29,7 +29,7 @@ import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderPlugins } from './views/plugins.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {

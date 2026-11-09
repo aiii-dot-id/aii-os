@@ -381,7 +381,7 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 	var ar anthResponse
 	mediaType, _, _ := mime.ParseMediaType(httpResp.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
-		ar, err = readAnthropicStream(httpResp.Body)
+		ar, err = readAnthropicStream(httpResp.Body, wire.TextObserver(ctx))
 	} else {
 		var body []byte
 		var truncated bool

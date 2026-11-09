@@ -174,7 +174,7 @@ const reasoningItemWithSummary = `data: {"type":"response.output_item.done","ite
 // summary, or one whose summary is not a list of text parts, gives none
 // and fails nothing.
 func TestAResponsesReasoningSummaryIsTheProvidersAccount(t *testing.T) {
-	resp, err := readResponsesStream(strings.NewReader(reasoningItemWithSummary + "\n" + streamOneItem + "\n" + streamTerminal))
+	resp, err := readResponsesStream(strings.NewReader(reasoningItemWithSummary+"\n"+streamOneItem+"\n"+streamTerminal), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestAResponsesReasoningSummaryIsTheProvidersAccount(t *testing.T) {
 		"a part with no text": `{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text"}]}`,
 	} {
 		stream := `data: {"type":"response.output_item.done","item":` + item + "}\n\n" + streamOneItem + "\n" + streamTerminal
-		resp, err := readResponsesStream(strings.NewReader(stream))
+		resp, err := readResponsesStream(strings.NewReader(stream), nil)
 		if err != nil {
 			t.Fatalf("%s: the reply was lost: %v", name, err)
 		}

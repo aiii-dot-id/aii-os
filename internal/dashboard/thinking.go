@@ -39,7 +39,7 @@ func (s *Server) serveInteractionThinking(w http.ResponseWriter, r *http.Request
 	s.jobsMu.Unlock()
 	defer s.jobsWG.Done()
 	if !s.tokenAuthorized(r) {
-		http.Error(w, "dashboard access token required", http.StatusUnauthorized)
+		http.Error(w, "this page isn't signed in. Sign in, then try again", http.StatusUnauthorized)
 		return
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !sameSiteAs(origin, r.Host) {

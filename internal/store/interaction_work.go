@@ -24,6 +24,17 @@ func (s *Store) recordWorkChangeRefTx(ctx context.Context, tx *sql.Tx, change in
 	return ref, err
 }
 
+func (s *Store) WorkDeliveredInTurn(turn string) (bool, error) {
+	if turn == "" {
+		return false, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var delivered bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversations WHERE turn_id=? AND kind=? AND json_extract(details,'$.work.result') IS NOT NULL)`, turn, string(interaction.Notice)).Scan(&delivered)
+	return delivered, err
+}
+
 func (s *Store) RecordWorkForecast(session, turn string, steps, independent *int) error {
 	changed := false
 	defer s.notifyInteraction(&changed)

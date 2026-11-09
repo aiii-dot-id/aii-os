@@ -380,8 +380,8 @@ cd "$repo_root"
 race_args=(-race)
 case ${AII_TEST_FULL_RACE:-0} in
 	0)
-		race_args+=(-gcflags=modernc.org/sqlite/lib=-race=false -gcflags=modernc.org/libc=-race=false -gcflags=github.com/trailofbits/go-slh-dsa/...=-race=false)
-		echo "race instrumentation: host (SQLite, libc and SLH-DSA excluded)"
+		race_args+=(-gcflags=modernc.org/sqlite/lib=-race=false -gcflags=modernc.org/libc=-race=false -gcflags=github.com/trailofbits/go-slh-dsa/...=-race=false -gcflags=golang.org/x/crypto/scrypt=-race=false)
+		echo "race instrumentation: host (SQLite, libc, SLH-DSA and scrypt excluded)"
 		;;
 	1) echo "race instrumentation: full (no dependency exclusions)" ;;
 	*) fail "AII_TEST_FULL_RACE must be 0 or 1" ;;
@@ -545,7 +545,7 @@ run_rest() {
 
 	set -- $(cat "$rest")
 	log="$run_dir/rest.log"
-	start_job "$log" "$go_bin" test -v "${race_args[@]}" -count=1 "$@"
+	start_job "$log" "$go_bin" test -v "${race_args[@]}" -count=1 -timeout "$shard_timeout" "$@"
 	pid=$started_pid
 	if ! wait "$pid"; then
 		untrack_job "$pid"

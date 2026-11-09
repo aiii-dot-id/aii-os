@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"maps"
 	"sort"
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
@@ -39,6 +40,80 @@ func (a *App) QueryInteractions(ctx context.Context, q interaction.Query) (*inte
 	interaction.Seal(p)
 	return p, nil
 }
+
+type pageReader struct{ *App }
+
+func (a pageReader) drawn(r interaction.Record) (interaction.Record, bool) {
+	words, named, spoken := a.store.SpokenForThePage(r.Sequence, string(r.Role), r.Content, string(r.Annotations[annotationSpeaker]))
+	if !spoken {
+		return r, false
+	}
+	r.Content = words
+	if named {
+		r.Role = interaction.Operator
+		r.Annotations = maps.Clone(r.Annotations)
+		delete(r.Annotations, annotationSpeaker)
+	}
+	return r, true
+}
+
+func (a pageReader) longRow(ctx context.Context, r *interaction.Record) {
+	if !a.store.RecordedAsSpoken(r.Sequence, string(r.Role)) {
+		return
+	}
+	ref := *r.ContentRef
+	whole, err := a.store.RecordedInteraction(ctx, interaction.ReadRequest{Version: interaction.Version, Source: ref.Source, ID: ref.ID, Incarnation: ref.Incarnation, SHA256: ref.SHA256})
+	if err != nil {
+		return
+	}
+	drawn, spoken := a.drawn(whole)
+	if !spoken {
+		return
+	}
+	raw, err := json.Marshal(interaction.Served(drawn))
+	if err != nil {
+		return
+	}
+	ref.SHA256, ref.Bytes = interaction.Hash(raw), len(raw)
+	r.Role, r.ContentRef = drawn.Role, &ref
+}
+
+func (a pageReader) QueryInteractions(ctx context.Context, q interaction.Query) (*interaction.Page, error) {
+	p, err := a.App.QueryInteractions(ctx, q)
+	if err != nil || p.Source != "recorded" {
+		return p, err
+	}
+	for i := range p.Rows {
+		r := &p.Rows[i]
+		if r.ContentRef != nil {
+			a.longRow(ctx, r)
+		} else if drawn, spoken := a.drawn(*r); spoken {
+			*r = drawn
+		}
+	}
+	interaction.Seal(p)
+	return p, nil
+}
+
+func (a pageReader) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (*interaction.ReadResult, error) {
+	if err := interaction.ValidateRead(&req); err != nil {
+		return nil, err
+	}
+	if req.Source != "recorded" || a.store == nil {
+		return a.App.ReadInteraction(ctx, req)
+	}
+	whole, err := a.store.RecordedInteraction(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	drawn, _ := a.drawn(whole)
+	raw, err := json.Marshal(interaction.Served(drawn))
+	if err != nil {
+		return nil, err
+	}
+	return interaction.DetailRead(req, raw)
+}
+
 func (a *App) ReadInteraction(ctx context.Context, req interaction.ReadRequest) (*interaction.ReadResult, error) {
 	if err := interaction.ValidateRead(&req); err != nil {
 		return nil, err
@@ -124,7 +199,7 @@ func observedOutcome(obs conversation.Observation) interaction.Outcome {
 }
 
 func (a *App) wireInteractionHooks(h *dashboard.WSHandler) {
-	h.Interactions = a
+	h.Interactions = pageReader{a}
 	h.Thinking = a.thinkingOfTurn
 	h.HeardSpeech = a.heardSpeechPage
 }

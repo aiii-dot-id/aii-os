@@ -50,29 +50,31 @@ func TestAResultRowKeepsWhatTheSettingSays(t *testing.T) {
 }
 
 // EACH CALL IS ITS CALL ROW AND ITS RESULT ROW, JOINED BY THEIR tex_ ID, AND
-// ATTRIBUTED TO THE SESSION ITS RESULT NAMES. A call still open is listed
-// with no result; a session the executor named on the result wins over the
-// newest active one the call row assumed; the kept head and the tool's last
-// line are read back apart from the store's own line; a result whose text
-// carries that line's words without being cut is not read as cut. Removing
-// the join loses the outcome; reading the call row's session alone puts the
-// executor's call in the wrong session.
+// ATTRIBUTED TO THE SESSION ITS START RESOLVED. A call still open is listed
+// with no result; a session started between a call's start and its
+// completion does not move it (F1: the start's seat is the call's, and the
+// completion writes it); the kept head and the tool's last line are read
+// back apart from the store's own line; a result whose text carries that
+// line's words without being cut is not read as cut. Removing the join
+// loses the outcome.
 func TestTheWorkRecordJoinsEachCallToItsResult(t *testing.T) {
 	s := testStore(t)
 	defer s.Close()
 	ctx := t.Context()
-	for _, ws := range []string{"ws_a", "ws_b"} {
-		if err := s.StartWorkSession(ctx, ws, ws); err != nil {
-			t.Fatal(err)
-		}
+	if err := s.StartWorkSession(ctx, "ws_a", "ws_a"); err != nil {
+		t.Fatal(err)
 	}
 	s.SetToolResultRunes(10)
 	if err := s.RecordToolStart("t1", 1, "main", "m", "p1", "shell", `{"command":"make"}`); err != nil {
 		t.Fatal(err)
 	}
+	// Newer work starts while the call runs: the call stays where it began.
+	if err := s.StartWorkSession(ctx, "ws_b", "ws_b"); err != nil {
+		t.Fatal(err)
+	}
 	two := 2
 	if err := s.RecordToolDoneMeasured("t1", 1, "shell", `{"command":"make"}`, "0123456789abcdef\n[exit status 2]", interaction.Failed, false,
-		ToolMeasurement{ExitStatus: &two, ReasonCode: "exit_status", WorkSession: "ws_a"}); err != nil {
+		ToolMeasurement{ExitStatus: &two, ReasonCode: "exit_status"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordToolStart("t2", 1, "main", "m", "p2", "file_read", "{}"); err != nil {
@@ -84,7 +86,7 @@ func TestTheWorkRecordJoinsEachCallToItsResult(t *testing.T) {
 	}
 	a := parts["ws_a"].Calls
 	if len(a) != 1 || a[0].Tool != "shell" || a[0].Outcome != "failed" || a[0].ReasonCode != "exit_status" || a[0].ExitStatus == nil || *a[0].ExitStatus != 2 || a[0].ProviderCallID != "p1" {
-		t.Fatalf("ws_a's call, as the executor attributed it: %+v", a)
+		t.Fatalf("ws_a's call, as its start attributed it: %+v", a)
 	}
 	if a[0].Args() != `{"command":"make"}` || !strings.HasPrefix(a[0].Tex, "tex_") {
 		t.Fatalf("the call's arguments and id: %q %q", a[0].Args(), a[0].Tex)
@@ -111,14 +113,18 @@ func TestTheWorkRecordJoinsEachCallToItsResult(t *testing.T) {
 	if err := s.RecordToolStart("t3", 1, "main", "m", "", "shell", "{}"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordToolDoneMeasured("t3", 1, "shell", "{}", forged, interaction.Succeeded, false, ToolMeasurement{WorkSession: "ws_a"}); err != nil {
+	if err := s.RecordToolDoneMeasured("t3", 1, "shell", "{}", forged, interaction.Succeeded, false, ToolMeasurement{}); err != nil {
 		t.Fatal(err)
 	}
-	parts, err = s.WorkRecordOf([]string{"ws_a"})
+	// Started with ws_b the newest active, it is ws_b's, after t2.
+	parts, err = s.WorkRecordOf([]string{"ws_b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a = parts["ws_a"].Calls
+	a = parts["ws_b"].Calls
+	if len(a) != 2 {
+		t.Fatalf("ws_b holds t2 and t3: %+v", a)
+	}
 	if head, _, cut := a[1].KeptResult(); cut || head != forged {
 		t.Fatalf("a whole result carrying the store's words reads as cut: %q %v", head, cut)
 	}

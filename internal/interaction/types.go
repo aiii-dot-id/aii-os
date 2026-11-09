@@ -78,7 +78,13 @@ type WorkChange struct {
 	Evidence         *string `json:"evidence,omitempty"`
 	EvidenceReadback *string `json:"evidence_readback,omitempty"`
 	Steps            *int    `json:"steps,omitempty"`
-	Independent      *int    `json:"independent,omitempty"`
+
+	Promise   *string `json:"promise,omitempty"`
+	ResumesOn *string `json:"resumes_on,omitempty"`
+
+	Under       string `json:"under,omitempty"`
+	Met         string `json:"met,omitempty"`
+	Independent *int   `json:"independent,omitempty"`
 }
 type AnnotationData struct {
 	Kind    string          `json:"kind"`
@@ -118,6 +124,33 @@ type Details struct {
 
 	ExitStatus *int `json:"exit_status,omitempty"`
 }
+
+type RequestFacts struct {
+	Ordinal int `json:"ordinal"`
+
+	Model              string `json:"model"`
+	PromptTokens       *int   `json:"prompt_tokens"`
+	CompletionTokens   *int   `json:"completion_tokens"`
+	TotalTokens        *int   `json:"total_tokens"`
+	CachedPromptTokens *int   `json:"cached_prompt_tokens"`
+	CacheWriteTokens   *int   `json:"cache_write_tokens"`
+	UnknownAttempts    int    `json:"unknown_attempts"`
+}
+
+func (f RequestFacts) Valid() bool {
+	reported := f.TotalTokens != nil
+	if f.Ordinal < 1 || f.UnknownAttempts < 0 || (f.PromptTokens != nil) != reported || (f.CompletionTokens != nil) != reported ||
+		(!reported && (f.CachedPromptTokens != nil || f.CacheWriteTokens != nil)) {
+		return false
+	}
+	for _, n := range []*int{f.PromptTokens, f.CompletionTokens, f.TotalTokens, f.CachedPromptTokens, f.CacheWriteTokens} {
+		if n != nil && *n < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 type Input struct {
 	ID                                      string
 	Kind                                    Kind
@@ -289,4 +322,6 @@ type ProjectContract struct {
 type ProjectChange struct {
 	Before *ProjectContract `json:"before,omitempty"`
 	After  ProjectContract  `json:"after"`
+
+	By string `json:"by,omitempty"`
 }

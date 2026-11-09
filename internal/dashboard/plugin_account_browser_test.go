@@ -101,7 +101,7 @@ run(assert => {
   assert(document.getElementById('pf-provider') && document.getElementById('pf-provider').value === 'google', 'the New profile form opens on the hint\'s authority');
   const read = st.querySelector('.profile-form input[name="svc-gmail"][value="read"]');
   assert(read && read.checked, 'the hint\'s service is prefilled');
-  assert(st.querySelector('.profile-form').textContent.includes('then choose it for Google account on ' + id + '\'s card'), 'the form says where the account is chosen');
+  assert(st.querySelector('.profile-form').textContent.includes('An account for ' + id + '. Save it and connect it, then choose it for Google account on the plugin\'s card.'), 'the form says where the account is chosen');
 
   S.config = card(setting({ not: 'plugin ' + id + ' declares no outbound host in its signed package' }));
   renderPlugins();

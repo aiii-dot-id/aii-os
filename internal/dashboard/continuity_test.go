@@ -181,7 +181,7 @@ func TestAPassphraseIsRefusedOnAConnectionThatIsNotPrivate(t *testing.T) {
 	for _, action := range []string{"escrow_create", "escrow_check"} {
 		var got *ContinuityReply
 		s.answerBackupsForTest(ClientMessage{RequestID: "p", Type: "backups", Backups: &ContinuityRequest{Action: action, Passphrase: "correct horse battery", Again: "correct horse battery", FileB64: "AAEC"}}, false, func(r ContinuityReply) { got = &r })
-		if got == nil || !strings.Contains(got.Error, "not private") || !strings.Contains(got.Error, "TLS") || got.FileB64 != "" {
+		if got == nil || !strings.Contains(got.Error, "isn't private") || !strings.Contains(got.Error, "Serve over HTTPS") || got.FileB64 != "" {
 			t.Errorf("%s on a connection that is not private: %+v", action, got)
 		}
 		if got != nil && (got.View == nil || got.View.SecretsOK) {
@@ -379,11 +379,11 @@ func TestTheKeysLeaveOnlyForAPageSignedInWithTheToken(t *testing.T) {
 
 	rig := &backupsRig{}
 	open, _ := backupsConnAs(t, rig, false)
-	if r := askBackups(t, open, "s0", ContinuityRequest{Action: "status"}); r.View == nil || r.View.ExportOK || !strings.Contains(r.View.ExportWhyNot, "Ask for an access token") {
+	if r := askBackups(t, open, "s0", ContinuityRequest{Action: "status"}); r.View == nil || r.View.ExportOK || !strings.Contains(r.View.ExportWhyNot, "Ask every device to sign in") {
 		t.Fatalf("a page under no token was offered the export: %+v", r.View)
 	}
 	r := askBackups(t, open, "c0", create)
-	if r.FileB64 != "" || !strings.HasPrefix(r.Error, "Exporting the identity's keys requires this dashboard to ask for its access token") || len(rig.created) != 0 {
+	if r.FileB64 != "" || !strings.HasPrefix(r.Error, "To export the keys, first turn on") || len(rig.created) != 0 {
 		t.Fatalf("the keys were exported, or the passphrase reached the host, under no token: %+v created=%q", r, rig.created)
 	}
 	if r := askBackups(t, open, "k0", ContinuityRequest{Action: "escrow_check", Passphrase: pass, FileB64: "AAEC"}); r.Error != "" {
@@ -400,7 +400,7 @@ func TestTheKeysLeaveOnlyForAPageSignedInWithTheToken(t *testing.T) {
 
 	var got *ContinuityReply
 	s.answerBackups(context.Background(), ClientMessage{Type: "backups", Backups: &create}, true, false, func(r ContinuityReply) { got = &r }, func(string) {})
-	if got == nil || got.FileB64 != "" || !strings.Contains(got.Error, "not signed in") || len(rig.created) != 1 {
+	if got == nil || got.FileB64 != "" || !strings.Contains(got.Error, "isn't signed in") || len(rig.created) != 1 {
 		t.Fatalf("a page not signed in with the token in force exported the keys: %+v", got)
 	}
 }

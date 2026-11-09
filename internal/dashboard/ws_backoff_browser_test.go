@@ -82,29 +82,78 @@ func TestWSReconnectBacksOff(t *testing.T) {
 
 func wsPageModules(wsJS, stateJS []byte) map[string][]byte {
 	return map[string][]byte{
-		"/ws.js":             wsJS,
-		"/state.js":          stateJS,
-		"/views/projects.js": []byte(`export const renderProjPill = () => {}; export const renderProjects = () => {}; export const newlyCreatedID = () => null; export const rejectCreate = () => false; export const acceptCreate = () => ''; export const acceptFocusSave = () => false; export const acceptContractSave = () => false; export const rejectFocusSave = () => false; export const rejectContractSave = () => false; export const projectsConnectionLost = () => false; export function viewProject() {}`),
-		"/views/memory.js":   []byte(`export const renderMemory = () => {};`),
-		"/views/identity.js": []byte(`export const renderIdentity = () => {};`),
-		"/views/plugins.js":  []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
-		"/views/settings.js": []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
-		"/firstboot.js":      []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
-		"/sections.js":       []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),
-		"/panel.js":          []byte(`export const renderPanel = () => {};`),
-		"/theme.js":          []byte(`export const onTheme = () => {};`),
-		"/overlay.js":        []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {}; export const reloadForTheOverlay = () => {};`),
-		"/voice.js":          []byte(`export const bindTransport = () => {}; export const render = () => {}; export const speak = () => {}; export const connectionLost = () => {};`),
-		"/app.js":            []byte(`export const sysLine = () => {}; export const toast = () => {}; export const go = () => {}; export const renderFirstbootVisibility = () => {};`),
-		"/views/chat.js":     []byte(`export const addMsg = () => null; export const attachSpeaker = () => false; export const sysLine = s => { (window.__chatLines ||= []).push(s); }; export const toolEventLive = () => {}; export const thinkingEvent = () => {}; export const renderInteractionPages = () => {}; export const renderHistory = () => {}; export const renderChatSubstrate = () => {}; export const renderComposer = () => {}; export const acceptSubstrateConfig = () => {}; export const rejectSubstrateConfig = () => {}; export const substrateConnectionLost = () => {}; export const renderSteering = () => {}; export const renderAsks = () => {};`),
-		"/views/home.js":     []byte(`export const renderHome = () => {};`),
-		"/views/work.js":     []byte(`export const renderWorkPill = () => {};`),
-		"/presence.js":       []byte(`import { S } from './state.js'; export const renderPresence = () => {}; export const setThinking = on => { S.thinking = on; window.__think = on; };`),
-		"/util.js":           utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '');`),
-		"/bridge.js":         []byte(`export const send = () => ''; export const query = () => '';`),
+		"/ws.js":    wsJS,
+		"/state.js": stateJS,
+		// ws.js imports many modules; stubs suffice — the connect path
+		// only calls S mutation, sysLine (identityExists false), and the
+		// reconnect scheduler. None of the renders fire without payloads.
+		"/views/projects.js":         []byte(`export const renderProjPill = () => {}; export const renderProjects = () => {}; export const newlyCreatedID = () => null; export const rejectCreate = () => false; export const acceptCreate = () => ''; export const acceptFocusSave = () => false; export const acceptContractSave = () => false; export const rejectFocusSave = () => false; export const rejectContractSave = () => false; export const projectsConnectionLost = () => false; export function viewProject() {}`),
+		"/shell/project-pill.js":     []byte(`export const renderProjPill = () => {};`),
+		"/views/memory.js":           []byte(`export const renderMemory = () => {};`),
+		"/views/identity.js":         []byte(`export const renderIdentity = () => {};`),
+		"/views/identity/between.js": []byte(`export const renderBetween = () => {};`),
+		"/views/plugins.js":          []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
+		"/views/settings.js":         []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
+		"/firstboot.js":              []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
+		"/sections.js":               []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),
+		"/panel.js":                  []byte(`export const renderPanel = () => {};`),
+		"/theme.js":                  []byte(`export const onTheme = () => {};`),
+		"/overlay.js":                []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {}; export const reloadForTheOverlay = () => {};`),
+		"/voice.js":                  []byte(`export const bindTransport = () => {}; export const render = () => {}; export const speak = () => {}; export const connectionLost = () => {};`),
+		"/app.js":                    []byte(`export const sysLine = () => {}; export const toast = s => { (window.__toasts ||= []).push(s); }; export const go = () => {}; export const renderFirstbootVisibility = () => {};`),
+		"/views/chat.js":             []byte(`export const addMsg = () => null; export const attachSpeaker = () => false; export const sysLine = s => { (window.__chatLines ||= []).push(s); }; export const toolEventLive = () => {}; export const thinkingEvent = () => {}; export const renderInteractionPages = () => {}; export const renderHistory = () => {}; export const renderChatSubstrate = () => {}; export const renderComposer = () => {}; export const acceptSubstrateConfig = () => {}; export const rejectSubstrateConfig = () => {}; export const substrateConnectionLost = () => {}; export const renderSteering = () => {}; export const renderAsks = () => {};`),
+		"/views/home.js":             []byte(`export const renderHome = () => {};`),
+		"/views/work.js":             []byte(`export const renderWorkPill = () => {};`),
+		"/presence.js":               []byte(`import { S } from './state.js'; export const renderPresence = () => {}; export const setThinking = on => { S.thinking = on; window.__think = on; };`),
+		"/util.js":                   utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '');`),
+		"/bridge.js":                 []byte(`export const send = () => ''; export const query = () => '';`),
 	}
 }
 
+// WHAT IS SCHEDULED IS ASKED AGAIN WHEN THE HOST SAYS IT CHANGED, and the
+// reply box is drawn again from the answer: the "idle" line under the box
+// is the host's word, never the page's guess.
+func TestAWorkChangeIsAskedAgainAndRedrawsTheReplyBox(t *testing.T) {
+	page := `<!doctype html><button id="send-btn" disabled></button><button id="mic" disabled></button>
+<script type="module">
+import { run } from '/__harness.js';
+import { S } from '/state.js';
+const sockets=[];
+class Socket {
+  constructor(url){this.url=url;this.readyState=0;this.sent=[];sockets.push(this);}
+  send(m){this.sent.push(JSON.parse(m));}
+  open(){this.readyState=1;this.onopen?.({});}
+  close(){this.readyState=3;}
+  recv(m){this.onmessage?.({data:JSON.stringify(m)});}
+}
+window.WebSocket=Socket;
+const ws=await import('/ws.js');
+run((assert)=>{
+  S.identityExists=true; S.view='chat'; S.stats={name:'Test'};
+  let drawn=0; S.renderComposer=()=>{ drawn++; };
+  ws.connect(); sockets[0].open();
+  const asked=()=>sockets[0].sent.filter(x=>x.type==='query'&&x.query==='work').length;
+  const before=asked();
+  sockets[0].recv({type:'work_changed'});
+  assert(asked()===before+1, 'the page did not ask for the work state again when the host said it changed');
+  const drawnBefore=drawn;
+  sockets[0].recv({type:'work', work:{live:[], queued:0, delivered:[], alarms:[], nothing_scheduled:true}});
+  assert(S.work && S.work.nothing_scheduled===true, 'the work state was not kept: '+JSON.stringify(S.work));
+  assert(drawn===drawnBefore+1, 'the reply box was not drawn again from the answer');
+});
+</script>`
+	stateJS := []byte(`export const S = { connected:false, reconnectTimer:null, identityExists:false, view:'chat', tokenPrompted:false, wsEverOpened:false, thinking:false, work:null };`)
+	wsJS, err := staticFS.ReadFile("static/ws.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPageInEngines(t, page, wsPageModules(wsJS, stateJS))
+}
+
+// A foregrounded mobile tab can still report OPEN after its network path
+// died. One unanswered app-level probe retires that socket; a matching
+// answer keeps it and asks for current state/history. Reconnect retries
+// change the standing presence state without adding chat-error lines.
 func TestForegroundProbeRecoversStaleOpenSocketWithoutErrorCascade(t *testing.T) {
 	page := `<!doctype html><button id="send-btn" disabled></button><button id="mic" disabled></button>
 <script type="module">
@@ -156,8 +205,9 @@ run((assert)=>{
   assert(window.__think===true && sockets[0].sent.filter(x=>x.type==='query'&&x.query==='interaction').length===historyBefore+1,
     'an active turn did not retain its marker while history refreshed');
   sockets[0].recv({type:'system_line',message:'one question was withdrawn'});
-  assert(window.__think===true && (window.__chatLines||[]).at(-1)==='one question was withdrawn',
+  assert(window.__think===true && (window.__toasts||[]).at(-1)==='one question was withdrawn',
     'an informational system line ended the turn or vanished');
+  assert(!(window.__chatLines||[]).includes('one question was withdrawn'), 'a line only a live page saw was put in the conversation');
   sockets[0].recv({type:'error',request_id:'settings-check',message:'unrelated settings refusal'});
   assert(window.__think===true, 'an unrelated query error ended the active turn marker');
   const beforeReject=sockets[0].sent.filter(x=>x.type==='probe').length;
@@ -330,9 +380,9 @@ func TestAuthenticationReplyCannotPromptAfterThePageHides(t *testing.T) {
 <button id="send-btn"></button><button id="mic"></button>
 <script type="module">
 import {run} from '/__harness.js';
-let visible=true,resolveFetch,prompts=0,fetches=0;
+let visible=true,resolveFetch,answer=null,prompts=0,fetches=0;
 Object.defineProperty(document,'visibilityState',{get:()=>visible?'visible':'hidden'});
-window.fetch=()=>{fetches++;return new Promise(resolve=>{resolveFetch=resolve})};
+window.fetch=()=>{fetches++;return answer?Promise.resolve(answer):new Promise(resolve=>{resolveFetch=resolve})};
 window.prompt=()=>{prompts++;return null};
 const ws=await import('/ws.js');
 run(async assert=>{
@@ -343,8 +393,9 @@ run(async assert=>{
  assert(prompts===0 && !document.getElementById('dashboard-signin'),'a late auth response prompted a hidden page');
  await ws.recoverAuthentication();assert(fetches===1,'hidden auth check sent traffic');
  visible=true;
- const resumed=ws.recoverAuthentication();resolveFetch({status:401, headers: new Headers()});await resumed;
+ answer={status:401, headers: new Headers()};await ws.recoverAuthentication();
  assert(prompts===0 && document.getElementById('dashboard-signin'),'suspension permanently suppressed legitimate inline authentication');
+ assert(fetches===3,'the refusal was not asked again before the person was: '+fetches+' asks');
 });</script></body></html>`
 	wsJS, err := staticFS.ReadFile("static/ws.js")
 	if err != nil {

@@ -662,7 +662,7 @@ func TestEmbeddedCredentialOptionsFillWithoutOverriding(t *testing.T) {
 		t.Fatalf("version fields are not embed-derived on the pinned entry: %v", pinned.CredentialOptions)
 	}
 
-	// A providers.json created before Codex acquired a discovery-version
+	// A providers.json created before a review acquired a discovery-version
 	// option heals on load just like Claude's vendor request facts.
 	if got := byName["Legacy ChatGPT"].CredentialOptions["query_client_version"]; got != "1.0.0" {
 		t.Fatalf("Codex discovery version was not supplied from the embedded registry: %q", got)

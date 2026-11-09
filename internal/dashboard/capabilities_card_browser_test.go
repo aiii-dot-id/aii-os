@@ -67,7 +67,7 @@ run(() => {
   assert(document.documentElement.scrollWidth <= window.innerWidth + 1, 'the panel is wider than the screen: ' + document.documentElement.scrollWidth + ' > ' + window.innerWidth);
 
   // The provider's card says the same of the model it will use.
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   st.querySelector('[data-prov-row="0"]').click();
   const card = st.querySelector('[data-provider-editor] [data-capabilities="claude-opus-5"]');
   assert(card, 'the provider card draws its model\'s capabilities');

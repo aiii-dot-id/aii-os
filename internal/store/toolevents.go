@@ -74,7 +74,109 @@ func (s *Store) ActingSession() (id string, several bool, err error) {
 	return id, n > 1, err
 }
 
+type CallSeat struct {
+	Actor, Session, Reason string
+}
+
+func startSeat(ctx context.Context, q queryer, turnID, actor, activeProject, child string, childArgs []any) (seat CallSeat, project string, err error) {
+	seat.Actor = actor
+	switch actor {
+	case "operator":
+		return CallSeat{Actor: actor, Reason: "operator_act"}, activeProject, nil
+	case "main", "safe":
+
+		if session, err := openingSessionOf(ctx, q, turnID); err != nil {
+			return CallSeat{}, "", err
+		} else if session != "" {
+			seat.Session = session
+			return seat, activeProject, nil
+		}
+		var active int
+		err = q.QueryRowContext(ctx, actingSessionSQL(child), childArgs...).Scan(&seat.Session, &active)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			seat.Reason = "no_session"
+		case err != nil:
+			return CallSeat{}, "", err
+		case active > 1:
+			seat.Reason = SeveralActive
+		}
+		return seat, activeProject, nil
+	default:
+		err = q.QueryRowContext(ctx, `SELECT id,project_id FROM work_sessions WHERE id=?`, actor).Scan(&seat.Session, &project)
+		if errors.Is(err, sql.ErrNoRows) {
+			return CallSeat{Actor: actor, Reason: "acting_session_unavailable"}, "", nil
+		}
+		if err != nil {
+			return CallSeat{}, "", err
+		}
+		return seat, project, nil
+	}
+}
+
+func openingSessionOf(ctx context.Context, q queryer, turnID string) (string, error) {
+	if turnID == "" {
+		return "", nil
+	}
+	var session sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT json_extract(a.payload, '$.session') FROM turn_annotations a JOIN conversations c ON c.turn_seq = a.turn_seq
+		WHERE c.turn_id = ? AND a.kind = ? ORDER BY a.turn_seq LIMIT 1`, turnID, AnnotationTurnSource).Scan(&session)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return session.String, err
+}
+
+func (s *Store) StartSeat(turnID, actor string) (CallSeat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	child, args, err := s.childTest()
+	if err != nil {
+		return CallSeat{}, err
+	}
+	seat, _, err := startSeat(context.Background(), s.db, turnID, actor, s.activeProject, child, args)
+	return seat, err
+}
+
+func (s *Store) ToolCallSeat(turnID string, ordinal int) (CallSeat, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var details string
+	err := s.db.QueryRow(`SELECT details FROM conversations WHERE source_kind='tool' AND source_id=? AND kind='tool_call'`, toolExecutionID(turnID, ordinal)).Scan(&details)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CallSeat{}, false, nil
+	}
+	if err != nil {
+		return CallSeat{}, false, err
+	}
+	var d interaction.Details
+	if err := json.Unmarshal([]byte(details), &d); err != nil {
+		return CallSeat{}, false, fmt.Errorf("tool call %s #%d: its details do not decode: %w", turnID, ordinal, err)
+	}
+	return CallSeat{Actor: d.Actor, Session: d.WorkSession, Reason: d.SessionReason}, true, nil
+}
+
 func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, providerCallID, tool, args string) error {
+	return s.RecordToolStartOfRequest(turnID, ordinal, actor, model, providerCallID, tool, args, nil)
+}
+
+const AnnotationRequest = "request"
+
+func RequestKey(turnID string, ordinal int) string {
+	return fmt.Sprintf("%s#%d", turnID, ordinal)
+}
+
+func (s *Store) RecordToolStartOfRequest(turnID string, ordinal int, actor, model, providerCallID, tool, args string, request *interaction.RequestFacts) error {
+	var payload []byte
+	if request != nil {
+		if !request.Valid() {
+			return interaction.Invalid("request facts: an ordinal from 1, no negative count, input, output and total together, cache counts only with them")
+		}
+		var err error
+		if payload, err = json.Marshal(request); err != nil {
+			return err
+		}
+	}
 	changed := false
 	defer s.notifyInteraction(&changed)
 	s.mu.Lock()
@@ -85,41 +187,55 @@ func (s *Store) RecordToolStart(turnID string, ordinal int, actor, model, provid
 	}
 	defer tx.Rollback()
 	id := toolExecutionID(turnID, ordinal)
-	project, work, why := s.activeProject, "", ""
-	switch actor {
-	case "operator":
-		why = "operator_act"
-	case "main", "safe":
-		var active int
-		err = tx.QueryRow(actingSessionSQL(queuedChild("")), SubagentWorkKind, SubagentWorkKind).Scan(&work, &active)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			why = "no_session"
-		case err != nil:
-			return err
-		case active > 1:
-			why = SeveralActive
-		}
-	default:
-		project = ""
-		err = tx.QueryRow(`SELECT id,project_id FROM work_sessions WHERE id=?`, actor).Scan(&work, &project)
-		if errors.Is(err, sql.ErrNoRows) {
-			why = "acting_session_unavailable"
-		} else if err != nil {
-			return err
-		}
+	seat, project, err := startSeat(context.Background(), tx, turnID, actor, s.activeProject, queuedChild(""), []any{SubagentWorkKind, SubagentWorkKind})
+	if err != nil {
+		return err
 	}
-	_, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_call_" + id, Kind: interaction.ToolCall, Role: interaction.System, TurnID: turnID, ProjectID: project, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, "", 0), Details: interaction.Details{WorkSession: work, SessionReason: why, Tool: tool, Actor: actor, Model: model, ProviderCallID: providerCallID, Ordinal: ordinal, ArgsRecord: metaRecord(args)}})
+	ref, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_call_" + id, Kind: interaction.ToolCall, Role: interaction.System, TurnID: turnID, ProjectID: project, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, "", 0), Details: interaction.Details{WorkSession: seat.Session, SessionReason: seat.Reason, Tool: tool, Actor: actor, Model: model, ProviderCallID: providerCallID, Ordinal: ordinal, ArgsRecord: metaRecord(args)}})
 	if err != nil {
 		return err
 	}
 	if !added {
 		return fmt.Errorf("tool start for turn %s ordinal %d is already recorded", turnID, ordinal)
 	}
+	if request != nil {
+		if err := annotateRowTx(context.Background(), tx, ref.Sequence, AnnotationRequest, RequestKey(turnID, request.Ordinal), string(payload)); err != nil {
+			return err
+		}
+	}
+	if err := servePlanStepTx(context.Background(), tx, ref.Sequence, seat.Session); err != nil {
+		return err
+	}
 	err = tx.Commit()
 	changed = added
 	return err
 
+}
+
+func servePlanStepTx(ctx context.Context, tx *sql.Tx, turnSeq uint64, session string) error {
+	if session == "" {
+		return nil
+	}
+	var payload string
+	err := tx.QueryRowContext(ctx, `SELECT payload FROM turn_annotations WHERE kind=? AND key=? ORDER BY turn_seq DESC LIMIT 1`, AnnotationPlanStep, session).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var step planStepLine
+	if err := json.Unmarshal([]byte(payload), &step); err != nil {
+		return fmt.Errorf("the plan step of session %s does not decode: %w", session, err)
+	}
+	if step.Line == "" {
+		return nil
+	}
+	served, err := json.Marshal(step)
+	if err != nil {
+		return err
+	}
+	return annotateRowTx(ctx, tx, turnSeq, AnnotationPlanStepServed, session, string(served))
 }
 
 func (s *Store) ToolCallStarted(turnID string, ordinal int) (bool, error) {

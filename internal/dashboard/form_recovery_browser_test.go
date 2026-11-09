@@ -27,6 +27,7 @@ const save=()=>st.querySelector('[data-save="plugin:example.plugin"]');
 const said=()=>st.querySelector('[data-said="plugin:example.plugin"]')?.textContent||'';
 const type=(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));};
 renderPlugins();
+st.querySelector('[data-manage="example.plugin"]').click(); // its card opens under Manage (step 16b)
 `
 
 func TestPluginSaveConfirmsKeysBeforeSettingsAndKeepsUnsentEdits(t *testing.T) {
@@ -87,7 +88,9 @@ run(assert=>{` + pluginFormSetup + `
  type(name,'account draft');type(document.getElementById('pf-client'),'client draft');type(secret,'dummy-profile-secret');name.focus();name.setSelectionRange(2,6);
  renderPlugins();assert(document.getElementById('pf-name')===name&&name.value==='account draft'&&document.activeElement===name&&name.selectionStart===2&&name.selectionEnd===6,'account draft/focus/selection lost');
  assert(document.getElementById('pf-client').value==='client draft'&&document.getElementById('pf-secret').value==='dummy-profile-secret'&&!st.innerHTML.includes('dummy-profile-secret'),'account secret lost or serialized into markup');
- name.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));type(name,'composing');renderPlugins();assert(name.isConnected&&document.activeElement===name,'composition was interrupted');name.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));
+ const drawn=st.firstElementChild;name.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));type(name,'composing');renderPlugins();assert(name.isConnected&&document.activeElement===name,'composition was interrupted');
+ assert(st.firstElementChild===drawn,'a frame redrew the page under a composition');name.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));
+ assert(st.firstElementChild!==drawn,'the redraw that waited did not follow the composition');
  assert(document.getElementById('pf-name').value==='composing','composition commit lost');
  st.querySelector('[data-profile-cancel]').click();st.querySelector('[data-profile-new]').click();
  assert(!document.getElementById('pf-name').value&&!document.getElementById('pf-secret').value,'Cancel resurrected old account edits');

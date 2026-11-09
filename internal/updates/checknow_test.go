@@ -247,7 +247,7 @@ func TestApplyDoesNotSwapAfterCancellation(t *testing.T) {
 
 	const newVer = "9.9.9"
 	archive := releaseArchive(t, []byte("new binary"))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	signer.provisionTrustDir(t, dir)
 	sig := signer.signReleasePayload(t, releaseArchivePayload{
 		ArchiveHash: sha256hex(archive),

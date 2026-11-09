@@ -26,7 +26,7 @@ func TestTheContractSurvivesAReload(t *testing.T) {
 		Acceptance:  []string{"a clean Windows box installs and registers", "the dmg is notarized and stapled"},
 		Constraints: []string{"no unsigned binaries"},
 	}
-	if _, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, c, nil); err != nil {
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, c, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func TestAuthorityBearingKeysAreRefusedInAttributes(t *testing.T) {
 		"parent":      "parent",
 		"Outcome":     "contract.outcome", // case is not a loophole
 	} {
-		_, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, nil,
+		_, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, nil,
 			map[string]any{key: "something"})
 		if err == nil {
 			t.Fatalf("attribute %q is authority-bearing and must be refused", key)
@@ -101,7 +101,7 @@ func TestAuthorityBearingKeysAreRefusedInAttributes(t *testing.T) {
 		}
 	}
 	// An ordinary extension still rides the envelope.
-	if _, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, nil,
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, nil,
 		map[string]any{"kind": "spreadsheet"}); err != nil {
 		t.Fatalf("attributes remain open for extensions: %v", err)
 	}
@@ -115,27 +115,27 @@ func TestParentRefusesSelfCyclesAndPhantoms(t *testing.T) {
 	b, _ := m.Create("B", "", "operator", nil, nil, nil)
 	c, _ := m.Create("C", "", "operator", nil, nil, nil)
 
-	if _, err := m.ApplyPatch(a.ID, nil, nil, nil, &a.ID, nil, nil); err == nil {
+	if _, err := m.ApplyPatch(a.ID, "operator", nil, nil, nil, &a.ID, nil, nil); err == nil {
 		t.Fatal("a project must not be its own parent")
 	}
 	ghost := "no-such-project"
-	if _, err := m.ApplyPatch(a.ID, nil, nil, nil, &ghost, nil, nil); err == nil {
+	if _, err := m.ApplyPatch(a.ID, "operator", nil, nil, nil, &ghost, nil, nil); err == nil {
 		t.Fatal("a parent that does not exist must be refused")
 	}
 
 	// A -> B -> C, then C -> A would close the loop.
-	if _, err := m.ApplyPatch(a.ID, nil, nil, nil, &b.ID, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(a.ID, "operator", nil, nil, nil, &b.ID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ApplyPatch(b.ID, nil, nil, nil, &c.ID, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(b.ID, "operator", nil, nil, nil, &c.ID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ApplyPatch(c.ID, nil, nil, nil, &a.ID, nil, nil); err == nil {
+	if _, err := m.ApplyPatch(c.ID, "operator", nil, nil, nil, &a.ID, nil, nil); err == nil {
 		t.Fatal("C -> A closes a cycle and must be refused")
 	}
 	// Clearing is always allowed.
 	empty := ""
-	if _, err := m.ApplyPatch(a.ID, nil, nil, nil, &empty, nil, nil); err != nil {
+	if _, err := m.ApplyPatch(a.ID, "operator", nil, nil, nil, &empty, nil, nil); err != nil {
 		t.Fatalf("clearing a parent must be allowed: %v", err)
 	}
 }
@@ -169,14 +169,14 @@ func TestUpdateCanClearAParentAndAbsenceLeavesItAlone(t *testing.T) {
 	b, _ := m.Create("B", "", "operator", nil, nil, nil)
 
 	set := b.ID
-	if _, err := m.Update(a.ID, "", "", "", &set, nil, nil); err != nil {
+	if _, err := m.Update(a.ID, "operator", "", "", "", &set, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := m.Load(a.ID); got.Parent != b.ID {
 		t.Fatalf("parent not set: %q", got.Parent)
 	}
 	// Absence leaves it alone.
-	if _, err := m.Update(a.ID, "", "", "still here", nil, nil, nil); err != nil {
+	if _, err := m.Update(a.ID, "operator", "", "", "still here", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := m.Load(a.ID); got.Parent != b.ID {
@@ -184,7 +184,7 @@ func TestUpdateCanClearAParentAndAbsenceLeavesItAlone(t *testing.T) {
 	}
 	// A pointer to "" clears it.
 	empty := ""
-	if _, err := m.Update(a.ID, "", "", "", &empty, nil, nil); err != nil {
+	if _, err := m.Update(a.ID, "operator", "", "", "", &empty, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := m.Load(a.ID); got.Parent != "" {

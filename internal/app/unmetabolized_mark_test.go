@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -69,6 +70,21 @@ func TestTheMarkIsShownOnTheNoteWhereverTheOperatorReadsIt(t *testing.T) {
 	}
 	if len(ids) != 2 {
 		t.Fatalf("the identity page is given %d of the two notes: %+v", len(ids), st.Experiences)
+	}
+	// EACH NOTE CARRIES THE RECORD ENTRY THAT MADE IT (step 11), in decimal,
+	// so its "Copy link" opens that entry; an experience's id is not one.
+	rows, err := app.store.ListExperiences(50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := map[string]string{}
+	for _, r := range rows {
+		made[r.ID] = strconv.FormatUint(r.CreatedSeq, 10)
+	}
+	for _, e := range st.Experiences {
+		if e.CreatedSeq == "" || e.CreatedSeq != made[e.ID] || e.CreatedSeq == e.ID {
+			t.Errorf("THE IDENTITY PAGE IS NOT GIVEN THE ENTRY THAT MADE THE NOTE: %q for %s (the record's %q)", e.CreatedSeq, e.ID, made[e.ID])
+		}
 	}
 
 	// THE MEMORY PAGE'S SEARCH.

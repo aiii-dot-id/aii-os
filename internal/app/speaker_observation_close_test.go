@@ -89,7 +89,7 @@ func TestSpeakerObservationJoinsQueuedTurnAfterSessionEnd(t *testing.T) {
 					t.Fatal("the session's end dropped the observation of words still queued for a turn")
 				}
 			}
-			said := a.DrainSteering()
+			said := steeredWords(a.DrainSteering())
 			if c.taken { // the wake path records the words it took
 				seq, err := a.engine.RecordConversationTurnSeq(roleOperator, voiceMarker+"words admitted before close")
 				if err != nil {
@@ -196,7 +196,7 @@ func TestASuccessorSessionNeverTakesItsPredecessorsObservation(t *testing.T) {
 	a.voiceEngineEvent(nil, observationRaw(next.id, 20, knownObservation(7, "Bo", "bo")), dropEvent)
 	queueSpoken(t, a, next.id, 7, "the next session's words")
 	a.voiceSessionEnded(next)
-	if said := a.DrainSteering(); len(said) != 2 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 2 {
 		t.Fatalf("both sessions' words reach the turn: %q", said)
 	}
 	for key, want := range map[string]string{"vs-old/7": "ada", "vs-next/7": "bo"} {
@@ -243,7 +243,7 @@ func TestAnObservationIsRetiredWithWordsThatAreNeverRecorded(t *testing.T) {
 			t.Fatalf("not queued: %v %v", steered, err)
 		}
 		a.voiceSessionEnded(h)
-		if said := a.DrainSteering(); len(said) != 0 {
+		if said := steeredWords(a.DrainSteering()); len(said) != 0 {
 			t.Fatalf("the carried arrival was said twice: %q", said)
 		}
 		a.settleVoice(context.Background(), "") // the turn's end, as runTurnLocked settles it

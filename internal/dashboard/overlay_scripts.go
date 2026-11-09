@@ -41,7 +41,7 @@ func (s *Server) noServiceWorker(next http.Handler) http.Handler {
 		if s.serviceWorkers.own(s.refusalLines(), func(n uint64) {
 			logsink.Warn("dashboard.refusal", "%d more request(s) for a service worker's script answered in the last minute with one that removes itself", n)
 		}) {
-			logsink.Warn("dashboard.refusal", "%s was asked for as a service worker's script: answered with one that removes itself, as this dashboard installs none", peerSaid(r.URL.Path, refusalPeerTextBytes))
+			logsink.Warn("dashboard.refusal", "%s was asked for as a service worker's script: answered with one that removes itself, as this dashboard installs none", peerSaid(pathToLog(r.URL.Path), refusalPeerTextBytes))
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -78,7 +78,7 @@ func (s *Server) scriptApproved(rel string, data []byte) bool {
 
 func heldOutcome(data []byte) string {
 	sum := sha256.Sum256(data)
-	return "held: a script awaiting your approval (Settings → Dashboard → Scripts), sha256 " + hex.EncodeToString(sum[:])[:12]
+	return "held: a script awaiting your approval (Settings → Plugins and permissions), sha256 " + hex.EncodeToString(sum[:])[:12]
 }
 
 func (s *Server) overlayScripts() ([]OverlayScript, error) {
@@ -127,21 +127,21 @@ func readOverlayFile(root *os.Root, rel string) ([]byte, bool) {
 	return data, err == nil
 }
 
-const approvalNeedsToken = "approving a script requires this dashboard to ask for its access token, so that only a browser signed in with it can approve one, and it does not now. Turn that on in Settings, under Dashboard, with Ask for an access token"
+const approvalNeedsToken = "to approve a script, first turn on \"Ask every device to sign in\" in Settings → Access"
 
 func (s *Server) canApprove(r *http.Request) string {
 	if !s.accessRequired() {
 		return approvalNeedsToken
 	}
 	if !s.tokenAuthorized(r) {
-		return "this browser is not signed in with this dashboard's access token"
+		return "this page isn't signed in. Sign in, then try again"
 	}
 	return ""
 }
 
 func (s *Server) handleOverlayScripts(w http.ResponseWriter, r *http.Request) {
 	if !s.tokenAuthorized(r) {
-		sayRefused(w, http.StatusUnauthorized, "this dashboard needs its access token")
+		sayRefused(w, http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	list, err := s.overlayScripts()
@@ -157,7 +157,7 @@ func (s *Server) handleOverlayScripts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOverlayScriptFile(w http.ResponseWriter, r *http.Request) {
 	if !s.tokenAuthorized(r) {
-		sayRefused(w, http.StatusUnauthorized, "this dashboard needs its access token")
+		sayRefused(w, http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	rel := r.URL.Query().Get("path")

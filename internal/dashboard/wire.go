@@ -39,6 +39,8 @@ type BeliefItem struct {
 	Status        string  `json:"status"`
 	EvidenceCount int     `json:"evidence_count"`
 	Confidence    float64 `json:"confidence"`
+
+	ChangedAt string `json:"changed_at,omitempty"`
 }
 
 type IntentionItem struct {
@@ -48,20 +50,24 @@ type IntentionItem struct {
 }
 
 type ExperienceItem struct {
-	ID            string `json:"id"`
-	Content       string `json:"content"`
-	Category      string `json:"category"`
-	CreatedAt     string `json:"created_at"`
-	Provenance    string `json:"provenance,omitempty"`
-	Unmetabolized bool   `json:"unmetabolized,omitempty"`
+	ID               string `json:"id"`
+	Content          string `json:"content"`
+	Category         string `json:"category"`
+	CreatedAt        string `json:"created_at"`
+	Provenance       string `json:"provenance,omitempty"`
+	Unmetabolized    bool   `json:"unmetabolized,omitempty"`
+	CreatedSeq       string `json:"created_seq,omitempty"`
+	OperatorVerbatim bool   `json:"operator_verbatim,omitempty"`
 }
 
 type IdentityState struct {
-	Beliefs       []BeliefItem     `json:"beliefs"`
-	Intentions    []IntentionItem  `json:"intentions"`
-	Experiences   []ExperienceItem `json:"experiences"`
-	Synthesis     string           `json:"synthesis"`
-	Brief         string           `json:"brief"`
+	Beliefs     []BeliefItem     `json:"beliefs"`
+	Intentions  []IntentionItem  `json:"intentions"`
+	Experiences []ExperienceItem `json:"experiences"`
+	Synthesis   string           `json:"synthesis"`
+	Brief       string           `json:"brief"`
+
+	Note          *OperatorNote    `json:"note,omitempty"`
 	Charter       string           `json:"charter"`
 	Approval      *CharterApproval `json:"approval,omitempty"`
 	TrustLevel    string           `json:"trust_level"`
@@ -70,6 +76,100 @@ type IdentityState struct {
 	Relationships []RelationshipItem `json:"relationships,omitempty"`
 
 	Meaning *MeaningState `json:"meaning,omitempty"`
+
+	Retired     []RetiredBeliefItem `json:"retired"`
+	RetiredMore int                 `json:"retired_more"`
+}
+
+type RetiredBeliefItem struct {
+	ID         string           `json:"id"`
+	Statement  string           `json:"statement"`
+	RetiredAt  string           `json:"retired_at"`
+	ReplacedBy *ReplacementItem `json:"replaced_by,omitempty"`
+}
+
+type ReplacementItem struct {
+	ID        string `json:"id"`
+	Statement string `json:"statement"`
+	Retired   bool   `json:"retired,omitempty"`
+}
+
+type OperatorNote struct {
+	Text         string        `json:"text"`
+	WrittenAt    string        `json:"written_at"`
+	Claims       []NoteClaim   `json:"claims"`
+	Unchecked    int           `json:"unchecked"`
+	NotSucceeded []NoteNotDone `json:"not_succeeded"`
+
+	NotSucceededUnread string `json:"not_succeeded_unread,omitempty"`
+
+	NotSucceededMore int `json:"not_succeeded_more,omitempty"`
+
+	NotSucceededBeyond bool `json:"not_succeeded_beyond,omitempty"`
+
+	WindowFrom  string `json:"window_from,omitempty"`
+	WindowUntil string `json:"window_until,omitempty"`
+}
+
+type NoteClaim struct {
+	Sentence string   `json:"sentence"`
+	Entries  []string `json:"entries"`
+	Outcomes []string `json:"outcomes"`
+}
+
+type NoteNotDone struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Outcome string `json:"outcome"`
+	Summary string `json:"summary"`
+	At      string `json:"at"`
+}
+
+type BeliefTrail struct {
+	Belief       TrailBelief    `json:"belief"`
+	Origins      []TrailLink    `json:"origins"`
+	Contradicts  []TrailLink    `json:"contradicts"`
+	Supersedes   []TrailLink    `json:"supersedes"`
+	SupersededBy *TrailLink     `json:"superseded_by"`
+	Truncated    TrailTruncated `json:"truncated"`
+}
+
+type TrailTruncated struct {
+	Origins     bool `json:"origins"`
+	Contradicts bool `json:"contradicts"`
+	Supersedes  bool `json:"supersedes"`
+}
+
+type TrailBelief struct {
+	ID            string  `json:"id"`
+	Statement     string  `json:"statement"`
+	Ring          int     `json:"ring"`
+	Confidence    float64 `json:"confidence"`
+	EvidenceCount int     `json:"evidence_count"`
+	Archived      bool    `json:"archived"`
+	HeldSince     string  `json:"held_since"`
+	LastSeq       int64   `json:"last_seq"`
+
+	Recall *float64 `json:"recall"`
+
+	RecallCount *int64 `json:"recall_count"`
+
+	RecalledAt *string `json:"recalled_at"`
+
+	Fading bool `json:"fading"`
+}
+
+type TrailLink struct {
+	EdgeType   string   `json:"edge_type"`
+	Strength   *float64 `json:"strength"`
+	CreatedSeq int64    `json:"created_seq"`
+	CreatedAt  string   `json:"created_at"`
+	Kind       string   `json:"kind"`
+	ID         string   `json:"id"`
+	Text       string   `json:"text"`
+	Provenance string   `json:"provenance,omitempty"`
+
+	Turn *string `json:"turn"`
 }
 
 type MeaningState struct {
@@ -151,7 +251,9 @@ type LLMConfigState struct {
 	Model            string `json:"model"`
 	ResolvedProvider string `json:"resolved_provider"`
 	ResolvedModel    string `json:"resolved_model"`
-	TimeoutSeconds   int    `json:"timeout_seconds"`
+
+	Answered       bool `json:"answered,omitempty"`
+	TimeoutSeconds int  `json:"timeout_seconds"`
 
 	RefusedRetryMaxSeconds int `json:"refused_retry_max_seconds"`
 	RefusedRetryMaxDefault int `json:"refused_retry_max_default"`
@@ -208,6 +310,10 @@ type GenesisConfigState struct {
 	ServerURL    string `json:"server_url"`
 	FirewallURL  string `json:"firewall_url"`
 	BootstrapURL string `json:"bootstrap_url"`
+
+	AgentMemoryOff bool `json:"agent_memory_off"`
+
+	AgentMemoryFound bool `json:"agent_memory_found"`
 }
 
 type PromptConfigState struct {
@@ -240,6 +346,8 @@ type ProviderDirectory struct {
 	Providers                []ProviderInfo
 	Broken                   []BrokenProviderInfo
 	SkipSignInWithValidToken bool
+
+	Local *LocalModelState
 }
 
 type BrokenProviderInfo struct {
@@ -293,6 +401,7 @@ type ProviderInfo struct {
 	StatusReason    string          `json:"status_reason,omitempty"`
 	Preselect       bool            `json:"preselect,omitempty"`
 	PreselectWhy    string          `json:"preselect_why,omitempty"`
+	PreselectModel  string          `json:"preselect_model,omitempty"`
 	APIKeyEnv       string          `json:"api_key_env,omitempty"`
 	DefaultModel    string          `json:"default_model,omitempty"`
 	ContextLength   int             `json:"context_length,omitempty"`
@@ -339,6 +448,8 @@ type ProviderEdit struct {
 	ClearKey bool `json:"clear_key,omitempty"`
 
 	SetEmbeddingsModel bool `json:"-"`
+
+	SetLocal bool `json:"-"`
 }
 
 func (e *ProviderEdit) UnmarshalJSON(data []byte) error {
@@ -348,6 +459,7 @@ func (e *ProviderEdit) UnmarshalJSON(data []byte) error {
 		HasKey          *bool   `json:"has_key"`
 		EmbeddingsModel *string `json:"embeddings_model"`
 		ClearKey        bool    `json:"clear_key"`
+		Local           *bool   `json:"local"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -356,6 +468,9 @@ func (e *ProviderEdit) UnmarshalJSON(data []byte) error {
 		ClearKey: wire.ClearKey || (wire.HasKey != nil && !*wire.HasKey)}
 	if wire.EmbeddingsModel != nil {
 		e.EmbeddingsModel, e.SetEmbeddingsModel = strings.TrimSpace(*wire.EmbeddingsModel), true
+	}
+	if wire.Local != nil {
+		e.Local, e.SetLocal = *wire.Local, true
 	}
 	return nil
 }
@@ -648,6 +763,8 @@ type PluginView struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
 	Tier    string `json:"tier"`
+
+	Kind    string `json:"kind"`
 	Mode    string `json:"mode"`
 	Variant string `json:"variant"`
 
@@ -1269,6 +1386,8 @@ type StatsResponse struct {
 
 	LastTurn string `json:"last_turn,omitempty"`
 
+	Accounted uint64 `json:"accounted,omitempty"`
+
 	Voice bool `json:"voice"`
 
 	VoiceEngine bool `json:"voice_engine"`
@@ -1333,10 +1452,56 @@ type GradeRequest struct {
 	Item    string `json:"item,omitempty"`
 }
 
+type ResumeView struct {
+	Session     string `json:"session"`
+	Description string `json:"description"`
+	Promise     string `json:"promise,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Counterpart string `json:"counterpart,omitempty"`
+	On          string `json:"on"`
+}
+
+type WideningOffer struct {
+	Counterpart string                   `json:"counterpart"`
+	Name        string                   `json:"name"`
+	From        string                   `json:"from"`
+	To          string                   `json:"to"`
+	Digest      string                   `json:"digest"`
+	Press       string                   `json:"press"`
+	Completions []WideningCompletionView `json:"completions"`
+}
+
+type WideningCompletionView struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Result      string `json:"result,omitempty"`
+	At          string `json:"at"`
+	Audited     bool   `json:"audited"`
+}
+
 type WorkState struct {
-	Live      []WorkSessionItem `json:"live"`
-	Queued    int               `json:"queued"`
-	Delivered []WorkSessionItem `json:"delivered"`
+	Live   []WorkSessionItem `json:"live"`
+	Queued int               `json:"queued"`
+
+	NothingScheduled bool              `json:"nothing_scheduled"`
+	Delivered        []WorkSessionItem `json:"delivered"`
+
+	Stage    string         `json:"stage"`
+	Resumes  *ResumeView    `json:"resumes,omitempty"`
+	Widening *WideningOffer `json:"widening,omitempty"`
+
+	Alarms []AlarmView `json:"alarms"`
+
+	NextPassAt *int64 `json:"next_pass_at,omitempty"`
+}
+
+type AlarmView struct {
+	ID      string `json:"id"`
+	Tag     string `json:"tag,omitempty"`
+	Message string `json:"message"`
+	DueAt   int64  `json:"due_at"`
+	Every   *int64 `json:"every,omitempty"`
+	FiredAt *int64 `json:"fired_at,omitempty"`
 }
 
 type WorkspaceState struct {
@@ -1411,6 +1576,9 @@ type ProjectContract struct {
 	Outcome     string   `json:"outcome,omitempty"`
 	Acceptance  []string `json:"acceptance,omitempty"`
 	Constraints []string `json:"constraints,omitempty"`
+
+	AgreedBy string `json:"agreed_by,omitempty"`
+	AgreedAt string `json:"agreed_at,omitempty"`
 }
 
 type ProjectRequest struct {
@@ -1430,6 +1598,7 @@ type AskView struct {
 	Kind      string         `json:"kind"`
 	From      string         `json:"from"`
 	Text      string         `json:"text"`
+	Heard     string         `json:"heard,omitempty"`
 	Choices   []string       `json:"choices,omitempty"`
 	Connector string         `json:"connector,omitempty"`
 	Session   string         `json:"session,omitempty"`
@@ -1478,38 +1647,43 @@ type ClientMessage struct {
 	Message          string             `json:"message"`
 	Attachments      []string           `json:"attachments,omitempty"`
 	Query            string             `json:"query"`
-	Genesis          *GenesisRequest    `json:"genesis"`
-	Tool             string             `json:"tool"`
-	Config           map[string]any     `json:"config"`
-	Enabled          bool               `json:"enabled"`
-	Project          *ProjectRequest    `json:"project,omitempty"`
-	Plugin           *PluginAction      `json:"plugin,omitempty"`
-	Ask              *AskAnswer         `json:"ask,omitempty"`
-	Profile          string             `json:"profile,omitempty"`
-	PluginKey        *PluginKeyRequest  `json:"plugin_key,omitempty"`
-	ProfileEdit      *AuthProfileEdit   `json:"profile_edit,omitempty"`
-	Grade            *GradeRequest      `json:"grade,omitempty"`
-	Root             string             `json:"root,omitempty"`
-	SandboxOff       *bool              `json:"sandbox_off,omitempty"`
-	Provider         string             `json:"provider,omitempty"`
-	APIKey           string             `json:"api_key,omitempty"`
-	BaseURL          string             `json:"base_url,omitempty"`
-	Direction        string             `json:"direction,omitempty"`
-	Search           string             `json:"search,omitempty"`
-	Language         string             `json:"language,omitempty"`
-	Name             string             `json:"name,omitempty"`
-	Q                string             `json:"q,omitempty"`
-	Days             int                `json:"days,omitempty"`
-	Entry            *ProviderEdit      `json:"entry,omitempty"`
-	Position         *int               `json:"position,omitempty"`
-	EntrySHA256      string             `json:"entry_sha256,omitempty"`
-	Input            string             `json:"input,omitempty"`
-	Effort           string             `json:"effort,omitempty"`
-	Voice            *VoiceRequest      `json:"voice,omitempty"`
-	Backups          *ContinuityRequest `json:"backups,omitempty"`
-	RestoreNew       *RestoreNewRequest `json:"restore_new,omitempty"`
+
+	BeliefID    string             `json:"belief_id,omitempty"`
+	Genesis     *GenesisRequest    `json:"genesis"`
+	Tool        string             `json:"tool"`
+	Config      map[string]any     `json:"config"`
+	Tokens      map[string]string  `json:"tokens,omitempty"`
+	Enabled     bool               `json:"enabled"`
+	Project     *ProjectRequest    `json:"project,omitempty"`
+	Plugin      *PluginAction      `json:"plugin,omitempty"`
+	Ask         *AskAnswer         `json:"ask,omitempty"`
+	Profile     string             `json:"profile,omitempty"`
+	PluginKey   *PluginKeyRequest  `json:"plugin_key,omitempty"`
+	ProfileEdit *AuthProfileEdit   `json:"profile_edit,omitempty"`
+	Grade       *GradeRequest      `json:"grade,omitempty"`
+	Root        string             `json:"root,omitempty"`
+	SandboxOff  *bool              `json:"sandbox_off,omitempty"`
+	Provider    string             `json:"provider,omitempty"`
+	APIKey      string             `json:"api_key,omitempty"`
+	BaseURL     string             `json:"base_url,omitempty"`
+	Direction   string             `json:"direction,omitempty"`
+	Search      string             `json:"search,omitempty"`
+	Language    string             `json:"language,omitempty"`
+	Name        string             `json:"name,omitempty"`
+	Q           string             `json:"q,omitempty"`
+	Days        int                `json:"days,omitempty"`
+	Entry       *ProviderEdit      `json:"entry,omitempty"`
+	Position    *int               `json:"position,omitempty"`
+	EntrySHA256 string             `json:"entry_sha256,omitempty"`
+	Input       string             `json:"input,omitempty"`
+	Effort      string             `json:"effort,omitempty"`
+	Voice       *VoiceRequest      `json:"voice,omitempty"`
+	Backups     *ContinuityRequest `json:"backups,omitempty"`
+	RestoreNew  *RestoreNewRequest `json:"restore_new,omitempty"`
 
 	Stored *PluginStoredRequest `json:"stored,omitempty"`
+
+	LocalServer *LocalServerRequest `json:"local_server,omitempty"`
 }
 
 type GenesisRequest struct {
@@ -1528,11 +1702,25 @@ type SectionState struct {
 	Entry    string   `json:"entry"`
 
 	Dev bool `json:"dev,omitempty"`
+
+	Plugin string `json:"plugin,omitempty"`
+
+	BuiltIn bool `json:"built_in,omitempty"`
+
+	Views []string `json:"views,omitempty"`
+
+	Address string `json:"address,omitempty"`
 }
 
 type ServerMessage struct {
-	StructuredOutput  json.RawMessage          `json:"structured_output,omitempty"`
-	RequestErrorCode  string                   `json:"request_error_code,omitempty"`
+	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+	RequestErrorCode string          `json:"request_error_code,omitempty"`
+
+	TurnFailure string                `json:"turn_failure,omitempty"`
+	TurnReason  string                `json:"turn_reason,omitempty"`
+	TurnRef     *interaction.Location `json:"turn_ref,omitempty"`
+
+	PassNow           *PassNowResult           `json:"pass_now,omitempty"`
 	InteractionWindow *interaction.WindowState `json:"interaction_window,omitempty"`
 
 	ChatRecording     *ChatRecording    `json:"chat_recording,omitempty"`
@@ -1543,22 +1731,24 @@ type ServerMessage struct {
 	PublicName        *PublicNameState  `json:"public_name,omitempty"`
 	RequestID         string            `json:"request_id,omitempty"`
 	Type              string            `json:"type"`
-	TurnActive        bool              `json:"turn_active,omitempty"`
-	Message           string            `json:"message,omitempty"`
-	Stats             *StatsResponse    `json:"stats,omitempty"`
-	Outbox            []OutboxItem      `json:"outbox,omitempty"`
-	Asks              []AskView         `json:"asks,omitempty"`
-	Device            *DeviceCodeView   `json:"device,omitempty"`
-	Projects          []ProjectState    `json:"projects,omitempty"`
-	Sandbox           *SandboxState     `json:"sandbox,omitempty"`
-	Work              *WorkState        `json:"work,omitempty"`
-	Workspace         *WorkspaceState   `json:"workspace,omitempty"`
-	History           []HistoryTurn     `json:"history,omitempty"`
-	Tools             []ToolState       `json:"tools,omitempty"`
-	Identity          *IdentityState    `json:"identity,omitempty"`
-	Query             string            `json:"query,omitempty"`
-	Continuity        *ContinuityState  `json:"continuity,omitempty"`
-	Config            *ConfigState      `json:"config,omitempty"`
+
+	BeliefTrail *BeliefTrail     `json:"belief_trail,omitempty"`
+	TurnActive  bool             `json:"turn_active,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	Stats       *StatsResponse   `json:"stats,omitempty"`
+	Outbox      []OutboxItem     `json:"outbox,omitempty"`
+	Asks        []AskView        `json:"asks,omitempty"`
+	Device      *DeviceCodeView  `json:"device,omitempty"`
+	Projects    []ProjectState   `json:"projects,omitempty"`
+	Sandbox     *SandboxState    `json:"sandbox,omitempty"`
+	Work        *WorkState       `json:"work,omitempty"`
+	Workspace   *WorkspaceState  `json:"workspace,omitempty"`
+	History     []HistoryTurn    `json:"history,omitempty"`
+	Tools       []ToolState      `json:"tools,omitempty"`
+	Identity    *IdentityState   `json:"identity,omitempty"`
+	Query       string           `json:"query,omitempty"`
+	Continuity  *ContinuityState `json:"continuity,omitempty"`
+	Config      *ConfigState     `json:"config,omitempty"`
 
 	SettingChoices *SettingChoicesReply `json:"setting_choices,omitempty"`
 	Providers      []ProviderInfo       `json:"providers,omitempty"`
@@ -1590,6 +1780,8 @@ type ServerMessage struct {
 	Layout   json.RawMessage `json:"layout,omitempty"`
 	Theme    json.RawMessage `json:"theme,omitempty"`
 
+	Draft *DraftView `json:"draft,omitempty"`
+
 	Overlays []OverlayEvent `json:"overlays,omitempty"`
 
 	Token uint64   `json:"token,omitempty"`
@@ -1606,6 +1798,15 @@ type ServerMessage struct {
 	VoiceHush    *VoiceHush         `json:"voice_hush,omitempty"`
 
 	PluginStored *PluginStoredPage `json:"plugin_stored,omitempty"`
+
+	LocalModels *LocalModelState   `json:"local_models,omitempty"`
+	LocalFound  []LocalServerFound `json:"local_found,omitempty"`
+}
+
+type PassNowResult struct {
+	Moved   bool   `json:"moved"`
+	Reason  string `json:"reason"`
+	AskedAt string `json:"asked_at,omitempty"`
 }
 
 type LogFileState struct {

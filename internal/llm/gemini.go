@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
@@ -326,7 +327,8 @@ func (c *Client) chatGemini(ctx context.Context, messages []Message, opts ChatOp
 		return nil, c.idleVerdict(err)
 	}
 	defer httpResp.Body.Close()
-	read := readGeminiStream
+	say := wire.TextObserver(ctx)
+	read := func(r io.Reader) (*Response, error) { return readGeminiStream(r, say) }
 	if httpResp.StatusCode == http.StatusOK && !isEventStream(httpResp.Header.Get("Content-Type")) {
 		read = readGeminiWhole
 	}
@@ -354,6 +356,7 @@ type geminiTurn struct {
 	usage   *geminiUsage
 	id      string
 	model   string
+	say     func(string)
 }
 
 func (t *geminiTurn) done() bool { return t.finish != "" || t.blocked }
@@ -376,6 +379,10 @@ func (t *geminiTurn) add(r geminiResponse) {
 			continue
 		}
 		for _, p := range cand.Content.Parts {
+
+			if t.say != nil && p.Text != nil && !p.Thought && *p.Text != "" {
+				t.say(*p.Text)
+			}
 
 			if n := len(t.parts); n > 0 && p.plain && t.text[n-1] != nil && t.parts[n-1].Thought == p.Thought {
 				t.text[n-1].WriteString(*p.Text)
@@ -496,11 +503,11 @@ func readGeminiWhole(r io.Reader) (*Response, error) {
 	return turn.response()
 }
 
-func readGeminiStream(r io.Reader) (*Response, error) {
+func readGeminiStream(r io.Reader, say func(string)) (*Response, error) {
 	limited := &io.LimitedReader{R: r, N: maxResponseBytes + 1}
 	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
-	var turn geminiTurn
+	turn := geminiTurn{say: say}
 	var provider string
 	generated := false
 	for sc.Scan() {

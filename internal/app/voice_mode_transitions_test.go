@@ -460,7 +460,7 @@ func TestAMeetingBegunWhileTheWordsWaitedInTheSteerQueueIsTheRooms(t *testing.T)
 		t.Fatalf("the words were not queued for the running turn: %d pending", n)
 	}
 	voiceModeDoor(t, a, listenMeeting, speakOff)
-	if out := a.DrainSteering(); len(out) != 0 {
+	if out := steeredWords(a.DrainSteering()); len(out) != 0 {
 		t.Fatalf("the room's words were delivered to the model: %q", out)
 	}
 	if role, content := latestHeard(t, a); role != roleParticipant || content != unidentifiedInTheRoom("queued behind the running turn") {
@@ -472,7 +472,7 @@ func TestAMeetingBegunWhileTheWordsWaitedInTheSteerQueueIsTheRooms(t *testing.T)
 
 	voiceModeDoor(t, a, listenInteractive, speakOn)
 	heard(2, "asked while listening")
-	out := a.DrainSteering()
+	out := steeredWords(a.DrainSteering())
 	if len(out) != 1 || !strings.Contains(out[0], "asked while listening") || strings.Contains(out[0], voiceRoomNote) {
 		t.Fatalf("under interactive the queue must deliver the question, marked, without the room note: %q", out)
 	}

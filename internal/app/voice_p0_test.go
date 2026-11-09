@@ -21,7 +21,7 @@ func TestVoiceHeardMidTurnIsStillNotOperatorEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The mailbox is drained at the next tool-call boundary.
-	if said := a.DrainSteering(); len(said) != 1 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 		t.Fatalf("the utterance did not reach the running turn: %v", said)
 	}
 

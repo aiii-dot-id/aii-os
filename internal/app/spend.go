@@ -10,11 +10,15 @@ import (
 )
 
 func (a *App) spendView(days int) (*dashboard.SpendView, error) {
+	return a.spendViewAt(days, time.Now())
+}
+
+func (a *App) spendViewAt(days int, at time.Time) (*dashboard.SpendView, error) {
 	zone := a.speechZone()
-	now := time.Now().In(zone)
+	now := at.In(zone)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, zone)
 	first := today.AddDate(0, 0, 1-max(days, 1))
-	view := &dashboard.SpendView{Zone: zone.String(), Days: []dashboard.SpendDay{}}
+	view := &dashboard.SpendView{Zone: zone.String(), Today: today.Format(time.DateOnly), Days: []dashboard.SpendDay{}}
 	if a.store == nil {
 		return view, nil
 	}
@@ -32,8 +36,11 @@ func (a *App) spendView(days int) (*dashboard.SpendView, error) {
 			lines[k] = l
 		}
 		l.Calls += r.Calls
-		if !r.Known {
+
+		if !r.Known || (r.Provider == "" && r.Kind != store.SpendSubagent) {
 			l.Unknown++
+		}
+		if !r.Known {
 			continue
 		}
 		l.Tokens += r.Tokens

@@ -124,7 +124,7 @@ func TestASlotsModelUnderItsOldNameIsAdoptedOffline(t *testing.T) {
 // by content, and adopt each from its own full-id directory.
 func TestPluginStoragePreparationSeparatesAllResourceRoots(t *testing.T) {
 	skipWhereNativeIsRefused(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)

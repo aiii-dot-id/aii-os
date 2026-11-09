@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,8 +26,9 @@ func (a *App) setProviderInfo(in dashboard.ProviderEdit) error {
 		yes := true
 		chat = &yes
 	}
-	return a.setProviderFromCard(providerEntry{
+	return a.setProviderWith(providerEntry{
 		Name: in.Name, APIType: in.APIType, URL: in.Endpoint, Chat: chat,
+		Local:  in.Local,
 		APIKey: in.APIKey, APIKeyEnv: in.APIKeyEnv, Credential: in.Credential,
 		DefaultModel: in.DefaultModel, SubscribeURL: in.SubscribeURL,
 		ContextLength: in.ContextLength, MaxOutputTokens: in.MaxOutputTokens,
@@ -35,7 +37,7 @@ func (a *App) setProviderInfo(in dashboard.ProviderEdit) error {
 		Temperature: in.Temperature, TopP: in.TopP, Extra: in.Extra, Cache: in.Cache,
 		Default: in.Default, Models: in.ConfiguredModels,
 		EmbeddingsModel: in.EmbeddingsModel,
-	}, !in.ClearKey, !in.SetEmbeddingsModel)
+	}, !in.ClearKey, true, !in.SetEmbeddingsModel, !in.SetLocal)
 }
 
 const (
@@ -57,6 +59,7 @@ const (
 	probeNoCredential      = "no_credential"
 	probeCredentialExpired = "credential_expired"
 	probeUnreachable       = "unreachable"
+	probeKeyRefused        = "key_refused"
 	probeInvalidURL        = "invalid_url"
 )
 
@@ -209,6 +212,14 @@ func (a *App) probeOne(e providerEntry) providerProbe {
 
 		st.state = classifyCredentialErr(err)
 		st.reason = err.Error()
+		if r := signInReason(e.Credential); r != "" && st.state == probeNoCredential && errors.Is(err, errNotSignedIn) {
+
+			st.reason = r
+		}
+	case e.Credential == "" && errors.Is(err, errCredentialRejected):
+
+		st.state = probeKeyRefused
+		st.reason = err.Error()
 	default:
 		st.state = probeUnreachable
 		st.reason = err.Error()
@@ -230,6 +241,16 @@ func keyWithheldReason(e providerEntry, blockEnv string) (why string, set bool) 
 	return fmt.Sprintf("no key was sent: %s is %s's own key variable and goes only to %s, and this entry is at %s. "+
 		"To send a key here, enter it in API KEY, or name a variable for this entry (api_key_env) in providers.json",
 		withheld, e.Name, home, addressOrigin(e.URL)), os.Getenv(withheld) != ""
+}
+
+func signInReason(kind string) string {
+	switch kind {
+	case "claude-code":
+		return "Sign in to Claude Code on this computer and your subscription works here. No key is needed."
+	case "codex":
+		return "Sign in to the Codex app on this computer and your subscription works here. No key is needed."
+	}
+	return ""
 }
 
 func classifyCredentialErr(err error) string {
@@ -265,16 +286,28 @@ func (a *App) providerDirectory() dashboard.ProviderDirectory {
 		logsink.Warn("providers.error", "%v", err)
 		return dir
 	}
-	dir.Providers = a.providerInfos(reg)
+
+	probes := a.probeProviders(reg)
+	dir.Providers = a.providerInfosFrom(reg, probes)
 	dir.Broken = brokenProviderInfo(reg)
+	dir.Local = a.localModelStateFrom(reg, probes)
 	return dir
 }
 
 func (a *App) providerInfos(reg *providerRegistry) []dashboard.ProviderInfo {
-	probes := a.probeProviders(reg)
+	return a.providerInfosFrom(reg, a.probeProviders(reg))
+}
+
+func (a *App) providerInfosFrom(reg *providerRegistry, probes map[string]providerProbe) []dashboard.ProviderInfo {
 	out := make([]dashboard.ProviderInfo, 0, len(reg.Providers))
+	live := make([][]string, 0, len(reg.Providers))
 	for _, e := range reg.Providers {
 		pr := probes[e.Name]
+		var offered []string
+		if pr.state == probeOK {
+			offered = pr.models
+		}
+		live = append(live, offered)
 
 		models := mergeDistinct(e.Models, seedModelsFor(e.Name), pr.models)
 		if e.DefaultModel != "" {
@@ -315,7 +348,7 @@ func (a *App) providerInfos(reg *providerRegistry) []dashboard.ProviderInfo {
 			Default: e.Default, Models: models, ConfiguredModels: e.Models, Status: pr.state, StatusReason: pr.reason,
 		})
 	}
-	markPreselect(out)
+	markPreselect(out, live)
 	return out
 }
 
@@ -494,11 +527,21 @@ func (a *App) discoveredCapabilities(entry providerEntry, model string) (modelMe
 	return row, true
 }
 
-func markPreselect(out []dashboard.ProviderInfo) {
+func markPreselect(out []dashboard.ProviderInfo, live [][]string) {
 	for i := range out {
 		if out[i].Credential != "" && out[i].Status == probeOK {
 			out[i].Preselect = true
 			out[i].PreselectWhy = "a working " + out[i].Credential + " credential is on this machine — no key needed"
+			return
+		}
+	}
+	for i := range out {
+		if out[i].Local && out[i].Chat && out[i].Status == probeOK && i < len(live) && len(live[i]) > 0 {
+			out[i].Preselect = true
+			out[i].PreselectModel = live[i][0]
+			if slices.Contains(live[i], out[i].DefaultModel) {
+				out[i].PreselectModel = out[i].DefaultModel
+			}
 			return
 		}
 	}

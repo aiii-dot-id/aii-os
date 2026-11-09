@@ -6,6 +6,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/ring"
 	"github.com/aiii-dot-id/aii-os/internal/store/rows"
+	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
 
 // Ring 1 has THREE states and the composer used to render two.
@@ -138,11 +139,11 @@ func TestEveryRing1StateSaysTheChartersBudget(t *testing.T) {
 			t.Errorf("%s: a source that carries no budget must say none:\n%s", name, without)
 		}
 		identity.CharterMaxTokens = 2000
-		if got, want := section(identity), without+" A new charter over 2000 tokens (about 6000 characters) is refused."; got != want {
+		if got, want := section(identity), without+" A new charter's length: "+tokenestimate.Stated(2000); got != want {
 			t.Errorf("%s: with the default budget the section reads\n%q\nwant\n%q", name, got, want)
 		}
 		identity.CharterMaxTokens = 900
-		if got := section(identity); !strings.HasSuffix(got, " A new charter over 900 tokens (about 2700 characters) is refused.") {
+		if got := section(identity); !strings.HasSuffix(got, " A new charter's length: "+tokenestimate.Stated(900)) {
 			t.Errorf("%s: the budget said does not follow the setting:\n%s", name, got)
 		}
 	}

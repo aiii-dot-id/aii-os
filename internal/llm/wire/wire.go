@@ -109,6 +109,8 @@ type ChatOptions struct {
 	RequireTool        bool
 	DisableTools       bool
 	PreviousResponseID string
+
+	OnText func(string)
 }
 
 type ContextLimitError struct {

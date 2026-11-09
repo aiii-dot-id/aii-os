@@ -120,6 +120,8 @@ func (a *App) configState() *dashboard.ConfigState {
 		},
 		Genesis: dashboard.GenesisConfigState{
 			ServerURL: c.Genesis.ServerURL, FirewallURL: c.Genesis.FirewallURL, BootstrapURL: c.Genesis.BootstrapURL,
+			AgentMemoryOff:   c.Genesis.AgentMemory != nil && c.Genesis.AgentMemory.Off,
+			AgentMemoryFound: agentNotesFound(c),
 		},
 		Prompt: dashboard.PromptConfigState{
 			MaxTokens: c.Prompt.MaxTokens, RecentTurns: c.Prompt.RecentTurns,
@@ -1000,6 +1002,12 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Memory.MeaningSource = choice
 		case "speech.operator_speakers":
+			if add, ok := v.(voiceToName); ok {
+				v = cfg.Speech.OperatorSpeakers
+				if !slices.Contains(cfg.Speech.OperatorSpeakers, string(add)) {
+					v = append(slices.Clone(cfg.Speech.OperatorSpeakers), string(add))
+				}
+			}
 			ids, err := operatorSpeakersFromChange(v)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", key, err)
@@ -1101,6 +1109,21 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 			}
 			cfg.Genesis.ServerURL = s
 			restart = append(restart, key)
+		case "genesis.agent_memory.off":
+
+			b, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Errorf("genesis.agent_memory.off: want a boolean")
+			}
+			if fileExists(orig.Identity.LedgerPath) {
+				return nil, fmt.Errorf("genesis.agent_memory.off: the identity is born, and this was read at their birth; it is set before a birth only")
+			}
+			am := AgentMemoryConfig{}
+			if cfg.Genesis.AgentMemory != nil {
+				am = *cfg.Genesis.AgentMemory
+			}
+			am.Off = b
+			cfg.Genesis.AgentMemory = &am
 		case "genesis.firewall_url":
 			s, err := str(key, v)
 			if err != nil {
@@ -1317,6 +1340,7 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 
 			if a.store != nil && !reflect.DeepEqual(orig.Speech.OperatorSpeakers, cfg.Speech.OperatorSpeakers) {
 				a.store.SetOperatorVoices(cfg.Speech.OperatorSpeakers)
+				a.settleNamedVoices(cfg.Speech.OperatorSpeakers)
 			}
 
 			if holdTurn {
@@ -1368,6 +1392,7 @@ func (a *App) applyConfigChangeWith(changes map[string]any, persist func(*Config
 
 	st := a.configState()
 	st.RestartRequired = restart
+	st.LLM.Answered = probed
 	return st, nil
 }
 
@@ -1427,12 +1452,12 @@ func (a *App) publicNameState(cfg Config) dashboard.PublicNameState {
 	return st
 }
 
-var errRelayNeedsToken = errors.New("certificate.route_mode: a relay carries the public internet to this dashboard, and the running dashboard is not asking for an access token — turn the token on first (Settings → Dashboard → Ask for an access token), then choose the relay")
+var errRelayNeedsToken = errors.New("certificate.route_mode: to use a relay, first turn on \"Ask every device to sign in\" in Settings → Access")
 
 type RelayTokenShort struct{ Length, Line int }
 
 func (e *RelayTokenShort) Error() string {
-	return fmt.Sprintf("certificate.route_mode: a relay exposes this dashboard's sign-in to the internet, and its access token is %d characters long, shorter than %d — Rotate access token (Settings → Dashboard) makes a new one, then choose the relay", e.Length, e.Line)
+	return fmt.Sprintf("certificate.route_mode: the secret your devices sign in with is %d characters; a relay needs %d. Press \"Sign out all devices\" on Phone and other devices, then choose the relay", e.Length, e.Line)
 }
 
 func (a *App) routeRefusal(was, cfg Config) error {
@@ -1593,7 +1618,9 @@ func (a *App) advertisedOrigin() string {
 
 func (a *App) wireSettingsHooks(h *dashboard.WSHandler) {
 	h.GetConfig = a.configState
+	h.SettingsInForce = a.settingsInForce
 	h.SetConfig = a.applyConfigChange
+	h.SetThemeTokens = a.setUIThemeTokens
 	h.GetSandbox = a.sandboxState
 	h.ChangeSandbox = a.changeSandboxRoot
 	h.SetSandboxOff = a.setSandboxOff

@@ -58,6 +58,9 @@ type MorningBriefFacility struct {
 	turn      TurnGate
 
 	attention func(ctx context.Context) ([]attention.AttentionItem, error)
+
+	note     NoteWriter
+	outcomes NoteOutcomesReader
 }
 
 func (m *MorningBriefFacility) SetAttention(fn func(ctx context.Context) ([]attention.AttentionItem, error)) {
@@ -120,6 +123,10 @@ func (m *MorningBriefFacility) Reconfigure(cfg MorningBriefConfig) (alarmChanged
 		m.cleared++
 		if m.briefWriter != nil {
 			m.briefWriter.SetBrief("")
+		}
+
+		if m.note != nil {
+			m.note.ClearOperatorNote()
 		}
 	}
 	return prev == nil || prev.LocalTime != next.LocalTime || prev.Timezone != next.Timezone
@@ -194,7 +201,12 @@ func (m *MorningBriefFacility) pass(ctx context.Context) error {
 		if items, err := m.attention(ctx); err != nil {
 			logsink.Warn("brief.error", "attention unreadable, the brief goes without it: %v", err)
 		} else if low := attention.OfCost(items, attention.CostLow); len(low) > 0 {
-			day.attention = attention.RenderAttention(low)
+			shown, _ := attention.Cut(low, attention.Limit)
+			day.attention = attention.RenderAttention(shown)
+
+			if fading := attention.OfKind(shown, attention.AttentionDecayAlert); len(fading) < len(attention.OfKind(low, attention.AttentionDecayAlert)) {
+				day.attention += "\n" + attention.CutSaid(len(fading))
+			}
 		}
 	}
 	if len(syntheses) > 0 {
@@ -288,6 +300,12 @@ func (m *MorningBriefFacility) pass(ctx context.Context) error {
 		} else {
 			m.teller.say(Condition{Facility: "brief", Kind: ConditionFitted, Said: fmt.Sprintf("this morning's brief was drawn from %d of %d records of the day and %d of %d active intentions, to fit the model's input budget", view.experiences, len(day.experiences), view.intentions, len(day.intentions))})
 		}
+
+		var portrait rows.SelfModelSynthesis
+		if len(syntheses) > 0 {
+			portrait = syntheses[0]
+		}
+		m.writeNote(ctx, cfg, now, experiences, intentions, portrait, clearedBefore)
 	}
 
 	return nil

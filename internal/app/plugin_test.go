@@ -247,9 +247,19 @@ func TestPluginDropInConvergesLive(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// THE REMOVAL: rm the directory = uninstall, live.
-	if err := os.RemoveAll(filepath.Join(dir, "plugins", "org.example.dropped")); err != nil {
-		t.Fatal(err)
+	// THE REMOVAL: rm the directory = uninstall, live. On Windows a file
+	// the host's sweep or the scanner has open refuses its unlink for a
+	// moment ("being used by another process", cut i, 2026-11-08), as it
+	// would refuse the operator's; the removal is tried again for up to 5 s.
+	gone := filepath.Join(dir, "plugins", "org.example.dropped")
+	for until := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		err := os.RemoveAll(gone)
+		if err == nil {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal(err)
+		}
 	}
 	deadline = time.Now().Add(20 * time.Second)
 	for {

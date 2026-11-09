@@ -32,7 +32,7 @@ run(assert => {
   S.identityExists=true; S.providersLoaded=true;
   S.config={llm:{provider:pinned.name,model:'m1'}};
   renderSettings();
-  document.querySelector('[data-sec="providers"]').click();
+  S.settingsSection('providers'); S.requestSettingsSection(); renderSettings();
   document.querySelector('[data-prov-row="0"]').click();
   said=document.querySelector('#settings-stack [data-signin-unmet]');
   assert(said && said.textContent.includes(why), 'the provider editor says nothing of an entry that cannot offer sign-in');

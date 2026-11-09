@@ -34,7 +34,7 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 
 	// Update: focus seeds RING4 on selection; attributes replace whole.
-	if _, err := m.Update(p.ID, "", "", "drafting column layout with Quinn", nil, nil, map[string]any{"kind": "spreadsheet"}); err != nil {
+	if _, err := m.Update(p.ID, "operator", "", "", "drafting column layout with Quinn", nil, nil, map[string]any{"kind": "spreadsheet"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := m.Load(p.ID)

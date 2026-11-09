@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func readAnthropicStream(r io.Reader) (anthResponse, error) {
+func readAnthropicStream(r io.Reader, say func(string)) (anthResponse, error) {
 	var result anthResponse
 	message := map[string]json.RawMessage{}
 	usage := map[string]json.RawMessage{}
@@ -112,7 +112,14 @@ func readAnthropicStream(r io.Reader) (anthResponse, error) {
 			switch kind {
 			case "text_delta":
 				sawText = true
-				return appendString("text", &text)
+				before := text.Len()
+				if err := appendString("text", &text); err != nil {
+					return err
+				}
+				if say != nil && text.Len() > before {
+					say(text.String()[before:])
+				}
+				return nil
 			case "thinking_delta":
 				sawThinking = true
 				return appendString("thinking", &thinking)

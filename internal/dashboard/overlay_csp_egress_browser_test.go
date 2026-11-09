@@ -118,7 +118,7 @@ func TestThePagePolicyDoesNotStopANavigationThatCarriesAValue(t *testing.T) {
 		// The page it lands on tells the rig it got here; this origin
 		// sends no policy.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<!doctype html><script>fetch(new URLSearchParams(location.search).get('rig') + '/__result', { method: 'POST', mode: 'no-cors', body: 'OK' });</script>`)
+		fmt.Fprint(w, `<!doctype html><script>fetch(new URLSearchParams(location.search).get('rig') + '/__result', { method: 'POST', mode: 'no-cors', credentials: 'include', body: 'OK' });</script>`)
 	}))
 	defer elsewhere.Close()
 

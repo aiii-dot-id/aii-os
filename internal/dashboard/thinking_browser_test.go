@@ -14,8 +14,9 @@ const row=(id,seq,role,text)=>({id,sequence:String(seq),kind:'message',role,cont
 const pages=(recorded,transient=[])=>new Map([['recorded',{identity:'fixture',incarnation:'disk',rows:recorded}],['transient',{identity:'fixture',incarnation:'memory',rows:transient}]]);
 const draw=p=>renderInteractionPages(p,()=>{},false,'latest',null);
 const owner=id=>document.querySelector('[data-turn-id="'+id+'"]');
-const details=id=>owner(id).querySelector('.message-context');
-const thinking=id=>owner(id).querySelector('.record-thinking');
+// The reply's own "Thinking" disclosure; what it shows once read.
+const details=id=>owner(id).querySelector('.record-thinking');
+const thinking=id=>owner(id).querySelector('.record-thinking__text')?details(id):null;
 const settle=(ms=40)=>new Promise(r=>setTimeout(r,ms));
 const toggle=async id=>{details(id).querySelector(':scope > summary').click();await settle();};
 const calls=[],kept=new Map();let fail=false;
@@ -30,7 +31,7 @@ window.fetch=(url,options={})=>{
 };
 `
 
-func TestAReplysThinkingIsShownOnlyWhenItsDetailsAreOpened(t *testing.T) {
+func TestAReplysThinkingIsShownOnlyWhenItsDisclosureIsOpened(t *testing.T) {
 	page := quietChatMarkup + `<script type="module">` + thinkingRig + `
 run(async assert=>{
  kept.set('2',{models:'glm',at:'2026-10-05T10:00:00Z',parts:['First the ledger head.\nThen the two dates.']});
@@ -38,15 +39,13 @@ run(async assert=>{
  const p=pages([row('q1',1,'operator','first question'),row('a1',2,'resident','first answer'),row('q2',3,'operator','second question'),row('a2',4,'resident','second answer'),row('a3',5,'resident','third answer')],[row('t1',2,'resident','an answer not saved')]);
  draw(p);await settle();
  assert(calls.length===0,'thinking was read before any details were opened');
- assert(!inner.querySelector('.record-thinking'),'the stream shows thinking nobody asked for');
- await toggle('q1');
- assert(details('q1').open&&calls.length===0,'an operator message asked for thinking');
- await toggle('t1');
- assert(details('t1').open&&calls.length===0,'a reply that was not saved asked for thinking under a turn that is not its own');
+ assert(!inner.querySelector('.record-thinking__text'),'the stream shows thinking nobody asked for');
+ assert(!inner.querySelector('.message-context'),'a message still carries the "⋯" menu');
+ assert(details('q1').hidden&&details('t1').hidden,'an operator message, or a reply that was not saved, offers thinking under a turn that is not its own');
+ assert(!details('a1').hidden&&!details('a1').open&&details('a1').querySelector('summary').textContent==='Thinking','a recorded reply does not carry a closed Thinking disclosure');
  await toggle('a1');await until(()=>thinking('a1'));
  assert(calls.length===1&&calls[0].turn==='2'&&calls[0].part===1,'the reply did not ask for its own turn, once: '+JSON.stringify(calls));
  const box=thinking('a1');
- assert(!box.open,'thinking is not collapsed');
  assert(box.querySelector('summary').textContent==='Thinking','raw thinking is labelled '+box.querySelector('summary').textContent);
  assert(!box.querySelector('.thinking-note'),'raw thinking carries the note of a summary');
  assert(box.querySelector('pre').textContent==='First the ledger head.\nThen the two dates.','the text shown is not the record');
@@ -59,8 +58,8 @@ run(async assert=>{
  assert(thinking('a2').querySelector('.thinking-note')?.textContent.includes('may leave things out'),'the mark is not explained');
  assert(calls.length===2&&calls[1].turn==='4','the second reply asked for another turn');
  await toggle('a3');await until(()=>calls.length===3);await settle();
- assert(calls[2].turn==='5'&&!thinking('a3'),'a reply with no thinking recorded shows a thinking box');
- assert(inner.querySelectorAll('.record-thinking').length===2,'thinking appeared somewhere it was not asked for');
+ assert(calls[2].turn==='5'&&!thinking('a3')&&details('a3').textContent.includes('No thinking was kept with this reply.'),'a reply with no thinking recorded shows thinking, or does not say none was kept');
+ assert(inner.querySelectorAll('.record-thinking__text').length===2,'thinking appeared somewhere it was not asked for');
 });</script>`
 	runPageInEngines(t, page, chatModuleRig(t))
 }
@@ -71,7 +70,7 @@ run(async assert=>{
  kept.set('2',{models:'glm',at:'t',parts:['part one. ','part two. ','part three.']});
  const p=pages([row('q1',1,'operator','question'),row('a1',2,'resident','answer')]);draw(p);await settle();
  fail=true;await toggle('a1');await until(()=>calls.length===1);await settle();
- assert(!thinking('a1'),'a failed read showed a thinking box');
+ assert(!thinking('a1')&&details('a1').textContent.includes("The recorded thinking can't be read."),'a failed read showed thinking, or did not say it could not be read');
  fail=false;await toggle('a1');await toggle('a1');await until(()=>thinking('a1'));
  assert(calls.length===2,'a failed read was not asked again at the next opening: '+calls.length);
  const box=thinking('a1'),more=()=>box.querySelector('.detail-read button');

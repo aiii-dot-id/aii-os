@@ -653,6 +653,9 @@ func upgradedIdentity(t *testing.T) *Config {
 	cfg.Dashboard.Port = 0
 	cfg.Tools.CWD = dir
 	cfg.Genesis.FirewallURL = genesistest.Ring5Server(t)
+	// The file names the hosted witness, as an earlier program's did, and no
+	// test reaches it.
+	cfg.Witness.URL = ""
 	return cfg
 }
 

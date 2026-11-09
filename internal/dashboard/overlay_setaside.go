@@ -192,7 +192,7 @@ func (s *Server) setAside(rel string) (string, error) {
 
 func (s *Server) handleOverlayReplacements(w http.ResponseWriter, r *http.Request) {
 	if !s.tokenAuthorized(r) {
-		sayRefused(w, http.StatusUnauthorized, "this dashboard needs its access token")
+		sayRefused(w, http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	files, err := s.overlayReplacements()
@@ -211,7 +211,7 @@ func (s *Server) handleOverlayReplacements(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleOverlaySetAside(w http.ResponseWriter, r *http.Request) {
 	if !s.tokenAuthorized(r) {
-		sayRefused(w, http.StatusUnauthorized, "this dashboard needs its access token")
+		sayRefused(w, http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	if !sameSiteAs(r.Header.Get("Origin"), r.Host) {

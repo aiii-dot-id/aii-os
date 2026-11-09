@@ -112,7 +112,7 @@ func TestHarvestWakeFiresOnDelivery(t *testing.T) {
 	if len(unh) != 0 {
 		t.Fatalf("post-wake unharvested = %d (want 0 — compose-time marking)", len(unh))
 	}
-	ws, err := a.buildWorkState()
+	ws, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

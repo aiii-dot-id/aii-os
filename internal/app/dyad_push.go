@@ -300,8 +300,8 @@ func (a *App) failureContext(ctx context.Context, tool string, obs conversation.
 	if !obs.Failed && !obs.Refused || obs.Cancelled {
 		return ""
 	}
-	seat := a.callSeat(ctx)
-	key := seat.session + "\x00" + tool + "\x00" + obs.ReasonCode
+
+	key := obs.WorkSession + "\x00" + tool + "\x00" + obs.ReasonCode
 	a.failurePushed.mu.Lock()
 	if a.failurePushed.seen == nil {
 		a.failurePushed.seen = map[string]bool{}

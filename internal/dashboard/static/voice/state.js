@@ -1,0 +1,16 @@
+export const V = {
+  media: null,
+  ctx: null,
+  capturing: false,
+  held: false,
+  latched: false,
+  captureEpoch: 0,
+  lanes: [],
+  modeRev: 0,
+  offSeenRev: 0,
+  listenFollowedRevision: -1,
+  transcriptPlaceholder: '',
+  speakerRefusedAt: 0,
+  speakerRefusedWhy: '',
+  speakerStoppedAtRevision: -1,
+};

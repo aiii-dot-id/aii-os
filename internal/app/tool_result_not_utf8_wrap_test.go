@@ -63,7 +63,9 @@ func TestAWrappedResultWhoseBytesWereReplacedKeepsItsOpeningMarker(t *testing.T)
 	if !strings.Contains(result, "\n"+untrusted.Open+" source: plugin example\n") {
 		t.Fatalf("THE CUT RESULT LOST ITS OPENING MARKER: the model reads foreign text as the host's: %.400q", result)
 	}
-	if !strings.HasSuffix(result, "the end\n"+untrusted.Close) {
+	// The host's status line follows the closing marker, outside the
+	// untrusted content (2026-11-06).
+	if !strings.Contains(result, "the end\n"+untrusted.Close+"\n[status · ") {
 		t.Fatalf("the result's tail and closing marker were not kept: %q", result[max(0, len(result)-200):])
 	}
 }

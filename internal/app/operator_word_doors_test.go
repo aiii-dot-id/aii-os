@@ -60,7 +60,7 @@ func TestTheOperatorsWordIsMarkedAtTheDoorAndAnAskPressIsNot(t *testing.T) {
 			t.Fatal(err)
 		}
 		readUntil(t, conn, func(m *dashboard.ServerMessage) bool { return m.Type == "steered" })
-		if said := a.DrainSteering(); len(said) != 1 {
+		if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 			t.Fatalf("the turn read %q", said)
 		}
 	}
@@ -125,7 +125,7 @@ func TestTheOperatorsSpokenWordsAreMarkedAtTheDoor(t *testing.T) {
 	if err := a.observeOperatorVoice(ctx, "use the second draft", heardUtterance{Answer: true}); err != nil {
 		t.Fatal(err)
 	}
-	if said := a.DrainSteering(); len(said) != 1 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 		t.Fatalf("the turn read %q", said)
 	}
 	a.EndTurn()

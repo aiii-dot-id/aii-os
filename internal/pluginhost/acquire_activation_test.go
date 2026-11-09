@@ -24,7 +24,7 @@ import (
 func TestActivationHandsAbsentMaterialToTheAcquirerAndFollowsIt(t *testing.T) {
 	skipWhereNativeIsRefused(t)
 	skipWhereTheSandboxCannotBeEstablished(t)
-	roots, role := platformRootsForTest(t)
+	roots, role := sharedPlatformRoots(t)
 	child, err := os.ReadFile(fakechildBin)
 	if err != nil {
 		t.Fatal(err)

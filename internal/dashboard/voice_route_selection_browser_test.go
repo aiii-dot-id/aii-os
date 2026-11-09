@@ -89,6 +89,12 @@ run(async () => {
   assert((globalThis.said || []).length === 1 && globalThis.said[0].text === 'the answer to what was typed',
     'the typed reply was not handed to the chosen speaking service: ' + JSON.stringify(globalThis.said || []));
   assert(browserSpoke === 0, 'the browser\'s own voice read a reply a service was chosen to speak');
+  // Under the default too, which is what Settings → Voice says of a voice chosen.
+  S.voiceSpeak = false;
+  S.stats = { ...S.stats, voice_speak: '' };
+  speak('typed under the default', null);
+  assert(globalThis.said.length === 2 && globalThis.said[1].text === 'typed under the default' && browserSpoke === 0,
+    'under the default a chosen voice did not read a typed reply: ' + JSON.stringify(globalThis.said));
 
   show('', 2);
   assert(engine().join(' ') === 'open:output', 'with speaking left to the engine earbuds hold no output lane: ' + engine().join(' '));

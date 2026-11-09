@@ -27,6 +27,11 @@ func ReasonCode(verb string, args map[string]any, err error) string {
 	if errors.As(err, &r) {
 		return r.Code
 	}
+
+	var coded interface{ ReasonCode() string }
+	if errors.As(err, &coded) && coded.ReasonCode() != "" {
+		return coded.ReasonCode()
+	}
 	if verb == "recall" {
 		if source, _ := args["source"].(string); source != "" {
 			return "recall." + source

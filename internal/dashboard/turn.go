@@ -5,6 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
@@ -53,16 +59,20 @@ func (s *Server) runOperatorRequest(ctx context.Context, conn carrier, h *WSHand
 	if len(requestIDs) > 0 {
 		receiptID = requestIDs[0]
 	}
-	if receiptID != "" || recorded != nil {
-		turnCtx = withChatRecording(turnCtx, func(r ChatRecording) {
-			if recorded != nil {
-				recorded(r)
-			}
-			if receiptID != "" {
-				s.sendMsg(ctx, conn, ServerMessage{Type: "chat_receipt", RequestID: receiptID, ChatRecording: &r})
-			}
-		})
-	}
+
+	held := &turnRef{}
+	turnCtx = context.WithValue(turnCtx, turnRefKey{}, held)
+	turnCtx = withChatRecording(turnCtx, func(r ChatRecording) {
+		if r.Ref != nil {
+			held.set(r.Ref)
+		}
+		if recorded != nil {
+			recorded(r)
+		}
+		if receiptID != "" {
+			s.sendMsg(ctx, conn, ServerMessage{Type: "chat_receipt", RequestID: receiptID, ChatRecording: &r})
+		}
+	})
 	ack := func(state string) {
 		if len(requestIDs) > 0 && requestIDs[0] != "" {
 			s.sendMsg(ctx, conn, ServerMessage{Type: "chat_ack", RequestID: requestIDs[0], Message: state})
@@ -250,15 +260,22 @@ func (s *Server) handleChat(ctx context.Context, conn carrier, message string, h
 	ctx = context.WithValue(ctx, structuredOutputKey{}, func(raw json.RawMessage) { output = append(json.RawMessage(nil), raw...) })
 	var response string
 	var err error
+	var draft *replyDraft
 	if h.ObserveChat != nil {
 
 		emit := func(kind, name, args string) {
 			s.broadcast(ServerMessage{Type: "event", Kind: kind, Name: name, Args: args})
 		}
-		response, err = h.ObserveChat(ctx, message, emit)
+
+		if speaker == "identity" {
+			draft = s.startDraft(ctx)
+			defer draft.finish()
+		}
+		response, err = h.ObserveChat(conversation.WithReplyObserver(ctx, draft.observer()), message, emit)
 	} else {
 		response, err = h.HandleMessage(ctx, message)
 	}
+	draft.finish()
 
 	if err == nil {
 		if options, constrained := conversation.RequestOptionsFromContext(ctx); constrained && options.ResponseFormat != nil {
@@ -278,9 +295,71 @@ func (s *Server) handleChat(ctx context.Context, conn carrier, message string, h
 			}
 			return
 		}
-		s.broadcast(ServerMessage{Type: "error", RequestID: requestID(ctx), RequestErrorCode: requestFailureCode(ctx, err), Message: fmt.Sprintf("identity error: %v", err)})
+		failure, reason := turnFailure(err)
+		if failure == "" {
+			failure = "turn"
+		}
+		s.broadcast(ServerMessage{Type: "error", RequestID: requestID(ctx), RequestErrorCode: requestFailureCode(ctx, err), TurnFailure: failure, TurnReason: reason, TurnRef: turnRefOf(ctx), Message: fmt.Sprintf("identity error: %v", err)})
 		return
 	}
 
 	s.broadcast(s.spokenAloud(ServerMessage{Type: "response", RequestID: requestID(ctx), StructuredOutput: output, Message: response, Role: speaker, Done: true}))
+}
+
+type turnRef struct {
+	mu  sync.Mutex
+	ref *interaction.Location
+}
+type turnRefKey struct{}
+
+func (t *turnRef) set(ref *interaction.Location) {
+	t.mu.Lock()
+	t.ref = ref
+	t.mu.Unlock()
+}
+
+func turnRefOf(ctx context.Context) *interaction.Location {
+	t, ok := ctx.Value(turnRefKey{}).(*turnRef)
+	if !ok {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ref
+}
+
+func turnFailure(err error) (failure, reason string) {
+
+	var streamErr *llm.StreamFailure
+	if errors.As(err, &streamErr) {
+		return "provider_failed", fmt.Sprintf("%.400s", strings.TrimSpace(streamErr.Text))
+	}
+	var httpErr *llm.HTTPError
+	if errors.As(err, &httpErr) {
+		reason = http.StatusText(httpErr.StatusCode)
+		if reason == "" {
+			reason = fmt.Sprintf("status %d", httpErr.StatusCode)
+		}
+		return "provider_failed", reason
+	}
+
+	var urlErr *url.Error
+	var opErr *net.OpError
+	var netErr net.Error
+	switch {
+	case errors.As(err, &urlErr):
+		netErr = urlErr
+	case errors.As(err, &opErr):
+		netErr = opErr
+	default:
+		return "", ""
+	}
+	if netErr.Timeout() {
+		return "provider_timeout", ""
+	}
+	inner := error(netErr)
+	for next := errors.Unwrap(inner); next != nil; next = errors.Unwrap(inner) {
+		inner = next
+	}
+	return "provider_failed", inner.Error()
 }

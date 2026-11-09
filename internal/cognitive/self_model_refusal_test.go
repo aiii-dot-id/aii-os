@@ -3,11 +3,13 @@ package cognitive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/aiii-dot-id/aii-os/internal/ledger"
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
+	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
 // captureDoor records every payload minted through it.
@@ -81,5 +83,58 @@ func TestFailureExperienceCarriesBothRefusals(t *testing.T) {
 	id, _ := door.payloads[0]["id"].(string)
 	if !strings.HasPrefix(id, "exp_facility_") {
 		t.Fatalf("failure experience id lost its facility prefix: %q", id)
+	}
+}
+
+// refuseOnce refuses the first commit with err and admits the next.
+type refuseOnce struct {
+	calls int
+	err   error
+}
+
+func (r *refuseOnce) Definition() wire.ToolDefinition {
+	return wire.ToolDefinition{Type: "function", Function: wire.ToolFunction{Name: "commit"}}
+}
+
+func (r *refuseOnce) Commit(context.Context, map[string]any) (string, error) {
+	if r.calls++; r.calls == 1 {
+		return "", r.err
+	}
+	return "Committed: self_model.synthesize", nil
+}
+
+// A portrait refused for its length is told how much to cut, and to what:
+// told only its count and the limit, a live identity's first pass under the
+// request count (2026-11-08) cut 14 of its 35 tokens over and was refused
+// again. The target is the prompt's own, 85 % of the limit at three counts
+// to a token; the cut is the draft's counts less it, to the nearest hundred.
+func TestAPortraitRefusedForLengthIsToldHowMuchToCut(t *testing.T) {
+	m := &mockLLM{overrides: []string{"", ""}}
+	committer := &refuseOnce{err: fmt.Errorf("self_model: commit: %w", &store.SelfModelRefusal{Requirement: "bounded narrative",
+		Detail: "synthesis_text is approximately 2021 tokens; maximum is 2000 (prompt.self_model_max_tokens)", Tokens: 2021, Limit: 2000})}
+	if err := NewSelfModel(selfModelStore(), m, committer).Execute(context.Background()); err != nil {
+		t.Fatalf("the corrected pass must succeed: %v", err)
+	}
+	if len(m.allMessages) != 2 {
+		t.Fatalf("%d requests, want the first and one corrective round", len(m.allMessages))
+	}
+	second := m.allMessages[1]
+	last := second[len(second)-1].Content
+	want := "Your synthesis_text was about 2021 tokens, over the limit of 2000: shorten it by about 1000 characters, to about 5100, and send the whole call again."
+	if !strings.Contains(last, want) || !strings.Contains(last, "maximum is 2000") {
+		t.Fatalf("the corrective round does not say how much to cut:\n%s", last)
+	}
+}
+
+// Any other refusal is passed on as it is, with no sentence about length.
+func TestARefusalNotForLengthGetsNoCut(t *testing.T) {
+	m := &mockLLM{overrides: []string{"", ""}}
+	committer := &refuseOnce{err: fmt.Errorf("self_model: commit: %w", &store.SelfModelRefusal{Requirement: "source coverage", Detail: "three classes cited; four are required"})}
+	if err := NewSelfModel(selfModelStore(), m, committer).Execute(context.Background()); err != nil {
+		t.Fatalf("the corrected pass must succeed: %v", err)
+	}
+	second := m.allMessages[1]
+	if last := second[len(second)-1].Content; strings.Contains(last, "shorten it") || !strings.Contains(last, "source coverage") {
+		t.Fatalf("a refusal not for length was given a cut, or lost: %s", last)
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ const (
 	askKindConnect = "connect"
 	askKindConfirm = "confirm"
 	askKindWord    = "word"
+	askKindVoice   = "voice"
 
 	asksPending = 8
 	askTextMax  = 2000
@@ -43,6 +46,10 @@ type pendingAsk struct {
 type askRegistry struct {
 	mu   sync.Mutex
 	asks map[string]*pendingAsk
+
+	voiceMu sync.Mutex
+
+	settling func()
 }
 
 func askDigest(session, text string, choices []string, connector string) string {
@@ -246,6 +253,7 @@ func (a *App) withdrawAsk(session, why string) {
 
 func (a *App) askViews() []dashboard.AskView {
 	var out []dashboard.AskView
+	out = append(out, a.voiceAskViews()...)
 	r := &a.asks
 	r.mu.Lock()
 	for _, ask := range r.asks {
@@ -275,6 +283,9 @@ func (a *App) askViews() []dashboard.AskView {
 }
 
 func (a *App) answerAsk(req dashboard.AskAnswer) (text string, settle func(recorded bool), err error) {
+	if v, ok := a.voiceAskWaiting(req.ID); ok {
+		return a.answerVoiceAsk(v, req)
+	}
 	r := &a.asks
 	r.mu.Lock()
 	ask := r.asks[req.ID]
@@ -394,6 +405,194 @@ func (a *App) answerAsk(req dashboard.AskAnswer) (text string, settle func(recor
 		return answered(fmt.Sprintf("connect %s (%s) — being set up on the Plugins page; installing, granting and any credential are the operator's acts there", what, scope), true)
 	}
 	return refused(fmt.Errorf("unknown answer %q (chose, said, no, not_now, connect)", req.Answer))
+}
+
+func (a *App) namedVoices() map[string]bool {
+	named := map[string]bool{}
+	for _, id := range a.configSnapshot().Speech.OperatorSpeakers {
+		named[id] = true
+	}
+	return named
+}
+
+func (a *App) voiceHeardWords(turn uint64) (string, error) {
+	t, err := a.store.GetTurnBySeq(turn)
+	if err != nil {
+		return "", fmt.Errorf("read turn %d: %w", turn, err)
+	}
+	if t == nil {
+		return "", fmt.Errorf("no turn %d is on record", turn)
+	}
+	words, _ := store.HeardWords(t.Content)
+	words = strings.TrimSpace(words)
+	if r := []rune(words); len(r) > askWordsMax {
+		words = string(r[:askWordsMax]) + "…"
+	}
+	return words, nil
+}
+
+func (a *App) voiceAsksWaiting() []store.VoiceAsk {
+	if a.store == nil {
+		return nil
+	}
+	if _, safe := a.SafeMode(); safe {
+		return nil
+	}
+	asked, err := a.store.VoiceAsks()
+	if err != nil {
+		logsink.Warn("ask.error", "the questions about voices could not be read: %v", err)
+		return nil
+	}
+	named := a.namedVoices()
+	return slices.DeleteFunc(asked, func(v store.VoiceAsk) bool { return v.Answer != "" || named[v.UUID] })
+}
+
+func (a *App) voiceAskWaiting(id string) (store.VoiceAsk, bool) {
+	for _, v := range a.voiceAsksWaiting() {
+		if v.Ask == id {
+			return v, true
+		}
+	}
+	return store.VoiceAsk{}, false
+}
+
+func (a *App) voiceAskViews() []dashboard.AskView {
+	var out []dashboard.AskView
+	for _, v := range a.voiceAsksWaiting() {
+		words, err := a.voiceHeardWords(v.Turn)
+		if err != nil {
+			logsink.Warn("ask.error", "%s could not be drawn: %v", v.Ask, err)
+			continue
+		}
+		out = append(out, dashboard.AskView{ID: v.Ask, Kind: askKindVoice, From: "identity", Text: v.Question, Heard: words, Proposed: v.Proposed})
+	}
+	return out
+}
+
+func (a *App) proposeVoiceAsk(uuid, question string) (string, error) {
+	question = strings.TrimSpace(question)
+	switch {
+	case a.store == nil:
+		return "", fmt.Errorf("no record to keep the question on; nothing was asked")
+	case question == "":
+		return "", fmt.Errorf("question is your words to your operator, and it is empty; nothing was asked")
+	case !speakerUUID(uuid):
+		return "", fmt.Errorf("voice_uuid %q is not a speaker UUID: copy speaker_uuid from the [voice · …] line; nothing was asked", uuid)
+	}
+	if err := askShapeFits(question, nil); err != nil {
+		return "", err
+	}
+	if a.namedVoices()[uuid] {
+		return "", fmt.Errorf("that voice is already named as your operator's; nothing was asked")
+	}
+	ask := store.VoiceAsk{Ask: "voice-" + uuid, Question: question, Proposed: time.Now().UTC().Format(time.RFC3339)}
+	switch err := a.store.AskAboutVoice(uuid, ask); {
+	case errors.Is(err, store.ErrVoiceNotHeard):
+		return "", fmt.Errorf("your record has heard no voice with that UUID; nothing was asked")
+	case errors.Is(err, store.ErrVoiceAlreadyAsked):
+		return "", fmt.Errorf("you have already asked about this voice, and it is asked once; nothing was asked")
+	case err != nil:
+		return "", fmt.Errorf("the question could not be recorded, so it was not asked: %w", err)
+	}
+	logsink.Info("ask.start", "%s asks the operator whether a voice nobody has named was theirs", ask.Ask)
+	a.broadcastAsks()
+	return fmt.Sprintf("voice_uuid=%q: Your question is on your operator's page. Go on as you were; nothing waits on it. Only their press on it names the voice.", uuid), nil
+}
+
+func (a *App) answerVoiceAsk(v store.VoiceAsk, req dashboard.AskAnswer) (string, func(bool), error) {
+	var words, answer string
+	switch req.Answer {
+	case "confirm":
+		words, answer = "yes, that voice is mine", "yes"
+	case "no":
+		words, answer = "no, that voice is not mine", "no"
+		if who := strings.TrimSpace(req.Text); who != "" {
+			words = "no, that voice is " + who
+		}
+	default:
+		return "", nil, fmt.Errorf("a card about a voice is answered yes or no, not %q", req.Answer)
+	}
+	gone := fmt.Errorf("no question %q awaits an answer — it was answered, withdrawn, or its session ended", v.Ask)
+	a.asks.voiceMu.Lock()
+	defer a.asks.voiceMu.Unlock()
+	if _, open := a.voiceAskWaiting(v.Ask); !open {
+		return "", nil, gone
+	}
+	if answer == "yes" {
+		said, err := a.nameVoice(v.UUID, saveConfig)
+		if err != nil {
+			return "", nil, fmt.Errorf("that voice was not named as yours: %w", err)
+		}
+		if said != "" {
+			a.sayOnPage(said)
+		}
+		if _, err := a.store.MoveVoiceAnswer(v.UUID, "", answer); err != nil {
+			logsink.Warn("ask.error", "%s: the voice is named, and its answer could not be recorded: %v", v.Ask, err)
+		}
+		logsink.Info("ask.decision", "%s: the operator named a voice as theirs", v.Ask)
+	} else {
+		closed, err := a.store.MoveVoiceAnswer(v.UUID, "", answer)
+		if err != nil {
+			return "", nil, fmt.Errorf("the answer could not be recorded: %w", err)
+		}
+		if !closed {
+			return "", nil, gone
+		}
+		logsink.Info("ask.decision", "%s: the operator said a voice is not theirs", v.Ask)
+	}
+	return store.AskMarker + v.Ask + "] " + words, func(recorded bool) {
+		defer a.broadcastAsks()
+		if recorded {
+			return
+		}
+		logsink.Warn("ask.error", "%s: the operator's answer was not recorded", v.Ask)
+		if answer == "yes" {
+			a.sayOnPage("That voice is named as yours, but your answer did not reach the conversation.")
+			return
+		}
+		if _, err := a.store.MoveVoiceAnswer(v.UUID, answer, ""); err != nil {
+			logsink.Warn("ask.error", "%s: the question could not be opened again: %v", v.Ask, err)
+		}
+	}, nil
+}
+
+type voiceToName string
+
+func (a *App) nameVoice(uuid string, persist func(*Config) (bool, error)) (string, error) {
+	var err error
+	for range 3 {
+		if _, err = a.applyConfigChangeWith(map[string]any{"speech.operator_speakers": voiceToName(uuid)}, persist); !errors.Is(err, errConfigMoved) {
+			break
+		}
+	}
+	if !a.namedVoices()[uuid] {
+		return "", err
+	}
+	if err != nil {
+		return err.Error(), nil
+	}
+	return "", nil
+}
+
+func (a *App) settleNamedVoices(named []string) {
+	if len(named) == 0 {
+		return
+	}
+	asked, err := a.store.VoiceAsks()
+	if err != nil {
+		logsink.Warn("ask.error", "the questions about voices could not be read: %v", err)
+		return
+	}
+	for _, v := range asked {
+		if v.Answer != "yes" && slices.Contains(named, v.UUID) {
+			if a.asks.settling != nil {
+				a.asks.settling()
+			}
+			if err := a.store.SettleVoiceAnswer(v.UUID); err != nil {
+				logsink.Warn("ask.error", "%s: its answer could not be recorded: %v", v.Ask, err)
+			}
+		}
+	}
 }
 
 func (a *App) broadcastAsks() {

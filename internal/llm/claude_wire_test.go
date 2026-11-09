@@ -193,7 +193,7 @@ data: {"type":"message_stop"}
 
 func TestAnthropicStreamCompletionAndRefusal(t *testing.T) {
 	for _, reason := range []string{"end_turn", "refusal", "max_tokens", "pause_turn"} {
-		a, err := readAnthropicStream(strings.NewReader(anthropicFixtureStream(reason, `{"type":"fixture_refusal"}`)))
+		a, err := readAnthropicStream(strings.NewReader(anthropicFixtureStream(reason, `{"type":"fixture_refusal"}`)), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,7 +206,7 @@ func TestAnthropicStreamCompletionAndRefusal(t *testing.T) {
 	}
 	full := anthropicFixtureStream("end_turn", `null`)
 	for _, bad := range []string{strings.ReplaceAll(full, `data: {"type":"message_stop"}`, ""), strings.Replace(full, `"index":0`, `"index":4`, 1), strings.Replace(full, `"text_delta"`, `"unknown_delta"`, 1), strings.Replace(full, `"text_delta"`, `"input_json_delta"`, 1), "data: {broken}\n\n", "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n"} {
-		if _, err := readAnthropicStream(strings.NewReader(bad)); err == nil {
+		if _, err := readAnthropicStream(strings.NewReader(bad), nil); err == nil {
 			t.Errorf("accepted malformed/truncated stream %q", bad)
 		}
 	}
@@ -229,7 +229,7 @@ func TestAnthropicStreamThinkingAndToolReplay(t *testing.T) {
 	for _, f := range frames {
 		fmt.Fprintf(&stream, "data: %s\n\n", f)
 	}
-	a, err := readAnthropicStream(strings.NewReader(stream.String()))
+	a, err := readAnthropicStream(strings.NewReader(stream.String()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestACallTheOutputLimitCutBeforeItsArgumentsIsLeftOut(t *testing.T) {
 		for _, f := range frames {
 			fmt.Fprintf(&b, "data: %s\n\n", f)
 		}
-		return readAnthropicStream(strings.NewReader(b.String()))
+		return readAnthropicStream(strings.NewReader(b.String()), nil)
 	}
 	for name, deltas := range map[string][]string{"no delta": nil, "an empty delta": {`""`}, "half an object": {`"{\"path\":\"a"`}} {
 		a, err := read("max_tokens", deltas...)
@@ -361,7 +361,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}
 data: {"type":"message_stop"}
 
 `
-	a, err := readAnthropicStream(strings.NewReader(stream))
+	a, err := readAnthropicStream(strings.NewReader(stream), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net/http"
 	"net/url"
@@ -22,6 +23,8 @@ var (
 	errAuthRequired = errors.New("this provider requires an API key to list models")
 
 	errCredentialUnavailable = errors.New("provider credential unavailable")
+
+	errNotSignedIn = errors.New("not signed in")
 
 	errCredentialRejected = errors.New("the provider refused the credential it was shown")
 )
@@ -407,11 +410,11 @@ func (a *App) discoverMetaAt(ctx context.Context, e providerEntry, apiKey, list,
 		}
 		src, err := a.credentialSource(e.Credential, e.CredentialOptions, e.signIn)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, err)
+			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, notSignedIn(err))
 		}
 		cr, err := src.Credential(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, err)
+			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, notSignedIn(err))
 		}
 		apiKey, bearer, extra, query = cr.Token, true, cr.Headers, src.DiscoveryQuery()
 		if b := src.BaseURL(); b != "" {
@@ -512,4 +515,11 @@ func mergeDistinct(lists ...[]string) []string {
 		}
 	}
 	return models
+}
+
+func notSignedIn(err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %w", errNotSignedIn, err)
+	}
+	return err
 }

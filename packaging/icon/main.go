@@ -31,11 +31,6 @@ func pngAssets() []pngAsset {
 	}{{"mdpi", 108}, {"hdpi", 162}, {"xhdpi", 216}, {"xxhdpi", 324}, {"xxxhdpi", 432}} {
 		out = append(out, pngAsset{"shells/android/app/src/main/res/mipmap-" + d.name + "/ic_launcher_foreground.png", func(m *fimg) *image.NRGBA { return foreground(m, d.px) }})
 	}
-	out = append(out,
-		pngAsset{"internal/dashboard/static/icon-32.png", func(m *fimg) *image.NRGBA { return free(m, 32) }},
-		pngAsset{"internal/dashboard/static/icon-192.png", func(m *fimg) *image.NRGBA { return free(m, 192) }},
-		pngAsset{"internal/dashboard/static/apple-touch-icon.png", func(m *fimg) *image.NRGBA { return opaque(m, 180) }},
-	)
 	return out
 }
 
@@ -94,7 +89,14 @@ func assets(root string) error {
 	if err := writeFile(root, icoPath, icoFile(m)); err != nil {
 		return err
 	}
-	return writeFile(root, icnsPath, icnsFile(m))
+	if err := writeFile(root, icnsPath, icnsFile(m)); err != nil {
+		return err
+	}
+
+	if err := writeFile(root, svgPath, ringsSVG()); err != nil {
+		return err
+	}
+	return writeFile(root, touchPath, pngBytes(ringsPNG(touchSize)))
 }
 
 func main() {

@@ -126,7 +126,7 @@ type helperRig struct {
 
 func newHelperRig(t *testing.T) *helperRig {
 	t.Helper()
-	r := &helperRig{signer: newTestReleaseSigner(t), trust: t.TempDir()}
+	r := &helperRig{signer: sharedReleaseSigner(t), trust: t.TempDir()}
 	r.signer.provisionTrustDir(t, r.trust)
 	return r
 }

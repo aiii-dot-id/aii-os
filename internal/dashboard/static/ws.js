@@ -1,6 +1,6 @@
 import './interaction-view.js';
 import { hasShellAuth, shellAccessToken } from './shell-auth.js';
-import { pageKey, keepPageKey, signedFetch, signIn, keptInMemoryOnly, MEMORY_ONLY } from './pagekey.js';
+import { keepPageKey, signedFetch, signIn, keptInMemoryOnly, MEMORY_ONLY, PAGE_KEY_STORE } from './pagekey.js';
 
 import { acceptSignIn, abandonSignIn } from './signin.js';
 import { S } from './state.js';
@@ -8,31 +8,33 @@ import { $ } from './util.js';
 import { announceWords } from './announce.js';
 import { renderPresence, setThinking } from './presence.js';
 import { go, renderFirstbootVisibility, toast } from './app.js';
-import { sysLine, toolEventLive, thinkingEvent, renderChatSubstrate, renderComposer, acceptSubstrateConfig, rejectSubstrateConfig, substrateConnectionLost, renderSteering, renderAsks } from './views/chat.js';
+import { sysLine, toolEventLive, thinkingEvent, renderComposer, renderSteering, renderAsks } from './views/chat.js';
+import CHAT from './strings/chat.js';
 import { renderHome } from './views/home.js';
-import { renderWorkPill } from './views/work.js';
 import { acceptAsks, renderTitle } from './waiting.js';
-import { renderProjPill, renderProjects, rejectCreate, rejectFocusSave, rejectContractSave, acceptCreate, acceptFocusSave, acceptContractSave, projectsConnectionLost } from './views/projects.js';
-import { renderMemory } from './views/memory.js';
-import { renderIdentity } from './views/identity.js';
-import { applyBackups, backupsReconnected, backupsConnectionLost, acceptBackupPreferences, rejectBackups } from './views/backups.js';
-import { acceptSandbox, rejectSandbox, sandboxConnectionLost } from './sandbox.js';
-import { acceptTools, rejectTools, toolsConnectionLost } from './tools.js';
-import { acceptMailRepair, rejectMailRepair } from './views/mail-repair.js';
-import { acceptMessages, rejectMessages } from './views/messages.js';
-import { acceptExpertConfig, rejectExpertConfig, expertStatus, expertConnectionLost } from './views/expert.js';
-import { applyRestoreNew } from './firstboot-restore.js';
-import { renderPlugins, rejectPluginAction, applyPluginStored } from './views/plugins.js';
-import { applySettingChoices } from './views/plugin-setting.js';
-import { renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave, acceptSpeechLists, rejectSpeechLists, acceptAccessCode, rejectAccessCode, settingsConnectionLost } from './views/settings.js';
-import { renderProviderOptions, discoveryAnswered, discoveryFailed, fbHint, fbResult, acceptDiscoveryResponse, firstbootConnectionLost } from './firstboot.js';
+import { renderProjPill } from './shell/project-pill.js';
+import { LATER } from './shell/later.js';
+import { fetchFirstRun } from './views.js';
 import { publish as publishToSections, onSections, onLayout, onTokensChanged } from './sections.js';
-import { renderPanel } from './panel.js';
+import { ownsThread } from './registry.js';
+import { channelWanted, settle, hello } from './transport/channel.js';
 import { onTheme } from './theme.js';
 import { onOverlayChanged, reloadForTheOverlay } from './overlay.js';
-import { bindTransport, render as renderVoice, speak, connectionLost as voiceConnectionLost } from './voice.js';
+import { bindVoice, toVoice } from './shell/voice-later.js';
+const { acceptSandbox, rejectSandbox, sandboxConnectionLost, acceptTools, rejectTools, toolsConnectionLost,
+  acceptMailRepair, rejectMailRepair, acceptMessages, rejectMessages, acceptExpertConfig, rejectExpertConfig,
+  expertStatus, expertConnectionLost, renderPlugins, rejectPluginAction, applyPluginStored, applySettingChoices,
+  renderSettings, acceptSettingsConfig, rejectSettingsConfig, acceptProviderSave, rejectProviderSave,
+  acceptSpeechLists, rejectSpeechLists, acceptAccessCode, rejectAccessCode, settingsConnectionLost, settingsSettled, localPart,
+  renderMemory, renderIdentity, renderBetween, renderStatus,
+  applyBackups, backupsReconnected, backupsConnectionLost, acceptBackupPreferences, rejectBackups, applyRestoreNew,
+  renderProviderOptions, discoveryAnswered, discoveryFailed, fbHint, acceptDiscoveryResponse,
+  firstbootConnectionLost, acceptFirstRunConfig, refuseFirstRunConfig, firstRunConfigArrived, beginAgain } = LATER;
+const { renderProjects, rejectCreate, rejectFocusSave, rejectContractSave, acceptCreate, acceptFocusSave,
+  acceptContractSave, projectsConnectionLost } = LATER;
+const theirs = () => { const n = S.stats?.name || ''; return n && n !== 'Unnamed' ? n : CHAT.yourIdentity; };
 
-S.onThemeApplied = onTokensChanged;
+S.onThemeApplied = () => { onTokensChanged(); S.renderMarks?.(); };
 
 let ws = null;
 let requestSeq = 0;
@@ -47,6 +49,10 @@ let receivedTurnRevision = 0;
 let probeTurnRevision = 0;
 let probeThinkingAtSend = false;
 let authCheck = false;
+const CLOSE_SIGN_IN = 4401;
+let refused = false;
+const settingsOpen = () => S.view === 'settings' || S.view === 'phone';
+let admission = 0;
 function foreground() { return document.visibilityState !== 'hidden'; }
 function canRetry() { return foreground() && navigator.onLine !== false; }
 function clearReconnect() {
@@ -64,22 +70,31 @@ function clearProbe() {
   probeTimer = null;
   probeRequestID = '';
 }
-function connectionLost(socket) {
+let draftIn = null;
+const toDraft = f => (draftIn ||= import('./views/chat/draft.js')).then(f, () => { draftIn = null; });
+function connectionLost(socket, code) {
   if (ws !== socket) return;
   ws = null;
+  if (code === CLOSE_SIGN_IN) refused = true;
   clearProbe();
   if (S.interactionLost) S.interactionLost();
-  if (S.chatConnectionLost) S.chatConnectionLost();
+  S.chatConnectionLost?.(); if (draftIn) toDraft(m => m.lost());
   if (S.gradesLost) S.gradesLost();
+  S.passNowLost?.();
+  S.beliefTrailLost?.();
   S.connected = false;
+  S.firstConnect = false;
+  S.pageFrames = { status: false, continuity: false };
   if (canRetry()) recoverAuthentication();
   $('send-btn').disabled = true;
-  voiceConnectionLost();
-  renderVoice();
+  renderComposer();
+  toVoice('connectionLost');
+  toVoice('render');
   setThinking(false);
-  substrateConnectionLost();
   expertConnectionLost();
   settingsConnectionLost();
+  S.renderModelSwitch?.();
+  S.sectionsLost?.();
   if (S.pluginsConnectionLost) S.pluginsConnectionLost();
   S.revokeLost?.();
   S.actsLost?.();
@@ -87,6 +102,7 @@ function connectionLost(socket) {
   backupsConnectionLost();
   sandboxConnectionLost();
   toolsConnectionLost();
+  S.logsConnectionLost?.();
   abandonSignIn();
   firstbootConnectionLost();
   projectsConnectionLost();
@@ -121,7 +137,7 @@ function probeConnection() {
 }
 function scheduleReconnect() {
   clearReconnect();
-  if (!canRetry()) return;
+  if (!canRetry() || refused) return;
   const jitter = 0.8 + Math.random() * 0.4;
   const delay = Math.min(reconnectDelay * jitter, RECONNECT_MAX);
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
@@ -135,6 +151,7 @@ function scheduleReconnect() {
 }
 export function connect() {
   if (!foreground()) return;
+  if (refused) { recoverAuthentication(); return; }
   if (ws && ws.readyState < 2) return;
   if (ws && ws.readyState === 2) { retireStalled(ws); return; }
 
@@ -144,24 +161,27 @@ export function connect() {
   socket.binaryType = 'arraybuffer';
   const opened = carrier => {
     if (ws !== carrier) return;
+    admission++;
     clearManualAuthentication();
     clearProbe();
     S.connected = true;
+    S.pageFrames = { status: false, continuity: false };
     reconnectDelay = 1000;
     S.wsEverOpened = true;
     backupsReconnected();
     if (S.reconnectTimer) { clearTimeout(S.reconnectTimer); S.reconnectTimer = null; }
     $('send-btn').disabled = false;
-    renderVoice();
+    renderComposer();
+    toVoice('render');
     query('providers');
     if (S.identityExists) query('steering');
     query('sections'); query('ui_layout'); query('ui_theme');
     query('ui.overlay');
 
-    query('config'); query('asks'); query('work');
+    query('config'); query('asks'); query('work'); query('identity');
     query('continuity');
     renderPresence();
-    go(S.view);
+    go(S.view, 'refresh');
   };
   const adopt = carrier => {
     ws = carrier;
@@ -172,30 +192,30 @@ export function connect() {
   if (!viaChannel) {
     ws = socket;
     socket.onopen = () => { hello(socket); opened(socket); };
-    socket.onclose = () => connectionLost(socket);
+    socket.onclose = e => connectionLost(socket, e && e.code);
     socket.onmessage = e => { if (ws === socket) onMessage(e); };
     return;
   }
-  const pending = settle(socket, adopt, () => connectionLost(pending), config => new RTCPeerConnection(config));
+  const pending = settle(socket, adopt, code => connectionLost(pending, code), config => new RTCPeerConnection(config));
   ws = pending;
-}
-
-function hello(socket) {
-  try { socket.send(JSON.stringify({ type: 'hello', page_key: pageKey() })); } catch (_) { }
 }
 
 export async function recoverAuthentication() {
   if (!canRetry() || S.tokenPrompted || authCheck) return;
   authCheck = true;
+  const asked = admission;
   let status;
   try {
     status = await signedFetch('/auth/token', { cache: 'no-store', credentials: 'same-origin' });
   } catch (e) {
     authCheck = false;
+    if (refused) showManualAuthentication();
     return;
   }
   if (status.status !== 401 || !canRetry()) {
     authCheck = false;
+    if (refused && status.ok) { refused = false; wake(); }
+    else if (refused && status.status !== 401) showManualAuthentication();
     return;
   }
 
@@ -210,12 +230,22 @@ export async function recoverAuthentication() {
     return;
   }
 
+  if (admission === asked) {
+    try { status = await signedFetch('/auth/token', { cache: 'no-store', credentials: 'same-origin' }); } catch (e) { status = null; }
+  }
   authCheck = false;
-  showManualAuthentication(status.headers.get('Aii-Missing') === 'page-key');
+  if (admission !== asked || !status || status.status !== 401 || !canRetry()) {
+    if (status && status.ok) refused = false;
+    if (refused) { if (admission === asked) showManualAuthentication(); return; }
+    if (canRetry() && !S.connected) wake();
+    return;
+  }
+  showManualAuthentication();
 }
 
 function signedIn(reply) {
-  if (keptInMemoryOnly()) { toast(MEMORY_ONLY); return; }
+  admission++; refused = false;
+  if (keptInMemoryOnly()) { toast(MEMORY_ONLY, 'note'); return; }
   if (reply && reply.headers.get('Aii-Overlay') === 'reload') reloadForTheOverlay();
 }
 
@@ -229,7 +259,7 @@ async function tokenAct(path) {
     if (reply.ok && previous && ws === previous) retireStalled(previous);
     return { ok: reply.ok, text: reply.ok ? '' : (await reply.text()).trim() };
   } catch (e) {
-    return { ok: false, text: 'The answer could not be confirmed. Check the connection; if this page then asks you to sign in, read the token with aii dashboard-token on this machine.' };
+    return { ok: false, text: 'The answer could not be confirmed. Check the connection and try again.' };
   } finally {
     authCheck = false;
     wake();
@@ -243,6 +273,7 @@ let authForm = null, authDismissed = false, authFormRevision = 0;
 function clearManualAuthentication() {
   authFormRevision++;
   if (authForm) { authForm.querySelector('input').value = ''; authForm.remove(); authForm = null; }
+  document.documentElement.classList.remove('signin-asked');
   authDismissed = false; S.tokenPrompted = false;
 }
 const ACCESS_CODE_LENGTH = 12, ACCESS_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -250,19 +281,20 @@ export function couldBeAccessCode(text) {
   const read = String(text).toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
   return read.length <= ACCESS_CODE_LENGTH && [...read].every(ch => ACCESS_CODE_ALPHABET.includes(ch));
 }
-const SIGN_IN_HOW = 'On a device that is already signed in, Settings \u2192 Dashboard \u2192 Open on another device shows an access code for this one. Or read the access token with aii dashboard-token on the AII OS machine, in its identity directory.';
-const SIGN_IN = 'Sign in to this dashboard. ' + SIGN_IN_HOW;
-const SIGN_IN_AGAIN = 'Sign in once more in this browser. This dashboard now keeps half of its sign-in in the page itself, where a page at another address on this machine cannot read it. ' + SIGN_IN_HOW;
-function showManualAuthentication(again) {
+const ON_THIS_COMPUTER = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+const SIGN_IN = ON_THIS_COMPUTER
+  ? 'Sign in to use this page. Open the AII OS app on this computer, and it opens this page signed in.'
+  : 'Sign in to use this page here. On your computer, open Settings \u2192 Phone and other devices, and scan the code with this phone, or type it here.';
+function showManualAuthentication() {
   if (!foreground()) return;
   if (!authForm) {
-    const box = document.createElement('section'); box.id = 'dashboard-signin'; box.setAttribute('aria-label', 'Dashboard sign-in');
+    const box = document.createElement('section'); box.id = 'dashboard-signin'; box.setAttribute('aria-label', 'Sign in');
     const note = document.createElement('p');
-    note.textContent = again ? SIGN_IN_AGAIN : SIGN_IN;
+    note.textContent = SIGN_IN;
     const reveal = document.createElement('button'); reveal.type = 'button'; reveal.className = 'btn ghost'; reveal.textContent = 'Sign in';
     const form = document.createElement('form');
-    const label = document.createElement('label'); label.textContent = 'Access code or access token';
-    const input = document.createElement('input'); input.type = 'text'; input.autocomplete = 'off'; input.autocapitalize = 'off'; input.spellcheck = false; input.setAttribute('aria-label', 'Dashboard access code or access token'); label.appendChild(input);
+    const label = document.createElement('label'); label.textContent = 'Access code';
+    const input = document.createElement('input'); input.type = 'text'; input.autocomplete = 'off'; input.autocapitalize = 'off'; input.spellcheck = false; input.setAttribute('aria-label', 'Access code'); label.appendChild(input);
     const actions = document.createElement('div'); actions.className = 'auth-actions';
     const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'btn'; submit.textContent = 'Sign in';
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn ghost'; cancel.textContent = 'Not now';
@@ -285,7 +317,7 @@ function showManualAuthentication(again) {
       event.preventDefault();
       if (authCheck || !canRetry()) return;
       const token = input.value.trim(); input.value = ''; mask();
-      if (!token) { note.textContent = 'Enter an access code or the dashboard access token.'; return; }
+      if (!token) { note.textContent = 'Enter the access code.'; return; }
       const revision = ++authFormRevision;
       authCheck = true; submit.disabled = true; note.textContent = 'Signing in…';
       try {
@@ -301,6 +333,9 @@ function showManualAuthentication(again) {
       }
     };
     authForm = box; ($('dashboard-auth') || document.body).prepend(box); visibility();
+    document.documentElement.classList.add('signin-asked');
+    S.firstConnect = false;
+    renderPresence(); renderComposer();
   }
 }
 
@@ -313,6 +348,11 @@ export function wake() {
 }
 if (typeof document !== 'undefined') {
   window.addEventListener('online', wake);
+  window.addEventListener('storage', e => {
+    if (e.key !== PAGE_KEY_STORE || !e.newValue) return;
+    admission++; refused = false;
+    if (authForm) { clearManualAuthentication(); wake(); }
+  });
   window.addEventListener('offline', suspendRecovery);
   window.addEventListener('pagehide', suspendRecovery);
   window.addEventListener('pageshow', event => { if (event.persisted) wake(); });
@@ -324,6 +364,8 @@ if (typeof document !== 'undefined') {
   document.documentElement.classList.toggle('page-hidden', !foreground());
   document.addEventListener('visibilitychange', visibility);
 }
+function statusOpen() { if (S.view === 'status') renderStatus(); if (S.view === 'technical') S.renderTechnical?.(); }
+
 export function send(obj) {
   if (!ws || ws.readyState !== 1) return '';
   if (!obj.request_id) obj.request_id = String(++requestSeq);
@@ -342,7 +384,7 @@ function sendVoiceFrame(buf) {
   ws.send(buf);
 }
 
-const voiceIn = bindTransport(sendVoiceFrame, send) || {};
+bindVoice(sendVoiceFrame, send);
 
 export function wsReady() { return !!(ws && ws.readyState === 1); }
 
@@ -364,7 +406,7 @@ if (typeof document !== 'undefined') {
 
 function onMessage(e) {
 
-  if (e.data instanceof ArrayBuffer) { if (voiceIn.receiveFrame) voiceIn.receiveFrame(e.data); return; }
+  if (e.data instanceof ArrayBuffer) { toVoice('receiveFrame', e.data); return; }
   let msg; try { msg = JSON.parse(e.data); } catch (err) { return; }
   if (probeRequestID && msg.type === 'probe' && msg.request_id === probeRequestID) {
     const newerTurnEvent = receivedTurnRevision !== probeTurnRevision || !!S.thinking !== probeThinkingAtSend;
@@ -384,9 +426,9 @@ function onMessage(e) {
     case 'sections': onSections(msg.sections || [], msg.message || ''); break;
     case 'layout': onLayout(msg.layout || null); break;
 
-    case 'theme': onTheme(msg.theme || null); onTokensChanged(); break;
-    case 'status': onStats(msg.stats); expertStatus(); renderPanel(); renderVoice(); break;
-    case 'voice_session': if (voiceIn.sessionState) voiceIn.sessionState(msg.voice_session || {}); break;
+    case 'theme': onTheme(msg.theme || null); onTokensChanged(); S.renderMarks?.(); S.themeAnswered?.(msg.request_id); break;
+    case 'status': (S.pageFrames ||= {}).status = true; S.firstConnect = false; onStats(msg.stats); expertStatus(); statusOpen(); toVoice('render'); break;
+    case 'voice_session': toVoice('sessionState', msg.voice_session || {}); break;
     case 'voice_event': {
       const ve = msg.voice_event || {};
       if (ve.type === 'transcript_final' && ve.operator && (ve.text || '').trim()) {
@@ -395,14 +437,15 @@ function onMessage(e) {
       if (ve.type === 'speaker_observation' && ve.refers_to) {
         finishHistoryReadback();
       }
-      if (voiceIn.voiceEvent) voiceIn.voiceEvent(ve);
+      toVoice('voiceEvent', ve);
       break;
     }
-    case 'voice_hush': if (voiceIn.hushFromHost) voiceIn.hushFromHost(msg.voice_hush || {}); break;
-    case 'continuity': S.cont = msg.continuity || null; renderPresence(); renderPanel(); if (S.view === 'home') renderHome(); if (S.view === 'identity') renderIdentity(); break;
+    case 'voice_hush': toVoice('hushFromHost', msg.voice_hush || {}); break;
+    case 'continuity': S.cont = msg.continuity || null; (S.pageFrames ||= {}).continuity = true; renderPresence(); statusOpen(); if (S.view === 'chat') renderHome(); if (S.view === 'identity') renderIdentity(); if (S.view === 'between') renderBetween(); S.renderRecordState?.(); break;
+    case 'draft': toDraft(m => m.receiveDraft(msg.draft)); break;
     case 'response':
       if (!msg.stream && msg.role !== 'identity') {
-        sysLine(msg.message); break;
+        toast(msg.message, 'note'); break;
       }
       receivedTurnRevision++;
       if (msg.stream) { setThinking(true); break; }
@@ -410,13 +453,14 @@ function onMessage(e) {
   renderSteering([]);
 
       if (msg.role === 'identity') {
-        announceWords(S.stats?.name || 'identity', msg.message);
-        speak(msg.message, msg.voice_reply);
+        announceWords(theirs(), msg.message);
+        toVoice('speak', msg.message, msg.voice_reply);
         if (S.view === 'memory' || S.view === 'identity') query('identity');
+        S.turnEnded?.();
       }
       finishHistoryReadback();
       break;
-    case 'system_line': sysLine(msg.message); break;
+    case 'system_line': toast(msg.message, 'note'); break;
     case 'event':
       if (msg.kind === 'thinking') { thinkingEvent(msg.args); break; }
       toolEventLive(msg.name, msg.args);
@@ -424,53 +468,53 @@ function onMessage(e) {
       break;
     case 'history': break;
     case 'interaction_changed': if (S.interactionChanged) S.interactionChanged(); break;
+    case 'work_changed': query('work'); break;
     case 'interaction_page': if (S.interactionPage) S.interactionPage(msg.interaction_page, msg.request_id, msg.interaction_window); break;
     case 'interaction_error': if (S.interactionError) S.interactionError(msg.interaction_reason, msg.message, msg.request_id); break;
     case 'chat_ack': if (S.chatAcknowledged) S.chatAcknowledged(msg.request_id, msg.message); break;
     case 'chat_receipt': if (S.chatReceipt) S.chatReceipt(msg.request_id, msg.chat_recording); break;
-    case 'asks': S.asks = msg.asks || []; renderAsks(S.asks); renderPanel(); acceptAsks(S.asks); break;
-    case 'identity': S.identity = msg.identity || null; if (S.view === 'memory') renderMemory(); if (S.view === 'identity') renderIdentity(); if (S.view === 'home') renderHome(); break;
+    case 'asks': S.asks = msg.asks || []; renderAsks(S.asks); statusOpen(); acceptAsks(S.asks); break;
+    case 'identity': S.identity = msg.identity || null; if (S.view === 'memory') renderMemory(); if (S.view === 'identity') renderIdentity(); if (S.view === 'between') renderBetween(); if (S.view === 'experiences') S.renderExperiences?.(); if (S.view === 'chat') renderHome(); break;
     case 'recall': S.recall = { query: msg.query || '', text: msg.message || '' }; if (S.view === 'memory') renderMemory(); break;
-    case 'tools': S.tools = msg.tools || []; acceptTools(msg.request_id); if (S.view === 'settings') renderSettings(); break;
-    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id, msg.message); if (S.view === 'settings') renderSettings(); break;
-    case 'work': S.gradeAnswered?.(msg.request_id, null); S.work = msg.work || null; S.gradesRead?.(S.work); renderWorkPill(); renderPanel(); if (S.view === 'home') renderHome(); break;
+    case 'tools': S.tools = msg.tools || []; acceptTools(msg.request_id); statusOpen(); if (settingsOpen()) renderSettings(); break;
+    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id, msg.message); if (settingsOpen()) renderSettings(); break;
+    case 'work': S.gradeAnswered?.(msg.request_id, null); S.work = msg.work || null; S.gradesRead?.(S.work); statusOpen(); if (S.view === 'chat') renderHome(); if (S.view === 'identity') renderIdentity(); if (S.view === 'projects') renderProjects(); S.renderComposer?.(); break;
 
     case 'workspace': S.workspace = msg.workspace || null; S.workspaceFor = (S.workspace && S.workspace.project) ? S.workspace.project.id : ''; if (S.view === 'projects') renderProjects(); break;
-    case 'overlays': S.overlays = msg.overlays || []; renderPanel(); break;
+    case 'overlays': S.overlays = msg.overlays || []; statusOpen(); break;
+    case 'pass_now': S.passNowAnswered?.(msg); break;
     case 'overlay_changed': onOverlayChanged(msg.token, msg.paths); break;
-    case 'setting_choices': applySettingChoices(msg.setting_choices); if (S.view === 'plugins') renderPlugins(); if (S.view === 'settings') renderSettings(); break;
+    case 'setting_choices': applySettingChoices(msg.setting_choices); if (S.view === 'plugins') renderPlugins(); if (settingsOpen()) renderSettings(); break;
     case 'plugin_stored': applyPluginStored(msg.plugin_stored); if (S.view === 'plugins') renderPlugins(); break;
     case 'config':
-      S.config = msg.config || null;
-      acceptSubstrateConfig(msg.request_id); acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id); S.revokeAnswered?.(msg.request_id, null);
+      S.config = msg.config || null; S.renderMarks?.();
+      firstRunConfigArrived(); acceptFirstRunConfig(msg.request_id);
+      acceptSettingsConfig(msg.request_id); acceptExpertConfig(msg.request_id); S.revokeAnswered?.(msg.request_id, null);
+      settingsSettled(msg.request_id);
       acceptBackupPreferences(msg.request_id);
       if (S.pluginStartAnswered) S.pluginStartAnswered(msg.request_id);
-      renderChatSubstrate(); renderComposer(); if (S.view === 'settings') renderSettings(); if (S.view === 'plugins') renderPlugins();
+      S.renderModelSwitch?.();
+      renderComposer(); statusOpen(); if (settingsOpen()) renderSettings(); if (S.view === 'plugins') renderPlugins();
       S.chipsRedraw?.();
       if (S.view === 'memory') query('identity');
       break;
     case 'spend':
-      S.spend = msg.spend || { days: [] };
-      if (S.view === 'settings') renderSettings(); break;
+      S.spend = msg.spend || { days: [] }; S.spendRequest = msg.request_id || '';
+      statusOpen(); if (settingsOpen()) renderSettings(); break;
     case 'logs':
 
       if (msg.logs_tail) { S.logTail = msg.logs_tail; }
       else { S.logsList = msg.logs_list || []; S.logFile = ''; S.logTail = null; }
-      if (S.view === 'settings') renderSettings(); break;
+      if (settingsOpen()) renderSettings();
+      if (S.view === 'technical') S.renderTechnical?.(); break;
     case 'projects': {
-      const prevActive = S.activeProject ? S.activeProject.id : '';
-      const primed = S.projectsPrimed; S.projectsPrimed = true;
+      S.projectsPrimed = true;
 
       const prevIDs = S.projects.map(p => p.id);
       S.projects = msg.projects || [];
       const made = acceptCreate(msg.request_id, prevIDs);
       if (made) S.viewedProject = made;
       S.activeProject = S.projects.find(p => p.active) || null;
-      const nowActive = S.activeProject ? S.activeProject.id : '';
-      if (primed && nowActive && nowActive !== prevActive) {
-
-        sysLine('now working in “' + (S.activeProject.name) + '” — turns and work sessions are stamped with it');
-      }
       if (msg.request_id) {
 
         if (acceptFocusSave(msg.request_id)) {
@@ -485,17 +529,17 @@ function onMessage(e) {
       }
       renderProjPill();
 
-      renderPanel();
+      statusOpen();
       if (S.view === 'projects') renderProjects();
-      if (S.view === 'home') renderHome();
+      if (S.view === 'chat') renderHome();
       break;
     }
-    case 'providers': S.providers = msg.providers || []; S.brokenProviders = msg.broken_providers || []; S.skipSignInWithValidToken = msg.skip_signin_with_valid_token !== false; acceptProviderSave(msg.request_id); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); renderChatSubstrate(); if (S.view === 'settings') renderSettings(); break;
+    case 'providers': S.providers = msg.providers || []; S.renderModelSwitch?.(); S.brokenProviders = msg.broken_providers || []; S.skipSignInWithValidToken = msg.skip_signin_with_valid_token !== false; acceptProviderSave(msg.request_id); localPart(msg); S.providersLoaded = true; if (!S.identityExists) renderProviderOptions(); statusOpen(); if (settingsOpen()) renderSettings(); break;
     case 'provider_signin': case 'profile_signin': acceptSignIn(msg); break;
     case 'backups': applyBackups(msg.backups, msg.request_id); break;
     case 'restore_new': applyRestoreNew(msg.restore_new); break;
     case 'update_check': S.update = msg.update || null; if (S.renderUpdate) S.renderUpdate(); if (S.renderUpdateChip) S.renderUpdateChip(); break;
-    case 'restart': sysLine('restarting to run the update \u2014 this page reconnects when the identity is back'); break;
+    case 'restart': toast('restarting to run the update \u2014 this page reconnects when the identity is back', 'note'); break;
     case 'public_name': if (S.renderPublicName) S.renderPublicName(msg.public_name || null); break;
     case 'speech_lists': acceptSpeechLists(msg.speech_lists); break;
     case 'access_code': acceptAccessCode(msg.request_id, msg.access_code || null); break;
@@ -504,7 +548,8 @@ function onMessage(e) {
 
         const p = (S.providers || []).find(x => x.name === msg.provider);
         if (p) { const seen = new Set(p.models || []); p.models = (p.models || []).concat((msg.model_list || []).filter(m => !seen.has(m))); }
-        renderChatSubstrate(); if (S.view === 'settings') renderSettings();
+        settingsSettled(msg.request_id, msg.provider);
+        if (settingsOpen()) renderSettings();
         break;
       }
       discoveryAnswered(msg.model_list || []); break;
@@ -514,8 +559,12 @@ function onMessage(e) {
     case 'messages': acceptMessages(msg); break;
     case 'steered': break;
     case 'steering': S.steering = msg.pending || []; renderSteering(S.steering); break;
-    case 'cancelled': receivedTurnRevision++; setThinking(false); finishHistoryReadback(); break;
-    case 'error': onError(msg.message || 'unknown error', msg.request_id, msg.provider, !!msg.needs_key); break;
+    case 'cancelled': receivedTurnRevision++; setThinking(false); finishHistoryReadback(); S.turnEnded?.(); break;
+    case 'error':
+      if (msg.said || S.beliefTrailRefused?.(msg.request_id, msg.message || '', msg.request_error_code || '') || S.themeRefused?.(msg.request_id, msg.message || '') || localPart(msg)) break;
+      onError(msg.message || 'unknown error', msg.request_id, msg.provider, !!msg.needs_key, msg.turn_failure, msg.turn_reason, msg.turn_ref); break;
+    case 'belief_trail': S.beliefTrailAnswered?.(msg); break;
+    case 'local_found': localPart(msg); break;
   }
 }
 function onStats(stats) {
@@ -525,28 +574,31 @@ function onStats(stats) {
   S.update = (stats && stats.update) || null;
   if (S.renderUpdate) S.renderUpdate();
   if (S.renderUpdateChip) S.renderUpdateChip();
-  const u = S.update, seen = u && (u.installed_version || u.available_version);
-  if (seen && seen !== S.noticedUpdate) {
-    S.noticedUpdate = seen;
-    sysLine(u.needs_restart ? 'update ' + seen + ' is installed \u2014 click "Restart to update" in the sidebar when convenient'
-      : (u.stage_refusal ? 'update ' + seen + ' is available \u2014 this install is managed by your package manager; Settings \u2192 Updates has the command'
-      : (u.automatic ? 'update ' + seen + ' is available \u2014 it is downloaded, verified and installed on the next check'
-      : 'update ' + seen + ' is available \u2014 Settings \u2192 Updates')));
-  }
   S.pluginUpdates = (stats && stats.plugin_updates) || 0;
   if (S.renderNavBadges) S.renderNavBadges();
   const born = !!(stats && stats.name && stats.name !== '(not born)');
   const was = S.identityExists;
   S.identityExists = born;
+  if (!born) fetchFirstRun();
   if (born && !was) { query('continuity'); query('projects'); query('work'); query('providers'); query('config'); query('asks'); query('work'); query('identity'); }
-  renderPresence(); renderFirstbootVisibility(); renderComposer();
-  if (S.view === 'home') renderHome();
+  renderPresence(); renderFirstbootVisibility(); renderComposer(); S.recordNamed?.();
+  if (S.view === 'chat') renderHome();
 }
-function onError(text, requestID, provider, needsKey) {
+function turnFailureWords(text, failure, reason) {
+  const llm = (S.config && S.config.llm) || {};
+  const slots = { provider: llm.resolved_provider || llm.provider || '', name: theirs(), reason: reason || text };
+  const fill = words => words.replace(/\{(\w+)\}/g, (m, k) => k in slots ? slots[k] : m);
+  if (!slots.provider) return text;
+  if (failure === 'provider_timeout') return fill(CHAT.providerTimeout);
+  if (failure === 'provider_failed') return fill(CHAT.providerFailed);
+  return text;
+}
+function onError(text, requestID, provider, needsKey, turnFailure, turnReason, turnRef) {
   if (S.gradeAnswered?.(requestID, text) || S.revokeAnswered?.(requestID, text)) return;
-  if (S.askRefused?.(requestID, text) || S.actRefused?.(requestID, text) || S.chatRefused?.(requestID, text)) return;
+  if (S.askRefused?.(requestID, text) || S.actRefused?.(requestID, text) || S.chatRefused?.(requestID, text) || S.passNowRefused?.(requestID, text)) return;
   if (rejectBackups(requestID, text) || rejectSandbox(requestID, text) || rejectTools(requestID, text)) return;
   if (rejectMailRepair(requestID, text) || rejectMessages(requestID, text) || rejectExpertConfig(requestID, text)) return;
+  if (refuseFirstRunConfig(requestID, text)) return;
   abandonSignIn(requestID);
   if (!requestID) {
     receivedTurnRevision++;
@@ -561,203 +613,20 @@ function onError(text, requestID, provider, needsKey) {
     if (text === 'not available') return;
     if (needsKey) { fbHint(text); return; }
     if (provider && discoveryFailed(text)) return;
-    fbResult('err', text);
-    $('fb-birth').disabled = false;
+    beginAgain(text);
     return;
   }
   if (rejectPluginAction(requestID)) { toast(text); return; }
   if (rejectAccessCode(text, requestID)) return;
-  if (rejectSettingsConfig(text, requestID)) { if (S.view === 'plugins') renderPlugins(); return; }
+  if (rejectSettingsConfig(text, requestID)) { S.renderModelSwitch?.(); if (S.view === 'plugins') renderPlugins(); return; }
   if (S.pluginStartRefused && S.pluginStartRefused(requestID, text)) return;
   if (rejectSpeechLists(requestID, text)) return;
-  if (rejectProviderSave(text, requestID) || rejectSubstrateConfig(text, requestID) || rejectCreate(requestID) || rejectFocusSave(requestID) || rejectContractSave(requestID)) { toast(text); return; }
+  if (settingsSettled(requestID, provider, text, toast)) return;
+  if (rejectProviderSave(text, requestID) || rejectCreate(requestID) || rejectFocusSave(requestID) || rejectContractSave(requestID)) { toast(text); return; }
+  if (S.logsAskFailed && S.logsAskFailed(requestID, text)) return;
   if (requestID) { toast(text); return; }
-  if (S.view === 'chat') sysLine(text, true); else toast(text);
+  if (turnFailure) { S.turnFailed?.(turnFailureWords(text, turnFailure, turnReason), turnRef); return; }
+  if (ownsThread(S.view)) sysLine(text); else toast(text);
 }
 
-const PIECE_BYTES = 16 * 1024, BINARY = 1, LAST = 2;
-const QUEUE_HIGH = 1024 * 1024, QUEUE_LOW = 256 * 1024;
-const encoder = new TextEncoder(), decoder = new TextDecoder();
-
-export function channelWanted(protocol, hostname, hasPeerConnection) {
-  const here = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostname);
-  return protocol === 'https:' && !here && !!hasPeerConnection;
-}
-
-export function cutIntoPieces(data, pieceBytes) {
-  let bytes, head = 0;
-  if (typeof data === 'string') bytes = encoder.encode(data);
-  else {
-    bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    head = BINARY;
-  }
-  const room = Math.max(1, pieceBytes - 1), pieces = [];
-  let at = 0;
-  do {
-    const n = Math.min(room, bytes.length - at);
-    const piece = new Uint8Array(1 + n);
-    piece[0] = head | (at + n === bytes.length ? LAST : 0);
-    piece.set(bytes.subarray(at, at + n), 1);
-    pieces.push(piece);
-    at += n;
-  } while (at < bytes.length);
-  return pieces;
-}
-
-export function pieceJoiner() {
-  let parts = [], size = 0, binary = false, started = false;
-  return buffer => {
-    const piece = new Uint8Array(buffer);
-    if (!piece.length) return false;
-    const isBinary = !!(piece[0] & BINARY);
-    if (started && isBinary !== binary) return false;
-    started = true; binary = isBinary;
-    parts.push(piece.subarray(1)); size += piece.length - 1;
-    if (!(piece[0] & LAST)) return null;
-    const whole = new Uint8Array(size);
-    let at = 0;
-    for (const part of parts) { whole.set(part, at); at += part.length; }
-    const message = { data: binary ? whole.buffer : decoder.decode(whole) };
-    parts = []; size = 0; started = false;
-    return message;
-  };
-}
-
-class ChannelSocket {
-  constructor(pc, dc) {
-    this.pc = pc; this.dc = dc;
-    this.readyState = 0; this.binaryType = 'arraybuffer';
-    this.onmessage = null; this.onclose = null;
-    this.queue = []; this.join = pieceJoiner();
-    dc.binaryType = 'arraybuffer';
-    dc.bufferedAmountLowThreshold = QUEUE_LOW;
-    dc.onbufferedamountlow = () => this.pump();
-    dc.onopen = () => { if (this.readyState === 0) this.readyState = 1; };
-    dc.onclose = () => this.end();
-    dc.onmessage = e => {
-      const message = this.join(e.data);
-      if (message === false) { this.close(); return; }
-      if (message && this.onmessage) this.onmessage(message);
-    };
-    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.end(); };
-    this.left = () => this.end();
-    window.addEventListener('pagehide', this.left);
-  }
-  pieceBytes() {
-    const stated = this.pc.sctp && this.pc.sctp.maxMessageSize;
-    return stated > 1 && stated < PIECE_BYTES ? stated : PIECE_BYTES;
-  }
-  send(data) {
-    if (this.readyState !== 1) throw new Error('the channel is not open');
-    for (const piece of cutIntoPieces(data, this.pieceBytes())) this.queue.push(piece);
-    this.pump();
-  }
-  pump() {
-    try {
-      while (this.queue.length && this.dc.readyState === 'open' && this.dc.bufferedAmount < QUEUE_HIGH) this.dc.send(this.queue.shift());
-    } catch (_) { this.close(); }
-  }
-  close() { this.end(); }
-  end() {
-    if (this.readyState === 3) return;
-    this.readyState = 3; this.queue = [];
-    window.removeEventListener('pagehide', this.left);
-    try { this.dc.close(); } catch (_) { }
-    try { this.pc.close(); } catch (_) { }
-    if (this.onclose) this.onclose({});
-  }
-}
-
-export function settle(socket, adopt, lost, makePeer) {
-  let pc = null, channel = null, timer = null, over = false, negotiating = false;
-  let offered = false, answered = false, answering = false;
-  let readyHere = false, socketClosed = false;
-  let localCandidates = [], remoteCandidates = [];
-  const finish = () => { over = true; clearTimeout(timer); localCandidates = []; remoteCandidates = []; };
-  const drop = () => {
-    if (channel) { channel.onclose = null; channel.end(); }
-    if (pc) { try { pc.close(); } catch (_) { } }
-  };
-  const abandon = () => {
-    try { socket.close(); } catch (_) { }
-    drop();
-  };
-  const fail = () => { if (over) return; finish(); abandon(); lost(); };
-  const onSocket = () => {
-    finish();
-    drop();
-    adopt(socket);
-  };
-  const take = () => { if (channel.readyState !== 1) { fail(); return; } finish(); adopt(channel); };
-  const say = message => { if (!over && socket.readyState === 1) socket.send(JSON.stringify(message)); };
-
-  const begin = setup => {
-    negotiating = true;
-    timer = setTimeout(fail, setup.ready_within_ms);
-    pc = makePeer({ iceServers: (setup.ice_servers || []).map(s => ({ urls: s.urls, username: s.username, credential: s.credential })) });
-    channel = new ChannelSocket(pc, pc.createDataChannel('dashboard', { ordered: true }));
-    channel.onmessage = e => {
-      if (over) return;
-      if (readyHere) { take(); if (channel.onmessage) channel.onmessage(e); return; }
-      let message = null;
-      try { message = JSON.parse(e.data); } catch (_) { }
-      if (!message || message.type !== 'transport_ready') return;
-      try { channel.send(JSON.stringify({ type: 'transport_ready', carrier: 'channel' })); } catch (_) { return; }
-      readyHere = true;
-      if (socketClosed) take();
-    };
-    pc.onicecandidate = e => {
-      if (over) return;
-      const message = e.candidate
-        ? { type: 'transport_candidate', candidate: e.candidate.candidate, sdp_mid: e.candidate.sdpMid, sdp_mline_index: e.candidate.sdpMLineIndex }
-        : { type: 'transport_candidates_done' };
-      if (offered) say(message);
-      else localCandidates.push(message);
-    };
-    pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer).then(() => {
-        if (over) return;
-        say({ type: 'transport_offer', sdp: offer.sdp });
-        offered = true;
-        for (const candidate of localCandidates) say(candidate);
-        localCandidates = [];
-      }))
-      .catch(() => { });
-  };
-
-  socket.onopen = () => hello(socket);
-  socket.onclose = () => {
-    if (over) return;
-    socketClosed = true;
-    if (!negotiating) fail();
-    else if (readyHere) take();
-  };
-  socket.onmessage = e => {
-    if (over) return;
-    let message = null;
-    if (typeof e.data === 'string') { try { message = JSON.parse(e.data); } catch (_) { } }
-    if (!negotiating) {
-      if (message && message.type === 'transport_setup' && message.ready_within_ms > 0) { begin(message); return; }
-      finish();
-      adopt(socket);
-      if (socket.onmessage) socket.onmessage(e);
-      return;
-    }
-    if (!message) return;
-    if (message.type === 'transport_answer' && !answering) {
-      answering = true;
-      pc.setRemoteDescription({ type: 'answer', sdp: message.sdp }).then(() => {
-        if (over) return;
-        answered = true;
-        for (const candidate of remoteCandidates) pc.addIceCandidate(candidate).catch(() => {});
-        remoteCandidates = [];
-      }).catch(() => {});
-    } else if (message.type === 'transport_candidate') {
-      const candidate = { candidate: message.candidate, sdpMid: message.sdp_mid, sdpMLineIndex: message.sdp_mline_index };
-      if (answered) pc.addIceCandidate(candidate).catch(() => {});
-      else remoteCandidates.push(candidate);
-    }
-    else if (message.type === 'transport_ready') onSocket();
-  };
-  return { readyState: 0, close: () => { if (over) return; finish(); abandon(); } };
-}
+export { channelWanted, cutIntoPieces, pieceJoiner, settle } from './transport/channel.js';

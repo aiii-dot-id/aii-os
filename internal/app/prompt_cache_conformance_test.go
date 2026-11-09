@@ -201,6 +201,13 @@ func m3RunSession(t *testing.T, d m3Dialect) *m3Session {
 	t.Helper()
 	a, dir := dispatchApp(t)
 	t.Cleanup(func() { stopApp(t, a) })
+	// The scripted session answers each turn once: the work's own
+	// continuation (2026-11-06) is switched off here, as the chain tests
+	// do, so the prefix is measured across the turns the script makes.
+	off := false
+	a.cfgMu.Lock()
+	a.cfg.Agency.TurnContinuation = &off
+	a.cfgMu.Unlock()
 	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("M3 plan\n1. check the lantern\n2. check the gallery\n3. write the inspection note\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +741,7 @@ func m3Around(parts []m3Part, offset int) string {
 // mark, key or split on.
 func m3ComposedStable(t *testing.T, s *m3Session) string {
 	t.Helper()
-	ws, err := s.app.buildWorkState()
+	ws, err := s.app.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

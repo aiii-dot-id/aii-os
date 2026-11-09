@@ -13,8 +13,11 @@
 //	socket carries the real payloads → the DOM renders the dock → a
 //	real DOM click
 //	commits the selection → the server's store changes → the render
-//	answers with the active mark and the WORK card sentence → a page
-//	reload proves the whole join again from a cold load.
+//	answers with the active mark and Status's two sentences → a page
+//	reload proves the whole join again from a cold load → the
+//	project's own "Work outside projects", then Continue with them,
+//	which reaches Home only on the host's answer, the project line and the
+//	store holding the project again (step 12b).
 //
 // The page is observed from OUTSIDE via the Chrome DevTools protocol
 // (--remote-debugging-port): the harness-in-page pattern of the
@@ -260,8 +263,8 @@ func openInChrome(t *testing.T, chrome, origin, path string) *cdp {
 		// A desktop window, named. The dashboard lays itself out as a
 		// phone below 768 px and hides the side panel there (layout.css),
 		// and an engine's default headless window is no fact a journey may
-		// rest on: Chrome's on macOS is 756 x 413, so the WORK card the
-		// projects journey reads was hidden on a Mac and shown on Linux.
+		// rest on: Chrome's on macOS is 756 x 413, so the side panel the
+		// projects journey once read was hidden on a Mac and shown on Linux.
 		"--window-size=1280,900",
 		// Kept for configs that serve TLS with a self-signed cert;
 		// inert on the loopback-HTTP listener the test config yields.
@@ -536,27 +539,29 @@ func TestProjectsJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("store.ActiveProjectID() = %q, want %q — the DOM said selected but the store disagrees", got, projID)
 	}
 
-	// ---- STEP 5: the WORK card speaks both facts (the reported defect
-	// of this arc: project focus and session state are different facts,
-	// and the empty wording must be about sessions only).
-	if _, err := page.eval(`location.hash = '#/home'; 'nav'`, false, 10*time.Second); err != nil {
-		t.Fatalf("nav home: %v", err)
+	// ---- STEP 5: Status speaks both facts (the reported defect of this
+	// arc: project focus and session state are different facts, and the
+	// empty wording must be about sessions only). Continuity names the
+	// project they work in; Flow says that no session is running.
+	if _, err := page.eval(`location.hash = '#/settings'; 'nav'`, false, 10*time.Second); err != nil {
+		t.Fatalf("nav to Status: %v", err)
 	}
-	panelState, err := page.evalRetry(awaitJS(`
-    const txt = document.body.innerText || '';
-    const haveWorking = txt.indexOf('working in') !== -1 && txt.indexOf('project-menu') !== -1;
-    const haveSession = txt.indexOf('no active session') !== -1;
-    last = 'working-in: ' + haveWorking + ', session-line: ' + haveSession;
-    if (haveWorking && haveSession) return last;
+	// Status is a built-in section: its words are in its own sandboxed frame.
+	statusState, err := page.evalInFrame("/built-in-sections/status/", awaitJS(`
+    const line = id => ((document.querySelector('[data-block="' + id + '"] .status__line') || {}).textContent || '');
+    const haveWorking = line('continuity').indexOf('Working on project-menu.') !== -1;
+    const haveNoSession = line('flow').indexOf('is waiting for you') !== -1;
+    last = 'working-on: ' + haveWorking + ', no-session: ' + haveNoSession + ' (' + line('continuity') + ' / ' + line('flow') + ')';
+    if (haveWorking && haveNoSession) return last;
     return null;
-  `, 15000), true, 25*time.Second, 3)
+  `, 15000), 25*time.Second)
 	if err != nil {
-		t.Fatalf("panel await: %v", err)
+		t.Fatalf("Status await: %v", err)
 	}
-	if strings.HasPrefix(panelState, "TIMEOUT") {
-		t.Fatalf("WORK card never spoke both facts: %s", panelState)
+	if strings.HasPrefix(statusState, "TIMEOUT") {
+		t.Fatalf("Status never spoke both facts: %s", statusState)
 	}
-	t.Logf("WORK card: %s", panelState)
+	t.Logf("Status: %s", statusState)
 
 	// ---- STEP 6: cold load. The reload walks boot restore → payloads
 	// → render again; the focus must survive (the operator's "rebuilt
@@ -566,10 +571,9 @@ func TestProjectsJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	reloadState, err := page.evalRetry(awaitJS(`
-    const txt = document.body.innerText || '';
-    last = 'post-reload text has working-in: ' + (txt.indexOf('working in') !== -1) +
-      ', name: ' + (txt.indexOf('project-menu') !== -1);
-    if (txt.indexOf('working in') !== -1 && txt.indexOf('project-menu') !== -1) return last;
+    const line = ((document.querySelector('[data-block="continuity"] .status__line') || {}).textContent || '');
+    last = 'post-reload Status says: ' + line;
+    if (line.indexOf('Working on project-menu.') !== -1) return last;
     return null;
   `, 20000), true, 30*time.Second, 5)
 	if err != nil {
@@ -579,4 +583,65 @@ func TestProjectsJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("focus did not survive the cold load end to end: %s", reloadState)
 	}
 	t.Logf("cold load kept the focus: %s", reloadState)
+
+	// ---- STEP 7: the project's own page, and its "Work outside projects"
+	// pressed: the host's answer leaves the project open on the page and
+	// worked in by no one, so Continue is the one way back (step 12b).
+	if _, err := page.eval(`location.hash = '#/projects/`+projID+`'; 'nav'`, false, 10*time.Second); err != nil {
+		t.Fatalf("nav to the project: %v", err)
+	}
+	leaveState, err := page.evalRetry(awaitJS(`
+    const leave = document.getElementById('proj-leave');
+    last = 'leave: ' + (leave ? 'present' : 'absent') + ', hash: ' + location.hash;
+    if (leave && location.hash === '#/projects/`+projID+`') { leave.click(); return last; }
+    return null;
+  `, 15000), true, 25*time.Second, 3)
+	if err != nil {
+		t.Fatalf("leave await: %v", err)
+	}
+	if strings.HasPrefix(leaveState, "TIMEOUT") {
+		t.Fatalf("the project's page never offered Work outside projects: %s", leaveState)
+	}
+	outsideState, err := page.evalRetry(awaitJS(`
+    const work = document.getElementById('proj-work'), leave = document.getElementById('proj-leave');
+    last = 'continue: ' + (work ? work.textContent : 'absent') + ', leave: ' + (leave ? 'present' : 'absent') + ', hash: ' + location.hash;
+    if (work && !leave && location.hash === '#/projects/`+projID+`') return last;
+    return null;
+  `, 15000), true, 25*time.Second, 3)
+	if err != nil {
+		t.Fatalf("outside await: %v", err)
+	}
+	if strings.HasPrefix(outsideState, "TIMEOUT") {
+		t.Fatalf("the host's answer to Work outside projects never reached the page: %s", outsideState)
+	}
+	if got := a.store.ActiveProjectID(); got != "" {
+		t.Fatalf("after Work outside projects, store.ActiveProjectID() = %q, want none", got)
+	}
+	t.Logf("worked in by no one: %s", outsideState)
+
+	// ---- STEP 8: Continue with them. The page asks the host to select the
+	// project and goes to the conversation only on the host's answer: the
+	// conversation shown, its address, the line above the reply box naming the
+	// project, and the store holding it.
+	if _, err := page.eval(`document.getElementById('proj-work').click(); 'clicked'`, false, 10*time.Second); err != nil {
+		t.Fatalf("continue click: %v", err)
+	}
+	homeState, err := page.evalRetry(awaitJS(`
+    const chat = document.getElementById('view-chat'), line = document.getElementById('reply-project');
+    const shown = !!chat && chat.classList.contains('on');
+    const named = !!line && !line.hidden && line.textContent.indexOf('project-menu') !== -1;
+    last = 'chat: ' + shown + ', hash: ' + location.hash + ', line: ' + (line ? JSON.stringify(line.textContent) + ' hidden=' + line.hidden : 'absent');
+    if (shown && location.hash === '#/chat' && named) return last;
+    return null;
+  `, 15000), true, 25*time.Second, 3)
+	if err != nil {
+		t.Fatalf("chat await: %v", err)
+	}
+	if strings.HasPrefix(homeState, "TIMEOUT") {
+		t.Fatalf("Continue did not reach the conversation with the project worked in: %s", homeState)
+	}
+	if got := a.store.ActiveProjectID(); got != projID {
+		t.Fatalf("after Continue, store.ActiveProjectID() = %q, want %q", got, projID)
+	}
+	t.Logf("Continue went Home: %s", homeState)
 }

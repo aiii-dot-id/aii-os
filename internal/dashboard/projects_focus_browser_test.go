@@ -7,7 +7,7 @@ import (
 )
 
 const projectsFocusPage = `<!doctype html>
-<div id="proj-space"></div><div id="dock"></div><span id="pill-proj"></span>
+<div id="proj-space"></div><div id="dock"></div><span id="pill-proj"></span><a id="reply-project" hidden></a>
 <div id="crumb"></div><div id="toast"></div><div id="firstboot"></div><div id="composer-wrap"></div>
 <script type="module">
 import { run, assert } from '/__harness.js';
@@ -34,7 +34,7 @@ run(() => {
   fresh();
   renderProjects();
   assert(space.textContent.includes('Alpha'), 'default view is not the active project');
-  assert(space.textContent.includes('working here'), 'active project does not say the identity is working here');
+  assert(space.textContent.includes('working in this project'), 'active project does not say the identity is working in it');
   const leave = document.getElementById('proj-leave');
   assert(leave, 'active project offers no way to work outside projects');
   leave.onclick();
@@ -68,19 +68,23 @@ run(() => {
   assert(__sent.length === 1 && __sent[0].project.action === 'select' && __sent[0].project.id === 'beta',
     'the work button did not select the viewed project: ' + JSON.stringify(__sent));
 
+  // THE NEW-PROJECT PAGE IS A VIEW, NOT A CLAIM. It used to null out
+  // activeProject client-side — asserting locally that the identity had
+  // left a project it was still in, until the next payload contradicted
+  // it. The line above the reply box is server truth and must not move.
   fresh();
   renderProjects();
   document.getElementById('dock-new').onclick();
-  renderProjPill(); // ws.js repaints the pill on every payload; do the same here
+  renderProjPill(); // ws.js repaints the line on every payload; do the same here
   assert(S.activeProject && S.activeProject.id === 'alpha', 'opening the new-project page dropped the active project');
-  assert(document.getElementById('pill-proj').textContent.includes('Alpha'), 'the pill stopped naming the working project');
-  assert(space.textContent.includes('NEW PROJECT'), 'the new-project page did not render');
+  assert(document.getElementById('reply-project').textContent.includes('Alpha'), 'the line above the reply box stopped naming the working project');
+  assert(document.getElementById('np-name') && space.textContent.includes('New project'), 'the new-project page did not render');
 
   fresh();
   viewProject('beta');
-  const active = document.querySelectorAll('#dock .bubble.active');
-  const viewing = document.querySelectorAll('#dock .bubble.viewing');
-  assert(active.length === 1 && viewing.length === 1, 'dock does not mark exactly one active and one viewed bubble');
+  const active = document.querySelectorAll('#dock .dock-item.active');
+  const viewing = document.querySelectorAll('#dock .dock-item.viewing');
+  assert(active.length === 1 && viewing.length === 1 && viewing[0].getAttribute('aria-current') === 'page', 'the list does not mark exactly one active and one viewed project');
   assert(!active[0].classList.contains('viewing'), 'the active and viewed marks landed on the same bubble');
 
   /* WAKE-ON-RETURN (§8.10 residual, closed): a tab at the cap is no

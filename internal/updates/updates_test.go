@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,13 +408,44 @@ func assertRecord(t *testing.T, tgt target, owner string, attempts int, backup, 
 
 // --- Signature verification tests (Issue 4) ---
 
-// testReleaseSigner is used only by the dedicated fresh-signing lane below.
+// testReleaseSigner is a throwaway platform_release root: its ML-DSA and
+// SLH-DSA keys, their public envelope, and every envelope it has signed.
 // Verifier tests consume immutable public vectors instead of regenerating
-// SLH-DSA material.
+// SLH-DSA material; the tests that drive the checker sign with
+// sharedReleaseSigner.
 type testReleaseSigner struct {
 	env   *sigenvelope.PublicKeyEnvelope
 	ml    *crypto.KeyPair
 	slhSk *slh.SecretKey
+	// signed is each envelope this signer made, by artifact kind and the
+	// payload's bytes: the same statement signed again is the same proof,
+	// and an SLH-DSA-SHA2-256s signature is seconds under the race
+	// detector. A caller is given a copy, so none can change what the next
+	// one gets.
+	mu     sync.Mutex
+	signed map[string][]byte
+}
+
+// sharedReleaseSigner is the one root the checker tests sign with, built
+// once per test binary (packagetest's rule: one signed fixture per suite,
+// not one per test). Its two keygens and the empty revocation snapshot a
+// root needs (provisionTrustDir) were minted some 70 times a gate, about
+// 3.5 s each, and no test here holds a release to a fresh root; the two
+// that need a root of their own mint it with newTestReleaseSigner
+// (TestAPackageSignedByAnotherRootIsNotOffered's stranger,
+// TestFreshReleaseSigningRoundTrip).
+var sharedSigner struct {
+	once sync.Once
+	s    *testReleaseSigner
+}
+
+func sharedReleaseSigner(t *testing.T) *testReleaseSigner {
+	t.Helper()
+	sharedSigner.once.Do(func() { sharedSigner.s = newTestReleaseSigner(t) })
+	if sharedSigner.s == nil {
+		t.Fatal("rig: the shared release signer was not built; the test that built it first says why")
+	}
+	return sharedSigner.s
 }
 
 func newTestReleaseSigner(t *testing.T) *testReleaseSigner {
@@ -475,6 +507,12 @@ func (s *testReleaseSigner) signPayloadAs(t *testing.T, artifactKind string, pay
 	if err != nil {
 		t.Fatal(err)
 	}
+	key := artifactKind + "\n" + string(payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out, ok := s.signed[key]; ok {
+		return append([]byte(nil), out...)
+	}
 	canonicalPayload, err := canonicaljson.CanonicalizeV1(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -509,7 +547,11 @@ func (s *testReleaseSigner) signPayloadAs(t *testing.T, artifactKind string, pay
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out
+	if s.signed == nil {
+		s.signed = map[string][]byte{}
+	}
+	s.signed[key] = out
+	return append([]byte(nil), out...)
 }
 
 func TestFreshReleaseSigningRoundTrip(t *testing.T) {

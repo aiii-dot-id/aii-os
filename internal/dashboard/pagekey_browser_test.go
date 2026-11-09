@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -272,9 +273,80 @@ run(async () => {
   const reply = await signIn('the-token');
   assert(reply.ok, 'the sign-in was not answered');
   assert(pageKey() === 'pk1.held-in-memory', 'the key was not held where storage is refused: ' + pageKey());
-  assert(keptInMemoryOnly() && MEMORY_ONLY.includes('until this tab is reloaded or closed'), 'the page does not know to say its sign-in lasts only the tab');
+  assert(keptInMemoryOnly() && MEMORY_ONLY.includes("Reload or close this tab and you'll sign in again"), 'the page does not know to say its sign-in lasts only the tab');
   await signedFetch('/record');
   assert(sent[sent.length - 1] === 'pk1.held-in-memory', 'a request went without the key held in memory');
 });
 </script>`, nil)
+}
+
+// A BROWSER HOLDING THE COOKIE AND NO PAGE KEY CAN SIGN IN, on the real server
+// and the real page. The browser is signed in by the app's link, its page key
+// is then taken away and the page loaded again: the state of a Windows beta
+// user's Edge (2026-11-02), whose page redrew "Loading conversation…" and the
+// sign-in form about once a second and could not be signed in. The form must
+// stand still for five seconds with what was typed, never mention a token, be
+// the only message (no "Reconnecting…" above it or in the reply box), and sign
+// the page in from what is typed into it.
+func TestABrowserWithTheCookieAndNoPageKeySignsIn(t *testing.T) {
+	engines := resolveEngines()
+	if len(engines) == 0 {
+		skipWithoutEngines(t)
+	}
+	// custom.js is the page's own last module, loaded on every load; here it
+	// drives the page through the three loads.
+	const driver = `
+const phase = sessionStorage.getItem('rig.phase') || '';
+const say = verdict => fetch('/__result', { method: 'POST', body: verdict });
+const until = async (ok, why) => {
+  for (const end = Date.now() + 20000; !ok(); await new Promise(r => setTimeout(r, 50))) if (Date.now() > end) throw Error(why);
+};
+if (phase === '') {
+  sessionStorage.setItem('rig.phase', 'keyless');
+  localStorage.removeItem('aii.signin'); sessionStorage.removeItem('aii.signin');
+  location.reload();
+} else if (phase === 'keyless') {
+  try {
+    await until(() => document.querySelector('#dashboard-signin input'), 'no sign-in form');
+    const box = document.getElementById('dashboard-signin'), input = box.querySelector('input');
+    input.value = 'typed';
+    // waits by design: the form must stand past the old loop's one-second retry, several times over
+    await new Promise(r => setTimeout(r, 5000));
+    if (document.getElementById('dashboard-signin') !== box || input.value !== 'typed') throw Error('the form was drawn again or its typing lost');
+    if (/token/i.test(box.textContent)) throw Error('the form asks for a token: ' + box.textContent);
+    if (document.body.textContent.includes('Reconnecting')) throw Error('the page says it is reconnecting while it asks for a sign-in');
+    const line = document.getElementById('reply-line');
+    if (line && line.textContent) throw Error('the reply box speaks of the connection while the page asks for a sign-in: ' + line.textContent);
+    sessionStorage.setItem('rig.phase', 'signing');
+    input.value = 'TOKEN'; box.querySelector('form').requestSubmit();
+    await until(() => !document.getElementById('dashboard-signin'), 'the sign-in did not take');
+    say('SIGNED');
+  } catch (e) { say('FAIL: ' + e.message); }
+} else if (phase === 'signing') {
+  say('SIGNED');
+}
+`
+	for _, found := range engines {
+		t.Run(found.engine.name, func(t *testing.T) {
+			s := New("127.0.0.1", 0, &WSHandler{})
+			s.SetAccessToken(true, pageKeyTestToken)
+			said, verdicts := make(chan string, 4), make(chan string, 4)
+			_, start := keyRig(t, s, "", said, map[string]string{"/custom.js": strings.Replace(driver, "TOKEN", pageKeyTestToken, 1)})
+			go func() {
+				first := <-said
+				if first != "SIGNED" {
+					verdicts <- first
+					return
+				}
+				for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+					if s.PageOpen() {
+						verdicts <- "OK"
+						return
+					}
+				}
+				verdicts <- "FAIL: the page said it was signed in, and no socket of it was admitted"
+			}()
+			runServerInOneEngine(t, found.engine, found.path, start, verdicts, 0, 0, 0)
+		})
+	}
 }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestHarvestedMarkerLifecycle(t *testing.T) {
 		t.Fatalf("unharvested after delivery = %+v (want exactly [%s])", unh, id)
 	}
 
-	if err := s.MarkHarvested(id, 12345); err != nil {
+	if _, err := s.TakeInDelivery(context.Background(), id, 12345, "taken in"); err != nil {
 		t.Fatal(err)
 	}
 	unh, err = s.UnharvestedDeliveries(8)

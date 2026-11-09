@@ -141,6 +141,34 @@ type Refusal struct {
 
 func (e *Refusal) Error() string { return e.Text }
 
+func (e *Refusal) ReasonCode() string        { return "backup." + e.Reason }
+func (e *Refusal) RefusedBeforeEffect() bool { return true }
+
+type ProofFailure struct {
+	Proof string
+	Err   error
+}
+
+func (e *ProofFailure) Error() string { return e.Proof + ": " + e.Err.Error() }
+func (e *ProofFailure) Unwrap() error { return e.Err }
+
+type HostFault struct {
+	What string
+	Err  error
+}
+
+func (e *HostFault) Error() string { return e.What + ": " + e.Err.Error() }
+func (e *HostFault) Unwrap() error { return e.Err }
+
+var makeWorkingSet = os.MkdirTemp
+
+func proofFailed(proof string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ProofFailure{Proof: proof, Err: err}
+}
+
 func refuseContinuity(reason, format string, args ...any) error {
 	return &Refusal{Reason: reason, Text: fmt.Sprintf(format, args...)}
 }
@@ -247,30 +275,41 @@ func (r *Runtime) verifyKept(ctx context.Context, name string, spaced bool, now 
 			return "", refuseContinuity("spaced", "you proved one %s ago; the next proof can run in %s", RoundAge(since), RoundAge(OnDemandSpacing(cfg.Maintenance)-since))
 		}
 	}
-	r.maint.lastVerify = now
 
 	if err := r.proveKept(ctx, cfg, dir, target); errors.Is(err, escrow.ErrUnsigned) {
 
 		return "", refuseContinuity("unsigned", "%s carries no signature of your key (snapshots made before they were signed carry none), so nothing holds what its database says to you, and a restore will not take it. The next pass makes a signed one, and work action=backup.take makes one now", target.Name)
 	} else if err != nil {
+		var fault *HostFault
+		if errors.As(err, &fault) {
 
+			r.Alert("snapshot-proof-fault", fmt.Sprintf("%s could not be proved on this host: %v", target.Name, err))
+			return "", refuseContinuity("host", "%s was not judged: this host could not run the proof (%s). Nothing is known of it beyond what was: prove it again later, and your operator is told what stood in the way", target.Name, fault.What)
+		}
+
+		proof := "restore"
+		var failed *ProofFailure
+		if errors.As(err, &failed) {
+			proof = failed.Proof
+		}
 		r.Alert("snapshot-rot", fmt.Sprintf("%s no longer proves: %v", target.Name, err))
-		return "", fmt.Errorf("%s does NOT prove: it no longer restores as it did when it was kept. Your operator is told what failed. Your other snapshots are untouched — prove another, or take a new one", target.Name)
+		return "", fmt.Errorf("%s does NOT prove: its %s proof failed, so it no longer restores as it did when it was kept. Your operator is told what failed. Your other snapshots are untouched — prove another, or take a new one", target.Name, proof)
 	}
+	r.maint.lastVerify = now
 	return fmt.Sprintf("proved: %s holds you through record %d — every file matches its checksum, the chain verifies, and the record and your memory restored together in scratch, which was then removed", target.Name, target.Record), nil
 }
 
 func (r *Runtime) proveKept(ctx context.Context, cfg Settings, dir string, k keptSnapshot) (retErr error) {
-	work, err := os.MkdirTemp(dir, SnapshotWorkPrefix+"verify-*.tmp")
+	work, err := makeWorkingSet(dir, SnapshotWorkPrefix+"verify-*.tmp")
 	if err != nil {
-		return fmt.Errorf("working set: %w", err)
+		return &HostFault{What: "working set", Err: err}
 	}
 	defer func() {
 		if rmErr := os.RemoveAll(work); rmErr != nil {
 			logsink.Error("maintenance.error", "a proof's plaintext working set could not be removed: %v — it stands in %s until the next normal boot sweeps it", rmErr, dir)
 			r.Alert("snapshot-debris", "a snapshot proof could not remove its plaintext working set ("+rmErr.Error()+") — remove "+work+" by hand, or restart the identity")
 			if retErr == nil {
-				retErr = fmt.Errorf("working set not removed: %w", rmErr)
+				retErr = &HostFault{What: "working set removal", Err: rmErr}
 			}
 		}
 	}()
@@ -280,34 +319,37 @@ func (r *Runtime) proveKept(ctx context.Context, cfg Settings, dir string, k kep
 	if k.Encrypted {
 		key, err := os.ReadFile(r.snapshotKeyPath(cfg))
 		if err != nil {
-			return fmt.Errorf("it is encrypted and the snapshot key on this host does not read: %w", err)
+			return &HostFault{What: "the snapshot key", Err: fmt.Errorf("it is encrypted and the snapshot key on this host does not read: %w", err)}
 		}
 		defer escrow.Wipe(key)
 		set = filepath.Join(work, "set")
 		if present, err = escrow.OpenSnapshot(filepath.Join(dir, k.Name), key, set); err != nil {
-			return fmt.Errorf("it does not open: %w", err)
+			return proofFailed("opening", fmt.Errorf("it does not open: %w", err))
 		}
 	} else {
 		if present, err = filesUnder(set); err != nil {
-			return err
+			return proofFailed("checksums", err)
 		}
 	}
 	if err := escrow.CheckSums(set, present); err != nil {
-		return err
+		return proofFailed("checksums", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(set, snapshotReceiptName))
 	if err != nil {
-		return fmt.Errorf("it holds no receipt: %w", err)
+		return proofFailed("receipt", fmt.Errorf("it holds no receipt: %w", err))
 	}
 	var want snapshotReceipt
 	if err := json.Unmarshal(raw, &want); err != nil {
-		return fmt.Errorf("its receipt does not read: %w", err)
+		return proofFailed("receipt", fmt.Errorf("its receipt does not read: %w", err))
 	}
 	if want.LastSeq != k.Record {
-		return fmt.Errorf("it is named for record %d and its receipt says %d", k.Record, want.LastSeq)
+		return proofFailed("receipt", fmt.Errorf("it is named for record %d and its receipt says %d", k.Record, want.LastSeq))
 	}
 	if err := heldToKey(set, r.w.DoorKey(), want); err != nil {
-		return err
+		if errors.Is(err, escrow.ErrUnsigned) {
+			return err
+		}
+		return proofFailed("signature", err)
 	}
 	return r.proveSnapshotIn(ctx, cfg, set, want, filepath.Join(work, "restore-proof"))
 }

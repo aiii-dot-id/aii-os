@@ -201,8 +201,12 @@ stage revertcheck ./test/no_silent_revert.sh
 stage build "$GO" build ./...
 stage vet "$GO" vet ./...
 if [ -z "$ONLY" ]; then
+  # Started here, settled after the scope: the six read-only stages run
+  # beside the scope's shards (the scope's tail leaves most cores idle, and
+  # these stages ended as a block about two minutes before it could begin;
+  # measured over 59 gates, 2026-10-31 to 11-03, none of them ever failed
+  # first). A failure among them still ends the gate: fail() settles them.
   together_start
-  together_settle || fail
 else
   for name in $together_stages; do stage "$name" together_stage "$name"; done
 fi
@@ -214,6 +218,7 @@ if [ -n "$EVIDENCE_DIR" ] && [ -f "$EVIDENCE_DIR/scope.log" ]; then
   ./test/run_race_scope.sh weights "$EVIDENCE_DIR/scope.log" > "$EVIDENCE_DIR/shard_weights.txt" ||
     { echo "the scope passed but its log yields no shard weights" >&2; fail; }
 fi
+[ -n "$ONLY" ] || together_settle || fail
 stage packaging run_packaging
 
 [ "$stages_run" -gt 0 ] || { echo "unknown GATE_ONLY stage: $ONLY" >&2; fail; }

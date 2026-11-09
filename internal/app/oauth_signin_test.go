@@ -131,7 +131,7 @@ func credentialReplacedMark(a *App) bool {
 }
 
 // THE RUNNING CLIENT TAKES A NEW SIGN-IN. A client holds the credential
-// source it was built with, so one built on Claude Code's or Codex's file
+// source it was built with, so one built on Claude Code's or a review's file
 // went on reading that file after the operator signed in: the page said
 // connected, the probe said ok, and every turn failed on the borrowed
 // file's expiry until a restart. A sign-in that writes the file the

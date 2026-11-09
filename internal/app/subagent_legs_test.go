@@ -599,6 +599,44 @@ func TestLegAgainstADeliveredSessionIsNotRun(t *testing.T) {
 	}
 }
 
+// waitWorkSettled waits until the queue row is no longer in the executor's
+// hands.
+//
+// recoverAfterAHardKill simulates a kill by writing CLAIMED. That write is
+// only a simulation if nothing else still holds the row: the executor sets
+// e.running[w.ID] before its handler runs and clears it only after
+// runOne returns, and CompleteWork's WHERE is "state = 'CLAIMED'". So a
+// claim written while the handler is still finishing is not a kill — it is
+// a steal, and the handler's own completion then lands on it, setting DONE
+// with retry_count untouched. The lease sweep never sees the row, so the
+// wait for "retries > 0" spins on a condition that can no longer come true,
+// and the test dies with "the recovered item never completed (state DONE,
+// retries 0)" — the failure the landing gate produced under load 45 to 57,
+// where the gap between the handler's last write and its completion is wide
+// enough to hit.
+//
+// Waiting for DONE first makes the claim this test writes the only claim in
+// play, so the sweep must be what recovers it. Only the call site that
+// follows a live delivery needs this; the killedLeg callers start from a row
+// that never ran and will never reach DONE on its own.
+func waitWorkSettled(t *testing.T, st *store.Store, dedup string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var state string
+		if err := st.DB().QueryRow(`SELECT state FROM work_queue WHERE dedup_key = ?`, dedup).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state == "DONE" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the item never finished on its own (state %s), so a hard kill cannot be simulated on it", state)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // recoverAfterAHardKill leaves a leg's queue row as a hard kill leaves it
 // — CLAIMED, its lease long expired, never completed — and drives the
 // executor until the real sweep and claim have recovered it and it is DONE
@@ -632,6 +670,7 @@ func TestARecoveredFirstLegAgainstADeliveredSessionIsNotRun(t *testing.T) {
 	id := spawnChild(t, a, st, "count the beans and deliver")
 	waitDelivered(t, st, id)
 	before := n.Load()
+	waitWorkSettled(t, st, id)
 	recoverAfterAHardKill(t, a, st, id)
 	if got := n.Load(); got != before {
 		t.Fatalf("a recovered first leg against a delivered session called the model %d more time(s)", got-before)

@@ -12,8 +12,8 @@ import (
 type ToolMeasurement struct {
 	DurationMS *int64
 
-	ExitStatus                             *int
-	WorkSession, SessionReason, ReasonCode string
+	ExitStatus *int
+	ReasonCode string
 }
 
 func (s *Store) appendToolOutcome(tx *sql.Tx, turn string, ordinal int, tool, args, result string, outcome interaction.Outcome, truncated bool, m ToolMeasurement) (bool, error) {
@@ -27,14 +27,7 @@ func (s *Store) appendToolOutcome(tx *sql.Tx, turn string, ordinal int, tool, ar
 		return false, err
 	}
 
-	switch {
-	case m.WorkSession == "" && m.SessionReason == "":
-		m.WorkSession = prior.WorkSession
-		m.SessionReason = prior.SessionReason
-	case m.SessionReason == "" && m.WorkSession == prior.WorkSession:
-		m.SessionReason = prior.SessionReason
-	}
-	_, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_result_" + id, Kind: interaction.ToolResult, Role: interaction.System, TurnID: turn, SessionID: session, ProjectID: project, RelatedID: parent, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, result, s.ToolResultRunes()), Outcome: outcome, Details: interaction.Details{Tool: tool, Actor: prior.Actor, Model: prior.Model, ProviderCallID: prior.ProviderCallID, Ordinal: ordinal, Truncated: truncated, DurationMS: m.DurationMS, ExitStatus: m.ExitStatus, WorkSession: m.WorkSession, SessionReason: m.SessionReason, ReasonCode: m.ReasonCode, ArgsRecord: metaRecord(args), ResultRecord: metaRecord(result)}})
+	_, added, err := s.appendInteractionTx(context.Background(), tx, InteractionInput{ID: "tool_result_" + id, Kind: interaction.ToolResult, Role: interaction.System, TurnID: turn, SessionID: session, ProjectID: project, RelatedID: parent, Source: &interaction.Source{Kind: "tool", ID: id}, Content: toolExcerpt(tool, args, result, s.ToolResultRunes()), Outcome: outcome, Details: interaction.Details{Tool: tool, Actor: prior.Actor, Model: prior.Model, ProviderCallID: prior.ProviderCallID, Ordinal: ordinal, Truncated: truncated, DurationMS: m.DurationMS, ExitStatus: m.ExitStatus, WorkSession: prior.WorkSession, SessionReason: prior.SessionReason, ReasonCode: m.ReasonCode, ArgsRecord: metaRecord(args), ResultRecord: metaRecord(result)}})
 	return added, err
 }
 

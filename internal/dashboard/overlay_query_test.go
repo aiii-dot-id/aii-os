@@ -86,7 +86,8 @@ func TestOverlayQueryBounded(t *testing.T) {
 }
 
 // JSON wire shape: the client renders msg.overlays[].path/.outcome — the
-// field tags must survive the encoder exactly as panel.js reads them, and
+// field tags must survive the encoder exactly as Status reads them
+// (views/settings/status.js), and
 // an empty readback must omit the field entirely (a stock install renders
 // no FRAME card, not an empty one).
 func TestOverlayQueryWireShape(t *testing.T) {

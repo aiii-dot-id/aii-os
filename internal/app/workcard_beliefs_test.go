@@ -44,7 +44,7 @@ func TestTheWorkCardCarriesTheMatchingBeliefWithoutReinforcing(t *testing.T) {
 	var card string
 	for i := 0; i < 10; i++ {
 		var err error
-		if card, err = a.buildWorkState(); err != nil {
+		if card, err = a.buildWorkState(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}

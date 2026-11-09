@@ -1,6 +1,7 @@
 package attention
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -44,4 +45,27 @@ func RenderAttention(items []AttentionItem) string {
 		lines = append(lines, "- "+it.Text)
 	}
 	return strings.Join(lines, "\n")
+}
+
+const Limit = 12
+
+func Cut(items []AttentionItem, limit int) (shown []AttentionItem, more bool) {
+	if limit > 0 && len(items) > limit {
+		return items[:limit], true
+	}
+	return items, false
+}
+
+func CutSaid(shown int) string {
+	return fmt.Sprintf("These are the %d most faded; more are fading.", shown)
+}
+
+func OfKind(items []AttentionItem, kind string) []AttentionItem {
+	var out []AttentionItem
+	for _, it := range items {
+		if it.Kind == kind {
+			out = append(out, it)
+		}
+	}
+	return out
 }

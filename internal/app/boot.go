@@ -481,6 +481,7 @@ func (a *App) startLive() (retErr error) {
 	st.SetWorkObserver(a.workObserved)
 	st.SetOperatorASCII(cfg.Dashboard.OperatorASCII != nil && *cfg.Dashboard.OperatorASCII)
 	st.SetOperatorVoices(cfg.Speech.OperatorSpeakers)
+	a.settleNamedVoices(cfg.Speech.OperatorSpeakers)
 	st.SetSelfModelMaxTokens(cfg.Prompt.SelfModelMaxTokens)
 	st.SetRing2EvidenceChars(cfg.Prompt.Ring2EvidenceMaxChars)
 	st.SetCharterMaxTokens(cfg.Prompt.CharterMaxTokens)
@@ -588,6 +589,7 @@ func (a *App) startLive() (retErr error) {
 			ThinkingBudget:        llmEntry.ThinkingBudget,
 
 			PredictedThisTurn: a.predictedThisTurn,
+			ReflectEvery:      a.reflectEvery,
 			ReplaySafe:        replaySafeHook(toolReg),
 
 			ThinkingKept: a.thinkingKept,
@@ -606,6 +608,7 @@ func (a *App) startLive() (retErr error) {
 	a.composer.SetName(a.store.IdentityName())
 
 	a.composer.SetPluginOperations(pluginOperations(toolReg))
+	a.composer.SetVoices(a.voicesForTurn)
 
 	placed := a.applySubstrate(cfg)
 	toolReg.SetExtraRoots(cfg.Tools.ExtraRoots)
@@ -694,6 +697,9 @@ func (a *App) startLive() (retErr error) {
 	}
 
 	a.sections = sections.NewRegistry()
+	for _, sec := range dashboard.BuiltInSections() {
+		_ = a.sections.Register(sec)
+	}
 	a.sections.SetSafeSource(a.SafeMode)
 
 	a.pluginToolReg = toolReg
@@ -743,12 +749,14 @@ func (a *App) startLive() (retErr error) {
 		StandingMaxChars:   a.standingMaxChars,
 		Reachable:          func(name string) bool { return len(a.reachFor(name)) > 0 },
 		AskProposer:        a.proposeAsk,
+		VoiceAsker:         a.proposeVoiceAsk,
 		AskFits:            a.askFits,
 		WorkStarted:        a.workStarted,
 		WorkDelivered:      a.workDelivered,
 		ConfirmSpokenWord:  a.confirmSpokenWord,
 		WorkWake:           a.executor.Wake,
 		YieldGate:          a.yieldGate,
+		CeilingGate:        a.pastCeiling,
 		RouteLimits:        a.spawnLimitsFor,
 	}))
 	a.applyAgency(cfg)
@@ -790,6 +798,7 @@ func (a *App) startLive() (retErr error) {
 		logsink.Info("work.decision", "closed %d work session(s) orphaned by a previous shutdown", len(swept))
 		a.bootSwept = swept
 	}
+	a.promiseConditionsAtBoot()
 
 	a.updateChecker = updates.NewChecker(
 		func() *sigenvelope.PublicKeyEnvelope {
@@ -891,6 +900,8 @@ func (a *App) startLive() (retErr error) {
 
 	a.settleInterruptedSends()
 	a.executor.Start(bgCtx)
+
+	a.releaseHeldPromise(releasedAtRestart)
 
 	a.startMachineLink(bgCtx, cfg)
 	a.startPluginSweep(bgCtx)

@@ -1,0 +1,19 @@
+.limit-row { display:flex; flex-direction:column; gap:var(--s-1); min-width:0; font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); overflow-wrap:anywhere; }
+.limit-row b { color:var(--text); font-weight:600; }
+.limit-row__list { display:flex; flex-direction:column; gap:var(--s-1); margin:0; padding:0; list-style:none; }
+.limit-row__set { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--s-1) var(--s-3); }
+.limit-row__add > summary { box-sizing:border-box; width:max-content; max-width:100%; min-height:32px; padding:var(--s-1) 0; cursor:pointer; color:var(--text-2); }
+.limit-row__fields { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-2); min-width:0; padding-top:var(--s-1); }
+.limit-row__fields select { flex:1 1 200px; width:auto; min-width:0; background-color:var(--surface); color:var(--text); border:1px solid var(--control); border-radius:var(--r-control); font-family:var(--font-page); font-size:var(--t-sm); }
+input.limit-row__input { box-sizing:border-box; flex:1 1 160px; width:auto; min-width:0; min-height:40px; padding:var(--s-2) var(--s-3); background-color:var(--surface); color:var(--text); border:1px solid var(--control); border-radius:var(--r-control); font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); }
+input.limit-row__input--value { flex:0 1 120px; }
+.limit-row__unlimited { display:inline-flex; align-items:center; gap:var(--s-1); min-height:40px; font-size:var(--t-sm); color:var(--text); cursor:pointer; }
+.limit-row__unlimited input { width:20px; height:20px; margin:0; accent-color:var(--accent); }
+.limit-row__add > summary:focus-visible, .limit-row__fields select:focus-visible, input.limit-row__input:focus-visible, .limit-row__unlimited input:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+@media (max-width: 767px) {
+  .limit-row__add > summary { min-height:var(--target-phone); padding:11px 0; }
+  input.limit-row__input { min-height:var(--target-phone); font-size:16px; flex-basis:100%; }
+  input.limit-row__input--value { flex:1 1 120px; }
+  .limit-row__fields select { flex-basis:100%; font-size:16px; }
+  .limit-row__unlimited { min-height:var(--target-phone); }
+}

@@ -9,11 +9,11 @@ import (
 
 func TestGradeChipsInBrowser(t *testing.T) {
 	page := `<!doctype html>
-<div id="home-inner"></div>
+<div id="projects-delivered"></div>
 <script type="module">
 import { assert, run } from './__harness.js';
 import { S } from './state.js';
-import { workSectionHTML, wireWork } from './views/work.js';
+import { renderDelivered } from './views/delivered.js';
 import { frames } from './ws.js';
 run(() => {
   S.work = { live: [], queued: 0, delivered: [
@@ -22,9 +22,8 @@ run(() => {
     { id: 'ws_3', description: 'the report', status: 'delivered', result: 'partial: two sections',
       grade: { grade: 'partial', comment: 'the second section is thin', turn: 41 } },
   ] };
-  const root = document.getElementById('home-inner');
-  root.innerHTML = workSectionHTML();
-  wireWork(root);
+  const root = document.getElementById('projects-delivered');
+  renderDelivered(root, true);
   const text = root.textContent;
 
   assert(root.querySelectorAll('[data-grade-work="ws_1"]').length === 3, 'three chips on an ungraded result');
@@ -51,14 +50,15 @@ run(() => {
 });
 </script>`
 	modules := map[string][]byte{}
-	for _, path := range []string{"static/views/work.js"} {
+	for _, path := range []string{"static/views/delivered.js", "static/views/work-recorded.js"} {
 		data, err := staticFS.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/state.js"] = []byte(`export const S = { work: null };`)
+	modules["/overlay.js"] = []byte(`export function holdReloadWhile() {}`)
+	modules["/state.js"] = []byte(`export const S = { work: null, projects: [] };`)
 	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');`)
 	modules["/ws.js"] = []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-1'; }`)
 	runPageInEngines(t, page, modules)
@@ -66,19 +66,19 @@ run(() => {
 
 func TestGradeAnswerStandsBesideTheChips(t *testing.T) {
 	page := `<!doctype html>
-<div id="home-inner"></div>
+<div id="projects-delivered"></div>
 <script type="module">
 import { assert, run } from './__harness.js';
 import { S } from './state.js';
-import { workSectionHTML, wireWork } from './views/work.js';
+import { renderDelivered } from './views/delivered.js';
 import { frames } from './ws.js';
 run(() => {
   S.work = { live: [], queued: 0, delivered: [
     { id: 'ws_1', description: 'book the flights', status: 'delivered', result: 'served: both legs booked' },
     { id: 'ws_2', description: 'the migration', status: 'delivered', result: 'partial: done' },
   ] };
-  const root = document.getElementById('home-inner');
-  const draw = () => { root.innerHTML = workSectionHTML(); wireWork(root); };
+  const root = document.getElementById('projects-delivered');
+  const draw = () => renderDelivered(root, true);
   draw();
   const chip = (s, g) => root.querySelector('[data-grade-work="' + s + '"][data-grade="' + g + '"]');
   const note = s => chip(s, 'served').closest('.grade-ask').querySelector('.grade-note').textContent;
@@ -87,6 +87,7 @@ run(() => {
   window.__connected = false;
   chip('ws_1', 'served').click();
   assert(frames.length === 0 && /Not sent/.test(note('ws_1')) && usable('ws_1'), 'a closed socket claimed a grade: ' + note('ws_1'));
+  assert(chip('ws_1', 'served').getAttribute('aria-pressed') === 'false', 'a Served that was not sent still looks pressed');
 
   window.__connected = true;
   chip('ws_1', 'served').click();
@@ -95,6 +96,8 @@ run(() => {
 
   assert(S.gradeAnswered('g-1', 'grading is not available') === true, 'the refusal was not claimed');
   assert(note('ws_1') === 'Not recorded: grading is not available' && usable('ws_1'), 'a refusal left the chips dead: ' + note('ws_1'));
+  // Served refused is not left pressed beside the line that says it was not recorded.
+  assert(chip('ws_1', 'served').getAttribute('aria-pressed') === 'false', 'A REFUSED SERVED STILL LOOKS PRESSED');
   chip('ws_1', 'served').click();
   assert(S.gradeAnswered('g-2', null) === true && note('ws_1') === 'recorded' && !usable('ws_1'), 'the host\'s yes did not say recorded: ' + note('ws_1'));
 
@@ -125,12 +128,15 @@ run(() => {
 });
 </script>`
 	modules := map[string][]byte{}
-	data, err := staticFS.ReadFile("static/views/work.js")
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"static/views/delivered.js", "static/views/work-recorded.js"} {
+		data, err := staticFS.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/views/work.js"] = data
-	modules["/state.js"] = []byte(`export const S = { work: null };`)
+	modules["/overlay.js"] = []byte(`export function holdReloadWhile() {}`)
+	modules["/state.js"] = []byte(`export const S = { work: null, projects: [] };`)
 	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');`)
 	modules["/ws.js"] = []byte(`export const frames = []; let n = 0; export function send(f) { if (!window.__connected) return ''; frames.push(f); return 'g-' + (++n); }`)
 	runPageInEngines(t, page, modules)

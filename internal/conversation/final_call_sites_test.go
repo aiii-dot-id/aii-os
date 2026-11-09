@@ -228,7 +228,7 @@ func TestTheBoundaryCarriesTheOperatorBeforeTheLoop(t *testing.T) {
 	}
 	final := client.requests[len(client.requests)-1]
 	last := final[len(final)-1].Content
-	if want := steeringNote([]string{"answer with what you have"}) + "\n\n" + roundLimitAsk; !strings.HasPrefix(last, want) {
+	if want := steeringNote([]Steered{{Words: "answer with what you have"}}) + "\n\n" + roundLimitAsk; !strings.HasPrefix(last, want) {
 		t.Fatalf("the boundary message = %q, want it to begin %q", last, want)
 	}
 }

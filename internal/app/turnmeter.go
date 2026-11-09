@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -25,17 +26,19 @@ const (
 
 const turnSourceTimer = store.TimerWakeSource
 
-type turnSourceKey struct{}
-
 func withTurnSource(ctx context.Context, source string) context.Context {
-	return context.WithValue(ctx, turnSourceKey{}, source)
+	return interaction.WithTurnSource(ctx, source)
 }
 
 type turnState struct {
 	mu sync.Mutex
 
 	toolEmit func(kind, name, args string)
-	lastTurn string
+
+	replyEmit conversation.ReplyEmitter
+	lastTurn  string
+
+	accounted uint64
 
 	requestSafe *bool
 
@@ -58,6 +61,8 @@ type turnState struct {
 
 	contChain int
 
+	legsQueued int
+
 	askYields     int
 	askFleetSpent bool
 
@@ -69,36 +74,40 @@ func (a *App) recordTurnCost(ctx context.Context, result conversation.Result) {
 	if u.Calls == 0 {
 		return
 	}
-	text := fmt.Sprintf("%d tokens over %d call(s)", u.TotalTokens, u.Calls)
+	text := counted(u.TotalTokens, "token", "tokens") + " over " + counted(u.Calls, "call", "calls")
 	if !u.Complete() {
 		text = "at least " + text
 	}
 	if u.CachedPromptTokens > 0 || u.CacheReadReports == u.Calls {
-		text += fmt.Sprintf(", %d of it cached", u.CachedPromptTokens)
+		text += ", " + thousands(u.CachedPromptTokens) + " of it cached"
 		if u.CacheReadReports == u.Calls && u.PromptTokens > 0 {
 			text += fmt.Sprintf(" (%.1f%% of reported input)", 100*float64(u.CachedPromptTokens)/float64(u.PromptTokens))
 		}
 	}
 	if u.CacheWriteTokens > 0 {
-		text += fmt.Sprintf(", %d cache-write tokens", u.CacheWriteTokens)
+		text += ", " + counted(u.CacheWriteTokens, "cache-write token", "cache-write tokens")
 	}
 	if u.CacheWrite1hTokens > 0 {
-		text += fmt.Sprintf(" (%d at 1h TTL)", u.CacheWrite1hTokens)
+		text += " (" + thousands(u.CacheWrite1hTokens) + " at 1h TTL)"
 	}
 	if u.Silent > 0 {
 		text += fmt.Sprintf(" — %d reported nothing", u.Silent)
 	}
 	if u.UnknownAttempts > 0 {
-		text += fmt.Sprintf(" — %d earlier attempt(s) have unknown usage", u.UnknownAttempts)
+		if u.UnknownAttempts == 1 {
+			text += " — 1 earlier attempt has unknown usage"
+		} else {
+			text += " — " + thousands(u.UnknownAttempts) + " earlier attempts have unknown usage"
+		}
 	}
 	if u.CacheReadReports < u.Calls {
 		text += "; cache details incomplete"
 	}
 	logsink.Info("turn.budget", "Turn cost: %s (in %d, out %d)", text, u.PromptTokens, u.CompletionTokens)
 
-	source, _ := ctx.Value(turnSourceKey{}).(string)
+	source := interaction.TurnSource(ctx)
 	a.logTurnSummary(turnLoop{source: source, provider: a.currentProvider().Name, model: result.ModelID, turn: interaction.TurnID(ctx), usage: &u,
-		emissions: &store.ToolCallEmissions{Count: result.ToolCallsEmitted, Complete: result.ToolCallCoverageComplete}})
+		emissions: &store.ToolCallEmissions{Count: result.ToolCallsEmitted, Complete: result.ToolCallCoverageComplete}, status: result.StatusLine, refused: result.RefusedCalls, done: result.CallsDone})
 	a.turn.mu.Lock()
 	a.turn.lastTurn = text
 	a.turn.mu.Unlock()
@@ -172,6 +181,12 @@ type turnLoop struct {
 	turn      string
 	usage     *conversation.TurnUsage
 	emissions *store.ToolCallEmissions
+
+	status string
+
+	refused int
+
+	done int
 }
 
 func (a *App) logTurnSummary(loop turnLoop) {
@@ -185,7 +200,16 @@ func (a *App) logTurnSummary(loop turnLoop) {
 	if u := loop.usage; u != nil {
 		rounds, usage = u.Calls, storedUsage(*u)
 	}
-	logsink.Info("turn.end", "TURN_SUMMARY calls=%d read_only=%d spawned=%d harvested=%d predicted=%d declared_at=%d independent=%d rounds=%d", calls, ro, spawned, harvested, predicted, declaredAt, independent, rounds)
+
+	status := ""
+	if loop.status != "" {
+		status = fmt.Sprintf(" status=%q", loop.status)
+	}
+
+	if loop.done > 0 {
+		calls = loop.done
+	}
+	logsink.Info("turn.end", "TURN_SUMMARY calls=%d refused=%d read_only=%d spawned=%d harvested=%d predicted=%d declared_at=%d independent=%d rounds=%d%s", calls, loop.refused, ro, spawned, harvested, predicted, declaredAt, independent, rounds, status)
 
 	if a.store != nil {
 		if err := a.store.InsertTurnMetric(store.TurnMetric{
@@ -207,6 +231,8 @@ func (a *App) logTurnSummary(loop turnLoop) {
 		}); err != nil {
 
 			logsink.Warn("turn.error", "turn metric not recorded: %v", err)
+		} else {
+			a.countAccounted()
 		}
 	}
 	a.resetTurnMeter()
@@ -242,7 +268,44 @@ func (a *App) recordFacilityCall(facility, model string, u llm.Usage) {
 		Usage:    storedUsage(call),
 	}); err != nil {
 		logsink.Warn("turn.error", "facility call usage not recorded (%s): %v", facility, err)
+		return
 	}
+	a.countAccounted()
+
+	if a.dashboard != nil {
+		a.dashboard.BroadcastStatus()
+	}
+}
+
+func (a *App) countAccounted() {
+	a.turn.mu.Lock()
+	a.turn.accounted++
+	a.turn.mu.Unlock()
+}
+
+func (a *App) accountedCount() uint64 {
+	a.turn.mu.Lock()
+	defer a.turn.mu.Unlock()
+	return a.turn.accounted
+}
+
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	sign := ""
+	if n < 0 {
+		sign, s = "-", s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return sign + s
+}
+
+func counted(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return thousands(n) + " " + many
 }
 
 func (a *App) lastTurnCost() string {

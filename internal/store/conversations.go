@@ -46,7 +46,12 @@ const ReasonNextPartNotRun = "next_part_not_run"
 
 const ReasonLoopNote = "loop_note"
 
-var BesideReasons = []string{"interrupted", ReasonNextPartNotRun, ReasonLoopNote}
+const (
+	ReasonSayChoice = "say"
+	ReasonWordsHeld = "words_held"
+)
+
+var BesideReasons = []string{"interrupted", ReasonNextPartNotRun, ReasonLoopNote, ReasonWordsHeld}
 
 func (s *Store) ReplyOfTurn(turn string) (string, error) {
 	if turn == "" {
@@ -363,6 +368,8 @@ const SpeakerKnown = "known"
 
 const AnnotationConfirmed = "confirmed"
 
+const AnnotationVoiceAsked = "voice.asked"
+
 type UnidentifiedSpeechError struct {
 	TurnSeq uint64
 	Why     string
@@ -388,6 +395,9 @@ func (s *Store) SetOperatorVoices(uuids []string) {
 		}
 	}
 	s.operatorVoices.Store(&voices)
+
+	changed := true
+	s.notifyInteraction(&changed)
 }
 
 func (s *Store) spokenByTheOperator(q interface {
@@ -444,8 +454,6 @@ func (s *Store) OperatorVoiceWhyNot(observation string) string {
 		return "no speech engine has said who spoke it"
 	}
 	var who struct {
-		Decision    string `json:"decision"`
-		SpeakerID   string `json:"speaker_id"`
 		SpeakerUUID string `json:"speaker_uuid"`
 		Continuity  string `json:"continuity"`
 	}
@@ -457,8 +465,6 @@ func (s *Store) OperatorVoiceWhyNot(observation string) string {
 		return "its speaker was not identified"
 	case !voices[who.SpeakerUUID]:
 		return "its speaker was identified as someone other than the operator"
-	case who.Decision != SpeakerKnown || who.SpeakerID == "":
-		return "its speaker's UUID is one the operator named, but the speech engine did not identify the speaker: that UUID is not an enrolled voice's"
 	}
 	return ""
 }
@@ -523,15 +529,19 @@ func (s *Store) RecalledTurn(seq uint64) (RecalledTurn, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var t RecalledTurn
+	var observation string
 	err := s.db.QueryRow(
-		`SELECT c.turn_seq, v.attribution, c.content, c.created_at FROM conversations_searchable v JOIN conversations c ON c.rowid = v.rowid
+		`SELECT c.turn_seq, v.attribution, c.content, c.created_at, `+speakerPayload+` FROM conversations_searchable v JOIN conversations c ON c.rowid = v.rowid
 		 WHERE c.turn_seq = ?`, seq,
-	).Scan(&t.Seq, &t.Attribution, &t.Content, &t.CreatedAt)
+	).Scan(&t.Seq, &t.Attribution, &t.Content, &t.CreatedAt, &observation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RecalledTurn{}, false, nil
 	}
 	if err != nil {
 		return RecalledTurn{}, false, err
+	}
+	if read, named := s.SpokenAsRead(t.Content, observation); named {
+		t.Content, t.Attribution = read, "operator"
 	}
 	return t, true, nil
 }

@@ -60,7 +60,7 @@ func turnShapes() []requestShape {
 			about: turnPathAbout[p.name] + ", on a realistic identity",
 			tools: "resident_with_plugin",
 			send: func(t *testing.T) sentRequest {
-				a, dir := realisticApp(t)
+				a, dir := realisticApp(t) // its continuation is off: the shape pins the turn's one request
 				obs := fixtureModel(t, a, answerNoted)
 				p.run(t, a)
 				waitUntil(t, func() bool { return !a.TurnActive() }, "the turn to end")
@@ -200,9 +200,12 @@ func wakeShapes() []requestShape {
 				if err := a.store.StartWorkSession(t.Context(), "ws_golden_work", "GOLDEN_WORK the work a budget cut off"); err != nil {
 					t.Fatal(err)
 				}
-				a.continueCappedTurn("ws_golden_work", 1, capDeclared, "")
+				a.continueCappedTurn("ws_golden_work", 1, capDeclared, "", false, "")
 				waitUntil(t, func() bool { return !a.TurnActive() }, "the continuation's turn to end")
-				return sentRequest{body: onlyRequest(t, obs.snapshot()), dir: dir}
+				// The leg ends with the work still open, so the work's own
+				// continuation (2026-11-06) sends a fresh turn after it; the
+				// shape pins the checkpoint's request.
+				return sentRequest{body: requestCarrying(t, obs, "[budget checkpoint — continuation 1]"), dir: dir}
 			},
 		},
 		{
@@ -267,7 +270,10 @@ func wakeShapes() []requestShape {
 					t.Fatal(err)
 				}
 				waitUntil(t, func() bool { return !a.TurnActive() }, "the answer's turn to end")
-				return sentRequest{body: onlyRequest(t, obs.snapshot()), dir: dir, more: askIDs}
+				// The trip's session stays open, so the work's own
+				// continuation (2026-11-06) follows the answer's turn; the
+				// shape pins the answer's request, the first.
+				return sentRequest{body: obs.snapshot()[0], dir: dir, more: askIDs}
 			},
 		},
 	}

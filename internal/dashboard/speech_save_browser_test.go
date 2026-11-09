@@ -20,7 +20,7 @@ run(async()=>{
  S.openSettings('speech');
  assert(document.querySelectorAll('#speech-form [data-save]').length===1,'Speech has multiple Save buttons');
  edit('sp-speakers-mode','only');edit('sp-speakers-uids','speaker-z, speaker-a speaker-z');
- edit('sp-mode-speak','');edit('sp-echo-mode','combined');
+ el('sp-mode-speak-auto').click();edit('sp-echo-mode','combined');
  assert(echoMode()==='browser','selection took effect before Save');
  renderSettings();
  assert(el('sp-echo-mode').value==='combined'&&el('sp-speakers-uids').value.includes('speaker-z'),'broadcast discarded edits');
@@ -35,11 +35,11 @@ run(async()=>{
  assert(echoMode()==='combined','echo not persisted');
  const reloaded=await import('./voice-echo.js?reload=1');
  assert(reloaded.echoMode()==='combined','fresh module lost saved echo');
- edit('sp-mode-speak','off');edit('sp-echo-mode','native');
+ el('sp-mode-speak-off').click();edit('sp-echo-mode','native');
  const second=save();
  acceptSettingsConfig(second.request_id);renderSettings();
  assert(document.querySelector('[data-said="speech"].bad'),'genuine mismatch falsely accepted');
- assert(el('sp-mode-speak').value==='off'&&el('sp-echo-mode').value==='native'&&echoMode()==='combined','failure erased edits or saved echo');
+ assert(el('sp-mode-speak-off').checked&&el('sp-echo-mode').value==='native'&&echoMode()==='combined','failure erased edits or saved echo');
  const third=save();S.config.speech.mode.speak='off';
  edit('sp-echo-mode','neither');
  acceptSettingsConfig(third.request_id);renderSettings();
@@ -49,7 +49,7 @@ run(async()=>{
  const fifth=save();
  const original=Storage.prototype.setItem;Storage.prototype.setItem=function(){throw new Error('storage blocked');};
  acceptSettingsConfig(fifth.request_id);renderSettings();Storage.prototype.setItem=original;
- assert(document.querySelector('[data-said="speech"].bad').textContent.includes('could not save echo'),'storage failure hidden');
+ assert(document.querySelector('[data-said="speech"].bad').textContent.includes('could not keep the echo choice'),'storage failure hidden');
  assert(echoMode()==='native','failed browser write changed preference');
 });</script>`
 	runPageInEngines(t, page, settingsDraftModules(t))

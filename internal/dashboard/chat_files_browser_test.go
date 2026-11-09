@@ -4,6 +4,78 @@ package dashboard
 
 import "testing"
 
+// A REPLY WITH A FILE KEEPS ITS LINES, AND CODE IS LITERAL. The words around a
+// file line are drawn as every reply's are: headings, lists and fenced code as
+// lines of their own, not their typed marks. A file or a picture written inside
+// fenced code is an example: it stays as typed, and nothing is asked for. A
+// fence that never closes is not a fence, as the words read it, so a file line
+// after it is a file.
+func TestAReplyWithAFileKeepsItsLinesAndCodeIsLiteral(t *testing.T) {
+	page := `<!doctype html><link rel="stylesheet" href="/layout.css">
+<div id="thread" style="height:600px;width:420px;overflow:auto"><div id="thread-inner"></div></div>
+<div id="composer-wrap"><textarea id="msg-input"></textarea><button id="send-btn">Send</button></div><button id="jump-latest" hidden>Latest</button>
+<script type="module">
+import {S} from '/state.js';import {renderInteractionPages} from '/views/chat.js';import {run} from '/__harness.js';
+run(async assert=>{
+ S.stats={name:'Fixture'};S.identityExists=true;
+ const asked=[];const seen=window.fetch;window.fetch=(...a)=>{asked.push(String(a[0]));return seen(...a);};
+ const EXAMPLE='![example](projects/example.png)\n[example.docx](projects/example.docx)';
+ const FENCE='` + "```" + `';
+ const withFile='# The report\n- first\n- second\nHere it is:\n[report.docx](projects/report.docx)\n1. one\n2. two\n'+FENCE+'\n'+EXAMPLE+'\n'+FENCE+'\nAnd **done**.';
+ const onlyCode='Write it like this:\n'+FENCE+'\n'+EXAMPLE+'\n'+FENCE;
+ const open='A fence left open:\n'+FENCE+'\n[real.docx](projects/real.docx)';
+ const lines='[report.docx](projects/report.docx)\nPlease review.\n[a.docx](projects/a.docx)\n[b.docx](projects/b.docx)\nThanks.';
+ const at=s=>'2026-10-12T10:'+s+'Z';
+ const say=(id,content,n)=>({id,sequence:String(n),kind:'message',role:'resident',content,turn_id:'t'+n,recorded_at:at('0'+n+':00'),details:{}});
+ const pages=new Map([['recorded',{identity:'fixture',incarnation:'disk',rows:[say('a',withFile,1),say('b',onlyCode,2),say('c',open,3),say('d',lines,4)],has_older:false,has_newer:false}],['transient',{identity:'fixture',incarnation:'memory',rows:[]}]]);
+ renderInteractionPages(pages,()=>{},false);
+ const body=id=>document.querySelector('[data-turn-id="'+id+'"] .body');
+ const a=body('a');
+ assert(a.querySelector('.in-words__heading')&&a.querySelector('.in-words__heading').textContent==='The report','the heading around a file is not a line of its own: '+a.innerHTML);
+ assert([...a.querySelectorAll('ul > li')].map(l=>l.textContent).join()==='first,second','the list around a file went back to its typed marks: '+a.innerHTML);
+ assert([...a.querySelectorAll('ol > li')].map(l=>l.textContent).join()==='one,two','the numbered list around a file went back to its typed marks: '+a.innerHTML);
+ assert(!/(^|\n)- first/.test(a.textContent),'a typed bullet still stands: '+a.textContent);
+ assert(a.querySelector('strong')&&a.querySelector('strong').textContent==='done','the words after the file lost their marks: '+a.innerHTML);
+ const chips=[...a.querySelectorAll('a.file-chip')].map(c=>c.textContent);
+ assert(chips.join()==='report.docx','the real file is not the one chip: '+chips.join());
+ const code=a.querySelector('pre.in-words__pre code');
+ assert(code&&code.textContent===EXAMPLE,'the example in code is not as typed beside a real file: '+(code&&code.textContent));
+ assert(!a.querySelector('figure,img'),'an example in code was drawn as a picture: '+a.innerHTML);
+ const b=body('b');
+ assert(!b.querySelector('a.file-chip,figure,img'),'an example in code became a file: '+b.innerHTML);
+ assert(b.dataset.shown===undefined,'a reply with only an example in code was read as showing a file');
+ assert((b.querySelector('pre.in-words__pre code')||{}).textContent===EXAMPLE,'the example in code is not as typed: '+b.innerHTML);
+ assert([...body('c').querySelectorAll('a.file-chip')].map(c=>c.textContent).join()==='real.docx','a file after a fence that never closes is not a file: '+body('c').innerHTML);
+ document.getElementById('thread').scrollTop=0;
+ // A file is a line of its own: what follows it starts below it, and no line stands empty before it.
+ const d=body('d'),[report,first,second]=d.querySelectorAll('a.file-chip');
+ const rectOf=words=>{const walk=document.createTreeWalker(d,NodeFilter.SHOW_TEXT);for(let n;(n=walk.nextNode());){const at=n.data.indexOf(words);if(at>=0){const r=document.createRange();r.setStart(n,at);r.setEnd(n,at+words.length);return r.getBoundingClientRect();}}return null;};
+ const review=rectOf('Please review.'),thanks=rectOf('Thanks.'),box=e=>e.getBoundingClientRect();
+ assert(review&&review.top>=box(report).bottom-1,'the words after a file stand on its line: chip ends '+box(report).bottom+', words start '+(review&&review.top));
+ assert(box(second).top>=box(first).bottom-1,'two files stand on one line: '+box(first).bottom+' then '+box(second).top);
+ assert(thanks&&thanks.top>=box(second).bottom-1,'the words after the last file stand on its line');
+ const beside=body('a').querySelector('a.file-chip');
+ const before=document.createRange();before.selectNodeContents(body('a'));before.setEndBefore(beside.parentElement);
+ const lastText=[...before.getClientRects()].filter(r=>r.height>0).at(-1);
+ assert(lastText&&box(beside).top>=lastText.bottom-1,'a file stands on the line before it: '+box(beside).top+' after '+(lastText&&lastText.bottom));
+ assert(lastText&&box(beside).top-lastText.bottom<parseFloat(getComputedStyle(body('a')).fontSize)/2,'an empty line stands before a file: '+(box(beside).top-lastText.bottom));
+ // waits by design: that nothing is asked for takes time to show.
+ await new Promise(r=>setTimeout(r,300));
+ assert(!document.querySelector('[data-file*="example"]'),'a picture was waiting to be asked for from code');
+ assert(!asked.some(u=>u.includes('example')),'an example in code was asked for: '+asked.join(' '));
+});
+</script>`
+	runPageInEngines(t, page, chatModuleRig(t))
+}
+
+// A REPLY SHOWS FILES OF THE IDENTITY'S FOLDER, AND NOTHING ELSE. A line of
+// the identity's reply that is only a markdown image or link whose target
+// is a path is drawn from the page's own /w route: an image as an image, a
+// document as a chip that downloads it. An address is text, a line that
+// carries more than the file is text, and the same line typed by the
+// operator is text: the page draws files the identity names, never an
+// address a reply could carry data to. A file that came with a message is
+// its chip beside the message.
 func TestAReplyShowsFilesOfTheIdentitysFolderAndNothingElse(t *testing.T) {
 	page := `<!doctype html><link rel="stylesheet" href="/layout.css">
 <div id="thread" style="height:600px;width:420px;overflow:auto"><div id="thread-inner"></div></div>

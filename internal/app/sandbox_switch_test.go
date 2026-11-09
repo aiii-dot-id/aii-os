@@ -967,9 +967,9 @@ func TestTheSandboxIsTurnedOffOnlyWhileTheDashboardAsksForItsAccessToken(t *test
 	// No token is asked for: refused, and the card's state says so with
 	// the saved setting on.
 	a.dashboard.SetAccessToken(false, switchTestToken)
-	refused(a.setSandboxOff(true, true), "Ask for an access token")
+	refused(a.setSandboxOff(true, true), "Ask every device to sign in")
 	st, err := a.sandboxState()
-	if err != nil || st.Off || st.HeldWhy != sandboxHeldToken || !strings.HasPrefix(st.Held, "The sandbox stays on: turning it off requires this dashboard to ask for its access token") || !strings.Contains(st.Held, "in Settings, under Dashboard, with Ask for an access token") {
+	if err != nil || st.Off || st.HeldWhy != sandboxHeldToken || !strings.HasPrefix(st.Held, "The sandbox stays on. To turn it off, first turn on") || !strings.Contains(st.Held, "\"Ask every device to sign in\" in Settings → Access") {
 		t.Fatalf("with no token asked for the card's state says the box cannot turn the sandbox off, and where to turn the token on: %+v %v", st, err)
 	}
 	// Turning it on asks for nothing.
@@ -979,7 +979,7 @@ func TestTheSandboxIsTurnedOffOnlyWhileTheDashboardAsksForItsAccessToken(t *test
 
 	// A token is asked for, and the page that asks did not sign in with it.
 	a.dashboard.SetAccessToken(true, switchTestToken)
-	refused(a.setSandboxOff(true, false), "signed in with this dashboard's access token")
+	refused(a.setSandboxOff(true, false), "this page isn't signed in")
 	if st, _ := a.sandboxState(); st.HeldWhy != "" || st.Held != "" {
 		t.Fatalf("with the token asked for nothing holds the sandbox on: %+v", st)
 	}
@@ -1007,7 +1007,7 @@ func TestTheSandboxIsTurnedOffOnlyWhileTheDashboardAsksForItsAccessToken(t *test
 		t.Fatalf("held on, the floor says paths outside fail again:\n%s", got)
 	}
 	st, err = a.sandboxState()
-	if err != nil || st.Off || st.HeldWhy != sandboxHeldToken || !strings.HasPrefix(st.Held, "The saved setting is off, but the sandbox stays on: turning it off requires this dashboard to ask for its access token") || !a.configSnapshot().Tools.SandboxOff {
+	if err != nil || st.Off || st.HeldWhy != sandboxHeldToken || !strings.HasPrefix(st.Held, "The saved setting is off, but the sandbox stays on. To turn it off, first turn on") || !a.configSnapshot().Tools.SandboxOff {
 		t.Fatalf("the saved setting stays off and the state says why it is not in force: %+v %v", st, err)
 	}
 	// A start that reads the saved setting with no token asked for begins on.

@@ -114,12 +114,13 @@ Ring 2: this synthesis remains Ring 3 provisional self-understanding.
 
 If the evidence does not materially change the current portrait, respond exactly
 NO_CHANGE and call no tool. Otherwise call commit exactly once with variant
-self_model.synthesize. Include a synthesis_text of at most 2000 tokens as this runtime
-counts them (about 6000 characters; a longer one is refused), one continuity_thread,
+self_model.synthesize. Include a synthesis_text (its length is below), one continuity_thread,
 source_entity_refs for evidence actually used spanning at least four distinct supplied
 classes, previous_synthesis_id when a current portrait is shown, and
 changes_since_last when it makes the transformation clearer. Emit no free-form final
 answer alongside the commit call.
+
+The synthesis_text's length: Aim for about 5100 characters. A character of plain English counts one; a line break, a straight double quote or a backslash two; a long dash, a curly quote or an accented letter two or three; and &, < or > six. Over 2000 tokens, at three of those counts to a token, it is refused.
 === message 1 (user) ===
 Evidence:
 - [beliefs id=b_ring2_1, standing=new] Reading the whole of a file before changing it keeps my edits small and correct.

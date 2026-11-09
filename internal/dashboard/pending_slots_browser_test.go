@@ -32,7 +32,9 @@ const pendingSlotsPage = `<!doctype html>
 import { assert, run } from './__harness.js';
 import { pendingSlot } from './pending.js';
 import { connect } from './ws.js';
-import { __lostCalled } from './views/projects.js';
+import * as projects from './views/projects.js';
+import { offer } from './shell/later.js';
+const { __lostCalled } = projects;
 
 let sock;
 window.WebSocket = function (url) { sock = this; this.readyState = 0; this.send = () => {}; this.close = () => {}; };
@@ -51,6 +53,13 @@ run(() => {
   assert(slot.arm({ what: 'x' }, '') === false, 'arming with no request id must report that nothing is pending');
   assert(slot.waiting() === null, 'a request that was never sent left the surface waiting');
 
+  // EVERY SURFACE IS NAMED IN THE DISCONNECT. The projects surface owns
+  // two waits whose answers only the dead socket could deliver; if the
+  // handler stops naming it, a create survives its connection and the
+  // button stays inert until a page reload.
+  // Projects is fetched when first opened (step 12a): the socket reaches
+  // it through later(), so it is offered here as views.js offers it.
+  offer(projects);
   connect();
   sock.onclose();
   assert(__lostCalled(),
@@ -79,22 +88,27 @@ export const rejectFocusSave = () => false; export const rejectContractSave = ()
 export function projectsConnectionLost() { lost = true; return true; }
 export function __lostCalled() { return lost; }
 `),
-		"/views/memory.js":   []byte(`export const renderMemory = () => {};`),
-		"/views/identity.js": []byte(`export const renderIdentity = () => {};`),
-		"/views/plugins.js":  []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
-		"/views/settings.js": []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
-		"/firstboot.js":      []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
-		"/sections.js":       []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),
-		"/panel.js":          []byte(`export const renderPanel = () => {};`),
-		"/theme.js":          []byte(`export const onTheme = () => {};`),
-		"/overlay.js":        []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {}; export const reloadForTheOverlay = () => {};`),
-		"/voice.js":          []byte(`export const bindTransport = () => {}; export const render = () => {}; export const speak = () => {}; export const connectionLost = () => {};`),
-		"/app.js":            []byte(`export const sysLine = () => {}; export const toast = () => {}; export const go = () => {}; export const renderFirstbootVisibility = () => {};`),
-		"/views/chat.js":     []byte(`export const addMsg = () => null; export const attachSpeaker = () => false; export const sysLine = () => {}; export const toolEventLive = () => {}; export const thinkingEvent = () => {}; export const renderInteractionPages = () => {}; export const renderHistory = () => {}; export const renderChatSubstrate = () => {}; export const renderComposer = () => {}; export const acceptSubstrateConfig = () => {}; export const rejectSubstrateConfig = () => {}; export const substrateConnectionLost = () => {}; export const renderSteering = () => {}; export const renderAsks = () => {};`),
-		"/views/home.js":     []byte(`export const renderHome = () => {};`),
-		"/views/work.js":     []byte(`export const renderWorkPill = () => {};`),
-		"/presence.js":       []byte(`export const renderPresence = () => {}; export const setThinking = () => {};`),
-		"/util.js":           utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '');`),
-		"/bridge.js":         []byte(`export const send = () => ''; export const query = () => '';`),
+		"/shell/project-pill.js": []byte(`export const renderProjPill = () => {};`),
+		// ws.js imports many modules; stubs suffice — the connect path
+		// only calls S mutation, sysLine (identityExists false), and the
+		// reconnect scheduler. None of the renders fire without payloads.
+		"/views/memory.js":           []byte(`export const renderMemory = () => {};`),
+		"/views/identity.js":         []byte(`export const renderIdentity = () => {};`),
+		"/views/identity/between.js": []byte(`export const renderBetween = () => {};`),
+		"/views/plugins.js":          []byte(`export const renderPlugins = () => {}; export const rejectPluginAction = () => false; export const applyPluginStored = () => {};`),
+		"/views/settings.js":         []byte(`export const renderSettings = () => {}; export const acceptSettingsConfig = () => {}; export const rejectSettingsConfig = () => {}; export const acceptProviderSave = () => {}; export const rejectProviderSave = () => {}; export const acceptSpeechLists = () => {}; export const rejectSpeechLists = () => false; export const acceptAccessCode = () => {}; export const rejectAccessCode = () => {}; export const settingsConnectionLost = () => {};`),
+		"/firstboot.js":              []byte(`export const renderProviderOptions = () => {}; export const setModelOptions = () => {}; export const fbHint = () => {}; export const fbResult = () => {}; export const acceptDiscoveryResponse = () => {}; export const firstbootConnectionLost = () => {}; export const discoveryAnswered = () => {}; export const discoveryFailed = () => false;`),
+		"/sections.js":               []byte(`export const publish = () => {}; export const onSections = () => {}; export const onLayout = () => {}; export const onTokensChanged = () => {};`),
+		"/panel.js":                  []byte(`export const renderPanel = () => {};`),
+		"/theme.js":                  []byte(`export const onTheme = () => {};`),
+		"/overlay.js":                []byte(`export const onOverlayChanged = () => {}; export const holdReloadWhile = () => {}; export const reloadForTheOverlay = () => {};`),
+		"/voice.js":                  []byte(`export const bindTransport = () => {}; export const render = () => {}; export const speak = () => {}; export const connectionLost = () => {};`),
+		"/app.js":                    []byte(`export const sysLine = () => {}; export const toast = () => {}; export const go = () => {}; export const renderFirstbootVisibility = () => {};`),
+		"/views/chat.js":             []byte(`export const addMsg = () => null; export const attachSpeaker = () => false; export const sysLine = () => {}; export const toolEventLive = () => {}; export const thinkingEvent = () => {}; export const renderInteractionPages = () => {}; export const renderHistory = () => {}; export const renderChatSubstrate = () => {}; export const renderComposer = () => {}; export const acceptSubstrateConfig = () => {}; export const rejectSubstrateConfig = () => {}; export const substrateConnectionLost = () => {}; export const renderSteering = () => {}; export const renderAsks = () => {};`),
+		"/views/home.js":             []byte(`export const renderHome = () => {};`),
+		"/views/work.js":             []byte(`export const renderWorkPill = () => {};`),
+		"/presence.js":               []byte(`export const renderPresence = () => {}; export const setThinking = () => {};`),
+		"/util.js":                   utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '');`),
+		"/bridge.js":                 []byte(`export const send = () => ''; export const query = () => '';`),
 	})
 }

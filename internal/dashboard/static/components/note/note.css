@@ -1,0 +1,19 @@
+.c-note { display:flex; flex-direction:column; gap:var(--s-3); }
+.c-note__label { margin:0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); }
+.c-note__text { font-family:var(--font-voice); font-size:var(--v-md); line-height:var(--v-md-lh); color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; }
+.c-note__none { font-family:var(--font-page); font-size:var(--t-md); line-height:var(--t-md-lh); color:var(--text-2); }
+.c-note__more { width:max-content; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--accent); }
+.c-note__more:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:var(--r-control); }
+.c-note__author { margin:0; font-family:var(--font-voice); font-style:italic; font-size:var(--v-md); line-height:var(--v-md-lh); color:var(--text-2); }
+.c-note__body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.c-note__voice { font-family:var(--font-voice); font-size:var(--v-md); line-height:var(--v-md-lh); color:var(--text); }
+.c-note__where { display:inline; margin-left:var(--s-1); font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); }
+.c-note__where summary { display:inline; cursor:pointer; color:var(--accent); }
+.c-note__where[open] .c-note__links { display:inline-flex; gap:var(--s-2); margin-left:var(--s-2); }
+.c-note__links a { color:var(--accent); }
+.c-note__os { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--s-1) calc(var(--s-2) + 2px); width:fit-content; max-width:100%; box-sizing:border-box; margin:var(--s-2) 0; padding:var(--s-2) var(--s-3); border:1px solid var(--accent); border-radius:var(--r-control); background:var(--surface); font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); white-space:normal; }
+.c-note__os strong { font-weight:600; color:var(--accent); }
+.c-note__os--after { margin:0; }
+@media (max-width: 767px) { .c-note__os { gap:2px calc(var(--s-2) + 2px); } .c-note__body .c-note__os { margin:calc(var(--s-1) * -1) 0 var(--s-2); } }
+.c-note__footer { margin:0; font-family:var(--font-page); font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-3); }
+.c-note__where summary:focus-visible, .c-note__links a:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:var(--r-control); }

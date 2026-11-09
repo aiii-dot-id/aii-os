@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/interaction"
@@ -69,26 +70,55 @@ type WorkSession struct {
 	ToolCalls      int
 	ToolCallsKnown bool
 
+	Promise      string
+	ResumesOn    string
+	PromisedTurn string
+
+	ResumesUnder string
+
+	ReflectEvery int
+
 	Child bool
 }
 
 const workSessionFields = `id, description, status, state, lease_owner, lease_until, created_seq, updated_seq, result,
 project_id, focus, next_move, plan, expected_evidence, falsifier, decision_needed, evidence, evidence_readback,
-family, started_at, tool_calls`
+family, started_at, tool_calls, promise, resumes_on, promised_turn, resumes_under, reflect_every`
 
 func scanWorkSession(row rowScanner, ws *WorkSession, extra ...any) error {
-	var state, leaseOwner, leaseUntil, result sql.NullString
-	var createdSeq, updatedSeq, startedAt, toolCalls sql.NullInt64
+	var state, leaseOwner, leaseUntil, result, promise, resumesOn, promisedTurn, resumesUnder sql.NullString
+	var createdSeq, updatedSeq, startedAt, toolCalls, reflectEvery sql.NullInt64
 	dest := append([]any{&ws.ID, &ws.Description, &ws.Status, &state, &leaseOwner, &leaseUntil, &createdSeq, &updatedSeq, &result,
 		&ws.Project, &ws.Focus, &ws.NextMove, &ws.Plan, &ws.ExpectedEvidence, &ws.Falsifier, &ws.DecisionNeeded, &ws.Evidence, &ws.EvidenceReadback,
-		&ws.Family, &startedAt, &toolCalls}, extra...)
+		&ws.Family, &startedAt, &toolCalls, &promise, &resumesOn, &promisedTurn, &resumesUnder, &reflectEvery}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return err
 	}
 	ws.State, ws.LeaseOwner, ws.LeaseUntil, ws.Result = state.String, leaseOwner.String, leaseUntil.String, result.String
 	ws.CreatedSeq, ws.UpdatedSeq = uint64(createdSeq.Int64), uint64(updatedSeq.Int64)
 	ws.StartedAt, ws.ToolCalls = startedAt.Int64, int(toolCalls.Int64)
+	ws.Promise, ws.ResumesOn, ws.PromisedTurn, ws.ResumesUnder = promise.String, resumesOn.String, promisedTurn.String, resumesUnder.String
 	ws.ToolCallsKnown = toolCalls.Valid
+	ws.ReflectEvery = int(reflectEvery.Int64)
+	return nil
+}
+
+func (s *Store) SetWorkReflectEvery(ctx context.Context, sessionID string, every int) error {
+	if every < 0 {
+		return fmt.Errorf("reflect_every %d: not a count of calls", every)
+	}
+	changed := false
+	defer s.notifyInteraction(&changed)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.w().ExecContext(ctx, `UPDATE work_sessions SET reflect_every = ? WHERE id = ? AND status = 'active'`, every, sessionID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("work session %s not found or not active", sessionID)
+	}
+	changed = true
 	return nil
 }
 
@@ -152,6 +182,14 @@ func (s *Store) WorkSessionByID(id string) (*WorkSession, error) {
 	return &ws, nil
 }
 
+func (s *Store) HasWorkSessions() (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM work_sessions`).Scan(&n)
+	return n > 0, err
+}
+
 func (s *Store) ActiveWorkSession() (*WorkSession, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -198,13 +236,140 @@ func (s *Store) UpdateWorkState(ctx context.Context, sessionID, state string) er
 	return err
 }
 
+func (s *Store) SetWorkPromise(ctx context.Context, sessionID string, promise, resumesOn *string, reason string) error {
+	if reason == "" {
+		reason = "Work promise updated"
+	}
+	if promise == nil && resumesOn == nil {
+		return nil
+	}
+	changed := false
+	defer s.notifyInteraction(&changed)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.w().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if resumesOn != nil {
+		if err := s.deliveryNeverComes(ctx, tx, sessionID, *resumesOn); err != nil {
+			return err
+		}
+	}
+	sets, args := make([]string, 0, 4), make([]any, 0, 5)
+	if promise != nil {
+		sets, args = append(sets, "promise = ?", "promised_turn = ?"), append(args, *promise, interaction.TurnID(ctx))
+	}
+
+	under := ""
+	if resumesOn != nil {
+		if promise != nil {
+			under = *promise
+		} else if err := tx.QueryRow(`SELECT COALESCE(promise, '') FROM work_sessions WHERE id = ?`, sessionID).Scan(&under); err != nil {
+			return err
+		}
+		if *resumesOn == "" {
+			under = ""
+		}
+		sets, args = append(sets, "resumes_on = ?", "resumes_under = ?"), append(args, *resumesOn, under)
+	}
+	args = append(args, sessionID)
+	res, err := tx.Exec(`UPDATE work_sessions SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("work session %s not found", sessionID)
+	}
+	change := interaction.WorkChange{Session: sessionID, Promise: promise, ResumesOn: resumesOn}
+	if resumesOn != nil && *resumesOn != "" {
+		change.Under = under
+	}
+	if err = s.recordWorkChangeTx(ctx, tx, change, interaction.TurnID(ctx), reason); err != nil {
+		return err
+	}
+	err = tx.Commit()
+	changed = true
+	return err
+}
+
+func (s *Store) MeetWorkCondition(ctx context.Context, sessionID, met, reason string) error {
+	changed := false
+	defer s.notifyInteraction(&changed)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.w().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var under string
+	if err := tx.QueryRow(`SELECT COALESCE(resumes_under, '') FROM work_sessions WHERE id = ?`, sessionID).Scan(&under); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE work_sessions SET resumes_on = '', resumes_under = '' WHERE id = ?`, sessionID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("work session %s not found", sessionID)
+	}
+	none := ""
+	change := interaction.WorkChange{Session: sessionID, ResumesOn: &none, Met: met}
+	change.Under = under
+	if err = s.recordWorkChangeTx(ctx, tx, change, interaction.TurnID(ctx), reason); err != nil {
+		return err
+	}
+	err = tx.Commit()
+	changed = true
+	return err
+}
+
 func (s *Store) UpdateWorkPlan(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded *string) error {
+	return s.UpdateWorkPlanStep(ctx, sessionID, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded, nil)
+}
+
+const AnnotationPlanStep = "plan_step"
+
+const AnnotationPlanStepServed = "plan_step.served"
+
+const PlanStepNone = "none"
+
+var (
+	ErrPlanStepNotALine  = errors.New("plan_step is not a line of the plan")
+	ErrPlanStepNeedsPlan = errors.New("plan_step needs a plan")
+)
+
+type planStepLine struct {
+	Line string `json:"line"`
+}
+
+func PlanStepLine(plan, step string) (string, error) {
+	step = strings.TrimSpace(step)
+	if step == PlanStepNone {
+		return "", nil
+	}
+	if strings.TrimSpace(plan) == "" {
+		return "", ErrPlanStepNeedsPlan
+	}
+	if step != "" {
+		for _, line := range strings.Split(plan, "\n") {
+			if strings.TrimSpace(line) == step {
+				return step, nil
+			}
+		}
+	}
+	return "", ErrPlanStepNotALine
+}
+
+func (s *Store) UpdateWorkPlanStep(ctx context.Context, sessionID string, focus, nextMove, plan, expectedEvidence, falsifier, decisionNeeded, planStep *string) error {
 	changed := false
 	defer s.notifyInteraction(&changed)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if focus == nil && nextMove == nil && plan == nil && expectedEvidence == nil && falsifier == nil && decisionNeeded == nil {
+	if focus == nil && nextMove == nil && plan == nil && expectedEvidence == nil && falsifier == nil && decisionNeeded == nil && planStep == nil {
 		return nil
 	}
 	sets := make([]string, 0, 3)
@@ -234,17 +399,49 @@ func (s *Store) UpdateWorkPlan(ctx context.Context, sessionID string, focus, nex
 		args = append(args, *decisionNeeded)
 	}
 	args = append(args, sessionID)
-	q := `UPDATE work_sessions SET ` + strings.Join(sets, ", ") + ` WHERE id = ?`
 	tx, err := s.w().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(q, args...); err != nil {
+
+	var selected *planStepLine
+	current := ""
+	if planStep != nil || plan != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(plan,'') FROM work_sessions WHERE id = ?`, sessionID).Scan(&current); err != nil {
+			return err
+		}
+	}
+	if planStep != nil {
+		text := current
+		if plan != nil {
+			text = *plan
+		}
+		line, err := PlanStepLine(text, *planStep)
+		if err != nil {
+			return err
+		}
+		selected = &planStepLine{Line: line}
+	} else if plan != nil && *plan != current {
+		selected = &planStepLine{}
+	}
+	if len(sets) > 0 {
+		if _, err = tx.Exec(`UPDATE work_sessions SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
+			return err
+		}
+	}
+	notice, err := s.recordWorkChangeRefTx(ctx, tx, interaction.WorkChange{Session: sessionID, Focus: focus, NextMove: nextMove, Plan: plan, ExpectedEvidence: expectedEvidence, Falsifier: falsifier, DecisionNeeded: decisionNeeded}, interaction.TurnID(ctx), "Work plan updated")
+	if err != nil {
 		return err
 	}
-	if err = s.recordWorkChangeTx(ctx, tx, interaction.WorkChange{Session: sessionID, Focus: focus, NextMove: nextMove, Plan: plan, ExpectedEvidence: expectedEvidence, Falsifier: falsifier, DecisionNeeded: decisionNeeded}, interaction.TurnID(ctx), "Work plan updated"); err != nil {
-		return err
+	if selected != nil {
+		payload, err := json.Marshal(selected)
+		if err != nil {
+			return err
+		}
+		if err = annotateRowTx(ctx, tx, notice.Sequence, AnnotationPlanStep, sessionID, string(payload)); err != nil {
+			return err
+		}
 	}
 	err = tx.Commit()
 	changed = true
@@ -257,6 +454,8 @@ func (s *Store) StartWorkSession(ctx context.Context, id, description string) er
 
 type WorkStart struct {
 	Family, State, Focus, NextMove, Plan, ExpectedEvidence, Falsifier, DecisionNeeded, Standing *string
+
+	PlanStep *string
 
 	Check *string
 }
@@ -278,6 +477,16 @@ func (s *Store) StartWorkSessionWith(ctx context.Context, id, description string
 		}
 		return *p
 	}
+	var selected []byte
+	if w.PlanStep != nil {
+		line, err := PlanStepLine(str(w.Plan), *w.PlanStep)
+		if err != nil {
+			return err
+		}
+		if selected, err = json.Marshal(planStepLine{Line: line}); err != nil {
+			return err
+		}
+	}
 	tx, err := s.w().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -289,12 +498,19 @@ func (s *Store) StartWorkSessionWith(ctx context.Context, id, description string
 	if err != nil {
 		return err
 	}
-	if err = s.recordWorkChangeTx(ctx, tx, interaction.WorkChange{Session: id}, interaction.TurnID(ctx), "Work started: "+description); err != nil {
+	notice, err := s.recordWorkChangeRefTx(ctx, tx, interaction.WorkChange{Session: id}, interaction.TurnID(ctx), "Work started: "+description)
+	if err != nil {
 		return err
 	}
 	if w.State != nil || w.Focus != nil || w.NextMove != nil || w.Plan != nil || w.ExpectedEvidence != nil || w.Falsifier != nil || w.DecisionNeeded != nil {
 		change := interaction.WorkChange{Session: id, State: w.State, Focus: w.Focus, NextMove: w.NextMove, Plan: w.Plan, ExpectedEvidence: w.ExpectedEvidence, Falsifier: w.Falsifier, DecisionNeeded: w.DecisionNeeded}
-		if err = s.recordWorkChangeTx(ctx, tx, change, interaction.TurnID(ctx), "Work plan updated"); err != nil {
+		if notice, err = s.recordWorkChangeRefTx(ctx, tx, change, interaction.TurnID(ctx), "Work plan updated"); err != nil {
+			return err
+		}
+	}
+
+	if selected != nil {
+		if err = annotateRowTx(ctx, tx, notice.Sequence, AnnotationPlanStep, id, string(selected)); err != nil {
 			return err
 		}
 	}
@@ -407,7 +623,7 @@ func (s *Store) SweepOrphanWorkSessions() ([]WorkSession, error) {
 	}
 	defer tx.Rollback()
 	rows, err := tx.Query(`UPDATE work_sessions SET status='delivered', result=?, evidence='external_effect_unknown', delivered_at=?
-		WHERE status='active' AND NOT `+queuedChild(` AND w.state IN ('PENDING','CLAIMED')`)+`
+		WHERE status='active' AND COALESCE(resumes_on,'') = '' AND NOT `+queuedChild(` AND w.state IN ('PENDING','CLAIMED')`)+`
 		RETURNING id, description, `+queuedChild(""), interruptedByRestart, time.Now().UTC().UnixMilli(),
 		SubagentWorkKind, SubagentWorkKind, SubagentWorkKind, SubagentWorkKind)
 	if err != nil {
@@ -431,6 +647,28 @@ func (s *Store) SweepOrphanWorkSessions() ([]WorkSession, error) {
 		return nil, err
 	}
 	return swept, nil
+}
+
+func (s *Store) KeptPromisedSessions() ([]WorkSession, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(`SELECT `+workSessionFields+`, `+queuedChild("")+` FROM work_sessions
+		WHERE status='active' AND COALESCE(resumes_on,'') != '' ORDER BY created_seq`, SubagentWorkKind, SubagentWorkKind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WorkSession
+	for rows.Next() {
+		var ws WorkSession
+		if err := scanWorkSession(rows, &ws, &ws.Child); err != nil {
+			return nil, err
+		}
+		if !ws.Child {
+			out = append(out, ws)
+		}
+	}
+	return out, rows.Err()
 }
 
 func SweptSessionNote(swept []WorkSession) string {
@@ -607,19 +845,67 @@ func (s *Store) UnharvestedDeliveries(limit int) ([]WorkSession, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) MarkHarvested(id string, ms int64) error {
+func (s *Store) TakeInDelivery(ctx context.Context, id string, ms int64, reason string) ([]string, error) {
 	var ev *WorkEvent
 	defer s.notifyWork(&ev)
+	changed := false
+	defer s.notifyInteraction(&changed)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, err := s.w().Exec(`UPDATE work_sessions SET harvested_ms=? WHERE id=?`, ms, id)
-	if err == nil {
-		if n, aerr := res.RowsAffected(); aerr == nil && n > 0 {
-			project, child := s.workRow(id)
-			ev = &WorkEvent{Kind: WorkHarvested, ID: id, Project: project, Actor: workActor(child)}
-		}
+	tx, err := s.w().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
 	}
-	return err
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE work_sessions SET harvested_ms=? WHERE id=?`, ms, id)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil
+	}
+	met := "delivery:" + id
+	rows, err := tx.Query(`SELECT id, COALESCE(resumes_under, '') FROM work_sessions WHERE status = 'active' AND resumes_on = ? ORDER BY id`, met)
+	if err != nil {
+		return nil, err
+	}
+	type waiter struct{ id, under string }
+	var waiters []waiter
+	for rows.Next() {
+		var w waiter
+		if err := rows.Scan(&w.id, &w.under); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		waiters = append(waiters, w)
+	}
+
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var ids []string
+	none := ""
+	for _, w := range waiters {
+		if _, err := tx.Exec(`UPDATE work_sessions SET resumes_on = '', resumes_under = '' WHERE id = ?`, w.id); err != nil {
+			return nil, err
+		}
+		change := interaction.WorkChange{Session: w.id, ResumesOn: &none, Met: met, Under: w.under}
+		if err := s.recordWorkChangeTx(ctx, tx, change, interaction.TurnID(ctx), reason); err != nil {
+			return nil, err
+		}
+		ids = append(ids, w.id)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	changed = len(ids) > 0
+	project, child := s.workRow(id)
+	ev = &WorkEvent{Kind: WorkHarvested, ID: id, Project: project, Actor: workActor(child)}
+	return ids, nil
 }
 
 func (s *Store) RecentDeliveredSubagents(limit int) ([]WorkSession, error) {
@@ -738,4 +1024,52 @@ func RenderResumeCard(f ResumeFields) string {
 		b.WriteString("\nResume point: " + f.ResumePoint)
 	}
 	return b.String()
+}
+
+func (s *Store) RecentWorkSessions(limit int) ([]WorkSession, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	fields, err := s.workSessionSelect()
+	if err != nil {
+		return nil, err
+	}
+	child, args, err := s.childTest()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT `+fields+` FROM work_sessions WHERE NOT `+child+` ORDER BY rowid DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WorkSession
+	for rows.Next() {
+		var ws WorkSession
+		if err := scanWorkSession(rows, &ws); err != nil {
+			return nil, err
+		}
+		out = append(out, ws)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) WorkSessionLastActivity(sessionID string) (time.Time, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var created sql.NullString
+
+	if err := s.db.QueryRow(`SELECT MAX(created_at) FROM conversations WHERE json_extract(details,'$.work.session') = ? OR json_extract(details,'$.work_session_id') = ?`, sessionID, sessionID).Scan(&created); err != nil {
+		return time.Time{}, false, err
+	}
+	if !created.Valid || created.String == "" {
+		return time.Time{}, false, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, created.String)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("session %s: the record's time %q: %w", sessionID, created.String, err)
+	}
+	return at.UTC(), true, nil
 }

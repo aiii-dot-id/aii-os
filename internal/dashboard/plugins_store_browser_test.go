@@ -34,6 +34,13 @@ run(() => {
   assert(text.includes('platform-signed') && text.includes('reviewed'), 'tiers are letters, not words');
   assert(rows().join(',') === 'org.example.memory,org.example.voice,org.example.zed', 'the default order is not by name: ' + rows());
 
+  // 2. Search narrows the list as the operator types, keywords included,
+  //    the count says so, and the field keeps its focus.
+  //    The catalog opens under "Add a plugin from the catalog" (step 16b).
+  const catalog = st.querySelector('[data-catalog]');
+  assert(catalog !== null && !catalog.open, 'the catalog is not folded under its summary');
+  catalog.querySelector('summary').click();
+  assert(catalog.open, 'its summary did not open the catalog');
   const q = document.getElementById('store-q');
   assert(q !== null, 'no search field');
   q.focus();

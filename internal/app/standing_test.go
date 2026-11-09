@@ -129,7 +129,7 @@ func TestComposeRendersStandingStateAndSuppressesTheGuess(t *testing.T) {
 	}
 
 	// Without standing state, the fallback speaks.
-	ws, err := a.buildWorkState()
+	ws, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestComposeRendersStandingStateAndSuppressesTheGuess(t *testing.T) {
 	if err := a.store.SetStandingState("waiting on the operator's restart word"); err != nil {
 		t.Fatal(err)
 	}
-	ws, err = a.buildWorkState()
+	ws, err = a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestUnreadableStandingStateSaysSoRatherThanReadingAsAbsent(t *testing.T) {
 	}
 
 	// CONTROL: it renders when it can be read.
-	ws, err := a.buildWorkState()
+	ws, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestUnreadableStandingStateSaysSoRatherThanReadingAsAbsent(t *testing.T) {
 	if _, err := a.store.DB().Exec(`DROP TABLE standing_state`); err != nil {
 		t.Fatal(err)
 	}
-	ws, err = a.buildWorkState()
+	ws, err = a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatalf("a failed standing read must not break the whole compose: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestUnreadableRecentPlanSaysSoRatherThanReadingAsEmpty(t *testing.T) {
 	}
 
 	// CONTROL: while it reads, the fallback renders.
-	ws, err := a.buildWorkState()
+	ws, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestUnreadableRecentPlanSaysSoRatherThanReadingAsEmpty(t *testing.T) {
 	if _, err := a.store.DB().Exec(`UPDATE work_sessions SET created_seq = 'not-a-number' WHERE id = 'ws_old'`); err == nil || !strings.Contains(err.Error(), "cannot store TEXT value in INTEGER column") {
 		t.Fatalf("STRICT must refuse a text in an integer column at the write: %v", err)
 	}
-	ws, err = a.buildWorkState()
+	ws, err = a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

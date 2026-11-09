@@ -115,6 +115,8 @@ func TestNothingInsideAPassReadsTheConfigurationAgain(t *testing.T) {
 		"DreamFacility.cfg":                        "the reader itself",
 		"DreamFacility.Reconfigure":                "the writer",
 		"DreamFacility.Predicate":                  "RHYTHM's probe",
+		"DreamFacility.Held":                       "where the operator's press begins: whether a pass that advanced nothing still waits its spacing (F-COG-110)",
+		"DreamFacility.SetStalledAtForTest":        "a test's plant of the stall stamp and its spacing (F-COG-110); tests only",
 		"DreamFacility.ConversationPending":        "RHYTHM's probe of the conversation",
 		"DreamFacility.Execute":                    "a DREAM pass",
 		"DreamFacility.OnAlarm":                    "an alarm: its spacing, what is due, and the pass it runs",

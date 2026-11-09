@@ -226,7 +226,7 @@ func (a *App) recordRoom(room []steerEntry) {
 	}
 }
 
-func (a *App) DrainSteering() []string {
+func (a *App) DrainSteering() []conversation.Steered {
 
 	listen, _, _ := a.voiceMode()
 	a.turnMu.Lock()
@@ -302,11 +302,24 @@ func (a *App) DrainSteering() []string {
 		a.dashboard.BroadcastSteering()
 	}
 
-	out := make([]string, 0, len(said))
+	out := make([]conversation.Steered, 0, len(said))
 	for _, e := range said {
-		out = append(out, e.content)
+		out = append(out, conversation.Steered{Words: e.content, By: steeredBy(e)})
 	}
 	return out
+}
+
+func steeredBy(e steerEntry) conversation.SteeredBy {
+	if e.role != roleOperator {
+		return conversation.BySomeone
+	}
+	switch interaction.SaidOf(e.recordCtx) {
+	case interaction.SaidTyped:
+		return conversation.ByOperatorTyped
+	case interaction.SaidAnswer:
+		return conversation.ByOperatorAnswer
+	}
+	return conversation.BySomeone
 }
 
 func (a *App) PendingSteers() []string {
@@ -332,6 +345,10 @@ func (a *App) CancelTurn() bool {
 	}
 	logsink.Info("steering.decision", "operator cancelled the running turn")
 	cancel(conversation.StoppedByOperator)
+	a.turnMu.Lock()
+	turn := a.interactionTurn
+	a.turnMu.Unlock()
+	a.holdOnStop(turn)
 	return true
 }
 

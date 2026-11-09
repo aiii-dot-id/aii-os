@@ -210,8 +210,17 @@ window.fetch = async (url, opt = {}) => {
   return { status: 401, ok: false, headers: new Headers() };
 };
 window.confirm = () => true;
-const goTo = view => click('.nav-item[data-view="' + view + '"]');
-const section = name => click('[data-sec="' + name + '"]');
+// The places are links (the top bar); the measure moves by the page's own
+// go(), which is what a place's link reaches, so each step stays synchronous.
+// Settings (step 21) and Projects (step 12a) are fetched when first opened;
+// the first visit waits for the view to draw, and later ones draw at once.
+const goTo = async view => { S.go(view); if (view === 'settings') await until(() => document.querySelector('#settings-stack [data-section]'), 4000);
+  if (view === 'projects') { await until(() => document.getElementById('projects-delivered'), 4000);
+    if (!document.getElementById('projects-delivered')) problems.push('Projects did not draw within 4 s of being opened'); } };
+// A section by the way in from elsewhere on the page (the section buttons
+// went in 2b).
+const section = name => S.openSettings(name);
+// A stretch of work with n finished steps and no reply yet, as the reader draws it.
 const showSteps = n => renderInteractionPages(new Map([['recorded', { identity: 'i1', incarnation: 'a1', has_older: false, has_newer: false,
   rows: Array.from({ length: n }, (_, i) => [
     { id: 'c' + i, sequence: String(2 * i + 1), kind: 'tool_call', turn_id: 't1', recorded_at: '2026-09-29T10:00:0' + i + 'Z', details: { tool: 'read' } },
@@ -256,7 +265,9 @@ async function run() {
   await probe('presence: connecting, then present', { at: '#p-state', msg: 'present', want: 'polite', atomic: 'true', act: () => { sockets[0].open(); status(); } });
   say({ type: 'providers', providers });
   say({ type: 'config', config: config() });
-  say({ type: 'layout', layout: { profiles: { desktop: { rail: [] }, mobile: { rail: [] } } } });
+  // The layout places one section, which SAFE holds back, so the rail's
+  // note has something to say when SAFE comes.
+  say({ type: 'layout', layout: { profiles: { desktop: { rail: ['held'] }, mobile: { rail: ['held'] } } } });
   await probe('a turn begins', { at: '#p-state', msg: 'thinking', want: 'polite', act: () => say({ type: 'response', stream: true }) });
   silent('the thinking indicator', '.thinking-row', 'dots, no words: the state is what #p-state says');
   showSteps(1);
@@ -267,18 +278,25 @@ async function run() {
     ...Array.from({ length: 3 }, () => () => status()),
   ], 0);
   await probe('a turn ends', { at: '#p-state', msg: 'present', want: 'polite', act: () => say({ type: 'response', role: 'identity', message: 'Done.' }) });
-  await probe('SAFE is entered', { at: '#p-state', msg: 'SAFE — record frozen', want: 'polite', atomic: 'true', act: () => say({ type: 'continuity', continuity: { mode: 'safe', safe_reason: 'the record failed verification' } }) });
+  // AII OS's note at the top of every page is said when it first arrives:
+  // its region (#page-note) is in the page, empty, before any words.
+  await probe('SAFE is entered', { checks: [
+    { name: 'SAFE is entered', at: '#p-state', msg: 'SAFE — record frozen', want: 'polite', atomic: 'true' },
+    { name: 'the page-wide note arrives', at: '#page-note', msg: 'AII OS has put Example in safe mode: the record failed verification.', want: 'polite' }],
+    act: () => say({ type: 'continuity', continuity: { mode: 'safe', safe_reason: 'the record failed verification' } }) });
   await probe('the witness goes dark', { at: '#p-state', msg: 'degraded — witness dark', want: 'polite', act: () => say({ type: 'continuity', continuity: { mode: 'degraded_witness' } }) });
   say({ type: 'continuity', continuity: { mode: 'normal' } });
-  silent('the orb', '#orb', 'a picture of the state #p-state names');
-  silent('the mode pill', '#pill-mode', 'SAFE is said once, by #p-state');
+  silent('their mark', '#bar-mark', 'no state; #p-state names it');
+  // The note comes with the sections' frames, fetched when the layout placed one.
+  for (let i = 0; i < 200 && !document.querySelector('.sections-safe'); i++) await new Promise(r => setTimeout(r, 15));
   silent('sections suspended note', '.sections-safe', 'the same SAFE, said once');
 
   await probe('the connection is lost', { at: '#p-state', msg: 'offline', want: 'polite', act: () => live().drop() });
   await writes('#p-state across five failed reconnects', '#p-state', Array.from({ length: 5 }, () => () => { wake(); live().drop(); }), 0);
   await probe('the connection is restored', { at: '#p-state', msg: 'present', want: 'polite', act: () => { wake(); live().open(); } });
 
-  await probe('sign-in is required', { at: '#dashboard-signin p', msg: 'Sign in to this dashboard.', want: 'polite',
+  // ── sign-in required ──
+  await probe('sign-in is required', { at: '#dashboard-signin p', msg: 'Sign in to use this page.', want: 'polite',
     act: async () => { authorized = false; live().drop(); await until(() => $('dashboard-signin')); } });
   await probe('the token is refused', { at: '#dashboard-signin p', msg: 'That was not accepted.', want: 'polite',
     act: async () => { const box = $('dashboard-signin'); box.querySelector('input').value = 'wrong-token'; box.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }));
@@ -288,11 +306,9 @@ async function run() {
 
   await probe('a provider error in Chat', { at: '#chat-error span', msg: 'The provider refused the turn: HTTP 429.', want: 'alert', act: () => say({ type: 'error', message: 'The provider refused the turn: HTTP 429.' }) });
   await probe('the next provider error, in place', { at: '#chat-error span', msg: 'The provider is unreachable.', want: 'assertive', act: () => say({ type: 'error', message: 'The provider is unreachable.' }) });
-  await probe('a notice in Chat', { at: '#chat-notice span', msg: 'now working in “Alpha”', want: 'polite', atomic: 'true', voice: 'announce', act: () => say({ type: 'system_line', message: 'now working in “Alpha” — turns and work sessions are stamped with it' }) });
-  await probe('the next notice, in place', { at: '#chat-notice span', msg: 'restarting to run the update', want: 'polite', voice: 'announce', act: () => say({ type: 'system_line', message: 'restarting to run the update — this page reconnects when the identity is back' }) });
   await writes('#announce as a turn runs under a notice: the reply, once', '#announce', [
     () => say({ type: 'response', stream: true }), () => status(), () => say({ type: 'response', role: 'identity', message: 'Ready.' })], 1);
-  click('#chat-notice button'); click('#chat-error button');
+  click('#chat-error button');
   $('msg-input').value = 'Hello?'; click('#send-btn');
   await probe('a message the host did not accept', { at: '#chat-pending summary', msg: 'Not accepted — your text is kept below', want: 'polite', voice: 'announce',
     act: () => say({ type: 'chat_ack', request_id: idOf('chat'), message: 'refused' }) });
@@ -305,19 +321,23 @@ async function run() {
   await probe('an error beyond Chat (toast)', { at: '#toast', msg: 'The host refused the next change.', want: 'polite', act: () => say({ type: 'error', request_id: 'nobody', message: 'The host refused the next change.' }) });
 
   $('msg-input').value = 'And this?'; click('#send-btn');
-  goTo('settings'); section('prompt'); click('[data-save="prompt"]'); goTo('chat');
+  await goTo('settings'); section('dashboard'); click('[data-save="dashboard"]'); goTo('chat');
   await probe('a lost connection with a message and a save unconfirmed', { checks: [
     { name: 'a lost connection: the unconfirmed message', at: '#chat-pending summary', msg: 'Connection lost — delivery unconfirmed', want: 'polite', voice: 'announce' },
-    { name: 'a lost connection: the unconfirmed save', at: '[data-said="prompt"]', msg: 'Connection lost before configuration confirmation', want: 'polite', voice: 'announce' }],
+    { name: 'a lost connection: the unconfirmed save', at: '[data-said="dashboard"]', msg: 'Connection lost before configuration confirmation', want: 'polite', voice: 'announce' }],
     act: () => live().drop() });
   wake(); live().open(); click('#chat-pending button:last-of-type');
 
-  await probe('the substrate is being checked', { at: '#chat-substrate-status', msg: 'Checking real inference', want: 'polite',
-    act: () => { $('chat-model').value = 'm2'; click('#chat-substrate-apply'); } });
-  await probe('the substrate is verified', { at: '#chat-substrate-status', msg: 'Active — inference verified.', want: 'polite',
-    act: () => say({ type: 'config', request_id: idOf('config_set'), config: config({ llm: { provider: 'Anthropic', model: 'm2' } }) }) });
-  await probe('the substrate change is refused', { at: '#chat-substrate-status', msg: 'llm.model: the provider refused it', want: 'polite',
-    act: () => { $('chat-model').value = 'm1'; click('#chat-substrate-apply'); say({ type: 'error', request_id: idOf('config_set'), message: 'llm.model: the provider refused it' }); } });
+  // The model they think with is chosen in Settings alone (step 4): its
+  // check, its verdict and a refusal are said through #announce.
+  await goTo('settings'); section('substrate');
+  await probe('the substrate is being checked', { at: '.savebar .savesay', msg: 'Checking that m2 answers', want: 'polite', atomic: 'true', voice: 'announce',
+    act: () => { $('cfg-model').value = 'm2'; click('[data-save="llm"]'); } });
+  await probe('the substrate is verified', { at: '[data-said="llm"]', msg: 'Active. m2 answered', want: 'polite', voice: 'announce',
+    act: () => say({ type: 'config', request_id: idOf('config_set'), config: config({ llm: { provider: 'Anthropic', model: 'm2', answered: true } }) }) });
+  await probe('the substrate change is refused', { at: '[data-said="llm"]', msg: 'llm.model: the provider refused it', want: 'polite', voice: 'announce',
+    act: () => { $('cfg-model').value = 'm1'; click('[data-save="llm"]'); say({ type: 'error', request_id: idOf('config_set'), message: 'llm.model: the provider refused it' }); } });
+  goTo('chat');
 
   const earlier = [words(1, 'operator', 'An earlier question, from before this page.'), words(2, 'resident', 'An earlier reply, from before this page.')];
   await probe('the conversation is read back as the page loads', { checks: [
@@ -358,38 +378,26 @@ async function run() {
     args: { to: 'sam@example.test', body: 'The draft, as written.' } };
   const connect = { id: 'k3', kind: 'connect', from: 'identity', connector: 'Calendar', text: 'I would like to see your week.' };
   const clarify = { id: 'k4', kind: 'clarify', from: 'identity', text: 'Which week do you mean?' };
-  await probe('an ask to choose', { at: '[data-ask-id="k1"] .ask-text', msg: 'Example asks you to choose: Which report first?', want: 'polite', voice: 'announce',
+  await probe('an ask to choose', { at: '[data-ask-id="k1"] .c-ask__text', msg: 'Example asks: Which report first?', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose] }) });
-  silent('the WAITING ON YOU card', '.sp-asks', 'lists the asks their cards said once, as they were made');
   await probe('an ask to confirm', { checks: [
-    { name: 'an ask to confirm', at: '[data-ask-id="k2"] .ask-text', msg: 'gmail asks you to confirm: Send the draft to ContactB gmail.send · sends one email to one address', want: 'polite', voice: 'announce' },
-    { name: 'an ask to confirm: an argument', at: '[data-ask-id="k2"] .act-arg', msg: 'The draft, as written.', want: 'silent' },
-    { name: 'an ask to confirm: another argument', at: '[data-ask-id="k2"] .act-arg + .act-arg', msg: 'sam@example.test', want: 'silent' }],
+    { name: 'an ask to confirm', at: '[data-ask-id="k2"] .c-ask__text', msg: 'gmail: Send the draft to ContactB', want: 'polite', voice: 'announce' },
+    { name: 'an ask to confirm: an argument', at: '[data-ask-id="k2"] .c-ask__args dd', msg: 'The draft, as written.', want: 'silent' },
+    { name: 'an ask to confirm: another argument', at: '[data-ask-id="k2"] .c-ask__args dd + dt + dd', msg: 'sam@example.test', want: 'silent' }],
     act: () => say({ type: 'asks', asks: [choose, confirm] }) });
-  await probe('an ask to connect', { at: '[data-ask-id="k3"] .ask-text', msg: 'Example asks to connect Calendar: I would like to see your week.', want: 'polite', voice: 'announce',
+  await probe('an ask to connect', { at: '[data-ask-id="k3"] .c-ask__text', msg: 'Example asks: I would like to see your week.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose, confirm, connect] }) });
-  await probe('an ask to clarify', { at: '[data-ask-id="k4"] .ask-text', msg: 'Example asks: Which week do you mean?', want: 'polite', voice: 'announce',
+  await probe('an ask to clarify', { at: '[data-ask-id="k4"] .c-ask__text', msg: 'Example asks: Which week do you mean?', want: 'polite', voice: 'announce',
     act: () => say({ type: 'asks', asks: [choose, confirm, connect, clarify] }) });
   await writes('#announce as the same asks are pushed again', '#announce', Array.from({ length: 3 }, () => () => say({ type: 'asks', asks: [choose, confirm, connect, clarify] })), 0);
   await writes('#announce as asks close', '#announce', [() => say({ type: 'asks', asks: [confirm, connect] }), () => say({ type: 'asks', asks: [] })], 0);
 
-  const quinn = (channel, carried) => ({ name: 'Quinn', channel, carried });
-  await probe('the notice route line appears', { at: '[data-route-line]', msg: 'Your notices also go to Quinn on telegram when no page is open.', want: 'polite', atomic: 'false',
-    act: () => status({ expert: false, notices: { on: true, lines: [quinn('telegram', true)] } }) });
-  await probe('the notice route line changes', { at: '[data-route-line]', msg: 'telegram, then sms', want: 'polite',
-    act: () => status({ expert: false, notices: { on: true, lines: [quinn('telegram', true), quinn('sms', true)] } }) });
-  await probe('an Expert save is refused', { at: '[data-expert-said]', msg: 'dashboard.expert: the host refused it', want: 'polite',
-    act: () => { click('[data-expert]'); say({ type: 'error', request_id: idOf('config_set'), message: 'dashboard.expert: the host refused it' }); } });
-  status({ expert: true, notices: { on: false, lines: [quinn('telegram', true)] } });
-  await probe('the route control is refused (in the Expert panel)', { at: '[data-notice-said]', msg: 'mark a contact line as you first', want: 'polite', voice: 'announce',
-    act: () => { click('[data-notice-route]'); say({ type: 'error', request_id: idOf('config_set'), message: 'dashboard.notices_off_dashboard: mark a contact line as you first' }); } });
-  status({ expert: false, notices: { on: false, lines: [] } });
-
-  goTo('settings'); section('prompt');
-  await probe('a setting is being checked and saved', { at: '.savebar .savesay', msg: 'Checking and saving… the current configuration remains active.', want: 'polite', atomic: 'true', voice: 'announce', act: () => click('[data-save="prompt"]') });
-  await probe('a setting is saved', { at: '[data-said="prompt"]', msg: 'Saved.', want: 'polite', voice: 'announce', act: () => say({ type: 'config', request_id: idOf('config_set'), config: config() }) });
-  click('[data-save="prompt"]');
-  await probe('a setting is refused', { at: '[data-said="prompt"]', msg: 'prompt.max_tokens: must be at least 1000', want: 'polite', voice: 'announce',
+  // ── Settings: every line the page rebuilds is said through #announce ──
+  await goTo('settings'); section('dashboard');
+  await probe('a setting is being checked and saved', { at: '.savebar .savesay', msg: 'Checking and saving… the current configuration remains active.', want: 'polite', atomic: 'true', voice: 'announce', act: () => click('[data-save="dashboard"]') });
+  await probe('a setting is saved', { at: '[data-said="dashboard"]', msg: 'Saved.', want: 'polite', voice: 'announce', act: () => say({ type: 'config', request_id: idOf('config_set'), config: config() }) });
+  click('[data-save="dashboard"]');
+  await probe('a setting is refused', { at: '[data-said="dashboard"]', msg: 'prompt.max_tokens: must be at least 1000', want: 'polite', voice: 'announce',
     act: () => say({ type: 'error', request_id: idOf('config_set'), message: 'prompt.max_tokens: must be at least 1000' }) });
 
   section('providers'); click('[data-prov-row="0"]');
@@ -407,15 +415,20 @@ async function run() {
 
   section('dashboard');
   const tokenCarrier = live();
-  await probe('an access token is asked for (Settings)', { at: '[data-token-require-said]', msg: 'Asked for — every other browser and device must now sign in with the token.', want: 'polite', voice: 'announce',
+  await probe('an access token is asked for (Settings)', { at: '[data-token-require-said]', msg: 'On. Every other browser and device must now sign in.', want: 'polite', voice: 'announce',
     act: async () => { click('[data-token-require]'); await until(() => document.querySelector('[data-token-require-said]')); } });
   await until(() => live() !== tokenCarrier && live().readyState === 0);
   live().open();
   await until(() => S.connected);
+  // Signing every other device out is Phone and other devices'.
+  location.hash = '#/settings/phone';
+  await until(() => document.querySelector('[data-sign-out-all]'));
   tokenRefused = 'This connection is not private, so the access token was not rotated.';
-  await probe('an access token is refused (Settings)', { at: '[data-token-rotate-said]', msg: 'This connection is not private, so the access token was not rotated.', want: 'polite', voice: 'announce',
-    act: async () => { click('[data-token-rotate]'); await until(() => document.querySelector('[data-token-rotate-said]')); } });
+  await probe('signing every other device out is refused (Phone and other devices)', { at: '[data-sign-out-said]', msg: 'This connection is not private, so the access token was not rotated.', want: 'polite', voice: 'announce',
+    act: async () => { click('[data-sign-out-all]'); await until(() => document.querySelector('[data-sign-out-said]')); } });
   tokenRefused = '';
+  location.hash = '#/settings/all';
+  await until(() => S.view === 'settings' && document.querySelector('#settings-stack [data-section]'));
 
   section('backups');
   say({ type: 'backups', backups: { action: 'status', view: backupsView } });
@@ -436,20 +449,34 @@ async function run() {
   await probe('a restore is restarting (Backups)', { at: '[data-restarting] b', msg: 'Restarting to restore.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'backups', request_id: idOf('backups'), backups: { action: 'restore', restarting: true } }) });
 
-  section('held-mail');
-  await probe('held mail is read', { at: '[data-mail-notice]', msg: 'No held mail on this page.', want: 'polite', voice: 'announce',
+  section('messages');
+  await probe('held mail is read', { at: '[data-mail-notice]', msg: 'Nothing is waiting to be sent.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'held_mail', request_id: idOf('query', f => f.query === 'held_mail'), mail_repair: { messages: [], routes: [] } }) });
   section('messages');
   await probe('messages are read', { at: '[data-messages-notice]', msg: 'Read at', want: 'polite', voice: 'announce',
     act: () => say({ type: 'messages', request_id: idOf('query', f => f.query === 'messages'), messages: { read_ms: Date.now(), limit: 50, max_limit: 200, arrivals: [], open: [], delivered: [], notices: [], arrivals_total: 0, open_total: 0, delivered_total: 0, notices_total: 0, channels: [] } }) });
+  // The notice route's switch, on the Messages card: the line about an
+  // active route and a refusal of the switch are said through #announce.
+  const quinn = (channel, carried) => ({ name: 'Quinn', channel, carried });
+  await probe('the notice route line appears', { at: '[data-route-line]', msg: 'nothing can carry them now', want: 'polite', voice: 'announce',
+    act: () => status({ notices: { on: true, lines: [quinn('telegram', false)] } }) });
+  await probe('the notice route line changes', { at: '[data-route-line]', msg: 'the channel is paused', want: 'polite', voice: 'announce',
+    act: () => status({ notices: { on: true, lines: [quinn('telegram', false)], held: 'the channel is paused' } }) });
+  status({ notices: { on: false, lines: [quinn('telegram', true)] } });
+  await probe('the notice route switch is refused', { at: '[data-notice-said]', msg: 'mark a contact line as you first', want: 'polite', voice: 'announce',
+    act: () => { click('[data-notice-route-switch]'); say({ type: 'error', request_id: idOf('config_set'), message: 'dashboard.notices_off_dashboard: mark a contact line as you first' }); } });
+  status({ notices: { on: false, lines: [] } });
   say({ type: 'sandbox', sandbox: { root: '/home/example', extra_roots: [] } });
   section('sandbox');
   $('sbx-add').value = '/work/project'; click('#sbx-grant');
   await probe('sandbox roots are saved', { at: '#settings-stack [role="status"], #settings-stack [data-announce]', msg: 'Sandbox roots saved.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'sandbox', request_id: idOf('sandbox_add'), sandbox: { root: '/home/example', extra_roots: ['/work/project'] } }) });
-  section('storage');
-  await probe('a database conversion is reported (Storage)', { at: '#settings-stack p[data-announce], #settings-stack p[role="status"]', msg: 'Conversion verified: the running database is unchanged.', want: 'polite', voice: 'announce',
+  location.hash = '#/settings/technical/storage';
+  await until(() => document.getElementById('cfg-db-format'), 5000);
+  await probe('a database conversion is reported (Storage)', { at: '.technical__pane p[data-announce], .technical__pane p[role="status"]', msg: 'Conversion verified: the running database is unchanged.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'config', config: config({ database: { active: 'sqlite', preferred: '', can_export: false, notice: 'Conversion verified: the running database is unchanged.' } }) }) });
+  location.hash = '#/settings/updates';
+  await until(() => S.view === 'settings' && document.querySelector('#settings-stack [data-section]'), 5000);
   section('updates');
   await probe('an update is available', { checks: [
     { name: 'an update is available (Settings)', at: '[data-update-state]', msg: 'Update available: 1.1.0', want: 'polite', voice: 'announce' },
@@ -462,20 +489,25 @@ async function run() {
   await probe('an update is available while the running release is withdrawn (sidebar chip)', { at: '#nav-update-text', msg: 'Update 1.1.0', want: 'polite', voice: 'announce',
     act: () => say({ type: 'update_check', update: { enabled: true, current_version: '1.0.0', installed_version: '1.0.0', available_version: '1.1.0', running_withdrawn: true, automatic: false } }) });
   if (!/withdrawn/.test(document.getElementById('nav-update').title)) problems.push('an update offered over a withdrawn release does not say in its tooltip that the release was withdrawn: ' + document.getElementById('nav-update').title);
-  await probe('a new version is noticed (Chat notice)', { at: '#chat-notice span', msg: 'update 1.1.0 is available', want: 'polite', voice: 'announce',
-    act: () => status({ update: { enabled: true, current_version: '1.0.0', available_version: '1.1.0', automatic: false } }) });
   await writes('#announce as status pushes leave the update chip as it was', '#announce',
     Array.from({ length: 3 }, () => () => status({ update: { enabled: true, current_version: '1.0.0', available_version: '1.1.0', automatic: false } })), 0);
   await writes('#announce as sections are opened and configuration is pushed', '#announce', [
-    () => section('backups'), () => section('messages'), () => section('updates'), () => section('prompt'),
+    () => section('backups'), () => section('messages'), () => section('updates'), () => section('dashboard'),
     ...Array.from({ length: 3 }, () => () => say({ type: 'config', config: config() }))], 0);
 
-  await focusProbe('a section tab, pressed', { focus: '[data-sec="storage"]', act: () => click('[data-sec="storage"]'), want: '[data-sec="storage"]' });
-  section('prompt');
-  await focusProbe('Save, while a push rebuilds the page', { focus: '[data-save="prompt"]', act: () => say({ type: 'config', config: config() }), want: '[data-save="prompt"]' });
-  await focusProbe('a text field, while a push rebuilds the page', { focus: '#cfg-ptokens', select: [1, 3], act: () => say({ type: 'config', config: config() }), want: '#cfg-ptokens' });
-  await focusProbe('Save, pressed: disabled while it is checked', { focus: '[data-save="prompt"]', act: () => click('[data-save="prompt"]'), want: 'page' });
-  await focusProbe('Save, when the answer enables it again', { act: () => say({ type: 'config', request_id: idOf('config_set'), config: config() }), want: '[data-save="prompt"]' });
+  // ── Settings: focus outlives a rebuild ──
+  // A pressed control is disabled until its answer comes, by the rebuild
+  // (Save) or by its own press (Refresh models), and a disabled control cannot
+  // hold focus in either engine: focus is on the page until the answer
+  // enables the control again, and then it is back on it.
+  // ("A section tab, pressed" went with the tabs in 2b: a page is reached
+  // by its address and the Settings list, which the stack's rebuild does
+  // not redraw.)
+  section('substrate');
+  await focusProbe('Save, while a push rebuilds the page', { focus: '[data-save="llm"]', act: () => say({ type: 'config', config: config() }), want: '[data-save="llm"]' });
+  await focusProbe('a text field, while a push rebuilds the page', { focus: '#cfg-model', select: [0, 2], act: () => say({ type: 'config', config: config() }), want: '#cfg-model' });
+  await focusProbe('Save, pressed: disabled while it is checked', { focus: '[data-save="llm"]', act: () => click('[data-save="llm"]'), want: 'page' });
+  await focusProbe('Save, when the answer enables it again', { act: () => say({ type: 'config', request_id: idOf('config_set'), config: config() }), want: '[data-save="llm"]' });
   section('substrate');
   const noFocusout = e => e.stopImmediatePropagation();
   window.addEventListener('focusout', noFocusout, true);
@@ -491,21 +523,80 @@ async function run() {
   window.removeEventListener('focusout', noFocusout, true);
   const contacts = [{ name: 'Robin', channel: 'telegram', address: '111', wake: true, operator: false }, { name: 'Ada', channel: 'sms', address: '222', wake: false, operator: true }];
   section('messages'); say({ type: 'config', config: config({ contacts }) });
-  await focusProbe('a field of the second contact, while a push rebuilds the page', { focus: '[data-contact-line="1"] [data-contact-field="name"]', select: [1, 2],
-    act: () => say({ type: 'config', config: config({ contacts }) }), want: '[data-contact-line="1"] [data-contact-field="name"]' });
+  click('[data-contact-edit="1"]');
+  await focusProbe('a field of the second contact, while a push rebuilds the page', { focus: '[data-contact-editor] [data-contact-name]', select: [1, 2],
+    act: () => say({ type: 'config', config: config({ contacts }) }), want: '[data-contact-editor] [data-contact-name]' });
   document.activeElement.blur();
 
-  goTo('home');
+  // ── Projects: the one owner of grade state (host disposition 12.1) ──
+  // These two probes drove the grade controls on Home's interim work section.
+  // That section retired and the controls moved here with the state, so the
+  // probes move with them: same announcement, same politeness, new owner.
+  // Projects asks for work as it opens: it draws delivered work, and a list
+  // that waited for the next push would show nothing until one came.
+  const askedFrom = sent.length;
+  await goTo('projects');
+  if (!sent.slice(askedFrom).some(f => f.type === 'query' && f.query === 'work')) problems.push('Projects opened without asking for work');
   say({ type: 'work', work: { live: [], queued: 0, delivered: [{ id: 'ses-1', description: 'Draft the report', result: 'Drafted.' }] } });
-  await probe('a grade is being recorded (Home)', { at: '.grade-note', msg: 'Recording…', want: 'polite', act: () => click('[data-grade="served"]') });
-  await probe('a grade is refused (Home)', { at: '.grade-note', msg: 'Not recorded: the ledger refused the grade', want: 'polite',
+  if (!document.querySelector('[data-grade-work="ses-1"]')) problems.push('a work push while Projects is open did not draw its delivered result');
+  await probe('a grade is being recorded (Projects)', { at: '.grade-note', msg: 'Recording…', want: 'polite', act: () => click('[data-grade="served"]') });
+  await probe('a grade is refused (Projects)', { at: '.grade-note', msg: 'Not recorded: the ledger refused the grade', want: 'polite',
     act: () => say({ type: 'error', request_id: idOf('grade'), message: 'the ledger refused the grade' }) });
+  // Typed grade text keeps its focus and selection through a work push that
+  // redraws Projects, as the contract's fields do.
+  const twoDelivered = [{ id: 'ses-1', description: 'Draft the report', result: 'Drafted.' }, { id: 'ses-2', description: 'Check the dates', result: 'Checked.' }];
+  say({ type: 'work', work: { live: [], queued: 0, delivered: twoDelivered } });
+  click('[data-grade-work="ses-2"][data-grade="partial"]');
+  const typed = document.querySelector('.grade-input[data-grade-session="ses-2"]');
+  if (typed) { typed.value = 'the dates were off'; typed.dispatchEvent(new Event('input')); }
+  await focusProbe('a grade comment on Projects, while a work push redraws it', { focus: '.grade-input[data-grade-session="ses-2"]', select: [4, 9],
+    act: () => say({ type: 'work', work: { live: [], queued: 0, delivered: twoDelivered.concat([{ id: 'ses-3', description: 'File the letter', result: 'Filed.' }]) } }),
+    want: '.grade-input[data-grade-session="ses-2"]' });
+  document.activeElement.blur();
+  // The page's own grade, answered. The host answers a grade with the work
+  // snapshot under the grade's request id (ws_work.go, wsGrade), and Projects
+  // is repainted from it: the recorded grade replaces the chips (a review 2259
+  // item 1; host 2300 item 1). Then a grade out when the connection is lost:
+  // the page says it cannot know and keeps the chips shut, and on reconnect
+  // it reads the outcome from the host's snapshot without sending it again.
+  try {
+    click('[data-grade-work="ses-3"][data-grade="served"]');
+    const own = sent.filter(f => f.type === 'grade' && f.grade && f.grade.session === 'ses-3').at(-1);
+    const ses3Graded = { id: 'ses-3', description: 'File the letter', result: 'Filed.', grade: { grade: 'served', comment: '' } };
+    say({ type: 'work', request_id: own && own.request_id, work: { live: [], queued: 0, delivered: twoDelivered.concat([ses3Graded]) } });
+    if (document.querySelector('[data-grade-work="ses-3"]') || !document.querySelector('.grade-said .grade-chip.is-served'))
+      problems.push('the work frame that answers a grade from this page did not repaint Projects with the recorded grade');
+    const fourDelivered = twoDelivered.concat([ses3Graded, { id: 'ses-4', description: 'Send the invoice', result: 'Sent.' }]);
+    say({ type: 'work', work: { live: [], queued: 0, delivered: fourDelivered } });
+    click('[data-grade-work="ses-4"][data-grade="served"]');
+    const gradesSent = sent.filter(f => f.type === 'grade').length;
+    const ses4 = () => document.querySelector('[data-grade-work="ses-4"][data-grade="served"]');
+    const ses4Note = () => (ses4()?.closest('.grade-ask')?.querySelector('.grade-note')?.textContent || '');
+    live().drop();
+    if (!/closed before the host answered/.test(ses4Note()) || !ses4()?.disabled)
+      problems.push('a grade out when the connection was lost did not say its outcome is unknown: ' + JSON.stringify(ses4Note()));
+    const socketsBefore = sockets.length;
+    wake();
+    await until(() => sockets.length > socketsBefore, 4000);
+    if (sockets.length === socketsBefore) problems.push('the page opened no socket to read a lost grade back');
+    else {
+      live().open();
+      say({ type: 'work', work: { live: [], queued: 0, delivered: fourDelivered } });
+      if (sent.filter(f => f.type === 'grade').length !== gradesSent) problems.push('reconnect sent a lost grade again');
+      if (!ses4() || ses4().disabled || !/No grade is recorded/.test(ses4Note()))
+        problems.push('the work frame after reconnect did not give back the chips of a grade lost with the connection: ' + JSON.stringify(ses4Note()));
+    }
+  } catch (e) { problems.push('the grade cases on Projects: the driver threw: ' + ((e && e.message) || e)); }
   goTo('chat');
 
   await announcerChecks();
 
   await probe('no identity yet', { at: '#p-state', msg: 'awaiting birth', want: 'polite', act: () => { status({ name: '(not born)' }); say({ type: 'providers', providers }); } });
-  await probe('Birth begins', { at: '#fb-result', msg: 'Birthing…', want: 'polite', act: () => click('#fb-birth') });
+  // First run is fetched by the status that finds no identity, so Begin
+  // is pressed once its screen is drawn and wired.
+  await until(() => document.getElementById('fb-birth')?.onclick, 6000);
+  // The notes choice as saved: Begin asks for the birth at once (step 7).
+  await probe('Birth begins', { at: '#fb-result', msg: 'Beginning…', want: 'polite', act: () => { S.config = Object.assign({}, S.config, { genesis: { agent_memory_off: false } }); click('#fb-birth'); } });
   await probe('Birth is refused', { at: '#fb-result', msg: 'the provider could not be reached: connection refused', want: 'polite',
     act: () => say({ type: 'error', message: 'the provider could not be reached: connection refused' }) });
   await probe('the provider says the key is wrong', { at: '#fb-hint', msg: 'The API key was rejected by the provider.', want: 'polite',
@@ -519,12 +610,12 @@ async function run() {
   click('#fb-restore-open');
   await probe('a restore is refused at first boot', { at: '[data-restore-said]', msg: 'That escrow file did not open: the passphrase is wrong.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'restore_new', restore_new: { action: 'keys', error: 'That escrow file did not open: the passphrase is wrong.' } }) });
-  await probe('the escrow keys are in place (first boot)', { at: '[data-keys-ok]', msg: 'are in place on this machine', want: 'polite', voice: 'announce',
+  await probe('the escrow keys are in place (first boot)', { at: '[data-keys-ok]', msg: 'keys are on this computer', want: 'polite', voice: 'announce',
     act: () => say({ type: 'restore_new', restore_new: { action: 'keys', keys: { identity: 'abcdef0123456789abcdef01', holds_snapshot_key: true } } }) });
   { const files = new DataTransfer(); files.items.add(new File(['x'], 'ledger-2026-09-29-seq7.tar.age')); $('fbr-snap').files = files.files; }
-  await probe('the snapshot is on this machine (first boot)', { at: '[data-snapshot-ok]', msg: 'ledger-2026-09-29-seq7.tar.age is on this machine.', want: 'polite', voice: 'announce',
+  await probe('the snapshot is on this machine (first boot)', { at: '[data-snapshot-ok]', msg: 'This backup is already here.', want: 'polite', voice: 'announce',
     act: async () => { click('#fbr-send'); await until(() => document.querySelector('[data-snapshot-ok]')); } });
-  await probe('a restore is unavailable on this connection (first boot)', { at: '[data-nosecrets]', msg: 'This connection is not private', want: 'polite', voice: 'announce',
+  await probe('a restore is unavailable on this connection (first boot)', { at: '[data-nosecrets]', msg: 'To restore, open this page on the computer where AII OS runs', want: 'polite', voice: 'announce',
     act: () => say({ type: 'restore_new', restore_new: { action: 'hello', secrets_ok: false } }) });
 }
 

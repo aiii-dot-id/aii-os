@@ -75,7 +75,7 @@ esac
 					t.Fatalf("full mode weakened instrumentation:\n%s\n%s", args, out)
 				}
 			} else {
-				for _, exclusion := range []string{"modernc.org/sqlite/lib", "modernc.org/libc", "github.com/trailofbits/go-slh-dsa/..."} {
+				for _, exclusion := range []string{"modernc.org/sqlite/lib", "modernc.org/libc", "github.com/trailofbits/go-slh-dsa/...", "golang.org/x/crypto/scrypt"} {
 					if strings.Count(args, "-gcflags="+exclusion+"=-race=false\n") != 2 {
 						t.Fatalf("normal mode changed its dependency instrumentation for %s:\n%s", exclusion, args)
 					}

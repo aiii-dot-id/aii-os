@@ -198,7 +198,7 @@ func TestAReloadAppliesTheAgencyConfigABootApplies(t *testing.T) {
 	if err := app.store.StartWorkSession(t.Context(), "ws_capped", "a capped task"); err != nil {
 		t.Fatal(err)
 	}
-	if scheduled, why := app.scheduleContinuation(capDeclared, ""); scheduled || !strings.Contains(why, "agency.turn_continuation") {
+	if scheduled, why := app.scheduledOrWhy(capDeclared, ""); scheduled || !strings.Contains(why, "agency.turn_continuation") {
 		t.Errorf("turn_continuation false: a capped turn was continued (%v), or was not told the switch is why nothing continues it (%q)", scheduled, why)
 	}
 

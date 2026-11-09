@@ -207,7 +207,7 @@ func TestTurnEventsComposeSteerInterleavingDoesNotDuplicateArrival(t *testing.T)
 	if ok, err := a.steer(roleParticipant, "only once", nil, ctx); err != nil || !ok {
 		t.Fatalf("queue: %v %v", ok, err)
 	}
-	if got := a.DrainSteering(); len(got) != 0 {
+	if got := steeredWords(a.DrainSteering()); len(got) != 0 {
 		t.Fatalf("already-carried arrival repeated: %v", got)
 	}
 	// A failed turn still has no durable input acknowledgment for the batch.
@@ -338,7 +338,7 @@ func TestEveryWokenTurnCarriesAndAcknowledgesPendingEvents(t *testing.T) {
 				if err := a.store.StartWorkSession(t.Context(), "ws_l12", "l12 work"); err != nil {
 					t.Fatal(err)
 				}
-				a.continueCappedTurn("ws_l12", 1, capDeclared, "")
+				a.continueCappedTurn("ws_l12", 1, capDeclared, "", false, "")
 			}
 			req := requestWith(t, obs, own)
 			for _, want := range seededEventMarkers {
@@ -681,7 +681,7 @@ func TestAComposerFoldedEventBlockAcknowledgesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	whole := a.composedEventText
-	work, err := a.buildWorkState()
+	work, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +747,7 @@ func foldAway(t *testing.T, a *App, gone string) {
 	if !strings.Contains(facts, gone) {
 		t.Fatalf("rig: the facts do not compose %q", gone)
 	}
-	work, err := a.buildWorkState()
+	work, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

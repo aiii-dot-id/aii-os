@@ -32,18 +32,12 @@ type cognitionSetting struct {
 
 func (s cognitionSetting) place() string {
 	switch s.card {
-	case "agency":
-		return "Settings → Agency"
-	case "prompt":
-		return "Settings → Prompt"
-	case "substrate":
-		return "Settings → Substrate"
-	case "tools":
-		return "Settings → Tools"
+	case "agency", "prompt", "substrate", "tools":
+		return "Settings → Technical → Turn and tool limits"
 	case "updates":
 		return "Settings → Updates"
 	}
-	return "Settings → Identity → Cognition"
+	return "Settings → Technical"
 }
 
 func (s cognitionSetting) get(c *Config) limits.Ceiling {
@@ -461,7 +455,7 @@ func holdCognition(c *Config) (said []string, err error) {
 			key, rounds, most, who := graceShort(*c)
 			if most >= 1 {
 				to, why = most, fmt.Sprintf("too many to leave a round of %s (%d) for a checkpoint — %s", key, rounds, who)
-				advice = fmt.Sprintf("set it at most %d in config.json or on Settings → Identity → Cognition", most)
+				advice = fmt.Sprintf("set it at most %d in config.json or on Settings → Technical → Turn and tool limits", most)
 			} else {
 				to, why = 0, fmt.Sprintf("too many to leave a round of %s (%d) for a checkpoint, and no grace leaves one; until it is raised to at least 3, %s", key, rounds, who)
 				advice = fmt.Sprintf("raise %s to at least 3, or leave the grace unset", key)

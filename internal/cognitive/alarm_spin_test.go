@@ -40,7 +40,7 @@ func TestAnAcceptedRepeatingAlarmReArmsRatherThanBeingDeleted(t *testing.T) {
 	}
 	fired, _ := liveAlarm(t, st, "rhythm")
 
-	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{Accepted: true}); err != nil {
+	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{Accepted: true}, 1); err != nil {
 		t.Fatal(err)
 	}
 	a, ok := liveAlarm(t, st, "rhythm")
@@ -63,7 +63,7 @@ func TestADeclinedRepeatingAlarmDoesNotStayInstantlyDue(t *testing.T) {
 	}
 	fired, _ := liveAlarm(t, st, "rhythm")
 
-	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}); err != nil {
+	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}, 1); err != nil {
 		t.Fatal(err)
 	}
 	a, ok := liveAlarm(t, st, "rhythm")
@@ -85,7 +85,7 @@ func TestADeclinedPastDueOneShotIsDeferredNotSpun(t *testing.T) {
 	}
 	fired, _ := liveAlarm(t, st, "brief")
 
-	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}); err != nil {
+	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}, 1); err != nil {
 		t.Fatal(err)
 	}
 	a, ok := liveAlarm(t, st, "brief")
@@ -111,7 +111,7 @@ func TestADeclinedFutureAlarmKeepsItsDeadlineExactly(t *testing.T) {
 	}
 	fired, _ := liveAlarm(t, st, "brief")
 
-	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}); err != nil {
+	if err := tm.ApplyAlarmTransitions(fired, AlarmResult{}, 1); err != nil {
 		t.Fatal(err)
 	}
 	a, ok := liveAlarm(t, st, "brief")

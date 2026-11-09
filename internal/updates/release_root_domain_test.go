@@ -6,7 +6,7 @@ import (
 )
 
 func TestAReleaseRootOfTheWrongDomainIsRefused(t *testing.T) {
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	sig := signer.signReleasePayload(t, releaseArchivePayload{
 		ArchiveHash: "0000000000000000000000000000000000000000000000000000000000000000",
 		Version:     "9.9.9",

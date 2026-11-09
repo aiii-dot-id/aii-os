@@ -1,6 +1,8 @@
 package interaction
 
 import (
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -46,5 +48,34 @@ func TestDescendantFilterRequiresRecordedRoot(t *testing.T) {
 	}
 	if _, err := MemoryPage(q, "source", nil, 0); err == nil {
 		t.Fatal("memory rows invented ancestry")
+	}
+}
+
+// The host's outcome filter keeps only the records whose outcome it names,
+// from the transient source as from the recorded one; none named keeps all.
+func TestTheOutcomeFilterKeepsOnlyTheOutcomesItNames(t *testing.T) {
+	rows := []Record{
+		{ID: "a", Sequence: 1, Kind: ToolResult, Role: System, Outcome: Succeeded},
+		{ID: "b", Sequence: 2, Kind: ToolResult, Role: System, Outcome: Failed},
+		{ID: "c", Sequence: 3, Kind: Notice, Role: System, Outcome: Refused},
+	}
+	ids := func(outcomes ...Outcome) string {
+		t.Helper()
+		p, err := MemoryPage(Query{Version: 1, Source: "transient", Limit: 10, Outcomes: outcomes}, "inc", append([]Record(nil), rows...), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range p.Rows {
+			got = append(got, r.ID)
+		}
+		slices.Sort(got)
+		return strings.Join(got, ",")
+	}
+	if got := ids(Failed, Refused); got != "b,c" {
+		t.Fatalf("failed and refused kept %q; want b,c", got)
+	}
+	if got := ids(); got != "a,b,c" {
+		t.Fatalf("no outcome named kept %q; want every record", got)
 	}
 }

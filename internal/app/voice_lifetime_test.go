@@ -290,7 +290,7 @@ func TestSteeredWordsAreRecordedAfterTheirArrivalEnded(t *testing.T) {
 	if steered, err := a.steer(roleOperator, "the file is in the other folder", nil, ended); err != nil || !steered {
 		t.Fatalf("not steered: %v %v", steered, err)
 	}
-	if said := a.DrainSteering(); len(said) != 1 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 		t.Fatalf("the words were not delivered: %v", said)
 	}
 	turns, err := a.store.RecentTurns(10)

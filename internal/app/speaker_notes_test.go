@@ -36,7 +36,7 @@ func TestSpeakerObservationAmendsTheTurnItNames(t *testing.T) {
 	a.turnMu.Lock()
 	a.steers = append(a.steers, steerEntry{role: roleOperator, content: voiceMarker + "hello there", voice: b})
 	a.turnMu.Unlock()
-	if said := a.DrainSteering(); len(said) != 1 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 		t.Fatalf("the steer was delivered: %v", said)
 	}
 	seq, ok, err := a.store.TurnSeqByAnnotation("voice", "vs-1/7")
@@ -159,7 +159,7 @@ func TestAnObservationWithNothingToCompareSaysSoRatherThanUncertain(t *testing.T
 	a.turnMu.Lock()
 	a.steers = append(a.steers, steerEntry{role: roleOperator, content: voiceMarker + "who am I", voice: b})
 	a.turnMu.Unlock()
-	if said := a.DrainSteering(); len(said) != 1 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 {
 		t.Fatalf("the steer was delivered: %v", said)
 	}
 	seq, ok, err := a.store.TurnSeqByAnnotation("voice", "vs-1/3")
@@ -249,7 +249,7 @@ func TestAnObservationThatOutrunsItsTurnIsHeldAndReachesTheTurnItNames(t *testin
 	a.turnMu.Lock()
 	a.steers = append(a.steers, steerEntry{role: roleOperator, content: voiceMarker + "it is me", voice: b})
 	a.turnMu.Unlock()
-	said := a.DrainSteering()
+	said := steeredWords(a.DrainSteering())
 
 	if _, held := a.speakerPending.Load("vs-2/5"); held {
 		t.Fatal("the held observation is adopted by the turn, not left behind")
@@ -306,7 +306,7 @@ func TestATypedTurnGainsNoAttribution(t *testing.T) {
 	a.turnMu.Lock()
 	a.steers = append(a.steers, steerEntry{role: roleOperator, content: "typed words"})
 	a.turnMu.Unlock()
-	if said := a.DrainSteering(); len(said) != 1 || said[0] != "typed words" {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 || said[0] != "typed words" {
 		t.Fatalf("a typed turn reaches the identity exactly as typed: %q", said)
 	}
 }

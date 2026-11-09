@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/conversation"
+	"github.com/aiii-dot-id/aii-os/internal/interaction"
 	"github.com/aiii-dot-id/aii-os/internal/limits"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 )
@@ -60,20 +61,30 @@ func TestATimedOutResidentTurnResumesRecordedWork(t *testing.T) {
 			if _, e := a.observeChat(ctx, "Finish this request", func(string, string, string) {}); !errors.Is(e, context.DeadlineExceeded) {
 				t.Fatalf("original timeout must remain a failure: %v", e)
 			}
+			// With a session active, the recovery leg is itself the
+			// session's fresh turn (work continues, 2026-11-06): it
+			// answers and, recording no outcome, is the last; the
+			// condition becomes the operator's word.
 			waitFor(t, "automatic timeout recovery", func() bool {
 				var n int
 				e := a.store.DB().QueryRow(`SELECT COUNT(*) FROM conversations WHERE role='resident' AND content='Recovered the unfinished request'`).Scan(&n)
-				return e == nil && n == 1 && !a.TurnActive()
+				if e != nil || a.TurnActive() {
+					return false
+				}
+				if work {
+					return n == 1 && resumesOnOf(t, a) == "word"
+				}
+				return n == 1
 			})
 			reqs := obs.snapshot()
-			want := 2
+			want, recovery := 2, 1
 			if work {
-				want = 3
+				want, recovery = 3, 2
 			}
 			if len(reqs) != want {
 				t.Fatalf("requests=%d want%d", len(reqs), want)
 			}
-			last := reqs[len(reqs)-1]
+			last := reqs[recovery]
 			if !strings.Contains(last, "timeout checkpoint — continuation 1") || !strings.Contains(last, "completed tool calls are not to be replayed") {
 				t.Fatal("recovery lacks scoped timeout instruction")
 			}
@@ -177,7 +188,7 @@ func TestTimeoutRecoveryDoesNotTakeOverDifferentWork(t *testing.T) {
 			if e := a.store.StartWorkSession(t.Context(), "ws_current", "current fixture"); e != nil {
 				t.Fatal(e)
 			}
-			a.continueCappedTurn(target, 1, capDeadline, "")
+			a.continueCappedTurn(target, 1, capDeadline, "", false, "")
 			if got := outboxReply(t, a, "continuation_1_"); !strings.Contains(got, "work selection changed") {
 				t.Fatalf("missing stand-down:%q", got)
 			}
@@ -224,4 +235,40 @@ func TestRepeatedTimeoutRecoveryStopsAtConfiguredBound(t *testing.T) {
 	if n := len(obs.snapshot()); n != 2 {
 		t.Fatalf("sent %d requests, want original plus one fresh leg", n)
 	}
+}
+
+// A TIMEOUT'S CONTINUATION IS SCHEDULED WORK TOO (a review 1844 item 4): while
+// its leg waits for the gate the page is not told nothing is scheduled, and
+// once the leg holds the gate its count is given back.
+func TestATimeoutsContinuationCountsAsScheduled(t *testing.T) {
+	a, _ := dispatchApp(t)
+	defer stopApp(t, a)
+	if e := a.store.StartWorkSession(t.Context(), "ws_timeout", "a long task"); e != nil {
+		t.Fatal(e)
+	}
+	if e := a.acquireTurn(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	held := true // a failure below lets the gate go, so the leg and the app can stop
+	defer func() {
+		if held {
+			a.releaseTurn()
+		}
+	}()
+	ctx := withTurnSource(interaction.WithTurn(t.Context(), "turn-timeout"), turnSourceOperator)
+	a.resumeTimedOutTurn(ctx, context.DeadlineExceeded, true)
+	w, err := a.workQueueState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.NothingScheduled {
+		t.Fatal("the page is told nothing is scheduled while a timeout's continuation waits for the gate")
+	}
+	held = false
+	a.releaseTurn()
+	waitFor(t, "the leg holding the gate", func() bool {
+		a.turn.mu.Lock()
+		defer a.turn.mu.Unlock()
+		return a.turn.legsQueued == 0
+	})
 }

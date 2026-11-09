@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+// A VOICE CONTROL'S FAILURE IS A SENTENCE ON THE OPERATOR'S SCREEN, NEVER
+// PROTOCOL TEXT (beta.7, 2026-10-02: a toast showed "could not finish the
+// input: session control ... {"code":-32000,...}"). The messages are the
+// ones the dashboard really sent when an engine failed each control —
+// finish, finish with the engine gone, interrupt, close — captured from the
+// socket by voiceControlFailures; the page is the shipped ws.js, fed them
+// on its own socket. Away from the conversation each becomes a toast; on
+// Home and in the whole conversation, which hold its thread and reply box
+// (step 6), a line there: either way exactly the sentence, with no '{' and
+// no '-320'.
 const voiceControlToastPage = `<!doctype html>
 <button id="send-btn" disabled></button>
 <button id="mic" disabled></button>
@@ -28,7 +38,7 @@ const sent = __SENT__, want = __WANT__;
 run(assert => {
   ws.connect(); sockets[0].open();
   assert(sent.length === want.length && sent.length >= 4, 'the socket gave the page ' + sent.length + ' control failures');
-  for (const [view, said] of [['home', () => window.__toasts || []], ['chat', () => window.__chatLines || []]]) {
+  for (const [view, said] of [['projects', () => window.__toasts || []], ['chat', () => window.__chatLines || []]]) {
     S.view = view;
     const before = said().length;
     for (const m of sent) sockets[0].recv(m);

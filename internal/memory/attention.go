@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/memory/attention"
-	"github.com/aiii-dot-id/aii-os/internal/memory/carrd"
 	"github.com/aiii-dot-id/aii-os/internal/store"
 )
 
@@ -17,7 +16,7 @@ const (
 
 	FollowupAfter = 30 * 24 * time.Hour
 
-	AttentionLimit = 12
+	AttentionLimit = attention.Limit
 
 	SnapshotStaleAfter = 48 * time.Hour
 
@@ -36,7 +35,7 @@ func (f *Facility) Attention(ctx context.Context, now time.Time, want string) ([
 		can  []string
 	}
 	sources := []source{
-		{"decay alerts", fadingBeliefs, []string{attention.CostLow}},
+		{"decay alerts", f.fadingBeliefs, []string{attention.CostLow}},
 		{"contradictions", openTensions, []string{attention.CostMedium}},
 		{"follow-ups", untouchedIntentions, []string{attention.CostLow}},
 		{"continuity", continuityItems, []string{attention.CostMedium, attention.CostLow}},
@@ -59,13 +58,12 @@ func (f *Facility) Attention(ctx context.Context, now time.Time, want string) ([
 		return nil, err
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Priority > items[j].Priority })
-	if len(items) > AttentionLimit {
-		items = items[:AttentionLimit]
-	}
+
 	return items, nil
 }
 
-func fadingBeliefs(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
+func (f *Facility) fadingBeliefs(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
+	st := f.st
 	rows, err := db.QueryContext(ctx, `SELECT b.id, b.statement, b.ring, b.evidence_count,
 		COALESCE((SELECT l.ts FROM ledger l WHERE l.seq = b.first_seq), ''),
 		COALESCE((SELECT a.count FROM memory_access a WHERE a.store = 'beliefs' AND a.id = b.id), 0),
@@ -74,46 +72,93 @@ func fadingBeliefs(ctx context.Context, db store.Reader, now time.Time) ([]Atten
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []AttentionItem
+	type candidate struct {
+		id, statement, lastAt string
+		facts                 RecallFacts
+	}
+	var candidates []candidate
 	for rows.Next() {
 		var id, statement, since, lastAt string
 		var ring, evidence int
 		var accesses int64
 		if err := rows.Scan(&id, &statement, &ring, &evidence, &since, &accesses, &lastAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		born := parseTime(since)
 		if born.IsZero() {
 			continue
 		}
-		class := carrd.Operational
-		if evidence > 0 {
-			class = carrd.Standard
-		}
-		strength, _ := carrd.Strength(class, now.Sub(born).Hours()/24, accesses)
-		if strength >= DecayAlertStrength {
+
+		facts := RecallFacts{Ring: ring, EvidenceCount: evidence, Born: born, Accesses: accesses}
+
+		if r := BeliefRecall(facts, now); r.Strength == nil || !r.Fading {
 			continue
 		}
+		candidates = append(candidates, candidate{id: id, statement: statement, lastAt: lastAt, facts: facts})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	ids := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		ids = append(ids, c.id)
+	}
+	footings, err := st.BeliefFootingsIn(ctx, db, ids)
+	if err != nil {
+		return nil, fmt.Errorf("footing: %w", err)
+	}
+	var out []AttentionItem
+
+	suspects := map[string]bool{}
+	for _, c := range candidates {
+		c.facts.Footing = footings[c.id]
+		if c.facts.Footing.Suspect {
+			unsuspected := c.facts
+			unsuspected.Footing.Suspect = false
+			if r := BeliefRecall(unsuspected, now); r.Fading {
+				suspects[c.id] = true
+			}
+			continue
+		}
+		reading := BeliefRecall(c.facts, now)
+		if reading.Strength == nil || !reading.Fading {
+			continue
+		}
+		strength := *reading.Strength
 		recalled := "never recalled"
-		if t := parseTime(lastAt); !t.IsZero() {
+		if t := parseTime(c.lastAt); !t.IsZero() {
 			recalled = "last recalled " + t.UTC().Format("2006-01-02")
 		}
-		out = append(out, AttentionItem{Kind: attention.AttentionDecayAlert, Cost: attention.CostLow, Priority: 1 - strength, Store: "beliefs", ID: id, Since: born,
-			Text: fmt.Sprintf("a belief is fading (strength %.2f, %s): %q — reconfirm it with evidence, or let it go", strength, recalled, statement)})
+		out = append(out, AttentionItem{Kind: attention.AttentionDecayAlert, Cost: attention.CostLow, Priority: 1 - strength, Store: "beliefs", ID: c.id, Since: c.facts.Born,
+			Text: fmt.Sprintf(fadingAlertText, strength, recalled, c.statement)})
 	}
-	return out, rows.Err()
+	if len(suspects) > 0 {
+		tensions, err := tensionItems(ctx, db, now, attention.CostLow, suspects)
+		if err != nil {
+			return nil, fmt.Errorf("tensions of suspect beliefs: %w", err)
+		}
+		out = append(out, tensions...)
+	}
+	return out, nil
 }
 
-const openTensionsSQL = `SELECT e.id, e.from_id, e.to_id,
+const fadingAlertText = "a belief is fading (strength %.2f, %s) and does not yet stand on three distinct origins: %q — give it evidence from three distinct places, or let it go"
+
+var openTensionsSQL = `SELECT e.id, e.from_id, e.to_id,
 		COALESCE((SELECT statement FROM beliefs WHERE id = e.from_id), ''),
 		COALESCE((SELECT statement FROM beliefs WHERE id = e.to_id), ''),
 		COALESCE((SELECT l.ts FROM ledger l WHERE l.seq = e.created_seq), '')
-		FROM edges e WHERE e.edge_type = 'CONTRADICTS' AND e.archived = 0
-		AND NOT EXISTS (SELECT 1 FROM beliefs r WHERE r.id IN (e.from_id, e.to_id) AND (r.archived = 1 OR r.superseded_by IS NOT NULL))
+		FROM edges e WHERE ` + store.LiveContradiction("e") + `
 		ORDER BY e.created_seq`
 
 func openTensions(ctx context.Context, db store.Reader, now time.Time) ([]AttentionItem, error) {
+	return tensionItems(ctx, db, now, attention.CostMedium, nil)
+}
+
+func tensionItems(ctx context.Context, db store.Reader, now time.Time, cost string, into map[string]bool) ([]AttentionItem, error) {
 	rows, err := db.QueryContext(ctx, openTensionsSQL)
 	if err != nil {
 		return nil, err
@@ -124,6 +169,9 @@ func openTensions(ctx context.Context, db store.Reader, now time.Time) ([]Attent
 		var id, from, to, fromText, toText, since string
 		if err := rows.Scan(&id, &from, &to, &fromText, &toText, &since); err != nil {
 			return nil, err
+		}
+		if into != nil && !into[to] {
+			continue
 		}
 		born := parseTime(since)
 		age := 0.0
@@ -136,7 +184,7 @@ func openTensions(ctx context.Context, db store.Reader, now time.Time) ([]Attent
 		if toText == "" {
 			toText = to
 		}
-		out = append(out, AttentionItem{Kind: attention.AttentionContradiction, Cost: attention.CostMedium, Priority: age, Store: "edges", ID: id, Since: born,
+		out = append(out, AttentionItem{Kind: attention.AttentionContradiction, Cost: cost, Priority: age, Store: "edges", ID: id, Since: born,
 			Text: fmt.Sprintf("an open tension: %q contradicts %q — resolve it by superseding or archiving one, or hold it knowingly", fromText, toText)})
 	}
 	return out, rows.Err()

@@ -177,7 +177,7 @@ func TestTheRecordKeepsWhenTheCheckWasSet(t *testing.T) {
 	if err != nil || c.Command != "true" || c.SetAfterCalls != 3 {
 		t.Fatalf("the declaration does not keep when it was set: %+v %v", c, err)
 	}
-	if card, err := a.buildWorkState(); err != nil || !strings.Contains(card, "Check (the host runs it at deliver): true") {
+	if card, err := a.buildWorkState(t.Context()); err != nil || !strings.Contains(card, "Check (the host runs it at deliver): true") {
 		t.Fatalf("the card does not show the check: %v\n%s", err, card)
 	}
 	parts, err := a.store.WorkRecordOf([]string{id})

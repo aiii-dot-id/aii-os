@@ -24,7 +24,7 @@ type alarmEnqueuerAdapter struct {
 
 const alarmLeaseMs = int64(30 * time.Minute / time.Millisecond)
 
-func (a alarmEnqueuerAdapter) EnqueueAlarm(alarm store.Alarm) error {
+func (a alarmEnqueuerAdapter) EnqueueAlarm(alarm store.Alarm, token uint64) error {
 
 	payload, _ := json.Marshal(map[string]any{
 		"alarm_id":     alarm.AlarmID,
@@ -33,6 +33,7 @@ func (a alarmEnqueuerAdapter) EnqueueAlarm(alarm store.Alarm) error {
 		"deadline":     alarm.Deadline,
 		"repeat_every": alarm.RepeatEvery,
 		"payload":      alarm.Payload,
+		"hold_token":   token,
 	})
 
 	_, err := a.ex.Enqueue(
@@ -54,8 +55,8 @@ type alarmHandler struct {
 type ownerLookup interface {
 	OwnerFor(name string) (cognitive.AlarmOwner, bool)
 	InvokeAlarmOwner(ctx context.Context, owner cognitive.AlarmOwner, alarm store.Alarm) cognitive.AlarmResult
-	ApplyAlarmTransitions(alarm store.Alarm, result cognitive.AlarmResult) error
-	ClearPendingDispatch(alarmID string)
+	ApplyAlarmTransitions(alarm store.Alarm, result cognitive.AlarmResult, token uint64) error
+	ClearPendingDispatch(alarmID string, token uint64)
 }
 
 func (h *alarmHandler) WorkKinds() []string { return []string{"alarm.*"} }
@@ -68,10 +69,10 @@ func (h *alarmHandler) RunWork(ctx context.Context, w *store.WorkItem) error {
 		Deadline    int64  `json:"deadline"`
 		RepeatEvery *int64 `json:"repeat_every"`
 		Payload     string `json:"payload"`
+		HoldToken   uint64 `json:"hold_token"`
 	}
 	if err := json.Unmarshal([]byte(w.Payload), &p); err != nil {
 
-		h.time.ClearPendingDispatch(p.AlarmID)
 		return fmt.Errorf("alarm payload: %w", err)
 	}
 	alarm := store.Alarm{
@@ -80,12 +81,12 @@ func (h *alarmHandler) RunWork(ctx context.Context, w *store.WorkItem) error {
 	}
 	owner, ok := h.time.OwnerFor(p.Owner)
 	if !ok {
-		h.time.ClearPendingDispatch(p.AlarmID)
+		h.time.ClearPendingDispatch(p.AlarmID, p.HoldToken)
 		return fmt.Errorf("unregistered owner %q (alarm %s preserved)", p.Owner, p.AlarmID)
 	}
 	result := h.time.InvokeAlarmOwner(ctx, owner, alarm)
 
-	return h.time.ApplyAlarmTransitions(alarm, result)
+	return h.time.ApplyAlarmTransitions(alarm, result, p.HoldToken)
 }
 
 type subagentHandler struct{ a *App }
@@ -555,16 +556,16 @@ func (a *App) routeLimits(role string) Limits {
 	reg, err := a.loadProviders()
 	if role != "" && err == nil {
 		if route, ok := cfg.Agency.Roles[role]; ok {
-			if e := entryNamed(reg, route.Provider); e != nil {
-				model := route.Model
-				if model == "" {
-					model = e.DefaultModel
-				}
-				return limitsFor(cfg, *e, model)
+
+			if cc, entry, err := a.resolveRouteLLM(cfg, reg, route.Provider, route.Model); err == nil {
+				return limitsFor(cfg, entry, cc.Model)
 			}
 		} else if cfg.Agency.PreferLocalForRoles {
-			if locals := localEntries(reg); len(locals) > 0 {
-				return limitsFor(cfg, locals[0], locals[0].DefaultModel)
+
+			if local, ok := a.firstHealthyLocal(reg); ok {
+				if cc, entry, err := a.resolveRouteLLM(cfg, reg, local.Name, ""); err == nil {
+					return limitsFor(cfg, entry, cc.Model)
+				}
 			}
 		}
 	}
@@ -634,13 +635,8 @@ func (a *App) firstHealthyLocal(reg *providerRegistry) (providerEntry, bool) {
 	if len(marked) == 0 {
 		return providerEntry{}, false
 	}
-	probes := a.probeProviders(&providerRegistry{Providers: marked})
-	for _, e := range marked {
-		if probes[e.Name].state == probeOK {
-			return e, true
-		}
-	}
-	return providerEntry{}, false
+
+	return firstAnsweringLocal(marked, a.probeProviders(&providerRegistry{Providers: marked}))
 }
 
 func subagentOutcomeHeader(role, modelID, cause string,
@@ -661,6 +657,9 @@ func (h *subagentHandler) closeChild(p identity.SubagentRequest, leg, calls, tok
 		logsink.Warn("subagent.error", "%s: child metric not recorded: %v", p.SessionID, merr)
 	}
 	h.a.emitToolEvent("subagent", "done", fmt.Sprintf("%s: %s", p.SessionID, event))
+	if runErr != nil {
+		h.a.childEndedUnfinished(p.SessionID, causeLine(runErr))
+	}
 	if h.a.dashboard != nil {
 		h.a.dashboard.PokeOutbox()
 		h.a.dashboard.BroadcastWork()

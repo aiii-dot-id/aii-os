@@ -32,7 +32,7 @@ remote="$stage/aii-native-$run_id.sh"
 qualify=""
 if [ "$host" = windows ]; then
   if [ -n "${AII_WINDOWS_VOICE_FIXTURE:-}" ] && [ -n "${AII_WINDOWS_VOICE_EVIDENCE:-}" ]; then
-    qualify="export AII_REQUIRED_WINDOWS_QUALIFICATION=1 AII_WINDOWS_VOICE_FIXTURE='$AII_WINDOWS_VOICE_FIXTURE' AII_WINDOWS_VOICE_EVIDENCE='$AII_WINDOWS_VOICE_EVIDENCE'"
+    qualify="rc=\$?; AII_REQUIRED_WINDOWS_QUALIFICATION=1 AII_WINDOWS_VOICE_FIXTURE='$AII_WINDOWS_VOICE_FIXTURE' AII_WINDOWS_VOICE_EVIDENCE='$AII_WINDOWS_VOICE_EVIDENCE' go test -count=1 -timeout $suite_timeout -json -run '^TestWindowsVoiceQualification\$' ./internal/pluginhost/ || rc=1; (exit \$rc)"
   else
     echo "native: WINDOWS QUALIFICATION NOT RUN — AII_WINDOWS_VOICE_FIXTURE and AII_WINDOWS_VOICE_EVIDENCE are not set" | tee -a "$dir/native.log" >&2
   fi
@@ -51,9 +51,9 @@ fi
 cat > "$remote" <<EOF
 export GOTOOLCHAIN=local GOFLAGS=-buildvcs=false
 $ask
-$qualify
 $where
-mkdir -p aii-native && mkdir aii-native/$run_id && tar -C aii-native/$run_id -xzf aii-native-$run_id.tgz && cd aii-native/$run_id && go version && go test -count=1 -timeout $suite_timeout -json ./...
+mkdir -p aii-native && mkdir aii-native/$run_id && tar -C aii-native/$run_id -xzf aii-native-$run_id.tgz && cd aii-native/$run_id && go version && sh test/native-suite.sh $suite_timeout
+$qualify
 echo NATIVE_EXIT=\$?
 EOF
 launcher="$stage/aii-native-$run_id.ps1"
@@ -78,7 +78,9 @@ for (\$p = Get-Item -Force \$dir; \$p -and \$p.Parent; \$p = \$p.Parent) {
 Remove-Item -Force -ErrorAction SilentlyContinue \$out
 \$action = New-ScheduledTaskAction -Execute "C:\\Program Files\\Git\\usr\\bin\\sh.exe" -Argument '-c "export PATH=/usr/bin:\$PATH; sh aii-native-$run_id.sh > aii-native-$run_id.out 2>&1"' -WorkingDirectory \$dir
 \$principal = New-ScheduledTaskPrincipal -UserId \$env:USERNAME -LogonType Interactive -RunLevel Limited
-\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+# Priority 4 is a normal process's: a task's default, 7, runs it below
+# normal, its disk and memory at background priority too.
+\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Priority 4
 Register-ScheduledTask -TaskName \$name -Action \$action -Principal \$principal -Settings \$settings | Out-Null
 Start-ScheduledTask -TaskName \$name
 \$deadline = (Get-Date).AddSeconds(60)
@@ -101,7 +103,7 @@ case "$host" in
   linux)
     work=$(mktemp -d)
     tar -C "$work" -xzf "$tarball"
-    ( cd "$work" && GOFLAGS=-buildvcs=false "$GO" test -count=1 -timeout "$suite_timeout" -json ./... ) > "$log" 2>&1; rc=$?
+    ( cd "$work" && PATH="$(dirname "$GO"):$PATH" GOFLAGS=-buildvcs=false sh test/native-suite.sh "$suite_timeout" ) > "$log" 2>&1; rc=$?
     ver=$("$GO" version 2>/dev/null)
     rm -rf "$work"
     skips; record "$ver" "$rc" "$start"; exit $rc ;;

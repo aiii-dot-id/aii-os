@@ -26,7 +26,7 @@ func TestStandingPlanRendersAfterSessionClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ws, err := (&App{store: projection}).buildWorkState()
+	ws, err := (&App{store: projection}).buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestStandingPlanRendersAfterSessionClose(t *testing.T) {
 	if err := projection.UpdateWorkPlan(t.Context(), "ws_y", &focus2, nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	ws, err = (&App{store: projection}).buildWorkState()
+	ws, err = (&App{store: projection}).buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

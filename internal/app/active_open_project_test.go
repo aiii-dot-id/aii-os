@@ -38,7 +38,7 @@ func TestTheWorkingStateNeverNamesAClosedProject(t *testing.T) {
 	if _, err := a.selectProject(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestTheWorkingStateNeverNamesAClosedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err = a.buildWorkState()
+	state, err = a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatalf("a closed focus must not fail the prompt, only be left out: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestTheWorkingStateRendersTheContractDeterministically(t *testing.T) {
 	if _, err := a.selectProject(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.projects.ApplyPatch(p.ID, nil, nil, nil, nil, &project.Contract{
+	if _, err := a.projects.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, &project.Contract{
 		Outcome:     "ship the beta on three platforms",
 		Acceptance:  []string{"windows installs clean", "the dmg is stapled", "the deb registers"},
 		Constraints: []string{"no unsigned binaries", "no network at install time"},
@@ -155,7 +155,7 @@ func TestTheWorkingStateRendersTheContractDeterministically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestAnUnauthoredContractStaysQuiet(t *testing.T) {
 	if _, err := a.selectProject(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	state, err := a.buildWorkState()
+	state, err := a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

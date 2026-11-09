@@ -236,7 +236,7 @@ func TestBootSaysAShortTokenBehindARelay(t *testing.T) {
 		return logs
 	}
 	said := boot("relay")
-	if !said.Contains("15 characters") || !said.Contains("relay") || !said.Contains("Rotate access token") {
+	if !said.Contains("15 characters") || !said.Contains("relay") || !said.Contains("Sign out all devices") {
 		t.Fatalf("boot did not say the token is short behind a relay, or how to replace it: %s", said.String())
 	}
 	if said.Contains("fifteen-chars-x") {

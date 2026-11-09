@@ -54,7 +54,7 @@ var declaredPayloadMembers = func() map[EventType]payloadMembers {
 		EventEdgeArchive:         with(commitMembers),
 		EventSelfModelSynthesize: portrait,
 		EventRelationshipUpsert: with(commitMembers, "counterpart_name", "counterpart_role", "trust_level", "autonomy_level",
-			"relationship_type", "supersedes", "charter_text", "operator_approval_excerpt", "operator_approval_turn", "approval_basis"),
+			"relationship_type", "supersedes", "charter_text", "operator_approval_excerpt", "operator_approval_turn", "approval_basis", "approval_digest", "approval_press_turn"),
 		EventEdgeCreate:            with(commitMembers, "from_id", "to_id", "edge_type", "strength", "context"),
 		EventExperienceCreate:      note,
 		EventIntentionCreate:       with(commitMembers, "statement", "why"),

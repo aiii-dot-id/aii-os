@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"os"
 	"path/filepath"
@@ -79,6 +81,31 @@ func inertThemeTokens(tokens map[string]string) []string {
 	return inert
 }
 
+func validateUITheme(raw []byte) (uiThemeShape, error) {
+	var shape uiThemeShape
+	if len(raw) > maxUIThemeBytes {
+		return shape, fmt.Errorf("%d bytes exceeds the %d ceiling (a theme is a screenful of JSON)", len(raw), maxUIThemeBytes)
+	}
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return shape, fmt.Errorf("invalid JSON (mid-edit saves must not repaint the screen): %v", err)
+	}
+	if shape.V != 1 {
+		return shape, fmt.Errorf("v must be 1, got %d", shape.V)
+	}
+	if len(shape.Tokens) > maxUIThemeTokens {
+		return shape, fmt.Errorf("%d tokens exceeds the %d ceiling", len(shape.Tokens), maxUIThemeTokens)
+	}
+	for name, val := range shape.Tokens {
+		if !validThemeName(name) {
+			return shape, fmt.Errorf("%q is not a CSS custom property (--name)", name)
+		}
+		if !validThemeValue(val) {
+			return shape, fmt.Errorf("value for %s is refused (allowlist: colours, lengths, font names; no url(), no comments, no selectors)", name)
+		}
+	}
+	return shape, nil
+}
+
 func (a *App) loadUITheme(quiet bool) bool {
 	path := a.uiThemePath()
 	raw, err := os.ReadFile(path)
@@ -89,34 +116,12 @@ func (a *App) loadUITheme(quiet bool) bool {
 		}
 		raw = nil
 	}
-	if len(raw) > maxUIThemeBytes {
-		logsink.Warn("theme.refusal", "%d bytes exceeds the %d ceiling — keeping current (a theme is a screenful of JSON)", len(raw), maxUIThemeBytes)
-		return false
-	}
 	var clean []byte
 	if raw != nil {
-		var shape uiThemeShape
-		if err := json.Unmarshal(raw, &shape); err != nil {
-			logsink.Warn("theme.refusal", "invalid JSON, keeping current (mid-edit saves must not repaint the screen): %v", err)
+		shape, err := validateUITheme(raw)
+		if err != nil {
+			logsink.Warn("theme.refusal", "%v — keeping current", err)
 			return false
-		}
-		if shape.V != 1 {
-			logsink.Warn("theme.refusal", "v must be 1, got %d — keeping current", shape.V)
-			return false
-		}
-		if len(shape.Tokens) > maxUIThemeTokens {
-			logsink.Warn("theme.refusal", "%d tokens exceeds the %d ceiling — keeping current", len(shape.Tokens), maxUIThemeTokens)
-			return false
-		}
-		for name, val := range shape.Tokens {
-			if !validThemeName(name) {
-				logsink.Warn("theme.refusal", "%q is not a CSS custom property (--name) — keeping current", name)
-				return false
-			}
-			if !validThemeValue(val) {
-				logsink.Warn("theme.refusal", "value for %s is refused (allowlist: colours, lengths, font names; no url(), no comments, no selectors) — keeping current", name)
-				return false
-			}
 		}
 
 		if !quiet {
@@ -182,4 +187,70 @@ func (a *App) watchUITheme() {
 			}
 		}
 	}
+}
+
+var (
+	errThemeFile  = errors.New("theme.json is not a valid theme as it stands, so it was left as it is")
+	errThemeToken = errors.New("the page sent a token theme.json does not take")
+)
+
+func (a *App) setUIThemeTokens(set map[string]string) error {
+	a.dash.themeWrite.Lock()
+	defer a.dash.themeWrite.Unlock()
+	declared := dashboard.DeclaredThemeTokens()
+	if len(declared) == 0 {
+		return fmt.Errorf("%w: the frame's token list could not be read", errThemeToken)
+	}
+	for name, val := range set {
+		if !validThemeName(name) || !declared[name] || (val != "" && !validThemeValue(val)) {
+			return fmt.Errorf("%w: %s", errThemeToken, name)
+		}
+	}
+	path := a.uiThemePath()
+	doc := map[string]json.RawMessage{}
+	shape := uiThemeShape{V: 1, Tokens: map[string]string{}}
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if shape, err = validateUITheme(raw); err != nil {
+			return fmt.Errorf("%w: %v", errThemeFile, err)
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("%w: %v", errThemeFile, err)
+		}
+		if shape.Tokens == nil {
+			shape.Tokens = map[string]string{}
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("%w: unreadable: %v", errThemeFile, err)
+	}
+	for name, val := range set {
+		if val == "" {
+			delete(shape.Tokens, name)
+		} else {
+			shape.Tokens[name] = val
+		}
+	}
+	if len(shape.Tokens) > maxUIThemeTokens {
+		return fmt.Errorf("%w: %d tokens exceeds the %d ceiling", errThemeToken, len(shape.Tokens), maxUIThemeTokens)
+	}
+	tokens, err := json.Marshal(shape.Tokens)
+	if err != nil {
+		return err
+	}
+	doc["v"], doc["tokens"] = json.RawMessage("1"), tokens
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	out = append(out, '\n')
+	if _, err := validateUITheme(out); err != nil {
+		return fmt.Errorf("%w: the file as it would be written is refused: %v", errThemeToken, err)
+	}
+	if _, err := writeFileAtomic(path, out); err != nil {
+		return err
+	}
+	a.loadUITheme(false)
+	return nil
 }

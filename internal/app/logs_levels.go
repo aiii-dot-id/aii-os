@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -210,26 +209,6 @@ const (
 	TapClear = "clear"
 )
 
-func isPromptTap(category string) bool { return strings.HasSuffix(category, ".prompt") }
-
-const promptTapRefusal = "a prompt tap is started only by the operator, in config.json under logs.taps; the log control file cannot start one"
-
-var (
-	overlayRefusedMu sync.Mutex
-
-	overlayRefused = map[string]string{}
-)
-
-func refuseOverlayPromptTap(category, until string) {
-	overlayRefusedMu.Lock()
-	defer overlayRefusedMu.Unlock()
-	if prev, seen := overlayRefused[category]; seen && prev == until {
-		return
-	}
-	overlayRefused[category] = until
-	logsink.Warn("logs.refusal", "%s is asked for in %s: refused — %s", category, filepath.ToSlash(filepath.Join(LogControlDirName, LogControlFileName)), promptTapRefusal)
-}
-
 func tapStopped(v string) bool { return strings.EqualFold(strings.TrimSpace(v), TapOff) }
 
 func SetLogTap(path, category, until string) error {
@@ -247,9 +226,6 @@ func SetLogTap(path, category, until string) error {
 
 	if until != TapOff && until != TapClear && !logsink.Tappable(category) {
 		return fmt.Errorf("%q is a detail, but nothing is captured under it: a tap records a model exchange, a detail ending in .prompt or .return (llm.prompt, llm.return, or a facility's own)", category)
-	}
-	if until != TapOff && until != TapClear && isPromptTap(category) {
-		return fmt.Errorf("%s: %s (\"%s\": {\"until\": \"<an RFC3339 time>\"})", category, promptTapRefusal, category)
 	}
 	switch until {
 	case TapOff:
@@ -282,18 +258,8 @@ func describeTaps(b *strings.Builder, cfg Config, ctl LogControl) {
 		taps[strings.ToLower(c)] = t.Until
 		asked[strings.ToLower(c)] = true
 	}
-	var refused []string
 	for c, u := range ctl.Tap {
-		c = strings.ToLower(c)
-		if isPromptTap(c) && !tapStopped(u) {
-			refused = append(refused, c)
-			continue
-		}
-		taps[c] = u
-	}
-	sort.Strings(refused)
-	for _, c := range refused {
-		fmt.Fprintf(b, "tap: %s — REFUSED in the overlay: %s\n", c, promptTapRefusal)
+		taps[strings.ToLower(c)] = u
 	}
 	if len(taps) == 0 {
 		b.WriteString("taps: none — no payloads are being captured\n")
@@ -343,13 +309,8 @@ func applyLogTaps(cfg Config, controlPath string) {
 		want[strings.ToLower(strings.TrimSpace(cat))] = t.Until
 	}
 	for cat, until := range ctl.Tap {
-		cat = strings.ToLower(strings.TrimSpace(cat))
 
-		if isPromptTap(cat) && !tapStopped(until) {
-			refuseOverlayPromptTap(cat, until)
-			continue
-		}
-		want[cat] = until
+		want[strings.ToLower(strings.TrimSpace(cat))] = until
 	}
 
 	live := map[string]time.Time{}

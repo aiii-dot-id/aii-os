@@ -432,7 +432,7 @@ func m4Render(t *testing.T, f *m4Fixture) []m4Request {
 // that names the section, or folds it, stands in for.
 func m4Sections(t *testing.T, f *m4Fixture) map[string][]string {
 	t.Helper()
-	ws, err := f.a.buildWorkState()
+	ws, err := f.a.buildWorkState(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

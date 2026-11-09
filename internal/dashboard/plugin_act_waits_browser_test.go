@@ -12,7 +12,7 @@ const pluginActWaitsPage = substratePageMarkup + `<div class="app"><div class="s
 import { S } from './state.js';
 import { connect } from './ws.js';
 import { assert, run } from './__harness.js';
-run(() => {
+` + offerSettingsJS + `run(() => {
  const sockets=[];
  window.setTimeout=()=>1;window.clearTimeout=()=>{};
  window.WebSocket=class {

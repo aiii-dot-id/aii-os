@@ -22,6 +22,8 @@ func localDevice(t *testing.T) (*httptest.Server, string, int) {
 		switch r.URL.Path {
 		case "/leave":
 			http.Redirect(w, r, "https://example.com/", http.StatusFound)
+		case "/leave-nowhere": // a name no resolver answers (RFC 2606)
+			http.Redirect(w, r, "https://nowhere.invalid/", http.StatusFound)
 		default:
 			fmt.Fprintf(w, `{"auth":%q,"path":%q}`, r.Header.Get("Authorization"), r.URL.Path)
 		}
@@ -203,5 +205,25 @@ func TestARedirectFromTheDeviceToTheInternetIsRefusedUnlessGranted(t *testing.T)
 	_ = json.Unmarshal(rec["detail"], &detail)
 	if !strings.Contains(strings.ToLower(detail), "redirect") && !strings.Contains(strings.ToLower(detail), "egress") && !strings.Contains(strings.ToLower(detail), "granted hosts") {
 		t.Fatalf("a hop off the local network is the guard's to refuse: %q", detail)
+	}
+}
+
+// A HOP OFF THE GRANT IS REFUSED BY NAME, BEFORE ANY LOOKUP (the gate of
+// 2026-11-06, twice: beside the rest of the scope the resolver stalled on
+// example.com, and the guard's lookup error was read as an unknown remote
+// outcome, NET_EFFECT_UNKNOWN for NET_REMOTE_OUTCOME_FAILED). A redirect to
+// a name no resolver answers is the same refusal as one to a name every
+// resolver answers: the grant does not name it, so nothing is asked.
+func TestAHopOffTheGrantIsRefusedByNameBeforeAnyLookup(t *testing.T) {
+	ts, host, port := localDevice(t)
+	st := newStore(t)
+	h := newHost(t, st, Config{Grants: map[string]Grant{"p": {Local: []string{fmt.Sprintf("%s:%d", host, port)}}}})
+	b := h.Bind("p", packagefmt.TierT1, []string{"net.local"})
+	m := dispatch(t, b, netParams(ts.URL+"/leave-nowhere", ""))
+	rec := wantResult(t, m, statusFailed, reasonNetRemoteFailed)
+	var detail string
+	_ = json.Unmarshal(rec["detail"], &detail)
+	if !strings.Contains(detail, "granted hosts") {
+		t.Fatalf("the refusal is the grant's, not the resolver's: %q", detail)
 	}
 }

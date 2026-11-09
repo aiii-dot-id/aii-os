@@ -7,11 +7,18 @@ import (
 	"testing"
 )
 
+// THE OPERATOR'S CITED WORDS, ON ABOUT {NAME} → WHO THEY ARE, IN THE FRAME
+// AS IT SHIPS (R52: the human audits the cited turn). The frame is loaded
+// whole — its modules, its stylesheets, its Content-Security-Policy — with
+// a scripted host on the far end of its socket, and Who they are is sent
+// every account of the approval the runtime can give. Each must be said in
+// the charter's part, first under its heading, with nothing pressed; the
+// operator's words must be text, never markup.
 const charterApprovalJS = `import { report, until } from '/__harness.js';
 const sockets = window.__sockets, sent = window.__sent;
 const say = m => sockets[sockets.length - 1].say(m);
 const norm = s => (s || '').replace(/\s+/g, ' ').trim();
-const card = () => [...document.querySelectorAll('#identity-stack .card')].find(c => norm((c.querySelector('h3') || {}).textContent) === 'CHARTER — RING 1');
+const card = () => document.querySelector('#identity-stack [aria-labelledby="who-charter"]');
 const block = () => card() && card().querySelector('[data-charter-approval]');
 const part = sel => (block() && block().querySelector(sel)) || null;
 const text = sel => norm(sel ? (part(sel) || {}).textContent : (block() || {}).textContent);
@@ -64,7 +71,7 @@ async function main() {
   if (await show('gone', { state: 'gone', excerpt: 'Yes, I approve.', turn: 42, record: 17 })) {
     expect(text('[data-approval-head]') === 'The words the identity cites as your approval — turn 42', 'a gone turn claims a time: ' + text('[data-approval-head]'));
     expect(text('[data-approval-words]') === 'Yes, I approve.', 'the words of a gone turn are not shown');
-    expect(notes().some(n => /Turn 42 is no longer in the conversation/.test(n.textContent) && /record 17/.test(n.textContent) && n.classList.contains('bad-text')), 'a gone turn is not said, in warning colour: ' + text());
+    expect(notes().some(n => /That part of the conversation is no longer on this computer/.test(n.textContent) && /record 17/.test(n.textContent) && n.classList.contains('bad-text')), 'a gone turn is not said, in warning colour: ' + text());
   }
   if (await show('gone, cut', { state: 'gone', excerpt: 'x'.repeat(1000), chars: 1200, turn: 42, record: 17 })) {
     expect(/The whole is record 17 of the signed record\./.test(text()), 'a cut whose turn is gone does not route to the signed record: ' + text());
@@ -89,7 +96,7 @@ async function main() {
   }
 
   if (await show('safe', { state: 'said', excerpt: MARKUP, turn: 42, said_at: '2026-09-29T07:57:17.123456789Z', record: 17 }, 'safe')) {
-    expect(document.querySelector('#identity-stack [data-safe-restore]'), 'the page is not drawn in SAFE');
+    expect(card(), 'the page is not drawn in SAFE');
     expect(part('[data-approval-words]') && part('[data-approval-words]').textContent === MARKUP, 'in SAFE the words are not shown: ' + text());
   }
 }
@@ -122,15 +129,15 @@ func TestTheIdentityPageShowsTheOperatorsCitedWordsFirstInTheCharter(t *testing.
 	}, map[string]string{"Content-Security-Policy": uiCSP})
 }
 
-// EVERY OTHER CURRENT RELATIONSHIP, WHOLE, UNDER THE CHARTER: whom it is
-// with, its role, its latest entry as a link to that row of the Record page,
-// the operator's words its entry cites and its text, all as text. None sent,
-// no card.
+// EVERY OTHER CURRENT RELATIONSHIP, WHOLE, ON ABOUT {NAME} → BETWEEN YOU:
+// whom it is with, its role, its latest entry as a link to that row of the
+// Record page, the operator's words its entry cites and its text, all as
+// text. None sent, no part.
 const otherRelationshipsJS = `import { report, until } from '/__harness.js';
 const sockets = window.__sockets;
 const say = m => sockets[sockets.length - 1].say(m);
 const norm = s => (s || '').replace(/\s+/g, ' ').trim();
-const card = () => [...document.querySelectorAll('#identity-stack .card')].find(c => norm((c.querySelector('h3') || {}).textContent) === 'OTHER RELATIONSHIPS — RING 1');
+const card = () => document.querySelector('#between-stack .between__others');
 const kv = (el, label) => { const k = [...el.querySelectorAll('.kv')].find(k => norm(k.querySelector('span').textContent) === label); return k ? norm(k.querySelector('b').textContent) : null; };
 const problems = [];
 const expect = (ok, what) => { if (!ok) problems.push(what); };
@@ -144,10 +151,10 @@ async function main() {
   sockets[0].open();
   say({ type: 'status', stats: { name: 'Example', version: 'test', build: 'test', ledger_seq: 40, lifetime_ticks: 3, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, voice_state: 'setup' } });
   say({ type: 'continuity', continuity: { mode: 'normal', ledger_seq: 40, lifetime_ticks: 3 } });
-  document.querySelector('.nav-item[data-view="identity"]').click();
+  location.hash = '#/identity/between';
   say({ type: 'identity', identity: identity(undefined) });
-  await until(() => norm((document.getElementById('identity-stack') || {}).textContent).includes('We build this together.'));
-  expect(!card(), 'a card of other relationships is drawn when none is sent');
+  await until(() => document.getElementById('view-between') && document.getElementById('view-between').classList.contains('on'));
+  expect(!card(), 'a part of other relationships is drawn when none is sent');
 
   say({ type: 'identity', identity: identity([
     { id: 'rel_ola', name: 'Ola', role: 'peer', charter: TEXT, record: 31, approval: { state: 'said', excerpt: WORDS, turn: 12, said_at: '2026-10-20T10:00:00Z', record: 30 } },
@@ -161,14 +168,14 @@ async function main() {
   expect(ola && sol, 'not every relationship is drawn: ' + norm(c.textContent));
   if (!ola || !sol) return;
   expect(kv(ola, 'with') === 'Ola' && kv(ola, 'role') === 'peer', 'whom it is with and its role are not said: ' + kv(ola, 'with') + ', ' + kv(ola, 'role'));
-  const link = ola.querySelector('a[href="#/record/31"]');
+  const link = ola.querySelector('a[href="#/identity/record/31"]');
   expect(link && norm(link.textContent) === 'record 31', 'its latest entry is not a link to its row of the Record page: ' + ola.innerHTML.slice(0, 400));
   const words = ola.querySelector('[data-approval-words]');
   expect(words && words.textContent === WORDS, 'the operator\'s words its entry cites are not shown verbatim, as text: ' + (words ? words.innerHTML : 'none'));
   expect([...ola.querySelectorAll('div')].some(d => d.textContent === TEXT), 'its text is not shown whole, as text');
   expect(!ola.querySelector('i') && ![...ola.querySelectorAll('b')].some(b => b.textContent === 'We'), 'markup in a relationship became markup');
   expect(ola.checkVisibility({ checkVisibilityCSS: true, visibilityProperty: true }), 'the relationship is not visible without a click');
-  expect(kv(sol, 'with') === 'no name given' && /No text is recorded for this relationship\./.test(norm(sol.textContent)) && sol.querySelector('a[href="#/record/33"]'),
+  expect(kv(sol, 'with') === 'no name given' && /No text is recorded for this relationship\./.test(norm(sol.textContent)) && sol.querySelector('a[href="#/identity/record/33"]'),
     'a relationship with no name and no text is not said as such: ' + norm(sol.textContent));
 }
 

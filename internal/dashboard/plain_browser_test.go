@@ -19,8 +19,8 @@ const hiddenNav = `
 const report = text => fetch('/__result', { method: 'POST', body: text, keepalive: true });
 const fail = m => report('FAIL: ' + m);
 const navDrawn = () => {
-  const nav = [...document.querySelectorAll('#nav .nav-item')].filter(el => !el.hidden);
-  return nav.length >= 7 && nav.every(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+  const nav = [...document.querySelectorAll('#nav .nav-item')].filter(el => el.getClientRects().length);
+  return nav.length >= 3 && nav.every(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
 };
 `
 

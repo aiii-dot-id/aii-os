@@ -191,14 +191,14 @@ func (s *Server) handleBackups(ctx context.Context, conn carrier, msg ClientMess
 		func(text string) { s.sendErrorFor(ctx, conn, msg.RequestID, text) })
 }
 
-const keysNeedToken = "Exporting the identity's keys requires this dashboard to ask for its access token, so that only a browser signed in with it can export them, and it does not now. Turn that on in Settings, under Dashboard, with Ask for an access token."
+const keysNeedToken = "To export the keys, first turn on \"Ask every device to sign in\" in Settings → Access."
 
 func (s *Server) keysExport(signedIn bool) (bool, string) {
 	switch {
 	case !s.accessRequired():
 		return false, keysNeedToken
 	case !signedIn:
-		return false, "This page is not signed in with this dashboard's access token. Sign in again, then export the keys."
+		return false, "This page isn't signed in. Sign in, then try again."
 	}
 	return true, ""
 }
@@ -298,7 +298,7 @@ func (s *Server) answerBackups(ctx context.Context, msg ClientMessage, secretsOK
 	case "escrow_create", "escrow_check", "key_back", "snapshot_key_back":
 		if !secretsOK {
 			v := hooks.View()
-			reply(ContinuityReply{View: &v, Error: "This connection is not private: a passphrase typed here would cross the network in the clear. Open the dashboard on the machine itself, or switch on TLS in Settings → Dashboard, and come back."})
+			reply(ContinuityReply{View: &v, Error: "This connection isn't private, so don't type a passphrase here. Use the AII OS computer, or turn on \"Serve over HTTPS\" in Settings → Access."})
 			return
 		}
 
@@ -550,7 +550,7 @@ func (s *Server) answerRestoreNew(ctx context.Context, msg ClientMessage, secret
 func (s *Server) handleRestoreUpload(w http.ResponseWriter, r *http.Request) {
 	refuse := func(code int, text string) { http.Error(w, text, code) }
 	if !s.tokenAuthorized(r) {
-		refuse(http.StatusUnauthorized, "this dashboard needs its access token")
+		refuse(http.StatusUnauthorized, "this page isn't signed in. Sign in, then try again")
 		return
 	}
 	if o := r.Header.Get("Origin"); o != "" && !sameSiteAs(o, r.Host) {

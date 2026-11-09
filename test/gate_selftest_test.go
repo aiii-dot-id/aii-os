@@ -430,7 +430,7 @@ func TestRaceScopeGivesEachShardABudgetThatOnlyCatchesAHang(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	for _, dir := range []string{"test", "internal/app"} {
+	for _, dir := range []string{"test", "internal/app", "internal/other"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -443,16 +443,30 @@ func TestRaceScopeGivesEachShardABudgetThatOnlyCatchesAHang(t *testing.T) {
 import ("testing"; "time")
 func TestSlow(t *testing.T) { time.Sleep(3 * time.Second) }
 `),
+		"internal/other/fixture_test.go": []byte(`package other
+import ("testing"; "time")
+func TestSlow(t *testing.T) { time.Sleep(3 * time.Second) }
+`),
 	} {
 		if err := os.WriteFile(filepath.Join(root, path), content, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	run := func(t *testing.T, budget string) (string, error) {
+	// Every package the runner partitions is there, so rest can leave them out.
+	for _, pkg := range shardedPackages(t) {
+		dir := filepath.Join(root, strings.TrimPrefix(pkg, "./"))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "doc.go"), []byte("package "+filepath.Base(dir)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(t *testing.T, scope, budget string) (string, error) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "sh", "test/run_race_scope.sh", "app")
+		cmd := exec.CommandContext(ctx, "sh", "test/run_race_scope.sh", scope)
 		cmd.Dir = root
 		env := append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=", "AII_GO="+goBin, "AII_TEST_SHARDS=1")
 		if budget != "" {
@@ -466,16 +480,17 @@ func TestSlow(t *testing.T) { time.Sleep(3 * time.Second) }
 		return string(out), err
 	}
 
-	if out, err := run(t, ""); err != nil {
+	if out, err := run(t, "app", ""); err != nil {
 		t.Fatalf("A SLOW SHARD WAS KILLED BY ITS BUDGET rather than finishing: %v\n%s", err, out)
 	}
-
-	out, err := run(t, "1s")
-	if err == nil {
-		t.Fatalf("a shard given one second to do three ran to completion — the runner is not passing its budget:\n%s", out)
-	}
-	if !strings.Contains(out, "test timed out") {
-		t.Errorf("a shard over its budget does not say what happened:\n%s", out)
+	for _, scope := range []string{"app", "rest"} {
+		out, err := run(t, scope, "1s")
+		if err == nil {
+			t.Fatalf("scope %s given one second to do three ran to completion — the runner is not passing its budget:\n%s", scope, out)
+		}
+		if !strings.Contains(out, "test timed out") {
+			t.Errorf("scope %s over its budget does not say what happened:\n%s", scope, out)
+		}
 	}
 }
 
@@ -689,6 +704,13 @@ printf 'PASS\nok  \tfake\t1.000s\n'
 	}
 }
 
+// The race build is defined once, in race_args, and the discovery list, every
+// shard and the rest scope all take it from there. A run that spelled -race
+// itself would build the package a second way, and a discovery built unlike its
+// shards compiles everything twice. Full mode keeps -race alone; normal mode
+// adds only the four documented third-party exclusions. The real-driver test
+// also checks that full mode never passes an exclusion. The reference lane's
+// line is held whole.
 func TestTheRunnerBuildsEveryRaceScopeTheSameWay(t *testing.T) {
 	script, err := os.ReadFile("run_race_scope.sh")
 	if err != nil {
@@ -710,12 +732,12 @@ func TestTheRunnerBuildsEveryRaceScopeTheSameWay(t *testing.T) {
 		case strings.HasPrefix(line, "race_args+=("):
 			exclusions++
 			var flags []string
-			for _, library := range []string{"modernc.org/sqlite/lib", "modernc.org/libc", "github.com/trailofbits/go-slh-dsa/..."} {
+			for _, library := range []string{"modernc.org/sqlite/lib", "modernc.org/libc", "github.com/trailofbits/go-slh-dsa/...", "golang.org/x/crypto/scrypt"} {
 				flags = append(flags, "-gcflags="+library+"=-race=false")
 			}
 			want := "race_args+=(" + strings.Join(flags, " ") + ")"
 			if line != want {
-				t.Errorf("normal mode does not add the three documented exclusions alone:\n got %s\nwant %s", line, want)
+				t.Errorf("normal mode does not add the four documented exclusions alone:\n got %s\nwant %s", line, want)
 			}
 		default:
 			if strings.Contains(line, `"${race_args[@]}"`) {

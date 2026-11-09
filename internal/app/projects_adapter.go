@@ -109,7 +109,7 @@ func (x projectsAdapter) Update(id, name, description, focus string, parent *str
 			Constraints: contract.Constraints,
 		}
 	}
-	p, err := x.a.projects.Update(id, name, description, focus, parent, c, attributes)
+	p, err := x.a.projects.Update(id, "identity", name, description, focus, parent, c, attributes)
 	if err != nil {
 		return identity.ProjectInfo{}, err
 	}
@@ -328,7 +328,7 @@ func (a *App) wireProjectHooks(h *dashboard.WSHandler) {
 			_, err := a.projects.Create(req.Name, descriptionDeref(req.Description), "operator", req.Parent, contract, derefAttrs(req.Attributes))
 			return err
 		case "update":
-			_, err := a.projects.ApplyPatch(req.ID, namePatch(req.Name), req.Description, req.Focus, req.Parent, contract, derefAttrs(req.Attributes))
+			_, err := a.projects.ApplyPatch(req.ID, "operator", namePatch(req.Name), req.Description, req.Focus, req.Parent, contract, derefAttrs(req.Attributes))
 			return err
 		case "close":
 			_, err := a.closeOrReopen(req.ID, "closed")

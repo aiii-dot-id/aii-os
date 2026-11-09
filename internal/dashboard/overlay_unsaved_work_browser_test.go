@@ -66,7 +66,7 @@ const held=['setting held','key pending','contract held','contract pending'];
 
 func TestEveryFormOwnerHoldsTheReloadForItsWork(t *testing.T) {
 	for _, owner := range []string{
-		"static/views/settings.js", "static/views/projects.js", "static/views/work.js",
+		"static/views/settings.js", "static/views/projects.js", "static/views/delivered.js",
 		"static/views/backups.js", "static/signin.js", "static/firstboot-restore.js",
 	} {
 		src, err := staticFS.ReadFile(owner)
@@ -93,7 +93,7 @@ const choose=(id,v)=>{const n=el(id);n.value=v;n.dispatchEvent(new Event('change
 const svc=name=>({name,added:true,has_key:true,speech:{stt:{},tts:{}}});
 const speech=()=>{S.identityExists=true;S.view='settings';S.providersLoaded=true;S.providers=[];
  S.config={llm:{},restart_required:[],speech:{services:[svc('Alpha'),svc('Beta')],stt:{provider:'Alpha',model:'',monthly_minutes:100},tts:{provider:'Alpha',voice:'',monthly_characters:1000}}};
- renderSettings();document.querySelector('[data-sec="speech"]').click();};
+ renderSettings();S.settingsSection('speech'); S.requestSettingsSection(); renderSettings();};
 const saved=()=>{document.querySelector('[data-save="speech"]').click();return frames.filter(f=>f.type==='config_set').at(-1);};
 const hostKeeps=sent=>{for(const [path,v] of Object.entries(sent)){const k=path.split('.');let o=S.config;k.slice(0,-1).forEach(x=>{o=o[x]=o[x]||{};});o[k.at(-1)]=v;}};
 const held=['hearing held','speaking held','speaking refused','speaking offline'];

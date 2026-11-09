@@ -1,5 +1,12 @@
-import { cardHead, esc } from './util.js';
+import { esc, fill } from './util.js';
 import { signedFetch } from './pagekey.js';
+import { S } from './state.js';
+import { sheet } from './shell/sheet.js';
+import { render as osNote } from './components/os-note/os-note.js';
+import W from './strings/settings-permissions.js';
+
+const nameOf = () => { const n = (S.stats && S.stats.name) || ''; return n === 'Unnamed' ? '' : n; };
+const named = (withName, unnamed) => { const n = nameOf(); return n ? fill(withName, { name: n }) : unnamed; };
 
 let loaded = false, loading = false;
 let scripts = [], canApprove = false, whyNot = '';
@@ -49,7 +56,7 @@ async function approve(path, rerender) {
     });
     const text = await res.text();
     if (!res.ok) throw new Error(text.trim() || ('status ' + res.status));
-    said = { path, kind: 'good', text: 'Approved. It runs from the next load of this page.' };
+    said = { path, kind: 'good', text: W.approved };
     shown.delete(path);
   } catch (e) {
     said = { path, kind: 'bad', text: ((e && e.message) || String(e)) };
@@ -60,30 +67,37 @@ async function approve(path, rerender) {
 }
 
 export function scriptsCardHTML() {
-  let html = '<div class="card" data-scripts-card>' + cardHead('SCRIPTS IN THE IDENTITY\'S INTERFACE FOLDER', 'The scripts the identity put in their interface folder; each runs in this page only once you approve that exact file.') +
-    '<div class="muted" style="font-size:12px">The identity may restyle this page freely. A script of its own runs here only after you approve that exact file; a change to it needs your approval again. Until then the page runs as shipped.</div>';
-  if (!loaded) return html + '<div class="muted" data-scripts-loading>Reading the interface folder…</div></div>';
-  if (failed) return html + '<div class="config-result bad" data-scripts-failed>' + esc(failed) + '</div></div>';
-  if (!canApprove && whyNot) html += '<div class="muted" data-scripts-why-not style="font-size:12px;margin-top:6px">' + esc(whyNot.charAt(0).toUpperCase() + whyNot.slice(1)) + '.</div>';
-  if (scripts.length === 0) return html + '<div class="muted" data-scripts-none>The interface folder holds no script.</div></div>';
+  sheet('views/settings/permissions.css').catch(() => {});
+  let html = '<section class="permissions__part" data-scripts-card aria-labelledby="adapt-h" aria-describedby="adapt-hint">' +
+    '<h3 id="adapt-h" class="permissions__h3">' + esc(named(W.adapters, W.adaptersUnnamed)) + '</h3>' +
+    '<p id="adapt-hint" class="permissions__hint">' + esc(named(W.adaptersHint, W.adaptersHintUnnamed) + ' ' + W.adaptersHow) + '</p>';
+  const shipped = '<p class="permissions__hint" data-scripts-shipped>' + esc(named(W.shipped, W.shippedUnnamed)) + '</p>';
+  if (!loaded) return html + '<p class="permissions__hint" data-scripts-loading>Reading the interface folder…</p></section>';
+  if (failed) return html + '<div class="config-result bad" data-scripts-failed>' + esc(failed) + '</div></section>';
+  if (!canApprove && whyNot) html += '<p class="permissions__hint" data-scripts-why-not>' + esc(whyNot.charAt(0).toUpperCase() + whyNot.slice(1)) + '.</p>';
+  if (scripts.length === 0) return html + '<p class="permissions__line" data-scripts-none>' + esc(named(W.noScripts, W.noScriptsUnnamed)) + '</p>' + shipped + '</section>';
+  html += '<ul class="permissions__rows">';
   for (const s of scripts) {
     const seen = shown.get(s.path);
-    html += '<div class="sp-kv" data-script="' + esc(s.path) + '" style="margin-top:8px"><span>' + (s.approved ? 'approved' : 'awaiting your approval') + '</span><b>' + esc(s.path) + '</b></div>' +
-      '<div class="muted" style="font-size:11.5px;word-break:break-all">sha256 ' + esc(s.sha256) + ' · ' + esc(String(s.size)) + ' bytes</div>';
+    html += '<li class="permissions__row" data-script="' + esc(s.path) + '"><span class="permissions__words"><span>' + (s.approved ? 'approved' : 'awaiting your approval') +
+      '<span class="permissions__soft"> · </span><span class="permissions__code">' + esc(s.path) + '</span></span>' +
+      '<span class="permissions__hint permissions__code">sha256 ' + esc(s.sha256) + ' · ' + esc(String(s.size)) + ' bytes</span>';
     if (seen) {
-      html += '<pre data-script-text style="max-height:240px;overflow:auto;font-size:11.5px;white-space:pre-wrap"></pre>';
+      if (!s.approved) html += osNote({ tone: 'warn', text: 'AII OS: ' + W.scriptRisk + ' ' + W.scriptRiskApprove, live: false }).outerHTML;
+      html += '<pre class="permissions__text" data-script-text></pre>';
       if (seen.sha256 !== s.sha256) html += '<div class="config-result bad">The file changed after it was listed. Show it again.</div>';
     }
     if (!s.approved) {
-      html += '<div class="savebar"><button type="button" class="btn ghost" data-script-show="' + esc(s.path) + '">' + (seen ? 'Show again' : 'Show the file') + '</button>';
+      html += '<span class="permissions__buttons"><button type="button" class="c-button" data-script-show="' + esc(s.path) + '">' + (seen ? 'Show again' : 'Show the file') + '</button>';
       if (canApprove && seen && seen.sha256 === s.sha256) {
-        html += '<button type="button" class="btn" data-script-approve="' + esc(s.path) + '"' + (busy ? ' disabled' : '') + '>' + (busy === s.path ? 'Approving…' : 'Approve this file') + '</button>';
+        html += '<button type="button" class="c-button c-button--primary" data-script-approve="' + esc(s.path) + '"' + (busy ? ' disabled' : '') + '>' + (busy === s.path ? 'Approving…' : esc(W.approve)) + '</button>';
       }
-      html += '</div>';
+      html += '</span>';
     }
     if (said && said.path === s.path) html += '<div class="config-result ' + said.kind + '" data-script-said data-announce>' + esc(said.text) + '</div>';
+    html += '</span></li>';
   }
-  return html + '</div>';
+  return html + '</ul>' + shipped + '</section>';
 }
 
 export function wireScriptsCard(root, rerender) {
@@ -91,10 +105,8 @@ export function wireScriptsCard(root, rerender) {
   if (!card) return;
   if (!loaded) { load(rerender); return; }
   card.querySelectorAll('[data-script]').forEach(row => {
-    const seen = shown.get(row.dataset.script);
-    let box = row.nextElementSibling;
-    while (box && !box.matches('[data-script-text]') && !box.matches('[data-script]')) box = box.nextElementSibling;
-    if (seen && box && box.matches('[data-script-text]')) box.textContent = seen.text;
+    const seen = shown.get(row.dataset.script), box = row.querySelector('[data-script-text]');
+    if (seen && box) box.textContent = seen.text;
   });
   card.querySelectorAll('[data-script-show]').forEach(btn => { btn.onclick = () => show(btn.dataset.scriptShow, rerender); });
   card.querySelectorAll('[data-script-approve]').forEach(btn => { btn.onclick = () => approve(btn.dataset.scriptApprove, rerender); });

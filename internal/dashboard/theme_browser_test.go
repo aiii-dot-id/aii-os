@@ -68,10 +68,16 @@ run((assert) => {
     const missing = tokens.filter(n => cs.getPropertyValue(n).trim() === '');
     assert(missing.length === 0, theme + ' theme leaves tokens unresolved: ' + missing.join(', '));
   }
-  document.documentElement.setAttribute('data-theme', 'light');
-  const g = document.createElement('div'); g.className = 'greet'; g.textContent = 'Good evening.'; document.body.appendChild(g);
-  const bi = getComputedStyle(g).backgroundImage;
-  assert(bi && bi !== 'none', 'the greeting gradient must resolve in the light theme, got ' + bi);
+  // The greeting's text must paint. It was gradient text, clipped to the
+  // letters and transparent wherever the gradient did not resolve; it is
+  // drawn in the text colour now (step 2), and never transparent.
+  for (const theme of ['dark', 'light']) {
+    document.documentElement.setAttribute('data-theme', theme);
+    const g = document.createElement('div'); g.className = 'greet'; g.textContent = 'Good evening.'; document.body.appendChild(g);
+    const cs = getComputedStyle(g), text = getComputedStyle(document.body).color;
+    assert(cs.backgroundImage === 'none' && cs.color === text, theme + ' theme: the greeting is not drawn in the text colour: ' + cs.color + ' over ' + cs.backgroundImage + ', want ' + text);
+    g.remove();
+  }
 });
 </script>`)
 	runPageInEngines(t, page, modules)

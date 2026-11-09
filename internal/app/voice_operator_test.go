@@ -73,7 +73,7 @@ func TestTheOperatorsSpokenWordsAreTheOperatorsAndAreAnsweredAloud(t *testing.T)
 		t.Fatal("the session's work was released before the turn answered")
 	case <-time.After(50 * time.Millisecond):
 	}
-	if said := a.DrainSteering(); len(said) != 1 || !strings.Contains(said[0], "can you hear me") {
+	if said := steeredWords(a.DrainSteering()); len(said) != 1 || !strings.Contains(said[0], "can you hear me") {
 		t.Fatalf("the words did not reach the running turn: %v", said)
 	}
 	latest, err := a.store.GetLatestOperatorTurn()
@@ -418,7 +418,7 @@ func TestASessionsWordsAreTheOperatorsOnlyWhenTheSpeakerIsIdentifiedAsThem(t *te
 	a.voiceEngineEvent(nil, knownUUIDObservation(h.id, 20, 7, "track-a", "quinn-desk", theOperatorsUUID, "matched"), page.enqueue)
 	a.voiceEngineEvent(nil, knownUUIDObservation(h.id, 21, 8, "track-b", "guest", uuidB, "matched"), page.enqueue)
 	holdWait(t, "both utterances to reach the running turn's mailbox", func() bool { return len(a.PendingSteers()) == 2 })
-	if said := a.DrainSteering(); len(said) != 2 {
+	if said := steeredWords(a.DrainSteering()); len(said) != 2 {
 		t.Fatalf("the running turn took %d utterance(s), want 2", len(said))
 	}
 	a.settleVoice(context.Background(), "")

@@ -366,6 +366,11 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 		}
 		accessByStore[name] = acc
 	}
+
+	beliefFacts, err := f.beliefClassFacts(ctx, idsByStore["beliefs"])
+	if err != nil {
+		res.Warnings = append(res.Warnings, "beliefs: evidence and footing unreadable, decay computed from age and recalls alone — "+err.Error())
+	}
 	hits := make([]Hit, 0, len(fused))
 	for _, fz := range fused {
 		h := byKey[fz.Key]
@@ -380,6 +385,10 @@ func (f *Facility) Recall(ctx context.Context, q Query) (Result, error) {
 		}
 		d, _ := Lookup(h.Store)
 		h.Class = classOf(d, *h)
+		if h.Store == "beliefs" {
+			bf := beliefFacts[h.ID]
+			h.Class = BeliefClass(h.Ring, bf.evidence, bf.footing)
+		}
 		var access store.MemoryAccess
 		if a, ok := accessByStore[h.Store][h.ID]; ok {
 			access = a
@@ -471,9 +480,9 @@ func (f *Facility) Reinforce(now time.Time, hits []Hit) error {
 }
 
 func laterContradictions(ctx context.Context, db store.Reader, id string, seq uint64) ([]string, bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT from_id FROM edges
-		WHERE to_id=? AND edge_type='CONTRADICTS' AND archived=0 AND created_seq>?
-		ORDER BY created_seq DESC, id ASC LIMIT ?`, id, seq, GraphEdgesPerNode+1)
+	rows, err := db.QueryContext(ctx, `SELECT e.from_id FROM edges e
+		WHERE e.to_id=? AND `+store.LiveContradiction("e")+` AND e.created_seq>?
+		ORDER BY e.created_seq DESC, e.id ASC LIMIT ?`, id, seq, GraphEdgesPerNode+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1152,4 +1161,52 @@ func insideFrame(tokens []string) bool {
 		}
 	}
 	return false
+}
+
+type beliefClassFact struct {
+	evidence int
+	footing  store.BeliefFooting
+}
+
+func (f *Facility) beliefClassFacts(ctx context.Context, ids []string) (map[string]beliefClassFact, error) {
+	out := make(map[string]beliefClassFact, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := f.st.ReadWith(ctx, func(db store.Reader) error {
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			args[i] = id
+		}
+		rows, err := db.QueryContext(ctx, `SELECT id, evidence_count FROM beliefs WHERE id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			var n int
+			if err := rows.Scan(&id, &n); err != nil {
+				rows.Close()
+				return err
+			}
+			out[id] = beliefClassFact{evidence: n}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		footings, err := f.st.BeliefFootingsIn(ctx, db, ids)
+		if err != nil {
+			return err
+		}
+		for id, ft := range footings {
+			v := out[id]
+			v.footing = ft
+			out[id] = v
+		}
+		return nil
+	})
+	if err != nil {
+		return map[string]beliefClassFact{}, err
+	}
+	return out, nil
 }

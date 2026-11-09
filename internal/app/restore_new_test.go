@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,9 +39,41 @@ type leftTheOldMachine struct {
 	identity      string
 }
 
+// oldMachine is the old machine built once per test binary, and
+// anotherOldMachine a second identity's, for the tests that hold one
+// identity's snapshot or key to another's. What comes back is bytes and a
+// name that no test changes, and building one is two passphrase
+// derivations at escrow.WorkFactor and a lived boot (about 8 s under the
+// race detector; 25 callers built their own). The second is built after
+// the first, so the two snapshots are seconds apart and never share a
+// name. A test whose old machine did something before or after its
+// snapshot builds its own (oldMachineLiving).
+var oldMachines struct {
+	mine, other         leftTheOldMachine
+	mineOnce, otherOnce sync.Once
+}
+
 func oldMachine(t *testing.T) leftTheOldMachine {
 	t.Helper()
-	return oldMachineLiving(t, nil, nil)
+	return builtOnce(t, &oldMachines.mineOnce, &oldMachines.mine)
+}
+
+func anotherOldMachine(t *testing.T) leftTheOldMachine {
+	t.Helper()
+	oldMachine(t)
+	return builtOnce(t, &oldMachines.otherOnce, &oldMachines.other)
+}
+
+// builtOnce is *slot, built by once if it has not been. A build that
+// failed left its once done and the slot empty: the test that built it
+// says why, and every later caller fails here.
+func builtOnce(t *testing.T, once *sync.Once, slot *leftTheOldMachine) leftTheOldMachine {
+	t.Helper()
+	once.Do(func() { *slot = oldMachineLiving(t, nil, nil) })
+	if slot.identity == "" {
+		t.Fatal("rig: the shared old machine was not built; the test that built it first says why")
+	}
+	return *slot
 }
 
 // oldMachineLiving is oldMachine with what the old machine did just before
@@ -254,7 +287,7 @@ func TestARestoreOnANewMachineSendsNothingItBroughtBackAgain(t *testing.T) {
 // held to the key the escrow put back. The keys stay, the door stays open,
 // and the right snapshot then restores.
 func TestASnapshotOfAnotherIdentityIsNotRestoredUnderTheseKeys(t *testing.T) {
-	mine, other := oldMachine(t), oldMachine(t)
+	mine, other := oldMachine(t), anotherOldMachine(t)
 	a, dir := blankMachine(t)
 	defer stopApp(t, a)
 	if _, err := a.continuity.NewMachineKeys(mine.escrowFile, []byte(newMachinePass)); err != nil {
@@ -288,7 +321,7 @@ func TestTheNewMachineDoorRefusesWhatIsNotItsToDo(t *testing.T) {
 	// Another identity's key is here already.
 	a, dir := blankMachine(t)
 	defer stopApp(t, a)
-	other := oldMachine(t)
+	other := anotherOldMachine(t)
 	otherKey, _, err := continuitytest.EscrowedKey(other.escrowFile, []byte(newMachinePass))
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +362,7 @@ func TestTheNewMachineDoorRefusesWhatIsNotItsToDo(t *testing.T) {
 // the person's own copy, so it is replaced; and nothing the door receives
 // is among an identity's kept snapshots until the restore is done.
 func TestTheRightSnapshotArrivesAfterAWrongOneOfTheSameName(t *testing.T) {
-	mine, other := oldMachine(t), oldMachine(t)
+	mine, other := oldMachine(t), anotherOldMachine(t)
 	a, dir := blankMachine(t)
 	defer stopApp(t, a)
 	if _, err := a.continuity.NewMachineKeys(mine.escrowFile, []byte(newMachinePass)); err != nil {
@@ -399,6 +432,7 @@ func TestKeysAreNotReportedInPlaceOverAFilesystemFailure(t *testing.T) {
 	// The failures are built from shapes no user can read through — a
 	// directory where a file goes, a file where a directory goes — because a
 	// permission bit is not a failure to the root these gates run as.
+	mine := oldMachine(t)
 	for _, tc := range []struct {
 		what   string
 		breaks func(t *testing.T, a *App)
@@ -425,7 +459,6 @@ func TestKeysAreNotReportedInPlaceOverAFilesystemFailure(t *testing.T) {
 		}, lookingThroughAFileSays()},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
-			mine := oldMachine(t)
 			a, _ := blankMachine(t)
 			defer stopApp(t, a)
 			tc.breaks(t, a)

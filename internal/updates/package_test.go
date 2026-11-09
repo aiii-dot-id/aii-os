@@ -34,7 +34,7 @@ type packageRig struct {
 // the package and its signature under their contract names).
 func newPackageRig(t *testing.T, pkg []byte, signed func(*releaseArchivePayload), assets ...string) *packageRig {
 	t.Helper()
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	dir := t.TempDir()
 	signer.provisionTrustDir(t, dir)
 	rig := &packageRig{dir: dir, ver: "9.9.9", signer: signer}

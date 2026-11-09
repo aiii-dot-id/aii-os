@@ -98,6 +98,19 @@ func (s *Store) AlarmDeadline(ownerName, alarmID string) (deadline int64, stands
 	return deadline, err == nil, err
 }
 
+func (s *Store) TimerAlarms() ([]Alarm, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		`SELECT alarm_id, owner_name, clock, deadline, repeat_every, payload
+		 FROM alarms WHERE owner_name = 'timers' AND clock = 'wall'
+		 ORDER BY deadline ASC, alarm_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	return scanAlarms(rows)
+}
+
 func (s *Store) DueAlarms(clock string, nowOrLess int64, limit int) ([]Alarm, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -157,6 +170,27 @@ func (s *Store) DeleteAlarm(alarmID string) error {
 
 	_, err := s.w().Exec(`DELETE FROM alarms WHERE alarm_id = ?`, alarmID)
 	return err
+}
+
+func (s *Store) AlarmByID(alarmID string) (Alarm, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	q, err := s.db.Query(
+		`SELECT alarm_id, owner_name, clock, deadline, repeat_every, payload
+		 FROM alarms WHERE alarm_id = ?`, alarmID,
+	)
+	if err != nil {
+		return Alarm{}, false, err
+	}
+	alarms, err := scanAlarms(q)
+	if err != nil {
+		return Alarm{}, false, err
+	}
+	if len(alarms) == 0 {
+		return Alarm{}, false, nil
+	}
+	return alarms[0], true, nil
 }
 
 func (s *Store) UpdateAlarmDeadlineCAS(alarmID string, expectedDeadline, newDeadline int64) (bool, error) {

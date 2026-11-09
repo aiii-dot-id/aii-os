@@ -1,7 +1,9 @@
 import { S } from './state.js';
-import { cardHead, esc } from './util.js';
+import { esc, fill } from './util.js';
 import { send } from './ws.js';
 import { pendingSlot } from './pending.js';
+import { sheet } from './shell/sheet.js';
+import W from './strings/settings-permissions.js';
 
 const pending = pendingSlot();
 let notice = '';
@@ -22,14 +24,19 @@ export function toolsConnectionLost() {
 }
 
 export function toolsCardHTML(note = () => '') {
+  sheet('views/settings/permissions.css').catch(() => {});
   const held = pending.waiting();
   const on = t => (held && held.tool === t.name ? held.enabled : t.enabled);
-  return '<div class="card">' + cardHead('TOOLS — RING 5 REACH', 'Every tool the identity may call, each with its switch: a tool switched off is not offered to them, and a call to it is refused.') +
-    (S.tools.length ? S.tools.map(t =>
-      '<div class="tool-row"><span class="tn">' + esc(t.name) + '</span><span class="td">' + esc(t.description) + note(t) + '</span>' +
-      '<label class="switch"><input type="checkbox" data-tool="' + esc(t.name) + '"' + (on(t) ? ' checked' : '') + (held ? ' disabled' : '') + '><span class="tk"></span></label></div>').join('') :
-      '<div class="empty">no tools</div>') +
-    '<div data-announce>' + esc(notice) + '</div></div>';
+  const n = (S.stats && S.stats.name) || '', name = n && n !== 'Unnamed' ? n : '';
+  return '<section class="permissions__part" data-tools aria-labelledby="tools-h" aria-describedby="tools-hint">' +
+    '<h3 id="tools-h" class="permissions__h3">' + esc(W.tools) + '<span class="permissions__soft"> · ' + S.tools.length + '</span></h3>' +
+    '<p id="tools-hint" class="permissions__hint">' + esc(name ? fill(W.toolsHint, { name }) : W.toolsHintUnnamed) + '</p>' +
+    '<ul class="permissions__rows">' + S.tools.map(t =>
+      '<li class="permissions__row"><label class="permissions__switch permissions__switch--row"><span class="permissions__words"><span>' + esc(t.name) +
+      (t.plugin ? '<span class="permissions__soft"> · ' + esc(fill(W.toolFrom, { plugin: t.plugin })) + '</span>' : '') + '</span>' +
+      '<span class="permissions__hint">' + esc(t.description) + note(t) + '</span></span>' +
+      '<input type="checkbox" role="switch" class="permissions__sw" data-tool="' + esc(t.name) + '"' + (on(t) ? ' checked' : '') + (held ? ' disabled' : '') + '></label></li>').join('') + '</ul>' +
+    '<p class="permissions__said" data-announce>' + esc(notice) + '</p></section>';
 }
 
 export function wireToolsCard(st) {

@@ -781,9 +781,11 @@ func TestATokenRefusedWhileARelayIsUpIsAppliedAtTheLookAfterItEnds(t *testing.T)
 func TestARotatedAccessTokenOverARefusedAddressIsSaidAsTheHostsOwnSave(t *testing.T) {
 	r := newRefusedRig(t)
 	logs := r.logs
+	// The dashboard is the App's before any look: a look's reload starts a
+	// model probe in the background, and that probe reads it.
+	r.a.dashboard = dashboard.New("127.0.0.1", 0, &dashboard.WSHandler{})
 	r.name(t, "new", nil)
 	r.look(t, 1, "the first look at the edit")
-	r.a.dashboard = dashboard.New("127.0.0.1", 0, &dashboard.WSHandler{})
 	logs.Reset()
 	if err := r.a.requireDashboardAccess(); err != nil {
 		t.Fatal(err)

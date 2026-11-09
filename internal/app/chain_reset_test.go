@@ -28,7 +28,6 @@ func cappedOnce(t *testing.T, dir string) func(n int) string {
 	if err := writeFileForTest(filepath.Join(dir, "probe.txt"), "leg probe"); err != nil {
 		t.Fatal(err)
 	}
-	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 	return func(n int) string {
 		switch {
 		case n == 1:
@@ -36,7 +35,7 @@ func cappedOnce(t *testing.T, dir string) func(n int) string {
 				toolCall("c1a", "work", `{"action":"start","description":"capped work"}`),
 				toolCall("c1b", "work", `{"action":"update","plan":"read the probe","steps":1}`))
 		case n <= 7:
-			return callReply("", toolCall(fmt.Sprintf("c%d", n), "read", string(readArgs)))
+			return callReply("", toolCall(fmt.Sprintf("c%d", n), "read", probeArgs(dir, n)))
 		case n == 8:
 			return textReply("capped here")
 		}
@@ -101,27 +100,22 @@ func TestTheOperatorsTypedOrSpokenMessageStartsANewChain(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S WORDS SAID WHILE A TURN RUNS START A NEW CHAIN TOO. Said
+// WORDS SAID WHILE A TURN RUNS ARE READ, AND THE WORK CONTINUES. Said
 // while a turn runs, they are read at its next tool boundary
 // (DrainSteering), or open the turn after it when no boundary came
-// (runLeftoverSteerTurn): either way they are the operator speaking, as a
-// message that opens its own turn is. Only that door reset the chain, so
-// "go on" said while the eighth leg was working left the chain stood down
-// when that leg was capped. A participant's words are not the operator's
-// look, and leave the chain where it stood.
+// (runLeftoverSteerTurn). The chain's count once decided whether the
+// capped turn was continued, and only the operator's words reset it; a
+// session's work is now carried on by the record's brakes (continueWork,
+// 2026-11-06), so a capped turn continues whoever spoke, and the chain
+// stood at its old bound (standDown) decides nothing.
 func TestTheOperatorsWordsSaidWhileATurnRunsStartANewChain(t *testing.T) {
-	const spent = "the host has already started 8 fresh turns in a row, its limit (agency.max_turn_continuations)"
 	for _, c := range []struct {
 		name, role string
-		continued  bool
 	}{
-		{"the operator's", roleOperator, true},
-		{"a participant's", roleParticipant, false},
+		{"the operator's", roleOperator},
+		{"a participant's", roleParticipant},
 	} {
-		want := "capped here\n\n" + nothingContinues(8, spent)
-		if c.continued {
-			want = "capped here\n\n" + continuesLine
-		}
+		want := "capped here\n\n" + continuesLine
 
 		t.Run("read at a tool boundary/"+c.name, func(t *testing.T) {
 			app, dir := dispatchApp(t)
@@ -178,12 +172,18 @@ func TestTheOperatorsWordsSaidWhileATurnRunsStartANewChain(t *testing.T) {
 	}
 }
 
+// AT A STAND-DOWN THE PAGE SAYS NOTHING CONTINUES, AND WHY. End to end,
+// on a live identity: the operator's message opens a turn the model caps,
+// and its reply says the work continues (a first leg was scheduled); that
+// leg is capped too having recorded no outcome, so the record's brake
+// stands the work down (no progress since its last fresh turn; work
+// continues, 2026-11-06, in place of the chain's bound the test once set
+// to one), and the leg's reply closes on what happened. The leg's words
+// moved nothing, so they stay on the page with the row beside them
+// (the floor for an unpromised leg), and the outbox holds nothing of it.
 func TestAStandDownAtTheOperatorsBoundIsToldOnThePage(t *testing.T) {
 	app, dir := dispatchApp(t)
 	defer stopApp(t, app)
-	if _, err := app.applyConfigChange(map[string]any{"agency.max_turn_continuations": float64(1)}); err != nil {
-		t.Fatalf("the door refused a bound of one: %v", err)
-	}
 	opening := cappedOnce(t, dir)
 	readArgs, _ := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "probe.txt")})
 	fixtureModel(t, app, func(n int, w http.ResponseWriter) {
@@ -195,7 +195,7 @@ func TestAStandDownAtTheOperatorsBoundIsToldOnThePage(t *testing.T) {
 				toolCall("l9a", "work", `{"action":"update","steps":1}`),
 				toolCall("l9b", "read", string(readArgs))))
 		case n <= 14:
-			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("l%d", n), "read", string(readArgs))))
+			_, _ = io.WriteString(w, callReply("", toolCall(fmt.Sprintf("l%d", n), "read", probeArgs(dir, n))))
 		case n == 15:
 			_, _ = io.WriteString(w, textReply("leg capped"))
 		default:
@@ -216,17 +216,17 @@ func TestAStandDownAtTheOperatorsBoundIsToldOnThePage(t *testing.T) {
 		t.Fatalf("rig: the operator's turn did not hand its work on: %q", reply)
 	}
 
-	var page string
-	waitUntil(t, func() bool {
-		page = outboxReply(t, app, "wake_cont_")
-		return page != ""
-	}, "the first leg's reply on the operator's page")
-	want := "leg capped\n\n" + nothingContinues(7, "the host has already started 1 fresh turn in a row, its limit (agency.max_turn_continuations)")
-	if page != "leg capped" {
-		t.Fatalf("at the stand-down the operator's outbox holds %q, want the identity's words", page)
-	}
+	waitUntil(t, replyRecorded(app, "leg capped"), "the first leg's reply")
+	waitUntil(t, func() bool { return resumesOnOf(t, app) == "word" }, "the stand-down")
+	want := "leg capped\n\n" + nothingContinues(7, "no progress on this work was recorded since its last fresh turn; it resumes on your operator's word")
 	if got := recordedReply(t, app, "leg capped"); got != want {
 		t.Errorf("at the stand-down the identity's history holds %q, want %q", got, want)
+	}
+	if r := waitRowBeside(t, app); r != wordsHeldUnpromisedRow {
+		t.Errorf("the row beside the leg's words: %q", r)
+	}
+	if page := outboxReply(t, app, "wake_cont_"); page != "" {
+		t.Errorf("a leg that moved nothing reached the operator's outbox: %q", page)
 	}
 	if n := promisesInTheRecord(t, app); n != 1 {
 		t.Errorf("%d recorded replies promise a fresh turn; want the operator's turn's one, which a leg kept", n)

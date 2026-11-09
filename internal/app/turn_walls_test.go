@@ -29,7 +29,7 @@ func TestAContinuedLegEndsAtTheOperatorsWall(t *testing.T) {
 	asked := hangingModel(t, a) // never answers; the client waits ten minutes
 	done := make(chan struct{})
 	go func() {
-		a.continueCappedTurn("ws_wall", 1, capDeclared, "")
+		a.continueCappedTurn("ws_wall", 1, capDeclared, "", false, "")
 		close(done)
 	}()
 	select {

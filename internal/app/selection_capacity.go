@@ -92,11 +92,11 @@ const vulkanProbeNotInstalled = "the Vulkan probe (" + vulkancap.Helper + ") is 
 const vulkanProbeUnreadable = "the Vulkan probe answered, but its answer was not a valid device capacity"
 
 func vulkanProbeFailed(ctx context.Context, query time.Duration, err error) string {
+	if errors.Is(err, errQueryBound) {
+		return fmt.Sprintf("the Vulkan probe did not answer within %d ms (plugins.runtime.hardware_query_ms)", query.Milliseconds())
+	}
 	if ctx.Err() != nil {
 		return "the Vulkan probe did not finish before the selection measurement ended"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Sprintf("the Vulkan probe did not answer within %d ms (plugins.runtime.hardware_query_ms)", query.Milliseconds())
 	}
 	var exited *exec.ExitError
 	if errors.As(err, &exited) {
@@ -149,16 +149,24 @@ func selectionMeasurement(query time.Duration) time.Duration {
 	return 2*query + time.Second
 }
 
+var errQueryBound = fmt.Errorf("the query's own bound: %w", context.DeadlineExceeded)
+
 func selectionQuery(ctx context.Context, bound time.Duration, path string, args ...string) ([]byte, error) {
 	if !hostcap.Can(hostcap.Subprocess).Available {
 		return nil, errors.New("hardware query unavailable on this topology")
 	}
 	qctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
+	own, _ := qctx.Deadline()
+	outer, measured := ctx.Deadline()
+	ownFirst := !measured || own.Before(outer)
 	var out limitedSelectionOutput
 	if err := selectionCommand(qctx, &out, path, args...).Run(); err != nil {
-		if qctx.Err() != nil {
-			return nil, qctx.Err()
+		if qerr := qctx.Err(); qerr != nil {
+			if ownFirst && errors.Is(qerr, context.DeadlineExceeded) {
+				return nil, errQueryBound
+			}
+			return nil, qerr
 		}
 		return nil, err
 	}

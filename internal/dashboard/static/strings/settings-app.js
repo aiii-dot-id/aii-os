@@ -1,0 +1,48 @@
+export default Object.freeze({
+  title: "App",
+  intro: "This browser, this computer, and the version of AII OS running.",
+
+  appearance: "Appearance",
+  theme: "Theme",
+  themeSystem: "As this device is set",
+  themeLight: "Light",
+  themeDark: "Dark",
+  themeHint: "For this browser only. Colours {name} has chosen for this page may change these.",
+  themeHintUnnamed: "For this browser only. Colours they have chosen for this page may change these.",
+
+  mark: "{name}'s mark",
+  markUnnamed: "Their mark",
+  markShape: "Shape, from spiral to brain",
+  markAcross: "Centre, left to right",
+  markDown: "Centre, top to bottom",
+  markFolds: "Folds in the brain",
+  markHint: "{name} can change these too. Every device shows the same mark.",
+  markHintUnnamed: "They can change these too. Every device shows the same mark.",
+  markSaving: "Saving…",
+  markSaved: "Saved.",
+  markNotSaved: "Not saved: {why}",
+
+  notifications: "Notifications",
+  notifySwitch: "Get a notification when {name} asks you something",
+  notifySwitchUnnamed: "Get a notification when they ask you something",
+  notifyHint: "In this browser, while the page is in another tab or window. The page's title also counts open questions.",
+  notifyUnsupported: "This browser cannot show notifications for this page. The page's title counts the open questions.",
+  notifyBlocked: "This browser has blocked notifications for this page. Allow them in its site settings, then turn this on again.",
+
+  updates: "Updates",
+  version: "AII OS {version}",
+  upToDate: "up to date, checked {ago}.",
+  checking: "Checking…",
+  checkNow: "Check now",
+  checksHourly: "Checks once an hour.",
+  installReady: "Install updates when they are ready",
+  installReadyHint: "An update that fails to start goes back to this version by itself, and tells you.",
+  whatChanged: "What changed in {version}",
+  noVersion: "This build carries no version, so it does not check for updates.",
+
+  remove: "Remove AII OS from this computer",
+  removeHint: "The AII OS app on this Mac asks you there. {name}'s record, keys and files stay where they are.",
+  removeHintUnnamed: "The AII OS app on this Mac asks you there. Their record, keys and files stay where they are.",
+  uninstall: "Uninstall AII OS…",
+  uninstallOpens: "AII OS opens on this Mac and asks you there."
+});

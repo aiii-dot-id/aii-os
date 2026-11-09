@@ -3,6 +3,7 @@ package dashboard
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -69,7 +70,7 @@ func (s *Server) hostGate(next http.Handler) http.Handler {
 			}) {
 				logsink.Warn("dashboard.refusal", "refused request with foreign Host %q", peerSaid(r.Host, refusalPeerTextBytes))
 			}
-			http.Error(w, "forbidden host", http.StatusForbidden)
+			refuseHost(w, r)
 			return
 		}
 		if scrubTokenQuery(w, r) {
@@ -77,6 +78,37 @@ func (s *Server) hostGate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+const (
+	refusalHeader    = "Aii-Refusal"
+	hostNotServed    = "host.not_served"
+	hostRefusalWords = "AII OS doesn't answer at this address. To allow it, tick it in Settings → Access, under \"The route and addresses\"."
+	hostRefusalStyle = `html{color-scheme:light dark}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-page);font-size:var(--t-md);line-height:var(--t-md-lh)}main{box-sizing:border-box;max-width:calc(var(--measure) + 2 * var(--gutter));margin:0 auto;padding:var(--s-7) var(--gutter)}h1{margin:0 0 var(--s-3);font-family:var(--font-voice);font-size:var(--t-xl);line-height:var(--t-xl-lh);font-weight:600;color:var(--accent)}p{margin:0}`
+)
+
+var hostRefusalPage, hostRefusalPolicy = func() (string, string) {
+	tokens, _ := staticFS.ReadFile("static/tokens/tokens.css")
+	style := string(tokens) + hostRefusalStyle
+	sum := sha256.Sum256([]byte(style))
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AII OS</title><style>` + style + `</style></head><body><main><h1>AII OS</h1><p>` + hostRefusalWords + `</p></main></body></html>`,
+		"default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; frame-ancestors 'none'"
+}()
+
+func refuseHost(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(refusalHeader, hostNotServed)
+	w.Header().Set("Cache-Control", "no-store")
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Security-Policy", hostRefusalPolicy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusForbidden)
+		if r.Method == http.MethodGet {
+			io.WriteString(w, hostRefusalPage)
+		}
+		return
+	}
+	http.Error(w, hostRefusalWords, http.StatusForbidden)
 }
 
 func scrubTokenQuery(w http.ResponseWriter, r *http.Request) bool {
@@ -172,19 +204,19 @@ func (s *Server) handleRequireAccessToken(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleTokenAct(w http.ResponseWriter, r *http.Request, require bool) {
-	done, where := "rotated", "rotate it there"
+	done := "signed out"
 	if require {
-		done, where = "turned on", "turn it on there"
+		done = "asked to sign in"
 	}
 	switch {
 	case require && s.accessRequired():
-		http.Error(w, "this dashboard already asks for an access token — there is nothing to turn on; Rotate access token replaces it", http.StatusConflict)
+		http.Error(w, "every device already has to sign in", http.StatusConflict)
 		return
 	case !require && !s.AccessTokenRequired():
-		http.Error(w, "this dashboard is not asking for an access token, so there is none to rotate", http.StatusConflict)
+		http.Error(w, "no device has to sign in yet. Turn on \"Ask every device to sign in\" in Settings → Access", http.StatusConflict)
 		return
 	case !require && !s.tokenAuthorized(r):
-		http.Error(w, "dashboard access token required", http.StatusUnauthorized)
+		http.Error(w, "this page isn't signed in. Sign in, then try again", http.StatusUnauthorized)
 		return
 	}
 
@@ -197,7 +229,7 @@ func (s *Server) handleTokenAct(w http.ResponseWriter, r *http.Request, require 
 		return
 	}
 	if !privateConnection(r) {
-		http.Error(w, "This connection is not private, so the access token was not "+done+": its cookie would cross the network in the clear. Open this page on the machine itself, or serve the dashboard over HTTPS (Settings → Dashboard), and "+where+".", http.StatusForbidden)
+		http.Error(w, "Nothing changed: this connection isn't private. Do this on the AII OS computer, or over HTTPS.", http.StatusForbidden)
 		return
 	}
 	var act func() error
@@ -208,7 +240,7 @@ func (s *Server) handleTokenAct(w http.ResponseWriter, r *http.Request, require 
 		}
 	}
 	if act == nil {
-		http.Error(w, "the access token cannot be "+done+" here", http.StatusNotFound)
+		http.Error(w, "no device can be "+done+" from here", http.StatusNotFound)
 		return
 	}
 	before := s.accessHash()

@@ -152,7 +152,10 @@ run(assert=>{
  const pending=id=>document.querySelector('[data-request-id="'+id+'"]');
  const ref=(source='recorded')=>({identity:'fixture',source,incarnation:source==='recorded'?'disk':'memory',id:'occurrence'});
  let id=send();S.chatAcknowledged(id,'accepted');assert(pending(id),'admission erased pending text');S.chatReceipt(id,{ref:ref()});assert(!pending(id),'durable receipt did not retire input');assert(!document.getElementById('chat-notice'),'successful recording displayed an attention banner');S.chatAcknowledged(id,'accepted');assert(!pending(id),'late ack revived input');
- id=send();S.chatReceipt(id,{ref:ref('transient')});assert(!pending(id) && document.getElementById('chat-notices').textContent.includes('Not saved'),'SAFE claimed durability');
+ id=send();S.chatReceipt(id,{ref:ref('transient')});assert(!pending(id),'a transient receipt left the words pending');
+ renderInteractionPages(new Map([['recorded',{identity:'fixture',incarnation:'disk',rows:[]}],['transient',{identity:'fixture',incarnation:'memory',rows:[{id:'occurrence',sequence:'1',kind:'message',role:'operator',content:'same words',details:{}}]}]]),()=>{},false);
+ assert(document.querySelector('.record-qualification')?.textContent.includes('Not saved'),'SAFE claimed durability: the row does not say it is not saved');
+ renderInteractionPages(new Map([['recorded',{identity:'fixture',incarnation:'disk',rows:[]}],['transient',{identity:'fixture',incarnation:'memory',rows:[]}]]),()=>{},false);
  id=send();const failed={ref:ref('transient'),error:{code:'CHAT_RECORDING_FAILED',message:'append failed'}};S.chatReceipt(id,failed);const el=pending(id);assert(el && el.textContent.includes('transient copy, not saved') && el.textContent.includes('same words'),'failed recording lost its text/ref');
  const before=el.textContent;S.chatAcknowledged(id,'accepted');S.chatReceipt(id,{error:{message:'append failed',code:'CHAT_RECORDING_FAILED'},ref:{id:'occurrence',incarnation:'memory',source:'transient',identity:'fixture'}});assert(el.textContent===before,'late ack or reordered duplicate changed the terminal receipt');
  S.chatReceipt(id,{ref:ref()});assert(el.textContent.includes('Conflicting'),'contradictory confirmation chose success');

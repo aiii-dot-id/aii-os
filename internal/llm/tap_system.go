@@ -8,21 +8,66 @@ import (
 	"encoding/json"
 	"io"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 type systemTextsKey struct{}
 
 func withSystemTexts(ctx context.Context, messages []Message) context.Context {
-	var texts []string
+	var texts, system []string
 	for _, m := range messages {
 		if (m.Role == "system" || m.Role == "developer") && m.Content != "" {
 			texts = append(texts, m.Content)
 		}
+		if m.Role == "system" {
+			system = append(system, m.Content)
+		}
 	}
-	if len(texts) == 0 {
+
+	if len(system) > 1 {
+		texts = append(texts, strings.Join(system, "\n\n"))
+	}
+	return withKnownSystemTexts(ctx, texts)
+}
+
+func WithSystemText(ctx context.Context, text string) context.Context {
+	return withKnownSystemTexts(ctx, []string{text})
+}
+
+func withKnownSystemTexts(ctx context.Context, texts []string) context.Context {
+	known, _ := ctx.Value(systemTextsKey{}).([]string)
+	all := append([]string(nil), known...)
+	for _, t := range texts {
+		if t == "" {
+			continue
+		}
+		all = append(all, t)
+		if e := asEncoded(t); e != t {
+			all = append(all, e)
+		}
+	}
+	if len(all) == len(known) {
 		return ctx
 	}
-	return context.WithValue(ctx, systemTextsKey{}, texts)
+	return context.WithValue(ctx, systemTextsKey{}, all)
+}
+
+func asEncoded(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && n == 1 {
+			b.WriteRune(utf8.RuneError)
+		} else {
+			b.WriteString(s[i : i+n])
+		}
+		i += n
+	}
+	return b.String()
 }
 
 func systemTextLine(text string) string {

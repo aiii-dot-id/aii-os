@@ -53,7 +53,7 @@ func TestTurnHandoffKeepsEachTurnsSteering(t *testing.T) {
 					}
 				}
 			}
-			if got := a.DrainSteering(); len(got) != 1 || got[0] != "the successor's own correction" {
+			if got := steeredWords(a.DrainSteering()); len(got) != 1 || got[0] != "the successor's own correction" {
 				t.Errorf("predecessor took the successor's steering: %v", got)
 			}
 		})

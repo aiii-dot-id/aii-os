@@ -277,6 +277,28 @@ func attributionOf(payload string) string {
 	return p.attribution()
 }
 
+func (a *App) attributionFor(o speakerObservation) string {
+	if a.store != nil {
+		if raw, err := json.Marshal(o); err == nil && a.store.OperatorVoiceWhyNot(string(raw)) == "" {
+			return store.NamedVoiceAttribution(o.SpeakerUUID, o.Continuity, o.RegistryRevision)
+		}
+	}
+	return o.attribution()
+}
+
+func (a *App) spokenAsRead(content, payload string) string {
+	if a.store != nil {
+		if read, named := a.store.SpokenAsRead(content, payload); named {
+			return read
+		}
+	}
+	var p speakerObservation
+	if json.Unmarshal([]byte(payload), &p) != nil {
+		return content
+	}
+	return attributeContent(content, p.attribution())
+}
+
 func attributeContent(content, attribution string) string {
 	if attribution == "" || !strings.HasPrefix(content, voiceMarker) {
 		return content
@@ -292,7 +314,7 @@ func (a *App) attributeSpoken(seq uint64, content string) string {
 	if err != nil || len(ann) == 0 {
 		return content
 	}
-	return attributeContent(content, attributionOf(ann[seq]))
+	return a.spokenAsRead(content, ann[seq])
 }
 
 func (a *App) speakerAnnotations(turns []store.ConversationTurn) map[uint64]string {

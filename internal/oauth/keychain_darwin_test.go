@@ -5,6 +5,7 @@ package oauth
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,16 +39,56 @@ func TestAnAbsentFileFallsBackToTheKeychain(t *testing.T) {
 	}
 }
 
-// A keychain that refuses must leave the FILE'S error standing: "not
-// signed in" is what an operator can act on, and os.IsNotExist has to
-// keep working for the caller that writes that sentence.
-func TestAKeychainFailureKeepsTheFilesNotExistError(t *testing.T) {
+// A Keychain that did not answer — the item declined, the tool timed out —
+// is NOT absence: nothing is known about the item, and the caller that writes
+// "sign in" on os.IsNotExist must not be handed that error. The words say
+// what happened instead.
+func TestAKeychainThatDidNotAnswerIsNotAbsence(t *testing.T) {
 	old := keychainLookup
 	defer func() { keychainLookup = old }()
 	forgetAdopted("Claude Code-credentials") // the memo outlives a test; whichever ran before must not answer this one
 	t.Cleanup(func() { forgetAdopted("Claude Code-credentials") })
 	keychainLookup = func(context.Context, string) ([]byte, error) {
 		return nil, errors.New("user denied access")
+	}
+	_, err := adoptedBytes(t.Context(), "Claude Code-credentials", filepath.Join(t.TempDir(), "gone.json"))
+	if os.IsNotExist(err) {
+		t.Fatalf("err = %v, reads as absence; a declined lookup must not", err)
+	}
+	if !errors.Is(err, ErrKeychainUnavailable) || !strings.Contains(err.Error(), "user denied access") {
+		t.Fatalf("err = %v, want ErrKeychainUnavailable carrying the tool's words", err)
+	}
+}
+
+// A tool that could not start carries its own not-exist error (the executable's),
+// and that must not read as the credential store's absence: the caller that
+// writes "sign in" on fs.ErrNotExist would tell a signed-in subscriber to sign in.
+func TestAMissingKeychainToolIsNotAbsenceEither(t *testing.T) {
+	old := keychainLookup
+	defer func() { keychainLookup = old }()
+	forgetAdopted("Claude Code-credentials")
+	t.Cleanup(func() { forgetAdopted("Claude Code-credentials") })
+	keychainLookup = func(context.Context, string) ([]byte, error) {
+		return nil, &fs.PathError{Op: "fork/exec", Path: "/usr/bin/security", Err: fs.ErrNotExist}
+	}
+	_, err := adoptedBytes(t.Context(), "Claude Code-credentials", filepath.Join(t.TempDir(), "gone.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v, carries the tool's not-exist as the store's", err)
+	}
+	if !errors.Is(err, ErrKeychainUnavailable) || !strings.Contains(err.Error(), "/usr/bin/security") {
+		t.Fatalf("err = %v, want ErrKeychainUnavailable naming the tool", err)
+	}
+}
+
+// A Keychain that answered "no such item" CONFIRMS absence: the file's
+// not-exist error stands, and the caller may say "not signed in".
+func TestAKeychainWithNoSuchItemLeavesTheFilesNotExistError(t *testing.T) {
+	old := keychainLookup
+	defer func() { keychainLookup = old }()
+	forgetAdopted("Claude Code-credentials")
+	t.Cleanup(func() { forgetAdopted("Claude Code-credentials") })
+	keychainLookup = func(context.Context, string) ([]byte, error) {
+		return nil, errKeychainItemNotFound
 	}
 	_, err := adoptedBytes(t.Context(), "Claude Code-credentials", filepath.Join(t.TempDir(), "gone.json"))
 	if !os.IsNotExist(err) {

@@ -33,6 +33,12 @@ func timerNotice(alarmID, tag, message string, at time.Time) string {
 type timerRecordKey struct{}
 type timerResumeKey struct{}
 
+type timerUnpromptedKey struct{}
+
+type timerTagKey struct{}
+
+type timerDeadlineKey struct{}
+
 type timerWakeHandler struct{ a *App }
 
 func (*timerWakeHandler) WorkKinds() []string { return []string{identity.TimerWakeWorkKind} }
@@ -54,6 +60,15 @@ func (h *timerWakeHandler) RunWork(ctx context.Context, w *store.WorkItem) error
 	notice = h.a.timerOwner.NoticeAfterRestore(firing.Deadline, notice)
 	ctx = context.WithValue(ctx, timerRecordKey{}, firing.DeliveryID())
 	ctx = context.WithValue(ctx, timerResumeKey{}, w.RetryCount > 0)
+	if firing.SetIn != "" {
+		ctx = interaction.WithAlarmSetIn(ctx, firing.SetIn)
+	}
+	if firing.Tag == identity.PromiseAlarmTag || firing.Tag == identity.HeldWordsTag {
+		ctx = context.WithValue(ctx, timerUnpromptedKey{}, true)
+	}
+	ctx = context.WithValue(ctx, timerTagKey{}, firing.Tag)
+	ctx = context.WithValue(ctx, timerDeadlineKey{}, firing.Deadline)
+	ctx = interaction.WithAlarmDeadline(ctx, firing.Deadline)
 	return h.a.wakeTimerAlarm(ctx, firing.AlarmID, notice)
 }
 
@@ -70,6 +85,46 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, notice string) error 
 		return &store.FrozenError{Reason: reason}
 	}
 
+	if tag, _ := ctx.Value(timerTagKey{}).(string); tag == identity.PromiseAlarmTag {
+		deadline, _ := ctx.Value(timerDeadlineKey{}).(int64)
+		owner, err := a.sessionOfFiring(alarmID, deadline)
+		if err != nil {
+
+			return fmt.Errorf("the session this firing resumes could not be read: %w", err)
+		}
+		if owner == nil {
+
+			now := "no session"
+			if ws, err := a.store.WorkSessionByID(strings.TrimPrefix(alarmID, "promise_")); err == nil && ws != nil {
+				now = fmt.Sprintf("session %s %s, resumes_on %q, promise %q", ws.ID, ws.Status, ws.ResumesOn, ws.Promise)
+			}
+			logsink.Info("wake.refusal", "timer %s at %d: no session's condition is this firing's any more (cleared, replaced or moved since it was queued); it wakes nothing — %s", alarmID, deadline, now)
+			return nil
+		}
+		ctx = interaction.WithResumeSession(ctx, owner.ID)
+		if !operatorProvenance(a.conditionSetIn(owner)) {
+			if !a.promisedUnattended(owner) {
+				a.setResumesOn(owner.ID, "", "word", "The turn that made this promise was an arrival's, or is not in the record; the moment came, and the work resumes on the operator's word")
+				return nil
+			}
+			held, err := a.heldByOperator()
+			if err != nil {
+				a.stageUnread(owner, "", err)
+				return nil
+			}
+			if held {
+				a.holdPromise(owner, "", "the moment named with resumes_on came")
+				logsink.Info("wake.refusal", "timer %s: held by the operator (supervised); the promise waits for their word", alarmID)
+				return nil
+			}
+			if past, at := a.pastCeiling(); past {
+				a.waitForTomorrow(owner, "", at)
+				logsink.Info("wake.refusal", "timer %s: today's ceiling is reached; the promise waits for tomorrow", alarmID)
+				return nil
+			}
+		}
+	}
+
 	turnBase := withTurnSource(ctx, turnSourceTimer)
 	turnCtx, cancelTurn := context.WithTimeout(turnBase, a.turnWall(alarmWallSetting))
 	defer cancelTurn()
@@ -82,11 +137,22 @@ func (a *App) wakeTimerAlarm(ctx context.Context, alarmID, notice string) error 
 
 		fact += safeWakePosture
 	}
-	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), fact+" Respond to your operator in your own words.")
+	unprompted, _ := ctx.Value(timerUnpromptedKey{}).(bool)
+	told := " Respond to your operator in your own words."
+	if unprompted {
+		told = " " + a.unpromptedSentence()
+	}
+	spoken, recorded, err := a.wakeRecorded(turnCtx, string(interaction.System), fact+told)
 
 	if spoken != "" {
 		wakeID := fmt.Sprintf("wake_%s_%d", alarmID, time.Now().UTC().UnixNano())
-		if derr := a.deliverReply(wakeID, spoken, recorded); derr != nil {
+		var derr error
+		if unprompted {
+			derr = a.deliverUnprompted(turnCtx, wakeID, spoken, recorded)
+		} else {
+			derr = a.deliverReply(wakeID, spoken, recorded)
+		}
+		if derr != nil {
 
 			var frozen *store.FrozenError
 			if !errors.As(derr, &frozen) {

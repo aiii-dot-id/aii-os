@@ -1,8 +1,11 @@
 
 import { S } from './state.js';
-import { $, cardHead, esc } from './util.js';
+import { $, esc, fill } from './util.js';
 import { send } from './ws.js';
 import { pendingSlot } from './pending.js';
+import { sheet } from './shell/sheet.js';
+import W from './strings/settings-permissions.js';
+import C from './strings/components.js';
 
 const pending = pendingSlot();
 let input = null;
@@ -57,20 +60,21 @@ export function sandboxConnectionLost() {
   render();
 }
 
-const OFF_LABEL = 'TURN THE SANDBOX OFF';
+const nameOf = () => { const n = (S.stats && S.stats.name) || ''; return n === 'Unnamed' ? '' : n; };
+const named = (withName, unnamed) => { const n = nameOf(); return n ? fill(withName, { name: n }) : unnamed; };
 const WARNING =
   '<b>Turn the sandbox off?</b>' +
-  '<div style="margin-top:6px">With the sandbox off they are no longer kept to their home and the folders listed here. Their tools, the shell included, can read, change and delete any file this computer\'s account can: your own documents, and the keys and sign-ins other programs have saved.</div>' +
-  '<div style="margin-top:6px">Their tools still refuse these, with the sandbox off as with it on: their own record, keys, database, config and data directory; every other identity on this account, whole; this program\'s own update and start-up files and the keys it borrows from other tools; and on Linux the running programs\' own files (/proc). ' +
-  'These are checks their tools make on each path. With the sandbox off an identity that sets out to get around them can, for example by changing what this account runs at its next login. Turn it off only for an identity you trust with this account.</div>';
+  '<p class="permissions__line">With the sandbox off they are no longer kept to their home and the folders listed here. Their tools, the shell included, can read, change and delete any file this computer\'s account can: your own documents, and the keys and sign-ins other programs have saved.</p>' +
+  '<p class="permissions__line">Their tools still refuse these, with the sandbox off as with it on: their own record, keys, database, config and data directory; every other identity on this account, whole; this program\'s own update and start-up files and the keys it borrows from other tools; and on Linux the running programs\' own files (/proc). ' +
+  'These are checks their tools make on each path. With the sandbox off an identity that sets out to get around them can, for example by changing what this account runs at its next login. Turn it off only for an identity you trust with this account.</p>';
 const WARNING_END =
-  '<div style="margin-top:6px">A plugin you granted files still reaches only their home and the folders listed here.</div>' +
-  '<div style="margin-top:6px">It stays off until you untick this box, through restarts too.</div>';
+  '<p class="permissions__line">A plugin you granted files still reaches only their home and the folders listed here.</p>' +
+  '<p class="permissions__line">It stays off until you untick this box, through restarts too.</p>';
 const OFF_LINE = 'The sandbox is off. Their tools reach any file this computer\'s account can. Their tools still refuse their own record, keys, database, config and data directory, the other identities on this account, and this program\'s own update and start-up files: a check on each path, which an identity that sets out to get around it can.';
 const ROOTS_IDLE = 'Not limiting them while the sandbox is off. A plugin you granted files still reaches only their home and these folders. Outside these folders a file named like one of their own (config.json, ledger.jsonl and the like) is still refused by their tools.';
 const NOT_KEPT = 'Not kept, because a folder you listed holds it: ';
 const notKept = () => (S.sandbox.not_kept || []).length
-  ? '<div data-sandbox-not-kept style="margin-top:6px">' + NOT_KEPT + '<span style="font-family:var(--mono);font-size:12px">' + S.sandbox.not_kept.map(esc).join('; ') + '</span></div>' : '';
+  ? '<p class="permissions__line" data-sandbox-not-kept>' + NOT_KEPT + '<span class="permissions__code">' + S.sandbox.not_kept.map(esc).join('; ') + '</span></p>' : '';
 
 let notesSaid = '';
 const NOTES_HEADING = 'OTHER AI AGENTS\u2019 NOTES';
@@ -91,14 +95,15 @@ function copyNotes() {
 function notesCardHTML() {
   const n = S.sandbox.agent_notes;
   if (!n) return '';
-  let html = '<div class="card" data-agent-notes>' + cardHead(NOTES_HEADING, NOTES_TIP);
+  let html = '<section class="permissions__part" data-agent-notes aria-labelledby="notes-h" aria-describedby="notes-hint">' +
+    '<h3 id="notes-h" class="permissions__h3">' + esc(W.otherNotes) + '</h3>';
   if (n.copied) {
-    html += '<div data-agent-notes-copied style="line-height:1.5">' + NOTES_COPIED('<span style="font-family:var(--mono);font-size:12px">' + esc(n.folder || '') + '</span>') + '</div>';
+    html += '<p id="notes-hint" class="permissions__line" data-agent-notes-copied>' + NOTES_COPIED('<span class="permissions__code">' + esc(n.folder || '') + '</span>') + '</p>';
   } else {
-    html += '<div style="line-height:1.5">' + NOTES_ASK + '</div>' +
-      '<div style="margin-top:10px"><button class="btn" id="notes-copy"' + (pending.waiting() ? ' disabled' : '') + '>' + NOTES_BUTTON + '</button></div>';
+    html += '<p id="notes-hint" class="permissions__line">' + NOTES_ASK + '</p>' +
+      '<div class="permissions__buttons"><button class="c-button" id="notes-copy"' + (pending.waiting() ? ' disabled' : '') + '>' + esc(W.otherNotesCopy) + '</button></div>';
   }
-  return html + '<div data-announce data-agent-notes-said style="margin-top:8px;line-height:1.5">' + esc(notesSaid) + '</div></div>';
+  return html + '<p class="permissions__said" data-announce data-agent-notes-said>' + esc(notesSaid) + '</p></section>';
 }
 
 const HELD_FIRM = ['SAFE', 'ACCESS_TOKEN_OFF'];
@@ -106,36 +111,35 @@ const HELD_FIRM = ['SAFE', 'ACCESS_TOKEN_OFF'];
 export function sandboxCardHTML() {
   focus = input && document.activeElement === input ? { start: input.selectionStart, end: input.selectionEnd } : null;
   if (!S.sandbox) return '';
+  sheet('views/settings/permissions.css').catch(() => {});
   const off = !!S.sandbox.off;
   const firm = !off && HELD_FIRM.includes(S.sandbox.held_why);
   if (off || firm) warning = false;
-  let html = '';
-  html += '<div class="card">' + cardHead('SANDBOX — WHERE THEY MAY REACH', 'Their home, the other folders their tools may read and change, and the switch that turns the sandbox off.') +
-    '<label class="f" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="sbx-off"' + (off ? ' checked' : '') + (pending.waiting() || warning || firm ? ' disabled' : '') + '> ' + OFF_LABEL + '</label>';
+  const waiting = pending.waiting() ? ' disabled' : '';
+  let html = '<section class="permissions__part" data-folders aria-labelledby="sbx-h" aria-describedby="' + (off ? 'sbx-offline' : 'sbx-hint') + '">' +
+    '<h3 id="sbx-h" class="permissions__h3">' + esc(named(W.folders, W.foldersUnnamed)) + '</h3>' +
+    (off ? '' : '<p id="sbx-hint" class="permissions__hint">' + esc(named(W.foldersHint, W.foldersHintUnnamed)) + '</p>') +
+    '<ul class="permissions__rows"><li class="permissions__row"><span class="permissions__words"><span>' + esc(W.home) + '<span class="permissions__soft"> · ' + esc(W.always) + '</span></span>' +
+    '<span class="permissions__code">' + esc(S.sandbox.root) + '</span></span></li>' +
+    (S.sandbox.extra_roots || []).map((r, i) =>
+      '<li class="permissions__row' + (off ? ' permissions__row--idle' : '') + '"><span class="permissions__code">' + esc(r) + '</span>' +
+      '<button class="permissions__act" data-rmroot="' + i + '"' + waiting + '>' + esc(C.remove) + '</button></li>').join('') + '</ul>';
+  if (off) html += '<p class="permissions__hint" data-roots-idle>' + ROOTS_IDLE + '</p>';
+  html += '<div class="permissions__add"><label for="sbx-add">' + esc(W.addFolder) + '</label><p class="permissions__hint">' + esc(W.addFolderHint) + '</p>' +
+    '<div class="permissions__inline"><input type="text" id="sbx-add" placeholder="/work/some/project"><button class="c-button" id="sbx-grant"' + waiting + '>' + esc(C.add) + '</button></div></div>';
+  if (!off && S.sandbox.held_why) html += '<div class="config-result bad" data-sandbox-held>' + esc(S.sandbox.held) + '</div>';
+  if (S.sandbox.labelled) html += '<p class="permissions__hint" data-sandbox-labelled>' + esc(S.sandbox.labelled) + '</p>';
+  html += '<label class="permissions__switch permissions__switch--row"><span class="permissions__words"><span>' + esc(W.sandboxOff) + '</span><span class="permissions__hint">' + esc(W.limitOffHint) + '</span></span>' +
+    '<input type="checkbox" role="switch" class="permissions__sw" id="sbx-off"' + (off ? ' checked' : '') + (pending.waiting() || warning || firm ? ' disabled' : '') + '></label>';
   if (warning) {
-    html += '<div class="config-result" data-sandbox-warning style="line-height:1.5;color:var(--txt)"><div data-announce>' + WARNING + notKept() + WARNING_END + '</div>' +
-      '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn" id="sbx-off-allow">Allow</button>' +
-      '<button class="btn ghost" id="sbx-off-cancel">Cancel</button></div></div>';
+    html += '<div class="config-result permissions__warning" data-sandbox-warning><div data-announce>' + WARNING + notKept() + WARNING_END + '</div>' +
+      '<div class="permissions__buttons"><button class="c-button c-button--danger" id="sbx-off-allow">Allow</button>' +
+      '<button class="c-button c-button--quiet" id="sbx-off-cancel">Cancel</button></div></div>';
   }
-  if (off) html += '<div class="config-result bad" data-sandbox-off style="line-height:1.5">' + OFF_LINE + notKept() + '</div>';
-  if (!off && S.sandbox.held_why) html += '<div class="config-result bad" data-sandbox-held style="line-height:1.5">' + esc(S.sandbox.held) + '</div>';
-  if (S.sandbox.labelled) html += '<div data-sandbox-labelled style="font-size:12.5px;color:var(--dim);padding:6px 0;line-height:1.5">' + esc(S.sandbox.labelled) + '</div>';
-  html += '<label class="f">HOME ROOT</label><div style="font-family:var(--mono);font-size:12px;color:var(--dim);padding:4px 0">' + esc(S.sandbox.root) + '</div>' +
-    '<label class="f">EXTRA ROOTS</label>';
-  if (off) html += '<div data-roots-idle style="color:var(--faint);font-size:12.5px;padding:6px 0;line-height:1.5">' + ROOTS_IDLE + '</div>';
-  if ((S.sandbox.extra_roots || []).length) {
-    html += S.sandbox.extra_roots.map((r, i) =>
-      '<div class="tool-row"' + (off ? ' style="opacity:.55"' : '') + '><span class="td" style="font-family:var(--mono);font-size:12px">' + esc(r) + '</span>' +
-      '<button class="btn ghost" data-rmroot="' + i + '"' + (pending.waiting() ? ' disabled' : '') + ' style="padding:4px 12px;font-size:12px">remove</button></div>').join('');
-  } else if (!off) {
-    html += '<div style="color:var(--faint);font-size:12.5px;padding:6px 0">none — their world is their home tree</div>';
-  }
-  html += '<label class="f">ADD A ROOT (ABSOLUTE PATH)</label>' +
-    '<div style="display:flex;gap:10px"><input type="text" id="sbx-add" placeholder="/work/some/project" style="font-family:var(--mono)">' +
-    '<button class="btn" id="sbx-grant"' + (pending.waiting() ? ' disabled' : '') + '>Add</button></div>' +
-    '<div data-announce>' + esc(notice + (switchRefused ? (off ? ' The sandbox is off.' : ' The sandbox is still on.') : '')) + '</div>' +
-    '<div style="font-size:11.5px;color:var(--faint);margin-top:10px;line-height:1.5">Adding a root widens their world — e.g. letting a trusted identity work on AII OS itself — and the world of every plugin you grant files, which works here under the same wall. Their substrate (the data directory, key, database and config) stays refused inside every root — that wall is structural and server-side. The in-process wall is best-effort; a namespace wrapper (bwrap) must bind added paths too.</div>' +
-    '</div>';
+  if (off) html += '<div class="config-result bad" id="sbx-offline" data-sandbox-off>' + OFF_LINE + notKept() + '</div>';
+  html += '<p class="permissions__said" data-announce>' + esc(notice + (switchRefused ? (off ? ' The sandbox is off.' : ' The sandbox is still on.') : '')) + '</p>' +
+    '<p class="permissions__hint">Adding a folder widens their world — e.g. letting a trusted identity work on AII OS itself — and the world of every plugin you grant files, which works here under the same wall. Their data directory, key, database and config stay refused inside every folder — that wall is structural and server-side. The in-process wall is best-effort; a namespace wrapper (bwrap) must bind added folders too.</p>' +
+    '</section>';
   return html + notesCardHTML();
 }
 

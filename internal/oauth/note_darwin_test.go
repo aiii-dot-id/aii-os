@@ -26,7 +26,7 @@ func TestAKeychainMissIsRememberedLikeAHit(t *testing.T) {
 		if answer != nil {
 			return answer, nil
 		}
-		return nil, errors.New("the specified item could not be found in the keychain")
+		return nil, errKeychainItemNotFound // the tool's "no such item": a confirmed miss
 	}
 	absent := filepath.Join(t.TempDir(), "absent.json")
 

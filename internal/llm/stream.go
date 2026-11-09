@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
 	"maps"
@@ -206,7 +207,7 @@ func (c *Client) chatOpenAIStream(ctx context.Context, body openAIBody, mode int
 		return nil, streamRefusal(refusal), refusal
 	}
 	if isEventStream(httpResp.Header.Get("Content-Type")) {
-		resp, err = readChatStream(httpResp.Body)
+		resp, err = readChatStream(httpResp.Body, wire.TextObserver(ctx))
 	} else {
 
 		resp, err = decodeCompletion(httpResp.Body)
@@ -255,7 +256,7 @@ type streamChunk struct {
 	} `json:"error"`
 }
 
-func readChatStream(r io.Reader) (*Response, error) {
+func readChatStream(r io.Reader, say func(string)) (*Response, error) {
 	limited := &io.LimitedReader{R: r, N: maxResponseBytes + 1}
 	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 0, 64<<10), maxResponseBytes)
@@ -312,6 +313,9 @@ func readChatStream(r io.Reader) (*Response, error) {
 			}
 			if d.Content != nil {
 				content.WriteString(*d.Content)
+				if say != nil && *d.Content != "" {
+					say(*d.Content)
+				}
 			}
 			if d.ReasoningContent != nil {
 				reasoning.WriteString(*d.ReasoningContent)

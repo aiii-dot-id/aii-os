@@ -240,7 +240,7 @@ func (s *Server) Start(tlsDir string) (string, error) {
 	if s.tlsDir == "" {
 		s.tls = false
 		if !IsLoopback(actualHost) {
-			logsink.Warn("dashboard.decision", "serving PLAIN HTTP on %s — every word between this identity and its operator crosses the network in the clear, and the browser will refuse the microphone. Settings → Dashboard → HTTPS.", actualAddr)
+			logsink.Warn("dashboard.decision", "serving PLAIN HTTP on %s — every word between this identity and its operator crosses the network in the clear, and the browser will refuse the microphone. Settings → Access → Serve over HTTPS.", actualAddr)
 		}
 		s.startTurnLifecycles()
 		serveLoopbacks()

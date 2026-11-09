@@ -121,7 +121,8 @@ func (a *App) retainHeard(session string, seq int64, text string, v dashboard.Vo
 		r.Truncated = true
 	}
 	if observation != nil && observation.err == nil {
-		r.apply(observation.observation())
+		o := observation.observation()
+		r.apply(o, a.attributionFor(o))
 		r.InitialAttribution = r.Attribution
 	}
 	if policy.ignores(r.filterIDs) {
@@ -136,8 +137,8 @@ func (a *App) retainHeard(session string, seq int64, text string, v dashboard.Vo
 	b.rows = append(b.rows, r)
 }
 
-func (r *heardHistoryRow) apply(o speakerObservation) {
-	r.Attribution = heardPrefix(o.attribution(), heardHistoryMetadataBytes)
+func (r *heardHistoryRow) apply(o speakerObservation, attribution string) {
+	r.Attribution = heardPrefix(attribution, heardHistoryMetadataBytes)
 	r.revision = o.Revision
 	if o.RegistryRevision != "" {
 		r.registryRevision = o.RegistryRevision
@@ -183,7 +184,7 @@ func (a *App) amendHeard(ev voiceFrame) {
 				b.rows = b.rows[:len(b.rows)-1]
 				return
 			}
-			r.apply(o)
+			r.apply(o, a.attributionFor(o))
 			return
 		}
 	}

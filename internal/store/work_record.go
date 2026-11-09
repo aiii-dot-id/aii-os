@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +44,10 @@ type WorkCall struct {
 
 	ResultClipped bool
 	ResultRecord  string
+
+	Request *interaction.RequestFacts
+
+	PlanStep *string
 }
 
 func (c WorkCall) Args() string {
@@ -76,9 +82,11 @@ func (c WorkCall) KeptResult() (head, last string, cut bool) {
 	return kept[:i], strings.TrimPrefix(rest, "\n"), true
 }
 
-const workCallSelect = `SELECT c.turn_seq, c.source_id, c.turn_id, c.project_id, COALESCE(c.recorded_at,''), c.content, c.details,
+const workCallSelect = `SELECT c.turn_seq, c.source_id, c.turn_id, c.project_id, COALESCE(c.recorded_at,''), c.content, c.details, COALESCE(q.payload,''), COALESCE(ps.payload,''),
 	r.id IS NOT NULL, COALESCE(r.turn_seq,0), COALESCE(r.recorded_at,''), substr(COALESCE(r.content,''),1,?), length(COALESCE(r.content,'')), COALESCE(r.outcome,''), COALESCE(r.details,'{}')
 	FROM conversations c
+	LEFT JOIN turn_annotations q ON q.turn_seq=c.turn_seq AND q.kind='` + AnnotationRequest + `'
+	LEFT JOIN turn_annotations ps ON ps.turn_seq=c.turn_seq AND ps.kind='` + AnnotationPlanStepServed + `'
 	LEFT JOIN conversations r ON r.source_kind='tool' AND r.source_id=c.source_id AND r.kind='tool_result'
 	WHERE c.kind='tool_call' AND c.source_kind='tool'`
 
@@ -88,9 +96,9 @@ const workCallSession = `(CASE WHEN r.id IS NULL THEN json_extract(c.details,'$.
 
 func scanWorkCall(rows rowScanner) (WorkCall, error) {
 	var c WorkCall
-	var callDetails, resultDetails string
+	var callDetails, request, step, resultDetails string
 	var length int
-	if err := rows.Scan(&c.Seq, &c.Tex, &c.TurnID, &c.ProjectID, &c.CalledAt, &c.CallContent, &callDetails,
+	if err := rows.Scan(&c.Seq, &c.Tex, &c.TurnID, &c.ProjectID, &c.CalledAt, &c.CallContent, &callDetails, &request, &step,
 		&c.Ended, &c.ResultSeq, &c.EndedAt, &c.ResultContent, &length, &c.Outcome, &resultDetails); err != nil {
 		return c, err
 	}
@@ -104,6 +112,19 @@ func scanWorkCall(rows rowScanner) (WorkCall, error) {
 	}
 	c.Tool, c.Actor, c.Model, c.ProviderCallID, c.Ordinal, c.ArgsRecord = call.Tool, call.Actor, call.Model, call.ProviderCallID, call.Ordinal, call.ArgsRecord
 	c.WorkSession, c.SessionReason = call.WorkSession, call.SessionReason
+	if request != "" {
+		c.Request = new(interaction.RequestFacts)
+		if err := json.Unmarshal([]byte(request), c.Request); err != nil {
+			return c, fmt.Errorf("tool call %s: its request's facts do not decode: %w", c.Tex, err)
+		}
+	}
+	if step != "" {
+		var served planStepLine
+		if err := json.Unmarshal([]byte(step), &served); err != nil {
+			return c, fmt.Errorf("tool call %s: its plan step does not decode: %w", c.Tex, err)
+		}
+		c.PlanStep = &served.Line
+	}
 	if c.Ended {
 		c.WorkSession, c.SessionReason = result.WorkSession, result.SessionReason
 		c.ReasonCode, c.ExitStatus, c.DurationMS, c.Truncated, c.ResultRecord = result.ReasonCode, result.ExitStatus, result.DurationMS, result.Truncated, result.ResultRecord
@@ -194,8 +215,22 @@ type WorkRecordParts struct {
 	Grades []WorkGrade
 	Turns  []WorkTurnUsage
 
+	Requests []WorkRequest
+
 	Check WorkCheck
 }
+
+type WorkRequest struct {
+	TurnID string
+	Facts  interaction.RequestFacts
+	Shared bool
+}
+
+const requestSessionsSQL = `SELECT a.key, COALESCE(` + workCallSession + `,'')
+	FROM turn_annotations a
+	JOIN conversations c ON c.turn_seq=a.turn_seq AND c.kind='tool_call' AND c.source_kind='tool'
+	LEFT JOIN conversations r ON r.source_kind='tool' AND r.source_id=c.source_id AND r.kind='tool_result'
+	WHERE a.kind='` + AnnotationRequest + `' AND a.key IN (SELECT value FROM json_each(?))`
 
 func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, error) {
 	out := make(map[string]*WorkRecordParts, len(sessions))
@@ -223,10 +258,18 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 		}
 		turnsOf[session][turn] = true
 	}
+	listed, requests := map[[2]string]bool{}, map[string]bool{}
 	for _, c := range calls {
 		if p := out[c.WorkSession]; p != nil {
 			p.Calls = append(p.Calls, c)
 			name(c.WorkSession, c.TurnID)
+			if c.Request == nil {
+				continue
+			}
+			if k := RequestKey(c.TurnID, c.Request.Ordinal); !listed[[2]string{c.WorkSession, k}] {
+				listed[[2]string{c.WorkSession, k}], requests[k] = true, true
+				p.Requests = append(p.Requests, WorkRequest{TurnID: c.TurnID, Facts: *c.Request})
+			}
 		}
 	}
 	checks, err := s.WorkChecksOf(sessions)
@@ -240,6 +283,9 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 	defer s.mu.RUnlock()
 	if s.historicalTurnMetrics {
 		return nil, errors.New("this database's turn usage predates the work record: its turn_metrics names no turn")
+	}
+	if err := s.markSharedRequests(out, requests); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.Query(`SELECT json_extract(details,'$.work_session_id'), turn_id FROM conversations
 		WHERE kind='notice' AND turn_id != '' AND json_extract(details,'$.work_session_id') IN (SELECT value FROM json_each(?))`, string(ids))
@@ -324,6 +370,45 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 		}
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) markSharedRequests(out map[string]*WorkRecordParts, keys map[string]bool) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	list, err := json.Marshal(slices.Sorted(maps.Keys(keys)))
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.Query(requestSessionsSQL, string(list))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	holders := map[string]map[string]bool{}
+	for rows.Next() {
+		var k, session string
+		if err := rows.Scan(&k, &session); err != nil {
+			return err
+		}
+		if holders[k] == nil {
+			holders[k] = map[string]bool{}
+		}
+		holders[k][session] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id, p := range out {
+		for i, r := range p.Requests {
+			for session := range holders[RequestKey(r.TurnID, r.Facts.Ordinal)] {
+				if session != "" && session != id {
+					p.Requests[i].Shared = true
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type WorkRecordSession struct {

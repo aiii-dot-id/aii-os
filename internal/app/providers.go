@@ -714,14 +714,14 @@ func providersStated(data []byte) ([]byte, error) {
 }
 
 func (a *App) setProvider(e providerEntry, keepAPIKey bool) error {
-	return a.setProviderWith(e, keepAPIKey, false, false)
+	return a.setProviderWith(e, keepAPIKey, false, false, false)
 }
 
 func (a *App) setProviderFromCard(e providerEntry, keepAPIKey, keepEmbeddingsModel bool) error {
-	return a.setProviderWith(e, keepAPIKey, true, keepEmbeddingsModel)
+	return a.setProviderWith(e, keepAPIKey, true, keepEmbeddingsModel, true)
 }
 
-func (a *App) setProviderWith(e providerEntry, keepAPIKey, fromCard, keepEmbeddingsModel bool) error {
+func (a *App) setProviderWith(e providerEntry, keepAPIKey, fromCard, keepEmbeddingsModel, keepLocal bool) error {
 	if e.Name == "" || e.URL == "" {
 		return fmt.Errorf("a provider needs at least a name and a url")
 	}
@@ -750,7 +750,9 @@ func (a *App) setProviderWith(e providerEntry, keepAPIKey, fromCard, keepEmbeddi
 				if keepEmbeddingsModel {
 					e.EmbeddingsModel = reg.Providers[i].EmbeddingsModel
 				}
-				e.Local = reg.Providers[i].Local
+				if keepLocal {
+					e.Local = reg.Providers[i].Local
+				}
 				e.CatalogueAuthor = reg.Providers[i].CatalogueAuthor
 				e.ReplayReasoning = reg.Providers[i].ReplayReasoning
 
@@ -1472,6 +1474,8 @@ func (a *App) wireProviderHooks(h *dashboard.WSHandler) {
 	h.DeleteProvider = a.deleteProvider
 	h.RepairProvider = a.repairBrokenProvider
 	h.RemoveBrokenProvider = a.removeBrokenProvider
+	h.LookForLocalServers = a.lookForLocalServers
+	h.AddLocalServer = a.addLocalServer
 
 	h.DiscoverModels = a.discoverModels
 }

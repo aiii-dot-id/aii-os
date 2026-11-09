@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net/http"
 	"regexp"
 	"testing"
 	"time"
@@ -73,14 +74,17 @@ func facilityShapes() []requestShape {
 		{
 			name: "facility_morning_brief", about: "a MORNING_BRIEF pass over the realistic identity's day",
 			send: func(t *testing.T) sentRequest {
-				a, dir := realisticApp(t)
-				obs := fixtureModel(t, a, replyingWith(textReply("GOLDEN_BRIEF the build is patched and not yet proven")))
-				if err := a.briefFacility.Execute(t.Context()); err != nil {
-					t.Fatal(err)
-				}
-				// The brief states the time it is written at
-				// (morning_brief.go: "Current time: …"): the clock.
-				return sentRequest{body: onlyRequest(t, obs.snapshot()), dir: dir, more: func(s string) string {
+				// The brief's request is the pass's first; the note to the
+				// operator follows it and leaves it byte for byte.
+				return sentRequest{body: briefPass(t, 0), dir: briefPassDir, more: func(s string) string {
+					return briefNowPattern.ReplaceAllString(s, "Current time: <now>")
+				}}
+			},
+		},
+		{
+			name: "facility_operator_note", about: "R263, the note to the operator: the brief's pass's second request, once the brief is kept",
+			send: func(t *testing.T) sentRequest {
+				return sentRequest{body: briefPass(t, 1), dir: briefPassDir, more: func(s string) string {
 					return briefNowPattern.ReplaceAllString(s, "Current time: <now>")
 				}}
 			},
@@ -120,6 +124,35 @@ func facilityShapes() []requestShape {
 }
 
 var briefNowPattern = regexp.MustCompile(`Current time: [^\n]*`)
+
+// briefPass runs one MORNING_BRIEF pass over the realistic identity's day,
+// the brief kept and then the note to the operator written, and is the
+// pass's request n of its two; briefPassDir is that pass's identity.
+var briefPassDir string
+
+func briefPass(t *testing.T, n int) string {
+	t.Helper()
+	a, dir := realisticApp(t)
+	briefPassDir = dir
+	brief, note := textReply("GOLDEN_BRIEF the build is patched and not yet proven"), textReply(`{"note":"GOLDEN_NOTE the build is patched and not yet proven.","claims":[]}`)
+	// The fixture counts requests from one: the first is the brief's.
+	obs := fixtureModel(t, a, func(i int, w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		if i == 1 {
+			_, _ = w.Write([]byte(brief))
+			return
+		}
+		_, _ = w.Write([]byte(note))
+	})
+	if err := a.briefFacility.Execute(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reqs := obs.snapshot()
+	if len(reqs) != 2 {
+		t.Fatalf("the brief's pass sent %d requests, want the brief's and the note's", len(reqs))
+	}
+	return reqs[n]
+}
 
 var toolWindowPattern = regexp.MustCompile(`recorded from [^\n]+ to [^\n]+ \(UTC\)`)
 

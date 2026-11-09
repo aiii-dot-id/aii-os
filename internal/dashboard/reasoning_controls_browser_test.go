@@ -14,12 +14,16 @@ import { S } from './state.js';
 import { renderSettings } from './views/settings.js';
 import { assert, run } from './__harness.js';
 
+// The reading is the resolved line's own (host 2021): the rest of the
+// page, More options' summary among it, may rightly say "thinking".
 function render(config, providers) {
   S.config = config;
   S.providers = providers || [];
   S.providersLoaded = true;
   renderSettings();
-  return document.getElementById('settings-stack').textContent;
+  const line = document.querySelector('[data-resolved]');
+  assert(line, 'the resolved line is not drawn');
+  return line.textContent;
 }
 
 const base = {
@@ -35,11 +39,33 @@ run(() => {
       effort_plan: 'high → reasoning.effort',
     }),
   }));
-  assert(text.indexOf('thinking') === -1,
+  // The reading is ' · thinking <budget>' (host 1952).
+  assert(text.indexOf(' · thinking') === -1,
     'a dialect with no thinking parameter must not print a thinking reading: ' + text);
   assert(text.indexOf('high → reasoning.effort') !== -1,
     'the panel must report where the effort actually goes: ' + text);
 
+  // LEVELS WITH NO THINKING PARAMETER (host 2021): the menu is drawn, so
+  // More options' summary rightly says "thinking"; the line still prints
+  // no thinking reading. effortChoice() reads only for an identity that
+  // exists, so this case alone sets it.
+  const hadIdentity = S.identityExists;
+  S.identityExists = true;
+  text = render(Object.assign({}, base, {
+    llm: Object.assign({}, base.llm, {
+      thinking_applies: false, thinking_budget: 0,
+      effort_plan: 'high → reasoning.effort',
+      effort_choice: { levels: ['low', 'high'], in_force: 'low' },
+    }),
+  }));
+  const summary = document.querySelector('[data-more] summary');
+  assert(summary && summary.textContent.indexOf('thinking, longest wait') !== -1,
+    'with levels More options does not name the thinking menu: ' + (summary ? summary.textContent : 'no summary'));
+  assert(text.indexOf(' · thinking') === -1,
+    'with levels and no thinking parameter the line printed a thinking reading: ' + text);
+  S.identityExists = hadIdentity;
+
+  // WHERE THINKING DOES APPLY it is shown.
   text = render(Object.assign({}, base, {
     llm: Object.assign({}, base.llm, {
       thinking_applies: true, thinking_budget: 8000,

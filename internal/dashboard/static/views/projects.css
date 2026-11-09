@@ -1,0 +1,60 @@
+#view-projects.on { display:grid; grid-template-columns:minmax(180px,230px) minmax(0,1fr); grid-template-areas:"dock space"; align-items:start; column-gap:var(--s-6); width:100%; max-width:1120px; margin:0 auto; padding:var(--s-6) var(--gutter,16px); box-sizing:border-box; overflow-y:auto; }
+#view-projects .proj-space { grid-area:space; padding:0; overflow:visible; min-width:0; }
+#view-projects .dock-wrap { grid-area:dock; display:flex; flex-direction:column; gap:var(--s-3); border:0; background:none; -webkit-backdrop-filter:none; backdrop-filter:none; }
+#view-projects .dock-tools { order:2; padding:0; justify-content:flex-start; }
+#view-projects #dock-filter { width:100%; min-height:40px; box-sizing:border-box; }
+#view-projects .dock { display:flex; flex-direction:column; align-items:stretch; gap:2px; width:100%; padding:0; overflow:visible; }
+.projects__dock-title { margin:0 0 var(--s-3); font-size:var(--t-xl); line-height:var(--t-xl-lh); font-weight:600; color:var(--text); }
+#view-projects .dock-item { display:flex; align-items:center; flex-wrap:wrap; gap:.3em; width:auto; min-height:40px; padding:0 var(--s-3); border:0; border-radius:var(--r-control); background:none; font-family:var(--font-page); font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); text-align:left; cursor:pointer; }
+#view-projects .dock-item:hover { background:var(--surface-2); }
+#view-projects .dock-item.viewing { background:var(--surface-2); font-weight:600; }
+#view-projects .dock-item.closed { color:var(--text-2); }
+#view-projects .dock-item.dock-new { color:var(--accent); margin-top:var(--s-2); }
+#view-projects .dock-item:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+#view-projects .dock-empty { padding:0 var(--s-3); font-size:var(--t-xs); color:var(--text-2); }
+
+.projects__page { display:flex; flex-direction:column; gap:var(--s-5); max-width:820px; min-width:0; }
+.projects__head { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:var(--s-3); }
+.projects__title { margin:0; font-size:var(--t-xl); line-height:var(--t-xl-lh); font-weight:600; color:var(--text); overflow-wrap:anywhere; }
+.projects__acts { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-2); }
+.projects__working { font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text-2); }
+.projects__said { margin:calc(-1 * var(--s-3)) 0 0; font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); }
+.projects__said:empty { display:none; }
+.projects__after { margin:0; font-size:var(--t-md); line-height:var(--t-md-lh); color:var(--text); overflow-wrap:anywhere; }
+.projects__meta { margin:calc(-1 * var(--s-3)) 0 0; font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); overflow-wrap:anywhere; }
+.projects__meta:empty { display:none; }
+.projects__soft { font-weight:400; color:var(--text-2); }
+.projects__part { display:flex; flex-direction:column; gap:var(--s-2); min-width:0; }
+.projects__page .card.projects__part { padding:0; border:0; border-radius:0; background:none; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; }
+.projects__top { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:var(--s-2); }
+.projects__page .projects__h3 { margin:0; padding:0; font-size:var(--t-lg); line-height:var(--t-lg-lh); font-weight:600; letter-spacing:normal; text-transform:none; color:var(--text); }
+.projects__counts { font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); }
+.projects__count { white-space:nowrap; }
+.projects__hint { margin:0; font-size:var(--t-xs); line-height:var(--t-xs-lh); color:var(--text-2); overflow-wrap:anywhere; }
+.projects__rows { list-style:none; margin:0; padding:0; border-top:1px solid var(--line); }
+.projects__claim { display:grid; grid-template-columns:140px minmax(0,1fr); gap:var(--s-1) var(--s-4); padding:var(--s-3) 0; border-bottom:1px solid var(--line); }
+.projects__page .chip.projects__state { justify-self:start; padding:0; border:0; background:none; font-size:var(--t-xs); line-height:var(--t-sm-lh); font-weight:600; color:var(--text); }
+.projects__claim.is-verified .projects__state { color:var(--good); }
+.projects__claim.is-supported .projects__state { color:var(--warn); }
+.projects__claim.is-unsupported .projects__state { color:var(--bad); }
+.projects__claim.is-waived .projects__state { color:var(--text-2); }
+.projects__claim-words { display:flex; flex-direction:column; gap:2px; min-width:0; font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); overflow-wrap:anywhere; }
+.projects__next { margin:0; font-size:var(--t-sm); line-height:var(--t-sm-lh); color:var(--text); }
+.projects__page .projects__files { width:100%; border-collapse:collapse; font-size:var(--t-sm); }
+.projects__page .projects__files th { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+.projects__page .projects__files td { padding:var(--s-2) 0; border-bottom:1px solid var(--line); }
+.projects__page .projects__files td + td { text-align:right; color:var(--text-2); font-size:var(--t-xs); white-space:nowrap; }
+.projects__row { display:flex; flex-direction:column; gap:var(--s-1); padding:var(--s-3) 0; border-bottom:1px solid var(--line); }
+.projects__form { display:flex; flex-direction:column; gap:var(--s-2); max-width:640px; }
+.projects__label { font-size:var(--t-sm); line-height:var(--t-sm-lh); font-weight:600; color:var(--text); }
+.projects__buttons { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-2); }
+#view-projects #projects-delivered { max-width:820px; margin-top:var(--s-6); }
+#view-projects .delivered-title { margin:0 0 var(--s-2); font-size:var(--t-lg); line-height:var(--t-lg-lh); font-weight:600; color:var(--text); }
+
+@media (max-width: 767px) {
+  #view-projects.on { display:flex; flex-direction:column; gap:var(--s-6); padding:var(--s-4) var(--gutter,16px); }
+  #view-projects .proj-space { flex:none; }
+  #view-projects .dock-wrap { order:2; align-self:stretch; }
+  .projects__claim { grid-template-columns:minmax(0,1fr); }
+  .projects__acts { width:100%; }
+}

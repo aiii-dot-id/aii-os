@@ -165,6 +165,13 @@ func TestThePagesEscrowRefusals(t *testing.T) {
 	}
 }
 
+// EVERY REASON THE PAGE CAN END SAYS WHAT TO DO THERE. The line under "not
+// encrypted" is read by someone who opened Backups, and since the
+// missing escrow stopped being an alert and an item of attention (R115 as
+// amended 2026-10-10) it is the one place that lack is said. A line that
+// names a lack and not the act that ends it leaves a person where they
+// were. The three reasons the page's own controls end each name the act,
+// "below"; none sends a person to a terminal or a path.
 func TestEveryReasonThePageCanEndSaysWhatToDoThere(t *testing.T) {
 	for _, reason := range []string{store.UnencryptedNoEscrow, store.UnencryptedReceiptUnread, store.UnencryptedReceiptMismatch} {
 		text := unencryptedForPerson(reason)

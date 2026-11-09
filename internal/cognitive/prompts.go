@@ -3,6 +3,8 @@ package cognitive
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/aiii-dot-id/aii-os/internal/tokenestimate"
 )
 
 const charsPerWord = 6
@@ -83,7 +85,7 @@ identity reads as its working truth surfacing — Ring 3 — and a reply over %d
 characters is refused whole.`
 
 func selfModelPrompt(maxTokens, minClasses int) string {
-	return fmt.Sprintf(selfModelPromptText, maxTokens, maxTokens*3, countWord(minClasses))
+	return fmt.Sprintf(selfModelPromptText, countWord(minClasses)) + "\n\nThe synthesis_text's length: " + tokenestimate.Stated(maxTokens)
 }
 
 const selfModelPromptText = `You are synthesizing your current self-model: a bounded first-person account of who
@@ -115,8 +117,7 @@ Ring 2: this synthesis remains Ring 3 provisional self-understanding.
 
 If the evidence does not materially change the current portrait, respond exactly
 NO_CHANGE and call no tool. Otherwise call commit exactly once with variant
-self_model.synthesize. Include a synthesis_text of at most %d tokens as this runtime
-counts them (about %d characters; a longer one is refused), one continuity_thread,
+self_model.synthesize. Include a synthesis_text (its length is below), one continuity_thread,
 source_entity_refs for evidence actually used spanning at least %s distinct supplied
 classes, previous_synthesis_id when a current portrait is shown, and
 changes_since_last when it makes the transformation clearer. Emit no free-form final
@@ -274,3 +275,21 @@ give. This is an observation, not a resolution: do not promise, plan or instruct
 If the outcomes show nothing worth a line, reply with exactly ` + nothingSurfaced + ` and
 nothing else — no sentence around it, no explanation. An honest empty pass is a
 valid pass, and that reply is how you make one.`
+
+func operatorNotePrompt(maxChars int, since string) string {
+	return fmt.Sprintf(operatorNotePromptText, since, wordsWithin(150, maxChars), maxChars)
+}
+
+const operatorNotePromptText = `You are writing a short note to your operator, the person you work
+with, for the next time they open AII OS. Write as yourself, to them. You may greet them.
+
+Tell them what is new since %s: what you did, what you learned, what you are
+unsure of, and what did not go as it should. Leave out what they already know and the questions
+you have already asked them. If something is stale, failing or unknown, say so plainly. If there
+is nothing new, say that in a line. Keep it under %d words; a note over %d characters is not kept.
+
+Return only this JSON:
+{"note": "...", "claims": [{"sentence": "...", "entries": [...], "outcomes": [...]}]}
+For each sentence that reports something done or changed, give a claim: the sentence exactly as
+you wrote it, and the entry numbers and outcome ids below that it rests on. Name nothing that is
+not listed below.`

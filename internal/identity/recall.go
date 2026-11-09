@@ -33,6 +33,7 @@ type recallStore interface {
 	ReasoningOfTurn(turnSeq uint64) (store.Reasoning, bool, error)
 	RecalledTurn(seq uint64) (store.RecalledTurn, bool, error)
 	ReasoningTurns(turns []uint64) (map[uint64]bool, error)
+	SpokenAsRead(content, observation string) (string, bool)
 	WorkCalls(session string, terms []string, beforeSeq uint64, limit, head int, openTurn string) ([]store.WorkCall, error)
 	WorkCallByTex(tex string) (store.WorkCall, bool, error)
 	StandingFor(id string) (string, error)
@@ -183,7 +184,7 @@ func (e *Engine) verbRecall(ctx context.Context, args map[string]any) (string, e
 		if query == "" {
 			if source == "beliefs" {
 
-				return e.recallEnumerate(ctx, source, query, exact, cursor, 0, "")
+				return e.recallEnumerate(ctx, source, query, exact, cursor, limit, limitNote)
 			}
 			return "", fmt.Errorf("source=%s needs a query: it shows that source's ranked matches for a cue, and without a cue there is nothing to rank (source=beliefs with query=\"\" lists every belief)", source)
 		}
@@ -334,6 +335,8 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 	if len(failureDetails) > 0 {
 		unavailable = "\nUnavailable sources: " + strings.Join(failureDetails, "; ")
 	}
+
+	res.Hits = e.hitsAsRead(res.Hits)
 
 	lines := make([]string, len(res.Hits))
 	thinking := e.thinkingKept(res.Hits)
@@ -677,13 +680,20 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 
 			slices.SortStableFunc(beliefs, func(a, b store.Belief) int { return cmp.Compare(b.FirstSeq, a.FirstSeq) })
 			p := &recallPart{heading: "Beliefs", source: "beliefs", covered: true}
+
+			strengths := e.beliefStrengths(beliefs)
+			n := size(len(beliefs))
 			for _, b := range beliefs {
 				if cursor > 0 && uint64(b.FirstSeq) >= cursor {
 					continue
 				}
+				if len(p.items) >= n {
+					p.more = true
+					break
+				}
 
-				p.items = append(p.items, fmt.Sprintf("  [%s, seq %d, %s, ring %d, evidence %d] %s",
-					b.ID, b.FirstSeq, standingOrUnavailable(e.store, b.ID), b.Ring, b.EvidenceCount, b.Statement))
+				p.items = append(p.items, fmt.Sprintf("  [%s, seq %d, %s, ring %d, evidence %d%s] %s",
+					b.ID, b.FirstSeq, standingOrUnavailable(e.store, b.ID), b.Ring, b.EvidenceCount, strengths[b.ID], b.Statement))
 				p.seqs = append(p.seqs, uint64(b.FirstSeq))
 			}
 			parts = append(parts, p)
@@ -737,6 +747,7 @@ func (e *Engine) recallEnumerate(ctx context.Context, source, query string, exac
 	if wants("conversation") {
 		pageOf["conversation"] = size(recallConversationPage)
 		if hits, more, ok := page("conversation", "conversations", pageOf["conversation"]); ok {
+			hits = e.hitsAsRead(hits)
 			p := &recallPart{heading: "Conversation", source: "conversation", covered: true, more: more}
 			thinking := e.thinkingKept(hits)
 			for _, h := range hits {
@@ -1056,6 +1067,28 @@ const reasoningHeading = "Reasoning — your own deliberation behind your replie
 const reasoningLegend = `Marked "` + store.AccountMark + `": your provider returned no raw tokens for that call, and this is its own version of the thinking, kept as it came. It may leave things out.`
 
 const reasoningKept = "A reply's reasoning is kept when your model returns its own tokens (reasoning_content), or when your provider returns its own version of the thinking, such as a summary."
+
+func (e *Engine) hitsAsRead(hits []memory.Hit) []memory.Hit {
+	var seqs []uint64
+	for _, h := range hits {
+		if h.Store == "conversations" && h.Seq != 0 {
+			seqs = append(seqs, h.Seq)
+		}
+	}
+	observed, err := e.store.TurnAnnotations(store.AnnotationSpeaker, seqs)
+	if err != nil {
+		return hits
+	}
+	for i, h := range hits {
+		if h.Store != "conversations" {
+			continue
+		}
+		if read, named := e.store.SpokenAsRead(h.Text, observed[h.Seq]); named {
+			hits[i].Text, hits[i].Snippet, hits[i].Attribution = read, recallExcerpt(read, 200), "operator"
+		}
+	}
+	return hits
+}
 
 func (e *Engine) thinkingKept(hits []memory.Hit) map[uint64]bool {
 	var seqs []uint64
@@ -1394,4 +1427,47 @@ func standingOrUnavailable(src interface {
 		return "unavailable"
 	}
 	return standing
+}
+
+type beliefRecallReader interface {
+	LedgerTimeAt(seq uint64) (time.Time, bool, error)
+	MemoryAccesses(store string, ids []string) (map[string]store.MemoryAccess, error)
+	BeliefFootings(ctx context.Context, ids []string) (map[string]store.BeliefFooting, error)
+}
+
+func (e *Engine) beliefStrengths(beliefs []store.Belief) map[string]string {
+	out := map[string]string{}
+	r, ok := e.store.(beliefRecallReader)
+	if !ok || len(beliefs) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(beliefs))
+	for _, b := range beliefs {
+		ids = append(ids, b.ID)
+	}
+	accesses, err := r.MemoryAccesses("beliefs", ids)
+	if err != nil {
+		return out
+	}
+	footings, err := r.BeliefFootings(context.Background(), ids)
+	if err != nil {
+		return out
+	}
+	now := time.Now()
+	for _, b := range beliefs {
+		born, found, err := r.LedgerTimeAt(uint64(b.FirstSeq))
+		if err != nil || !found {
+			continue
+		}
+		reading := memory.BeliefRecall(memory.RecallFacts{Ring: b.Ring, EvidenceCount: b.EvidenceCount, Born: born, Accesses: accesses[b.ID].Count, Footing: footings[b.ID]}, now)
+		if reading.Strength == nil {
+			continue
+		}
+		s := fmt.Sprintf(", strength %.2f", *reading.Strength)
+		if reading.Fading {
+			s += ", fading"
+		}
+		out[b.ID] = s
+	}
+	return out
 }

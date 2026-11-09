@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -290,6 +291,7 @@ func (a *App) statsState() (*dashboard.StatsResponse, error) {
 		LifetimeTicks:     stats.LifetimeTicks,
 		CredentialWarning: a.credentialWarning(),
 		LastTurn:          a.lastTurnCost(),
+		Accounted:         a.accountedCount(),
 		MalformedCalls:    a.toolReg.MalformedCallCount(),
 		SuspiciousPaths:   a.toolReg.SuspiciousPathCount(),
 		DuplicateArgKeys:  a.toolReg.DuplicateArgKeyCount(),
@@ -314,13 +316,22 @@ func (a *App) recentTurnViews() ([]dashboard.HistoryTurn, error) {
 	for _, t := range turns {
 
 		ht := dashboard.HistoryTurn{Role: t.Role, Content: replayContent(t.Role, t.Content), VoiceRef: refs[t.TurnSeq]}
-		if payload, ok := attributions[t.TurnSeq]; ok {
+		payload, attributed := attributions[t.TurnSeq]
+		if attributed {
 			ht.Note = attributionOf(payload)
+		}
+		if words, named, spoken := a.store.SpokenForThePage(t.TurnSeq, t.Role, t.Content, payload); spoken {
+			ht.Content = words
+			if named {
+				ht.Role, ht.Note = roleOperator, ""
+			}
 		}
 		out = append(out, ht)
 	}
 	return out, nil
 }
+
+const retiredBeliefsShown = 50
 
 func (a *App) identityState() (*dashboard.IdentityState, error) {
 
@@ -330,13 +341,36 @@ func (a *App) identityState() (*dashboard.IdentityState, error) {
 		return nil, fmt.Errorf("identity state: beliefs: %w", err)
 	}
 	for _, b := range beliefs {
-		state.Beliefs = append(state.Beliefs, dashboard.BeliefItem{
+		item := dashboard.BeliefItem{
 			ID: b.ID, Statement: b.Statement, Ring: b.Ring,
 
 			Status:        standingOrUnavailable(a.store, b.ID),
 			EvidenceCount: b.EvidenceCount, Confidence: b.Confidence,
-		})
+		}
+
+		changed, ok, err := a.store.LedgerTimeAt(b.LastSeq)
+		if err != nil {
+			return nil, fmt.Errorf("identity state: belief %s changed: %w", b.ID, err)
+		}
+		if ok {
+			item.ChangedAt = changed.UTC().Format(time.RFC3339)
+		}
+		state.Beliefs = append(state.Beliefs, item)
 	}
+
+	retired, more, err := a.store.RetiredBeliefs(0, retiredBeliefsShown)
+	if err != nil {
+		return nil, fmt.Errorf("identity state: retired beliefs: %w", err)
+	}
+	state.Retired = make([]dashboard.RetiredBeliefItem, 0, len(retired))
+	for _, r := range retired {
+		item := dashboard.RetiredBeliefItem{ID: r.ID, Statement: r.Statement, RetiredAt: r.RetiredAt}
+		if r.Replacement.ID != "" {
+			item.ReplacedBy = &dashboard.ReplacementItem{ID: r.Replacement.ID, Statement: r.Replacement.Text, Retired: r.Replacement.Retired}
+		}
+		state.Retired = append(state.Retired, item)
+	}
+	state.RetiredMore = more
 	ints, err := a.store.ListIntentions()
 	if err != nil {
 		return nil, fmt.Errorf("identity state: intentions: %w", err)
@@ -350,9 +384,13 @@ func (a *App) identityState() (*dashboard.IdentityState, error) {
 	}
 	for _, e := range exps {
 
-		state.Experiences = append(state.Experiences, dashboard.ExperienceItem{
+		item := dashboard.ExperienceItem{
 			ID: e.ID, Content: e.Content, Category: e.Category, CreatedAt: e.CreatedAt, Provenance: e.Provenance,
-			Unmetabolized: e.Unmetabolized == 1})
+			Unmetabolized: e.Unmetabolized == 1, OperatorVerbatim: e.OperatorVerbatim}
+		if e.CreatedSeq != 0 {
+			item.CreatedSeq = strconv.FormatUint(e.CreatedSeq, 10)
+		}
+		state.Experiences = append(state.Experiences, item)
 	}
 	current, err := a.store.CurrentSelfModel()
 	if err != nil {
@@ -366,6 +404,10 @@ func (a *App) identityState() (*dashboard.IdentityState, error) {
 		return nil, fmt.Errorf("identity state: brief: %w", err)
 	}
 	state.Brief = brief
+
+	if state.Note, err = a.operatorNoteView(a.lifetime()); err != nil {
+		return nil, fmt.Errorf("the note to the operator: %w", err)
+	}
 
 	rel, err := a.store.CurrentOperatorRelationship()
 	if err != nil {
@@ -519,7 +561,10 @@ func checkRunText(c store.WorkCheck) string {
 }
 
 func (a *App) workQueueState() (*dashboard.WorkState, error) {
-	w := &dashboard.WorkState{}
+	w := &dashboard.WorkState{Alarms: []dashboard.AlarmView{}}
+	if err := a.fillAlarms(w); err != nil {
+		return nil, err
+	}
 	live, err := a.store.LiveSubagentSessions()
 	if err != nil {
 		return nil, fmt.Errorf("load live work: %w", err)
@@ -553,7 +598,38 @@ func (a *App) workQueueState() (*dashboard.WorkState, error) {
 		}
 		w.Delivered = append(w.Delivered, item)
 	}
+	w.NothingScheduled = a.nothingScheduled(w)
+	w.Stage = a.operatorStage()
+	w.Resumes = a.resumeView()
+	w.Widening = a.wideningOffer()
 	return w, nil
+}
+
+func (a *App) nothingScheduled(w *dashboard.WorkState) bool {
+	if len(w.Alarms) > 0 || len(w.Live) > 0 || w.Queued > 0 {
+		return false
+	}
+	a.turn.mu.Lock()
+	queued := a.turn.legsQueued > 0
+	a.turn.mu.Unlock()
+	if queued {
+		return false
+	}
+	a.asks.mu.Lock()
+	asked := len(a.asks.asks) > 0
+	a.asks.mu.Unlock()
+	if asked {
+		return false
+	}
+	ws, err := a.store.ActiveWorkSession()
+	if err != nil || ws == nil {
+		return false
+	}
+	if ws.ResumesOn != "" {
+		return false
+	}
+	unharvested, err := a.store.UnharvestedDeliveries(1)
+	return err == nil && len(unharvested) == 0
 }
 
 func (a *App) projectsState() ([]dashboard.ProjectState, error) {
@@ -577,6 +653,8 @@ func (a *App) projectsState() ([]dashboard.ProjectState, error) {
 				Outcome:     p.Contract.Outcome,
 				Acceptance:  p.Contract.Acceptance,
 				Constraints: p.Contract.Constraints,
+				AgreedBy:    p.Contract.AgreedBy,
+				AgreedAt:    p.Contract.AgreedAt,
 			}
 		}
 		ps.Progress = projectDashboardProgress(p)
@@ -609,9 +687,50 @@ func (a *App) wireIdentityViewHooks(h *dashboard.WSHandler) {
 	h.GetIdentity = a.identityState
 
 	h.Recall = a.recallForDashboard
+
+	h.BeliefTrail = a.beliefTrailForDashboard
 }
 
 func (a *App) wireWorkHooks(h *dashboard.WSHandler) {
 	h.GetWork = a.workQueueState
 	h.GradeResult = a.gradeResult
+}
+
+const alarmFiringsWindowMs = int64(30 * 24 * time.Hour / time.Millisecond)
+
+func (a *App) fillAlarms(w *dashboard.WorkState) error {
+	rows, err := a.store.TimerAlarms()
+	if err != nil {
+		return fmt.Errorf("load the identity's timers: %w", err)
+	}
+	fired := map[string]int64{}
+	if len(rows) > 0 {
+		since := time.Now().UnixMilli() - alarmFiringsWindowMs
+		firings, err := a.store.TimerFiringsSince(since)
+		if err != nil {
+			return fmt.Errorf("load timer firings: %w", err)
+		}
+		for _, f := range firings {
+			id := identity.TimerFiringAlarmID(f.ID)
+			if f.CreatedMs > fired[id] {
+				fired[id] = f.CreatedMs
+			}
+		}
+	}
+	for _, r := range rows {
+		tag, msg := identity.DecodeTimerPayload(r.Payload)
+		v := dashboard.AlarmView{ID: r.AlarmID, Tag: tag, Message: msg, DueAt: r.Deadline, Every: r.RepeatEvery}
+		if at, ok := fired[r.AlarmID]; ok {
+			at := at
+			v.FiredAt = &at
+		}
+		w.Alarms = append(w.Alarms, v)
+	}
+	if rhythm, ok, err := a.store.AlarmByID("rhythm"); err != nil {
+		return fmt.Errorf("read the rhythm's alarm: %w", err)
+	} else if ok {
+		d := rhythm.Deadline
+		w.NextPassAt = &d
+	}
+	return nil
 }

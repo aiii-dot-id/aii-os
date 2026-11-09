@@ -123,7 +123,7 @@ func TestBuildWorkStateReturnsStoreFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = (&App{store: projection}).buildWorkState()
+	_, err = (&App{store: projection}).buildWorkState(t.Context())
 	if err == nil {
 		t.Fatal("closed projection was treated as empty working state")
 	}

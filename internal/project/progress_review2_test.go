@@ -17,7 +17,7 @@ func TestReview2EvidenceFollowsTextAcrossReorder(t *testing.T) {
 		t.Fatalf("record: %v", err)
 	}
 	// reorder acceptance: "beta done" moves to index 0.
-	if _, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, &Contract{
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, &Contract{
 		Acceptance: []string{"beta done", "alpha done"},
 	}, nil); err != nil {
 		t.Fatalf("reorder: %v", err)
@@ -52,7 +52,7 @@ func TestReview2DuplicateAcceptanceRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ApplyPatch(p.ID, nil, nil, nil, nil, &Contract{
+	if _, err := m.ApplyPatch(p.ID, "operator", nil, nil, nil, nil, &Contract{
 		Acceptance: []string{"same", "same"},
 	}, nil); err == nil {
 		t.Fatal("duplicate acceptance items must be refused on update too")

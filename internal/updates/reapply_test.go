@@ -67,7 +67,7 @@ func TestASecondApplyKeepsTheRollbackBackup(t *testing.T) {
 
 	const newVer = "9.9.9"
 	archive := releaseArchive(t, []byte("new binary"))
-	signer := newTestReleaseSigner(t)
+	signer := sharedReleaseSigner(t)
 	// A release is revocation-checked now, and this test signs with its
 	// OWN root — which the binary did not ship, so there is no snapshot to
 	// fall back on. Provisioning one is exactly what an operator running
@@ -186,7 +186,7 @@ func TestACorruptTombstoneStillProtectsTheBackup(t *testing.T) {
 
 			const newVer = "9.9.9"
 			archive := releaseArchive(t, []byte("newer binary"))
-			signer := newTestReleaseSigner(t)
+			signer := sharedReleaseSigner(t)
 			sig := signer.signReleasePayload(t, releaseArchivePayload{
 				ArchiveHash: sha256hex(archive),
 				Version:     newVer,

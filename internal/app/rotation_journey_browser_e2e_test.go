@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+// THE ROTATION JOURNEY, with nothing test-shaped inside it: a born
+// identity on its live listener with a token required, a real Chrome signed
+// in on the real page, Settings → Phone and other devices → Sign out all
+// devices pressed in the DOM. The page must come back on its own — the
+// rotation closed its socket, and the answer carried its new cookie — with
+// no sign-in asked of the person; config.json and the running server must
+// hold one new token; the old cookie must open nothing; and the page must
+// show neither token.
+//
+// Blink only, as the projects journey: the JOIN is what this proves; the
+// control's render in three engines is the phone page's fixture test's
+// (TestPhoneAndOtherDevicesShowsTheCodeAtOnce).
 func TestRotationJourneyInARealBrowser(t *testing.T) {
 	chrome := needChrome(t)
 	dir := t.TempDir()
@@ -28,8 +40,14 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 		t.Fatal("the identity is not asking for a token")
 	}
 
-	page := openInChrome(t, chrome, origin, "/#/settings/dashboard")
-
+	page := openInChrome(t, chrome, origin, "/#/settings/phone")
+	// THE PAGE IS THERE BEFORE IT IS SCRIPTED. The debug target appears as
+	// soon as the browser has a tab, which is before the document at the
+	// dashboard's origin has loaded; a relative fetch from the blank page
+	// before it has no base to resolve against. On a starved host the five
+	// one-second tries below all landed in that gap and a landing gate
+	// failed (2026-10-13: "Failed to parse URL from /auth/token") with no
+	// fault in the product. The wait is on the document, not on a clock.
 	if at, err := page.evalRetry(awaitJS(`
     last = 'at ' + location.href + ', ' + document.readyState;
     return location.origin === `+"`"+origin+"`"+` && document.readyState === 'complete' ? last : null;
@@ -47,23 +65,23 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	ready, err := page.evalRetry(awaitJS(`
-    const b = document.querySelector('[data-token-rotate]'), send = document.getElementById('send-btn');
-    last = 'rotate control: ' + !!b + ', socket open: ' + !!(send && !send.disabled);
+    const b = document.querySelector('[data-sign-out-all]'), send = document.getElementById('send-btn');
+    last = 'sign-out control: ' + !!b + ', socket open: ' + !!(send && !send.disabled);
     return b && send && !send.disabled ? last : null;
   `, 20000), true, 30*time.Second, 5)
 	if err != nil || strings.HasPrefix(ready, "TIMEOUT") {
 		t.Fatalf("the signed-in page never offered the rotation: %s %v", ready, err)
 	}
 
-	if _, err := page.eval(`window.confirm = () => true; document.querySelector('[data-token-rotate]').click(); 'pressed'`, false, 10*time.Second); err != nil {
+	if _, err := page.eval(`window.confirm = () => true; document.querySelector('[data-sign-out-all]').click(); 'pressed'`, false, 10*time.Second); err != nil {
 		t.Fatalf("press: %v", err)
 	}
 	back, err := page.evalRetry(awaitJS(`
-    const said = document.querySelector('[data-token-rotate-said]'), send = document.getElementById('send-btn');
+    const said = document.querySelector('[data-sign-out-said]'), send = document.getElementById('send-btn');
     const asked = !!document.getElementById('dashboard-signin');
     last = 'said: ' + (said ? said.textContent : '-') + ', socket open: ' + !!(send && !send.disabled) + ', sign-in asked: ' + asked;
     if (asked) return 'ASKED ' + last;
-    return said && said.textContent.includes('Rotated') && send && !send.disabled ? last : null;
+    return said && said.textContent.includes('Every other device is signed out') && send && !send.disabled ? last : null;
   `, 20000), true, 30*time.Second, 3)
 	if err != nil || strings.HasPrefix(back, "TIMEOUT") || strings.HasPrefix(back, "ASKED") {
 		t.Fatalf("the rotating page did not come back signed in on its own: %s %v", back, err)
@@ -90,14 +108,9 @@ func TestRotationJourneyInARealBrowser(t *testing.T) {
 		t.Fatalf("the old cookie still signs in after the rotation: %d", res.StatusCode)
 	}
 
-	// The page shows neither token: it says where the token is read.
-	shown, err := page.evalRetry(awaitJS(`
-    const where = document.querySelector('[data-token-where]');
-    last = 'where: ' + !!where;
-    const html = document.documentElement.outerHTML;
-    return where ? (html.includes('`+rotated+`') || html.includes('`+old+`') ? 'SHOWN' : 'none') : null;
-  `, 10000), true, 20*time.Second, 3)
+	// The page shows neither token.
+	shown, err := page.eval(`const html = document.documentElement.outerHTML; html.includes('`+rotated+`') || html.includes('`+old+`') ? 'SHOWN' : 'none'`, false, 10*time.Second)
 	if err != nil || shown != "none" {
-		t.Fatalf("after the rotation the page does not say where the token is read, or shows a token (%q; %v)", shown, err)
+		t.Fatalf("after the rotation the page shows a token (%q; %v)", shown, err)
 	}
 }

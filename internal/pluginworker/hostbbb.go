@@ -93,7 +93,7 @@ func hostCall(ctx context.Context, mod api.Module, dispatcher HostDispatcher, me
 	if derr != nil {
 
 		logsink.Warn("plugins.error", "%s dispatch failed: %v (answered -32603)", method, derr)
-		reply = []byte(`{"code":-32603,"message":"host dispatch failed"}`)
+		reply = []byte(hostDispatchFailedReply)
 	}
 
 	if len(reply) > bbb.MaxControlFrameBytes {
@@ -132,3 +132,5 @@ func guestAlloc(ctx context.Context, mod api.Module, n uint32) (uint32, error) {
 	}
 	return ptr, nil
 }
+
+const hostDispatchFailedReply = `{"code":-32603,"message":"host dispatch failed","data":{"reasonCode":"HOST_DISPATCH_FAILED"}}`

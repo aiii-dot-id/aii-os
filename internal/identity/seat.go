@@ -69,6 +69,7 @@ var workerSeatTable = map[string]seatRule{
 	"work curiosity":       anySeat,
 	"work curiosity.clear": anySeat,
 	"work voice.mode":      anySeat,
+	"work ask":             anySeat,
 	"work backup.take":     primaryOnly(snapshotIsTheMainSeats),
 	"work backup.verify":   primaryOnly(snapshotIsTheMainSeats),
 

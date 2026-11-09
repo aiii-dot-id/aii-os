@@ -2,6 +2,15 @@
 
 let applied = [];
 
+const ROLE_OF = [
+  ['--txt', '--text'], ['--dim', '--text-2'], ['--faint', '--text-3'],
+  ['--acc', '--accent'], ['--white', '--on-accent'], ['--bg0', '--bg'],
+  ['--panel-solid', '--surface'], ['--panel', '--surface'], ['--panel2', '--surface-2'],
+  ['--line2', '--control'], ['--line-soft', '--line'],
+  ['--font', '--font-page'], ['--mono', '--font-code'],
+  ['--r-lg', '--r-large'], ['--r-md', '--r-object'], ['--r-sm', '--r-control'],
+];
+
 export function onTheme(payload) {
   const root = document.documentElement;
 
@@ -10,13 +19,18 @@ export function onTheme(payload) {
 
   if (!payload || !payload.tokens) return;
 
+  const set = (name, value) => { root.style.setProperty(name, value); applied.push(name); };
   for (const name in payload.tokens) {
     const value = payload.tokens[name];
 
     if (typeof name !== 'string' || !name.startsWith('--')) continue;
     if (typeof value !== 'string') continue;
-    root.style.setProperty(name, value);
-    applied.push(name);
+    set(name, value);
+  }
+  for (const [old, role] of ROLE_OF) {
+    const value = payload.tokens[old];
+    if (typeof value !== 'string' || typeof payload.tokens[role] === 'string' || applied.includes(role)) continue;
+    set(role, value);
   }
 }
 

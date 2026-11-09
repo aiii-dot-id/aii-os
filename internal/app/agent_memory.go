@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/aiii-dot-id/aii-os/internal/agentmemory"
@@ -34,6 +33,15 @@ func copyAgentMemory(ctx context.Context, all Config) *agentMemoryCopy {
 	return copyAgentNotes(ctx, all, all.Tools.CWD, agentmemory.Copy)
 }
 
+func agentStores(all Config) []agentmemory.Store {
+	if set := all.Genesis.AgentMemory; set != nil && len(set.Stores) > 0 {
+		return set.Stores
+	}
+	return otherAgentStores()
+}
+
+func agentNotesFound(all Config) bool { return agentmemory.Present(agentStores(all)) }
+
 func copyAgentNotes(ctx context.Context, all Config, home string, copyNotes func(context.Context, []agentmemory.Store, string, agentmemory.Limits, func(string) bool, time.Time) (agentmemory.Report, error)) *agentMemoryCopy {
 	cfg := AgentMemoryConfig{}
 	if set := all.Genesis.AgentMemory; set != nil {
@@ -43,10 +51,7 @@ func copyAgentNotes(ctx context.Context, all Config, home string, copyNotes func
 		logsink.Info("seed.decision", "other agents' notes: not copied (genesis.agent_memory.off)")
 		return nil
 	}
-	stores := cfg.Stores
-	if len(stores) == 0 {
-		stores = otherAgentStores()
-	}
+	stores := agentStores(all)
 	if abs, err := filepath.Abs(home); err == nil {
 		home = abs
 	}
@@ -94,9 +99,7 @@ func agentMemoryKept(cfg Config, home string) (func(string) bool, error) {
 	for i, r := range places {
 		places[i] = r.Resolved()
 	}
-	return func(path string) bool {
-		return slices.ContainsFunc(places, func(r *firewall.Rule) bool { return r.CoversResolved(path) })
-	}, nil
+	return func(path string) bool { return firewall.AnyCoversResolved(places, path) }, nil
 }
 
 const (

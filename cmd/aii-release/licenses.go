@@ -127,6 +127,9 @@ type licensedData struct {
 var shippedData = []struct{ title, file string }{
 	{"models.dev: the model capability rows of config/providers.json", "third_party/models.dev/LICENSE"},
 	{"gitleaks: the shapes of a secret in internal/agentmemory, after those of its default rules (config/gitleaks.toml) that know a token by its own shape or read it in its context", "third_party/gitleaks/LICENSE"},
+	{"Fraunces: the face of the identity's words on the dashboard (internal/dashboard/static/fonts)", "third_party/fraunces/OFL.txt"},
+	{"Inter: the dashboard's own face (internal/dashboard/static/fonts)", "third_party/inter/OFL.txt"},
+	{"JetBrains Mono: the dashboard's face for code (internal/dashboard/static/fonts)", "third_party/jetbrains-mono/OFL.txt"},
 }
 
 func renderThirdPartyLicenses(goLicense []byte, mods []thirdPartyModule, data []licensedData) ([]byte, error) {
