@@ -71,7 +71,7 @@ func TestAPromiseMustNameAnOpenIntentionOrCommitment(t *testing.T) {
 		return err.Error()
 	}
 	// Nothing open: the second sentence says so. The whole text, as the
-	// identity reads it (the host, 2026-11-06: no substrings).
+	// identity reads it (no substrings).
 	if got, want := refusal(map[string]any{"action": "update", "promise": "item_2527b593"}),
 		`rejected_before_effect (promise): promise "item_2527b593" is not an open intention or commitment in your record. You have none open; leave promise empty.`; got != want {
 		t.Fatalf("with none open:\n got %s\nwant %s", got, want)

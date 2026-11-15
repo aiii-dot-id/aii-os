@@ -16,21 +16,21 @@ func (s *Server) queryHistory(ctx context.Context, conn carrier, h *WSHandler, m
 	}
 }
 
-func (s *Server) queryWork(ctx context.Context, conn carrier, h *WSHandler) {
+func (s *Server) queryWork(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetWork == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, id, "not available")
 		return
 	}
 	if w, err := h.GetWork(); err == nil {
 		s.sendMsg(ctx, conn, ServerMessage{Type: "work", Work: w})
 	} else {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, id, err.Error())
 	}
 }
 
-func (s *Server) queryTools(ctx context.Context, conn carrier, h *WSHandler) {
+func (s *Server) queryTools(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetTools == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, id, "not available")
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "tools", Tools: h.GetTools()})
@@ -38,38 +38,38 @@ func (s *Server) queryTools(ctx context.Context, conn carrier, h *WSHandler) {
 
 func (s *Server) queryRecall(ctx context.Context, conn carrier, h *WSHandler, msg ClientMessage) {
 	if h.Recall == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
 		return
 	}
 	q := strings.TrimSpace(msg.Q)
 	if q == "" {
-		s.sendError(ctx, conn, "recall needs a word or phrase")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "recall needs a word or phrase")
 		return
 	}
 	text, err := h.Recall(q)
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "recall", Query: q, Message: text, RequestID: msg.RequestID})
 }
 
-func (s *Server) queryIdentity(ctx context.Context, conn carrier, h *WSHandler) {
+func (s *Server) queryIdentity(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetIdentity == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, id, "not available")
 		return
 	}
 	state, err := h.GetIdentity()
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, id, err.Error())
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "identity", Identity: state})
 }
 
-func (s *Server) queryConfig(ctx context.Context, conn carrier, h *WSHandler) {
+func (s *Server) queryConfig(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetConfig == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, id, "not available")
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "config", Config: h.GetConfig()})
@@ -127,14 +127,14 @@ func (s *Server) querySpeechLists(ctx context.Context, conn carrier, h *WSHandle
 	})
 }
 
-func (s *Server) queryContinuity(ctx context.Context, conn carrier, h *WSHandler) {
+func (s *Server) queryContinuity(ctx context.Context, conn carrier, h *WSHandler, id string) {
 	if h.GetContinuity == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, id, "not available")
 		return
 	}
 	cont, err := h.GetContinuity()
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, id, err.Error())
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "continuity", Continuity: cont})

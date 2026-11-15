@@ -441,23 +441,67 @@ package_for_scope() {
 	return 1
 }
 
+discover() {
+	d_package=$1
+	d_tests=$2
+	d_raw="$d_tests.list.out"
+	start_job "$d_raw" "$go_bin" test "${race_args[@]}" -list '^(Test|Example|Fuzz)' "$d_package"
+	d_pid=$started_pid
+	if ! wait "$d_pid"; then
+		untrack_job "$d_pid"
+		cat "$d_raw" >&2
+		fail "could not discover tests for $d_package"
+	fi
+	untrack_job "$d_pid"
+	grep -E '^(Test|Example|Fuzz)' "$d_raw" > "$d_tests" || true
+}
+
+finder_packages() {
+	fp_out=$1
+	: > "$fp_out"
+	if [ ! -d "$script_dir/browserscope" ]; then
+		echo "race scope: no browserscope beside this runner, so no test is moved to the browser scope"
+		return 0
+	fi
+	fp_log="$fp_out.log"
+	start_job "$fp_log" "$go_bin" run ./test/browserscope -go "$go_bin" -out "$fp_out" -packages ./...
+	fp_pid=$started_pid
+	if ! wait "$fp_pid"; then
+		untrack_job "$fp_pid"
+		cat "$fp_log" >&2
+		fail "could not read which packages' tests reach the browser finder"
+	fi
+	untrack_job "$fp_pid"
+}
+
+browser_tests_of() {
+	bt_package=$1
+	bt_listed=$2
+	bt_out=$3
+	: > "$bt_out"
+	[ -d "$script_dir/browserscope" ] || return 0
+	bt_log="$bt_out.log"
+	start_job "$bt_log" "$go_bin" run ./test/browserscope -go "$go_bin" -out "$bt_out" -list "$bt_listed" "$bt_package"
+	bt_pid=$started_pid
+	if ! wait "$bt_pid"; then
+		untrack_job "$bt_pid"
+		cat "$bt_log" >&2
+		fail "could not read which tests of $bt_package drive a browser"
+	fi
+	untrack_job "$bt_pid"
+}
+
 run_sharded_package() {
 	short_scope=$1
 	package=$(package_for_scope "$short_scope") || fail "unknown package scope: $short_scope"
 	plan="$run_dir/$short_scope-plan"
-	raw="$plan/list.out"
 	tests="$plan/tests"
 	mkdir -p "$plan"
 
-	start_job "$raw" "$go_bin" test "${race_args[@]}" -list '^(Test|Example|Fuzz)' "$package"
-	discovery_pid=$started_pid
-	if ! wait "$discovery_pid"; then
-		untrack_job "$discovery_pid"
-		cat "$raw" >&2
-		fail "could not discover tests for $package"
-	fi
-	untrack_job "$discovery_pid"
-	grep -E '^(Test|Example|Fuzz)' "$raw" > "$tests" || true
+	discover "$package" "$plan/listed"
+	browser_tests_of "$package" "$plan/listed" "$plan/browser"
+	awk 'FILENAME == ARGV[1] { moved[$0] = 1; next } !moved[$0]' "$plan/browser" "$plan/listed" > "$tests"
+	moved=$(wc -l < "$plan/browser" | tr -d ' ')
 	shards=$(shards_for "$short_scope")
 	weights=$script_dir/shard_weights.txt
 	[ -f "$weights" ] || weights=/dev/null
@@ -469,7 +513,7 @@ run_sharded_package() {
 	while [ "$i" -lt "$shards" ]; do
 		regex=$(awk 'BEGIN { printf "^(" } { printf "%s%s", separator, $0; separator="|" } END { print ")$" }' "$plan/$i.tests")
 		log="$plan/$i.log"
-		start_job "$log" "$go_bin" test -v "${race_args[@]}" -count=1 -timeout "$shard_timeout" -run "$regex" "$package"
+		start_job "$log" env AII_TEST_BROWSERS=elsewhere "$go_bin" test -v "${race_args[@]}" -count=1 -timeout "$shard_timeout" -run "$regex" "$package"
 		echo "$started_pid $log $plan/$i.tests $plan/$i-execution" >> "$jobs"
 		i=$((i + 1))
 	done
@@ -504,8 +548,13 @@ run_sharded_package() {
 	if [ "$status" -ne 0 ]; then
 		return "$status"
 	fi
-	report_skips "$short_scope" $(awk '{ print $2 }' "$jobs") || return 1
-	echo "race scope $short_scope: PASS ($shards exact-once shards)"
+	sed "s|^|${package#./} |" "$plan/browser" > "$plan/elsewhere"
+	report_skips "$short_scope" -elsewhere "$plan/elsewhere" $(awk '{ print $2 }' "$jobs") || return 1
+	if [ "$moved" = 0 ]; then
+		echo "race scope $short_scope: PASS ($shards exact-once shards)"
+	else
+		echo "race scope $short_scope: PASS ($shards exact-once shards; $moved tests that drive a browser are the browser scope's)"
+	fi
 }
 
 report_skips() {
@@ -540,12 +589,14 @@ run_rest() {
 	for package in $(sharded_packages); do
 		"$go_bin" list "$package" >> "$slow" || fail "could not resolve $package"
 	done
+	finder_packages "$run_dir/finder-packages"
+	awk '{ print $1 }' "$run_dir/finder-packages" >> "$slow"
 	awk 'NR == FNR { excluded[$0] = 1; next } !excluded[$0]' "$slow" "$all" > "$rest"
 	[ -s "$rest" ] || fail "remaining-package scope is empty"
 
 	set -- $(cat "$rest")
 	log="$run_dir/rest.log"
-	start_job "$log" "$go_bin" test -v "${race_args[@]}" -count=1 -timeout "$shard_timeout" "$@"
+	start_job "$log" env AII_TEST_BROWSERS=elsewhere "$go_bin" test -v "${race_args[@]}" -count=1 -timeout "$shard_timeout" "$@"
 	pid=$started_pid
 	if ! wait "$pid"; then
 		untrack_job "$pid"
@@ -560,10 +611,97 @@ run_rest() {
 	echo "race scope rest: PASS"
 }
 
-run_all() {
-	jobs="$run_dir/all-jobs"
+browser_shards_for() {
+	if [ -n "${AII_TEST_SHARDS:-}" ]; then
+		echo "$AII_TEST_SHARDS"
+		return
+	fi
+	case "$1" in
+		dashboard) echo 6 ;;
+		app) echo 2 ;;
+		*) echo 1 ;;
+	esac
+}
+
+run_browser() {
+	finder="$run_dir/finder-packages"
+	finder_packages "$finder"
+	jobs="$run_dir/browser-jobs"
+	assigned="$run_dir/browser-assigned"
+	elsewhere="$run_dir/browser-elsewhere"
 	: > "$jobs"
-	for child_scope in $(sharded_scopes) rest; do
+	: > "$assigned"
+	: > "$elsewhere"
+	n=0
+	while read -r import directory <&3; do
+		b="$run_dir/browser-$n"
+		n=$((n + 1))
+		mkdir -p "$b"
+		discover "./$directory" "$b/listed"
+		case " $(sharded_packages | tr '\n' ' ') " in
+			*" ./$directory "*) browser_tests_of "./$directory" "$b/listed" "$b/tests" ;;
+			*) cp "$b/listed" "$b/tests" ;;
+		esac
+		[ -s "$b/tests" ] || continue
+		sed "s|^|$directory |" "$b/tests" >> "$assigned"
+		awk 'FILENAME == ARGV[1] { given[$0] = 1; next } !given[$0]' "$b/tests" "$b/listed" | sed "s|^|$directory |" >> "$elsewhere"
+		base=${directory##*/}
+		count=$(wc -l < "$b/tests" | tr -d ' ')
+		shards=$(browser_shards_for "$base")
+		[ "$shards" -le "$count" ] || shards=$count
+		weights=$script_dir/shard_weights.txt
+		[ -f "$weights" ] || weights=/dev/null
+		plan_tests "$b/tests" "$b/plan" "$shards" "$weights" "$base" || fail "invalid browser shard plan for $import"
+		i=0
+		while [ "$i" -lt "$shards" ]; do
+			regex=$(awk 'BEGIN { printf "^(" } { printf "%s%s", separator, $0; separator="|" } END { print ")$" }' "$b/plan/$i.tests")
+			start_job "$b/$i.log" env -u AII_TEST_BROWSERS "$go_bin" test -v "${race_args[@]}" -count=1 -parallel 1 -timeout "$shard_timeout" -run "$regex" "./$directory"
+			echo "$started_pid $b/$i.log $b/plan/$i.tests $b/$i-execution $import" >> "$jobs"
+			i=$((i + 1))
+		done
+	done 3< "$finder"
+	[ "$n" = "$(wc -l < "$finder" | tr -d ' ')" ] || fail "the browser scope read $n of the packages whose tests reach the finder"
+
+	status=0
+	while read -r pid log expected execution import; do
+		if ! wait "$pid"; then
+			untrack_job "$pid"
+			status=1
+			echo "=== FAILING BROWSER PACKAGE $import $log (go test exited nonzero) ==="
+			cat "$log"
+			echo "=== END FAILING BROWSER PACKAGE $import ==="
+		elif ! validate_execution "$expected" "$log" "$execution" >> "$log" 2>&1; then
+			untrack_job "$pid"
+			status=1
+			echo "=== FAILING BROWSER PACKAGE $import $log (execution validation exited nonzero) ==="
+			cat "$log"
+			echo "=== END FAILING BROWSER PACKAGE $import ==="
+		elif ! grep '^ok[[:space:]]' "$log"; then
+			untrack_job "$pid"
+			status=1
+			echo "=== SUSPECT BROWSER PACKAGE $import $log (exit 0 but no package result) ==="
+			cat "$log"
+			echo "=== END SUSPECT BROWSER PACKAGE $import ==="
+		else
+			untrack_job "$pid"
+			echo "=== BROWSER TIMINGS package=$import shard=$(basename "$log" .log) ==="
+			awk '/^test preparation / || /^--- (PASS|SKIP): /' "$log"
+		fi
+	done < "$jobs"
+	if [ "$status" -ne 0 ]; then
+		return "$status"
+	fi
+	if [ ! -s "$jobs" ]; then
+		echo "race scope browser: PASS (no test drives a browser here)"
+		return 0
+	fi
+	report_skips browser -elsewhere "$elsewhere" $(awk '{ print $2 }' "$jobs") || return 1
+	echo "race scope browser: PASS ($(wc -l < "$assigned" | tr -d ' ') tests in $(awk '{ print $5 }' "$jobs" | sort -u | wc -l | tr -d ' ') packages, $(wc -l < "$jobs" | tr -d ' ') processes, one test at a time in each)"
+}
+
+run_scopes() {
+	jobs=$(mktemp "$run_dir/scopes.XXXXXX")
+	for child_scope in "$@"; do
 		log="$run_dir/$child_scope.log"
 		start_job "$log" env AII_GO="$go_bin" "$script_dir/run_race_scope.sh" "$child_scope"
 		echo "$started_pid $child_scope $log" >> "$jobs"
@@ -581,19 +719,32 @@ run_all() {
 		cat "$log"
 		echo "=== END SCOPE $child_scope ==="
 	done < "$jobs"
-	if [ "$status" -ne 0 ]; then
-		return "$status"
+	return "$status"
+}
+
+run_parallel() {
+	run_scopes $(sharded_scopes) rest || return 1
+	echo "race scope parallel: PASS (every scope but browser; dominant packages sharded exactly once)"
+}
+
+run_all() {
+	if ! run_scopes $(sharded_scopes) rest; then
+		echo "race scope all: the browser scope was not run: a scope before it failed"
+		return 1
 	fi
-	echo "race scope all: PASS (every package; dominant packages sharded exactly once)"
+	run_scopes browser || return 1
+	echo "race scope all: PASS (every package; dominant packages sharded exactly once; the tests that drive a browser after the others, alone)"
 }
 
 case "$scope" in
 	reference) run_reference ;;
 	rest) run_rest ;;
+	browser) run_browser ;;
+	parallel) run_parallel ;;
 	all) run_all ;;
 	*)
 		package_for_scope "$scope" >/dev/null 2>&1 ||
-			fail "unknown scope: $scope (use all, a sharded package basename, rest, self-test, or weights SCOPE_LOG)"
+			fail "unknown scope: $scope (use all, parallel, a sharded package basename, rest, browser, self-test, or weights SCOPE_LOG)"
 		run_sharded_package "$scope"
 		;;
 esac

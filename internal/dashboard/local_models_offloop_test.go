@@ -80,7 +80,7 @@ func TestALocalLookOrAddDoesNotHoldTheSocket(t *testing.T) {
 // connection drops; the page reconnects and takes its providers answer before
 // the save; then the add saves. The new connection must be sent the directory
 // with the entry, with no request id, or its page goes on offering Add for a
-// server that is already an entry (a review 2026-11-06 14:50Z, finding 1).
+// server that is already an entry.
 func TestALocalAddThatSavesAfterAReconnectReachesTheNewPage(t *testing.T) {
 	release := make(chan struct{})
 	saved := make(chan struct{})

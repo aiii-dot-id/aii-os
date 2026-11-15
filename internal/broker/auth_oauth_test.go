@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	configdir "github.com/aiii-dot-id/aii-os/config"
 	"net/http"
@@ -41,6 +42,11 @@ func (f *fakeAuthority) handler(t *testing.T) http.Handler {
 		}
 		if r.PostForm.Get("client_secret") != "csecret" {
 			t.Errorf("the client secret rides the refresh: %v", r.PostForm)
+		}
+		// Every refresh here is a custom profile's: it carries the
+		// catalogue's "custom" token headers (ruling of 2026-11-11).
+		if want := oauthTestCatalog()[CustomContract].TokenHeaders["User-Agent"]; want == "" || r.Header.Get("User-Agent") != want {
+			t.Errorf("refresh User-Agent = %q, want providers.json's oauth[%q] value %q", r.Header.Get("User-Agent"), CustomContract, want)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if f.revoked {
@@ -230,7 +236,7 @@ func TestOAuth2ProfileContractsAndTheirLimits(t *testing.T) {
 		t.Fatalf("a profile narrows the hosts: %v", tpl.Hosts)
 	}
 	custom := AuthProfile{Scheme: SchemeOAuth2, Provider: "custom", ClientID: "cid", TokenFile: "/tmp/t.json", TokenURL: "https://auth.example/token", Hosts: []string{"api.example:443"}}
-	if params, _, err := custom.Contract(); err != nil || params.TokenURL != "https://auth.example/token" {
+	if params, _, err := custom.Contract(oauthTestCatalog()); err != nil || params.TokenURL != "https://auth.example/token" {
 		t.Fatalf("custom endpoints: %+v %v", params, err)
 	}
 	for _, bad := range []AuthProfile{
@@ -298,7 +304,7 @@ func TestOAuthContractHeadersReachRequestsAndPolicyReplacement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 	writeTokens(t, path, "access", "refresh", time.Now().Add(time.Hour))
 	profile := AuthProfile{Scheme: SchemeOAuth2, Provider: "fixture", TokenFile: path}
-	contracts := map[string]oauth.Provider{"fixture": {ClientID: "client", TokenURL: server.URL + "/token", Hosts: []string{hp}, ResourceHeaders: map[string]string{"X-Configured": "first"}}}
+	contracts := map[string]oauth.Provider{"fixture": {ClientID: "client", TokenURL: server.URL + "/token", Hosts: []string{hp}, TokenHeaders: map[string]string{"User-Agent": "fixture-agent/1"}, ResourceHeaders: map[string]string{"X-Configured": "first"}}}
 	grants := map[string]Grant{"p": {Hosts: []string{hp}, CredentialHandles: []string{"account"}}}
 	profiles := map[string]AuthProfile{"account": profile}
 	h := newHost(t, newStore(t), Config{Grants: grants, AuthProfiles: profiles, ProfilesDir: filepath.Dir(path), OAuthProviders: contracts, Guard: guardFor(server), Transport: server.Client().Transport})
@@ -311,5 +317,53 @@ func TestOAuthContractHeadersReachRequestsAndPolicyReplacement(t *testing.T) {
 	wantResult(t, dispatch(t, b, netParams(server.URL+"/api", `{"auth_profile":"account"}`)), statusSucceeded, "")
 	if calls.Load() != 2 {
 		t.Fatalf("API calls: %d", calls.Load())
+	}
+}
+
+// A CUSTOM PROFILE TAKES ITS TOKEN HEADERS FROM ONE NAMED DEFAULT (ruling
+// of 2026-11-11): the OAuth catalogue's "custom" entry in providers.json,
+// for provider "custom" and for the older form that names none; an
+// operator's own entry of that name wins; missing or empty refuses, naming
+// the key. Refresh through the broker carries it (the fake authority above
+// checks every refresh it answers).
+func TestACustomProfileTakesTheCatalogsCustomTokenHeaders(t *testing.T) {
+	shipped := oauthTestCatalog()
+	want := shipped[CustomContract].TokenHeaders["User-Agent"]
+	if want == "" {
+		t.Fatal("providers.json's oauth catalogue has no custom User-Agent")
+	}
+	with := func(ua map[string]string) map[string]oauth.Provider {
+		c := map[string]oauth.Provider{}
+		for k, v := range shipped {
+			c[k] = v
+		}
+		if ua == nil {
+			delete(c, CustomContract)
+		} else {
+			c[CustomContract] = oauth.Provider{TokenHeaders: ua}
+		}
+		return c
+	}
+	for _, provider := range []string{"custom", ""} {
+		p := AuthProfile{Scheme: SchemeOAuth2, Provider: provider, ClientID: "cid", TokenFile: "/tmp/t.json", TokenURL: "https://auth.example/token", Hosts: []string{"api.example:443"}}
+		params, tpl, err := p.Contract(shipped)
+		if err != nil || params.TokenHeaders["User-Agent"] != want || tpl.TokenHeaders["User-Agent"] != want {
+			t.Fatalf("provider %q: %+v %v, want the catalogue's custom User-Agent %q", provider, params.TokenHeaders, err, want)
+		}
+		if params, _, err := p.Contract(with(map[string]string{"User-Agent": "operator/1"})); err != nil || params.TokenHeaders["User-Agent"] != "operator/1" {
+			t.Fatalf("provider %q: the operator's own custom entry must win: %+v %v", provider, params.TokenHeaders, err)
+		}
+		for label, catalog := range map[string]map[string]oauth.Provider{"missing": with(nil), "empty": with(map[string]string{"User-Agent": ""})} {
+			_, _, err := p.Contract(catalog)
+			var unset *oauth.HeaderNotConfiguredError
+			if !errors.As(err, &unset) || unset.Header != "User-Agent" || !strings.Contains(err.Error(), `oauth["custom"]`) {
+				t.Fatalf("provider %q, %s: err = %v, want a refusal naming oauth[\"custom\"]", provider, label, err)
+			}
+		}
+	}
+	// A named template keeps its own.
+	g := AuthProfile{Scheme: SchemeOAuth2, Provider: "google", ClientID: "cid", TokenFile: "/tmp/t.json"}
+	if params, _, err := g.Contract(shipped); err != nil || params.TokenHeaders["User-Agent"] != shipped["google"].TokenHeaders["User-Agent"] {
+		t.Fatalf("google: %+v %v", params.TokenHeaders, err)
 	}
 }

@@ -34,6 +34,11 @@ func newStore(t *testing.T) *store.Store {
 func newHost(t *testing.T, st *store.Store, cfg Config) *Host {
 	t.Helper()
 	cfg.Store = st
+	if cfg.OAuthProviders == nil {
+		// The app always hands the broker providers.json's OAuth catalogue
+		// (plugins.go); a custom profile's token headers come from it.
+		cfg.OAuthProviders = oauthTestCatalog()
+	}
 	h, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

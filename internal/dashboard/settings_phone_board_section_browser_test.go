@@ -23,8 +23,7 @@ import (
 // sections list there first (the page holds Status's entry in its sections
 // list before its first visit to Settings: registered before launch is not
 // enough, the list comes over the socket after the page has loaded), and with
-// it coming once the page has drawn the board on its own (host 1821; codex
-// 2206; host 2215).
+// it coming once the page has drawn the board on its own.
 const boardSectionDriver = boardDriver + `
 let held = null;
 window.addEventListener('message', e => { if (e.data && e.data.type === 'section-holds') held = e.data; });
@@ -43,7 +42,7 @@ const settled = act => new Promise(r => { addEventListener('hashchange', () => r
     await until(() => box());
     if (!box()) return fail('rig: the sections list came and Status\'s section never took the place');
   } else {
-    // The list first (host 2215): the page's sections list starts empty
+    // The list first: the page's sections list starts empty
     // (sections.js) and its one writer is onSections, called from the real
     // socket, so Status's entry in it is the list received and consumed. The
     // mount is lazy (a section's frame mounts only where it covers the view,

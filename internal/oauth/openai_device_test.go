@@ -48,7 +48,7 @@ func TestOpenAIDeviceUsesConfiguredEndpointsAndSharedExchange(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	p := Provider{DeviceExpiresSeconds: 900, ClientID: "configured-client", DeviceURL: server.URL + "/start", DevicePollURL: server.URL + "/poll", TokenURL: server.URL + "/exchange", VerificationURI: "https://authority.example/device", DeviceRedirectURI: "https://authority.example/device-return", TokenParams: map[string]any{"configured_field": "configured-value"}}
+	p := Provider{TokenHeaders: testTokenHeaders(), DeviceExpiresSeconds: 900, ClientID: "configured-client", DeviceURL: server.URL + "/start", DevicePollURL: server.URL + "/poll", TokenURL: server.URL + "/exchange", VerificationURI: "https://authority.example/device", DeviceRedirectURI: "https://authority.example/device-return", TokenParams: map[string]any{"configured_field": "configured-value"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	d, err := StartOpenAIDevice(ctx, server.Client(), p)

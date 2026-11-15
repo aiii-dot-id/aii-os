@@ -144,7 +144,7 @@ func (a *App) refreshSelectedModalities(ctx context.Context, entry providerEntry
 	if row, ok := a.discoveredCapabilities(entry, model); ok && row.complete() {
 		return
 	}
-	a.fetchModelModalities(ctx, modelModalitiesURL(entry, model, catalogueFor(entry)), guard, reg.capabilityLookup())
+	a.fetchModelModalities(ctx, modelModalitiesURL(entry, model, catalogueFor(entry)), catalogueHeaders(entry), guard, reg.capabilityLookup())
 }
 
 func (a *App) noteListedCapabilities(entry providerEntry, meta map[string]modelMeta) {
@@ -239,19 +239,19 @@ func modelModalitiesURL(entry providerEntry, model, baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/" + slug + "/endpoints"
 }
 
-func (a *App) fetchModelModalities(ctx context.Context, url string, guard func(context.Context, string) error, lookup capabilityLookup) modelModalities {
+func (a *App) fetchModelModalities(ctx context.Context, url string, headers map[string]string, guard func(context.Context, string) error, lookup capabilityLookup) modelModalities {
 	if url == "" {
 		return modelModalities{}
 	}
 	if mods, ok := a.modalities.get(url); ok {
 		return mods
 	}
-	mods := lookupModalities(ctx, url, guard, lookup)
+	mods := lookupModalities(ctx, url, headers, guard, lookup)
 	a.modalities.put(url, mods)
 	return mods
 }
 
-func lookupModalities(ctx context.Context, url string, guard func(context.Context, string) error, lookup capabilityLookup) modelModalities {
+func lookupModalities(ctx context.Context, url string, headers map[string]string, guard func(context.Context, string) error, lookup capabilityLookup) modelModalities {
 	if err := guard(ctx, url); err != nil {
 		return modelModalities{}
 	}
@@ -259,7 +259,9 @@ func lookupModalities(ctx context.Context, url string, guard func(context.Contex
 	if err != nil {
 		return modelModalities{}
 	}
-	req.Header.Set("User-Agent", "AII-OS/1.0 (model capability)")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := firewall.GuardedClient(lookup.timeout(), guard, nil).Do(req)
 	if err != nil {
 		return modelModalities{}

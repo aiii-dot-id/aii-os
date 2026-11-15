@@ -525,6 +525,11 @@ func (e *executor) activate(ctx context.Context, gen Generation, c *command, bes
 			ref.Class = ClassTransient
 			ref.Remedy = "The previous release is still retiring; this one starts once it has."
 		}
+
+		if stage == StageVerify && unreadable(cause) {
+			ref.Class, ref.WakeOn = ClassTransient, nil
+			ref.Remedy = "The package could not be read just now; it is read again."
+		}
 		var checks *ChecksFailedError
 		if errors.As(cause, &checks) {
 			ref.Remedy = checksFailedRemedy

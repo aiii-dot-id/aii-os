@@ -7,7 +7,8 @@ import "testing"
 // SEARCH OR JUMP TO (spec section 1, "Search"; step 20). On the real page:
 // Ctrl K opens it with the line that nothing typed goes to them; every one
 // of Settings' sections is reached through it by its label, and by the
-// words people use for it; a belief the page holds and a record entry the
+// words people use for it; the folders (the sandbox) and the tools by their
+// names, on Plugins and permissions; a belief the page holds and a record entry the
 // record finds are reached in their groups; arrows and Enter choose, Esc
 // closes and gives focus back; G then S, and G then A, go to a place; ?
 // lists the keys; and typing in it sends nothing to the identity.
@@ -57,11 +58,12 @@ async function run() {
 
   // Every section of Settings, by its label: where it lands once an old
   // section id is redirected (a group's first takes the group's address, a
-  // section after it adds its own; the folders and the tools keep theirs
-  // until piece three), written from the design rather than read from the
-  // page, and drawn there. Technical's forms left Settings' sections in step
-  // 19; Search finds them below, as Technical's panels.
-  const LANDS = { substrate: '#/settings/model', providers: '#/settings/model/providers', speech: '#/settings/voice', dashboard: '#/settings/access', backups: '#/settings/backups', sandbox: '#/settings/sandbox', tools: '#/settings/tools', messages: '#/settings/people', updates: '#/settings/app' };
+  // section after it adds its own), written from the design rather than
+  // read from the page, and drawn there. Technical's forms left Settings'
+  // sections in step 19; Search finds them below, as Technical's panels. The
+  // folders and the tools left them for Plugins and permissions (A10); Search
+  // finds them below, there.
+  const LANDS = { substrate: '#/settings/model', providers: '#/settings/model/providers', speech: '#/settings/voice', dashboard: '#/settings/access', backups: '#/settings/backups', messages: '#/settings/people', updates: '#/settings/app' };
   check(SECTIONS.length === Object.keys(LANDS).length && SECTIONS.every(([id]) => LANDS[id]), 'the sections are not the ones this test expects: ' + SECTIONS.map(s => s[0]).join(','));
   for (const [id, label] of SECTIONS) {
     if (!dialog().open) { await open(); }
@@ -89,6 +91,26 @@ async function run() {
     const hit = go && [...go.querySelectorAll('.c-menu__row')].some(r => norm(r.textContent) === W.settings + ' · ' + want);
     check(hit, '"' + words + '" does not find Settings → ' + want);
     dialog().close(); await tick();
+  }
+
+  // The folders (the sandbox) and the tools, by their names and the words
+  // people use for them: found as Plugins and permissions, where they are
+  // drawn, and reached there (A10).
+  for (const words of ['Sandbox', 'Tools', 'folders', 'shell']) {
+    if (!dialog().open) { await open(); }
+    await type(words);
+    const find = () => { const go = groupOf(W.groupGoTo); return go && [...go.querySelectorAll('.c-menu__row')].find(r => norm(r.textContent) === W.settings + ' · ' + W.pluginsAndPermissions); };
+    await until(() => find(), 3000).catch(() => {});
+    const row = find();
+    check(row, '"' + words + '" does not find Settings → ' + W.pluginsAndPermissions);
+    if (!row) continue;
+    row.click();
+    const drawn = () => document.querySelector('#plugins-stack [data-tools]');
+    await until(() => location.hash === '#/settings/permissions' && S.view === 'plugins' && drawn(), 8000).catch(() => {});
+    check(location.hash === '#/settings/permissions' && S.view === 'plugins', '"' + words + '" does not reach Plugins and permissions: ' + location.hash + ' ' + S.view);
+    check(drawn(), '"' + words + '" reaches Plugins and permissions, but the tools are not drawn there');
+    if (dialog().open) dialog().close();
+    await tick();
   }
 
   // Technical's panels, by their labels and by the words they went by.

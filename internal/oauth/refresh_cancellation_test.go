@@ -39,7 +39,7 @@ func TestOwnedRefreshBoundsAuthorityWait(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				calls := 0
-				src, err := NewProfileSource(path, OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{
+				src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{
 					Timeout: clientLimit,
 					Transport: refreshTransport(func(r *http.Request) (*http.Response, error) {
 						calls++
@@ -111,7 +111,7 @@ func TestOwnedRefreshKeepsRotatedCredentialsDespiteTurnCancellation(t *testing.T
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(body)}, nil
 			})}
-			params := OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}
+			params := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}
 			src, err := NewProfileSource(path, params, client)
 			if err != nil {
 				t.Fatal(err)
@@ -154,7 +154,7 @@ func TestCancelledCallerDoesNotBeginAnOwnedRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	src, err := NewProfileSource(path, OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(*http.Request) (*http.Response, error) {
+	src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(*http.Request) (*http.Response, error) {
 		calls++
 		return nil, errors.New("must not contact authority")
 	})})
@@ -189,7 +189,7 @@ func TestARefreshWaiterWhoseTurnEndedStopsWaiting(t *testing.T) {
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	src, err := NewProfileSource(path, OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(r *http.Request) (*http.Response, error) {
+	src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(r *http.Request) (*http.Response, error) {
 		if calls.Add(1) == 1 {
 			close(entered)
 		}

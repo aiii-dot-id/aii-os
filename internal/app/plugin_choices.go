@@ -7,6 +7,7 @@ import (
 
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/pluginhost"
+	"github.com/aiii-dot-id/aii-os/internal/tools"
 )
 
 const choicesTimeout = 20 * time.Second
@@ -25,12 +26,16 @@ func (a *App) PluginSettingChoices(id, key string) ([]dashboard.SettingChoice, e
 	if !ok {
 		return nil, fmt.Errorf("plugin %s offers no operation %q", id, decl.ChoicesFrom)
 	}
+
+	if owned, ok := tool.(interface{ DispatchOwner() any }); !ok || owned.DispatchOwner() != any(ap) {
+		return nil, fmt.Errorf("plugin %s's %q is not the operation of the activation whose setting names it; the card can ask again", id, decl.ChoicesFrom)
+	}
 	if rs, ok := tool.(interface{ ReplaySafe() bool }); !ok || !rs.ReplaySafe() {
 		return nil, fmt.Errorf("plugin %s's %q is not a read, so the page does not call it", id, decl.ChoicesFrom)
 	}
 	ctx, cancel := context.WithTimeout(a.lifetime(), choicesTimeout)
 	defer cancel()
-	res, err := a.toolReg.Execute(ctx, name, map[string]any{})
+	res, err := a.toolReg.Execute(tools.WithDispatchOwner(ctx, ap), name, map[string]any{})
 	if err != nil {
 		return nil, fmt.Errorf("the lookup failed: %w", err)
 	}

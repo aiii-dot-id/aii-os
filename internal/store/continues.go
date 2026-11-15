@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -27,16 +28,16 @@ func (s *Store) SessionProgressSince(sessionID string, afterSeq uint64) (bool, e
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	changed, err := s.outcomeChangesSince(sessionID, afterSeq)
+	changed, err := outcomeChangesSince(s.db, sessionID, afterSeq)
 	return len(changed) > 0, err
 }
 
-func (s *Store) outcomeChangesSince(sessionID string, afterSeq uint64) ([]uint64, error) {
+func outcomeChangesSince(q standingReader, sessionID string, afterSeq uint64) ([]uint64, error) {
 
 	prior := map[string]*string{}
 	for _, f := range outcomeFields {
 		var v sql.NullString
-		err := s.db.QueryRow(`SELECT json_extract(c.details,'$.work.`+f+`') FROM conversations c WHERE c.kind = ? AND c.turn_seq <= ?
+		err := q.QueryRow(`SELECT json_extract(c.details,'$.work.`+f+`') FROM conversations c WHERE c.kind = ? AND c.turn_seq <= ?
 			AND json_extract(c.details,'$.work.session') = ? AND json_extract(c.details,'$.work.`+f+`') IS NOT NULL ORDER BY c.turn_seq DESC LIMIT 1`,
 			string(interaction.Notice), afterSeq, sessionID).Scan(&v)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -47,7 +48,7 @@ func (s *Store) outcomeChangesSince(sessionID string, afterSeq uint64) ([]uint64
 			prior[f] = &val
 		}
 	}
-	rows, err := s.db.Query(`SELECT c.turn_seq, c.details FROM conversations c WHERE c.kind = ? AND c.turn_seq > ?
+	rows, err := q.Query(`SELECT c.turn_seq, c.details FROM conversations c WHERE c.kind = ? AND c.turn_seq > ?
 		AND json_extract(c.details,'$.work.session') = ? ORDER BY c.turn_seq`, string(interaction.Notice), afterSeq, sessionID)
 	if err != nil {
 		return nil, err
@@ -74,7 +75,7 @@ func (s *Store) outcomeChangesSince(sessionID string, afterSeq uint64) ([]uint64
 		}
 		if len(d.Work.Met) > len("delivery:") && d.Work.Met[:len("delivery:")] == "delivery:" {
 			var evidence string
-			err := s.db.QueryRow(`SELECT COALESCE(evidence,'') FROM work_sessions WHERE id = ?`, d.Work.Met[len("delivery:"):]).Scan(&evidence)
+			err := q.QueryRow(`SELECT COALESCE(evidence,'') FROM work_sessions WHERE id = ?`, d.Work.Met[len("delivery:"):]).Scan(&evidence)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
@@ -125,22 +126,33 @@ func (s *Store) SessionStuck(sessionID string, t StuckThresholds) (stuck string,
 	if sessionID == "" {
 		return "", "", nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var since uint64
-	if err := s.db.QueryRow(`SELECT COALESCE(MAX(c.turn_seq),0) FROM conversations c WHERE c.role = 'operator' AND c.kind = ?3
-		AND (c.turn_id IN (`+sessionTurnsSQL+`) OR c.turn_id NOT IN (`+anySessionTurnsSQL+`))`, sessionID, AnnotationTurnSource, string(interaction.Message)).Scan(&since); err != nil {
+	var events []stuckEvent
+	ctx := context.Background()
+	if err := s.ReadWith(ctx, func(r Reader) error {
+		var err error
+		events, err = stuckEvents(boundReader{ctx: ctx, s: r}, sessionID)
+		return err
+	}); err != nil {
 		return "", "", err
 	}
-	changed, err := s.outcomeChangesSince(sessionID, since)
+	return readStuck(events, t)
+}
+
+func stuckEvents(q boundReader, sessionID string) ([]stuckEvent, error) {
+	var since uint64
+	if err := q.QueryRow(`SELECT COALESCE(MAX(c.turn_seq),0) FROM conversations c WHERE c.role = 'operator' AND c.kind = ?3
+		AND (c.turn_id IN (`+sessionTurnsSQL+`) OR c.turn_id NOT IN (`+anySessionTurnsSQL+`))`, sessionID, AnnotationTurnSource, string(interaction.Message)).Scan(&since); err != nil {
+		return nil, err
+	}
+	changed, err := outcomeChangesSince(q, sessionID, since)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	qualifying := map[uint64]bool{}
 	for _, seq := range changed {
 		qualifying[seq] = true
 	}
-	rows, err := s.db.Query(`SELECT c.turn_seq, c.kind, c.content, c.outcome, c.details FROM conversations c
+	rows, err := q.Query(`SELECT c.turn_seq, c.kind, c.content, c.outcome, c.details FROM conversations c
 		WHERE c.turn_seq > ?3 AND (
 			(c.kind = ?4 AND json_extract(c.details,'$.work_session_id') = ?1) OR
 			(c.kind = ?5 AND c.role = 'resident' AND c.turn_id IN (`+sessionTurnsSQL+`)) OR
@@ -150,7 +162,7 @@ func (s *Store) SessionStuck(sessionID string, t StuckThresholds) (stuck string,
 		ORDER BY c.turn_seq DESC LIMIT ?7`,
 		sessionID, AnnotationTurnSource, since, string(interaction.ToolResult), string(interaction.Message), string(interaction.Notice), stuckWindow)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer rows.Close()
 	var events []stuckEvent
@@ -158,7 +170,7 @@ func (s *Store) SessionStuck(sessionID string, t StuckThresholds) (stuck string,
 		var seq uint64
 		var kind, content, outcome, details string
 		if err := rows.Scan(&seq, &kind, &content, &outcome, &details); err != nil {
-			return "", "", err
+			return nil, err
 		}
 		switch kind {
 		case string(interaction.Message):
@@ -178,12 +190,12 @@ func (s *Store) SessionStuck(sessionID string, t StuckThresholds) (stuck string,
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", "", err
+		return nil, err
 	}
 	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 		events[i], events[j] = events[j], events[i]
 	}
-	return readStuck(events, t)
+	return events, nil
 }
 
 func readStuck(events []stuckEvent, t StuckThresholds) (stuck, nudge string, err error) {

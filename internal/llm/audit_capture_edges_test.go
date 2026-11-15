@@ -70,10 +70,13 @@ func TestAuditPromptCaptureDeclaresTruncation(t *testing.T) {
 	}
 }
 
-type auditCaptureCredential struct{ advances atomic.Int32 }
+type auditCaptureCredential struct {
+	advances atomic.Int32
+	headers  map[string]string
+}
 
-func (*auditCaptureCredential) Credential(context.Context) (Credential, error) {
-	return Credential{Token: "synthetic-token", Gen: 1}, nil
+func (c *auditCaptureCredential) Credential(context.Context) (Credential, error) {
+	return Credential{Token: "synthetic-token", Gen: 1, Headers: c.headers}, nil
 }
 func (c *auditCaptureCredential) Stale(context.Context, uint64) error { c.advances.Add(1); return nil }
 
@@ -106,6 +109,7 @@ func TestAuditCredentialReplayCapturesSuccessfulReply(t *testing.T) {
 			cfg := &ClientConfig{Endpoint: srv.URL, Model: "synthetic", NoStream: mode == "whole", Credential: credential, MaxOutputTokens: 256}
 			if mode == "anthropic" {
 				cfg.Provider = "anthropic"
+				credential.headers = anthropicHeaders()
 			}
 			resp, err := New(cfg).Chat(context.Background(), []Message{{Role: "user", Content: "synthetic question"}}, ChatOptions{})
 			if err != nil || resp == nil || resp.Choices[0].Message.Content != "AUDIT-TAIL" {

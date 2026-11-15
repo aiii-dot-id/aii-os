@@ -21,9 +21,11 @@ A REVOKE NAMES THE ONE STANDING CONFIRMATION IT TAKES AWAY.
 	and no list, waits for the answer to its request while another page's
 	configuration arrives, says a refusal beside the card, says what the
 	host took, says a lost connection leaves it unknown, and says a press
-	with no connection sent nothing.
+	with no connection sent nothing. Each of those is said once to a screen
+	reader (#announce), and the page's first drawing, or a drawing that
+	says nothing new, is not.
 */
-const pluginRevokePage = substratePageMarkup + `<div class="app"><div class="stack" id="plugins-stack"></div></div>
+const pluginRevokePage = substratePageMarkup + `<div class="app"><div class="stack" id="plugins-stack"></div></div><div class="sr-only" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
 <script type="module">
 import { S } from './state.js';
 import { connect } from './ws.js';
@@ -46,6 +48,8 @@ import { assert, run } from './__harness.js';
  const said=()=>{const el=st.querySelector('[data-revoke-said]');return el?el.textContent:'';};
  socket.recv({type:'config',config:config(['enroll','list'])});
  assert(rv('enroll') && rv('list'),'rig: the card did not list the standing confirmations');
+ const voice=document.getElementById('announce'), heard=()=>voice.textContent, hush=()=>{voice.textContent='';};
+ assert(heard()==='','the page\'s first drawing was announced: '+heard());
 
  rv('enroll').click();
  const asked=socket.frames.at(-1);
@@ -59,18 +63,26 @@ import { assert, run } from './__harness.js';
  window.__think='untouched';
  socket.recv({type:'error',request_id:asked.request_id,message:'fixture: nothing to revoke; nothing was changed'});
  assert(said().includes('fixture: nothing to revoke') && !rv('enroll').disabled,'A REFUSED REVOKE SAID NOTHING BESIDE THE CARD, or stayed waiting');
+ assert(heard().includes('fixture: nothing to revoke'),'the refused revoke was not announced: '+heard());
+ hush();
  assert(window.__think==='untouched','a refused revoke was read as a turn\'s error');
 
  rv('enroll').click();const again=socket.frames.at(-1);
  socket.recv({type:'config',request_id:again.request_id,config:config(['list'])});
  assert(!rv('enroll') && rv('list') && !rv('list').disabled && said()==='Revoked: enroll asks you again before it runs.','the host\'s answer did not settle the revoke: '+said());
+ assert(heard().includes('Revoked: enroll asks you again before it runs.'),'what the host took was not announced: '+heard());
+ hush();socket.recv({type:'config',config:config(['list'])});
+ assert(said()==='Revoked: enroll asks you again before it runs.' && heard()==='','a drawing that says nothing new announced it again: '+heard());
 
  rv('list').click();
  socket.readyState=3;socket.onclose();
  assert(said().includes('it is not known whether list was revoked') && !rv('list').disabled,'a connection lost under a revoke said nothing, or left it waiting');
+ assert(heard().includes('it is not known whether list was revoked'),'the lost connection was not announced: '+heard());
+ hush();
 
  const before=socket.frames.length;rv('list').click();
  assert(socket.frames.length===before && said()==='Not connected — list was not revoked.','A REVOKE PRESSED WITH NO CONNECTION SAID NOTHING');
+ assert(heard().includes('Not connected — list was not revoked.'),'the unsent revoke was not announced: '+heard());
 });
 </script>`
 
@@ -79,7 +91,7 @@ func TestARevokeNamesTheOneConfirmationAndWaitsForTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
+	modules := wsPageModules(ws, []byte(`export const S={providers:[],tools:[]};`))
 	for _, file := range []string{"views/plugins.js", "views/settings.js", "util.js"} {
 		data, err := staticFS.ReadFile("static/" + file)
 		if err != nil {

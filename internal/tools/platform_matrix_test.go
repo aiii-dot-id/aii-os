@@ -13,7 +13,7 @@ import (
 //
 // This exists because I broke the matrix twice in one day, the same way
 // both times: a helper was added to the unix and windows partitions and
-// not to the mobile one, and tools.go calls it unconditionally. Linux,
+// not to the mobile one, and the shared code calls it unconditionally. Linux,
 // macOS and Windows stayed green while android went red, so nothing in
 // the host gate noticed — the five-platform law is precisely the law
 // that a green host cannot enforce.

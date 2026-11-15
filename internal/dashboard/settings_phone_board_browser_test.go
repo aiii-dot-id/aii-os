@@ -130,8 +130,11 @@ func TestASettingsGroupAtPhoneWidthHasNoListAboveIt(t *testing.T) {
 const groupNameDriver = `
   const heads = () => [...document.querySelectorAll('#settings-stack h1, #settings-stack h2')];
   // Each page by its own first section, so the page before it cannot pass.
+  // The folders and the tools are no page of Settings' own: they are drawn on
+  // Plugins and permissions (A10), and their old addresses go there
+  // (TestOldSettingsAddressesAtPhoneWidthLandOnAPage).
   for (const [hash, name, sec] of [['#/settings/model', 'Model', 'substrate'], ['#/settings/voice', 'Voice', 'speech'], ['#/settings/backups', 'Backups', 'backups'],
-    ['#/settings/sandbox', 'Plugins and permissions', 'sandbox'], ['#/settings/access', 'Access', 'dashboard'], ['#/settings/app', 'App', 'updates'], ['#/settings/people', 'People and messages', 'messages']]) {
+    ['#/settings/access', 'Access', 'dashboard'], ['#/settings/app', 'App', 'updates'], ['#/settings/people', 'People and messages', 'messages']]) {
     const own = () => document.querySelector('#settings-stack [data-section="' + sec + '"]');
     await go(hash, () => viewOn() === 'view-settings' && shown(views()) && own() && heads().length > 0);
     if (!own()) return fail(hash + ' did not draw its ' + sec + ' section');
@@ -170,6 +173,9 @@ func TestOldSettingsAddressesAtPhoneWidthLandOnAPage(t *testing.T) {
     ['#/settings/held-mail', '#/settings/people', 'view-settings'],
     ['#/settings/updates', '#/settings/app', 'view-settings'],
     ['#/settings/witness', '#/settings/technical/verification', 'view-technical'],
+    // The folders and the tools, drawn on Plugins and permissions (A10).
+    ['#/settings/sandbox', '#/settings/permissions', 'view-plugins'],
+    ['#/settings/tools', '#/settings/permissions', 'view-plugins'],
   ];
   for (const [old, now, view] of routes) {
     await go(old, () => location.hash === now && viewOn() === view && shown(views()) && !onBoard());
@@ -219,6 +225,16 @@ func TestSettingsAtDesktopWidthKeepsItsListBesideThePage(t *testing.T) {
   }
   const st = rows().find(x => x.dataset.item === 'status');
   if (st.getAttribute('href') !== '#/settings/status') return fail('Status\'s entry is ' + st.getAttribute('href'));
+  // The folders' and the tools' old addresses are Plugins and permissions'
+  // own page, which draws them, and the list marks that group and no other
+  // (A10): it once lent its mark to a Settings page that drew only them.
+  for (const old of ['#/settings/sandbox', '#/settings/tools']) {
+    await go(old, () => location.hash === '#/settings/permissions' && viewOn() === 'view-plugins' && shown(views()) && document.querySelector('#plugins-stack [data-tools]'));
+    if (location.hash !== '#/settings/permissions' || viewOn() !== 'view-plugins') return fail(old + ' at 1280 is at ' + location.hash + ' showing ' + viewOn());
+    if (document.querySelector('#settings-stack [data-folders], #settings-stack [data-tools]')) return fail(old + ' at 1280: the folders or the tools are still drawn on a Settings page');
+    const marked = rows().filter(x => x.getAttribute('aria-current') === 'page').map(x => x.dataset.item).join(',');
+    if (marked !== 'permissions') return fail(old + ' at 1280 marks ' + (marked || 'nothing') + ' in the list, not Plugins and permissions');
+  }
 `)
 }
 

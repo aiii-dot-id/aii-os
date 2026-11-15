@@ -510,7 +510,7 @@ func (b *Binding) dispatchFS(p invokeParams, pol policySnapshot) ([]byte, error)
 
 	switch p.Operation {
 	case opFSList:
-		return b.fsList(reply, osRoot, root, rel)
+		return b.fsList(reply, p, osRoot, root, rel)
 	case opFSRead:
 		return b.fsRead(reply, p, osRoot, root, rel)
 	case opFSWrite:
@@ -534,7 +534,27 @@ func boundedPath(p string) error {
 
 type replyFn func(outcome) ([]byte, error)
 
-func (b *Binding) fsList(reply replyFn, osRoot *os.Root, root resolvedRoot, rel string) ([]byte, error) {
+func (b *Binding) fsList(reply replyFn, p invokeParams, osRoot *os.Root, root resolvedRoot, rel string) ([]byte, error) {
+	after := ""
+	if len(p.Arguments) > 0 {
+		var args map[string]json.RawMessage
+		if err := json.Unmarshal(p.Arguments, &args); err != nil {
+			return reply(outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: "arguments must be an object"})
+		}
+		for name, raw := range args {
+			switch name {
+			case "after":
+
+				var name *string
+				if err := json.Unmarshal(raw, &name); err != nil || name == nil || len(*name) > MaxFilePathBytes || strings.ContainsAny(*name, "/\x00") {
+					return reply(outcome{status: statusDenied, reason: reasonArgumentInvalid, detail: fmt.Sprintf("after must be one entry's name (a string of at most %d bytes, with no / or NUL): the last name of the page before", MaxFilePathBytes)})
+				}
+				after = *name
+			default:
+				return reply(outcome{status: statusDenied, reason: reasonNetUnknownArgument, detail: fmt.Sprintf("argument %q is not supported by fs.list (after)", name)})
+			}
+		}
+	}
 	f, err := osRoot.Open(rel)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -548,6 +568,9 @@ func (b *Binding) fsList(reply replyFn, osRoot *os.Root, root resolvedRoot, rel 
 		return reply(outcome{status: statusFailed, reason: reasonFSIOFailed, detail: "read directory: " + err.Error()})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	if after != "" {
+		entries = entries[sort.Search(len(entries), func(i int) bool { return entries[i].Name() > after }):]
+	}
 	truncated := false
 	if len(entries) > MaxListEntries {
 		entries, truncated = entries[:MaxListEntries], true

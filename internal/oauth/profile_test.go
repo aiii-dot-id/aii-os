@@ -69,7 +69,7 @@ func TestTheGenericExchangeSpeaksPlainOAuth(t *testing.T) {
 	a := &authority{answer: map[string]any{"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600, "scope": "calendar.readonly"}}
 	ts := a.serve(t)
 	defer ts.Close()
-	p := OAuthParams{ClientID: "cid", ClientSecret: "csecret", TokenURL: ts.URL}
+	p := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "cid", ClientSecret: "csecret", TokenURL: ts.URL}
 	tok, err := refreshWith(context.Background(), ts.Client(), p, "rt-0")
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestTheGenericExchangeSpeaksPlainOAuth(t *testing.T) {
 	}
 
 	a.answer = map[string]any{"access_token": "gh-1"} // GitHub: no expiry, no refresh token
-	tok, err = refreshWith(context.Background(), ts.Client(), OAuthParams{ClientID: "cid", TokenURL: ts.URL}, "rt-0")
+	tok, err = refreshWith(context.Background(), ts.Client(), OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "cid", TokenURL: ts.URL}, "rt-0")
 	if err != nil || tok.Access != "gh-1" || !tok.Expires.IsZero() || tok.Refresh != "" {
 		t.Fatalf("a token without expiry or refresh: %+v %v", tok, err)
 	}
@@ -131,7 +131,7 @@ func TestAProfileSourceOwnsAndRefreshesItsFile(t *testing.T) {
 	a := &authority{answer: map[string]any{"access_token": "at-new", "expires_in": 3600}, delay: 50 * time.Millisecond}
 	ts := a.serve(t)
 	defer ts.Close()
-	p := OAuthParams{ClientID: "cid", TokenURL: ts.URL, Scope: "s configured-extra", RefreshParams: map[string]any{"scope": "{scope}"}}
+	p := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "cid", TokenURL: ts.URL, Scope: "s configured-extra", RefreshParams: map[string]any{"scope": "{scope}"}}
 	src, err := NewProfileSource(path, p, ts.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +214,14 @@ func TestProviderTemplatesAreData(t *testing.T) {
 		t.Fatal("a caller's narrowing must not reach the table")
 	}
 	for _, name := range ProviderNames(testCatalog()) {
+		if name == "custom" {
+			// Not a template: the token headers a custom profile, which
+			// names its own endpoints, takes (broker.CustomContract).
+			if p, _ := ProviderTemplate(name, testCatalog()); p.TokenHeaders["User-Agent"] == "" || p.TokenURL != "" {
+				t.Fatalf("custom: %+v, want token headers and no endpoints", p)
+			}
+			continue
+		}
 		if p, ok := ProviderTemplate(name, testCatalog()); !ok || p.TokenURL == "" || p.AuthorizeURL == "" || len(p.Hosts) == 0 {
 			t.Fatalf("%s: incomplete template %+v", name, p)
 		}

@@ -1,11 +1,14 @@
 #!/bin/sh
 # Run committed source natively with explicit credentials and trusted SSH host keys. Retain exact exit, platform session and skip evidence.
 set -u
+scripts_only=""
+if [ "${1:-}" = --scripts-only ]; then scripts_only=1; shift; fi
 host=${1:?linux|mac|windows}
 dir=${2:-${EVIDENCE_DIR:-}}
 [ -n "$dir" ] || { echo "EVIDENCE_DIR or a directory argument is required" >&2; exit 2; }
 mkdir -p "$dir"
 . "$(dirname "$0")/toolchain.sh"
+. "$(dirname "$0")/native-judge.sh"
 rev=$(git rev-parse --short HEAD)
 full=$(git rev-parse HEAD)
 utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -14,21 +17,34 @@ skipped() { grep -c '"Action":"skip","Package":"[^"]*","Test":' "$log" 2>/dev/nu
 session() { sed -n 's/^native \(session=[0-9]* interactive=[A-Za-z]*\).*/ \1/p' "$log" 2>/dev/null | tr -d '\r' | head -1; }
 record() { printf 'native host=%s commit=%s go="%s" exit=%s skipped=%s started=%s ended=%s%s log=%s\n' "$host" "$full" "$1" "$2" "$(skipped)" "$3" "$(utc)" "$(session)" "native-$host.log" | tee -a "$dir/native.log"; }
 skips() {
+  if ! native_refusal_ok "$log" "$rc"; then echo "native: the log says the run did not start, and its exit says it passed: it did not pass" | tee -a "$dir/native.log" >&2; rc=1; return 0; fi
   if grep -q '^NATIVE_NOT_STARTED' "$log" 2>/dev/null; then return 0; fi
   case "$host" in mac) goos=darwin ;; *) goos=$host ;; esac
-  ( cd "$(git rev-parse --show-toplevel)" && GOFLAGS=-buildvcs=false "$GO" run ./test/skipreport -platform "$goos" -critical test/release_critical.txt -whole "$log" ) > "$dir/native-$host.skips.txt" 2>&1 && return 0
+  ( cd "$(git rev-parse --show-toplevel)" && GOFLAGS=-buildvcs=false "$GO" run ./test/skipreport -platform "$goos" -critical test/release_critical.txt -whole -no-fail "$log" ) > "$dir/native-$host.skips.txt" 2>&1 && return 0
   tail -n 12 "$dir/native-$host.skips.txt" >&2
   [ "$rc" != 0 ] || rc=1
 }
 suite_timeout=90m
 min_free_gib=${AII_NATIVE_MIN_FREE_GIB:-10}
 case "$min_free_gib" in ''|*[!0-9]*) echo "AII_NATIVE_MIN_FREE_GIB must be a whole number of GiB, not '$min_free_gib'" >&2; exit 2 ;; esac
+wjobs=${AII_WINDOWS_NATIVE_JOBS:-} wp=${AII_WINDOWS_NATIVE_P:-}
+[ "$host" = windows ] || wjobs="" wp=""
+for v in "$wjobs" "$wp"; do
+	case "$v" in '') ;; *[!0-9]*|0*) echo "AII_WINDOWS_NATIVE_JOBS and AII_WINDOWS_NATIVE_P must be whole numbers from 1, not '$v'" >&2; exit 2 ;; esac
+done
+width="export GOTOOLCHAIN=local GOFLAGS=-buildvcs=false" cap_hours=3
+if [ "$host" = windows ] && { [ -n "$wjobs" ] || [ -n "$wp" ]; }; then
+	cap_hours=6
+	width="export GOTOOLCHAIN=local GOFLAGS='-buildvcs=false${wp:+ -p=$wp}'${wjobs:+ AII_NATIVE_JOBS=$wjobs}
+echo \"native width jobs=\${AII_NATIVE_JOBS:-default} goflags=\$(go env GOFLAGS)\""
+fi
 stage=$(mktemp -d "${TMPDIR:-/tmp}/aii-native.XXXXXXXX") || exit 1
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 run_id="$rev-${stage##*.}"
 tarball="$stage/aii-native-$run_id.tgz"
-git archive --format=tar.gz -o "$tarball" HEAD || exit 1
+[ -n "$scripts_only" ] || git archive --format=tar.gz -o "$tarball" HEAD || exit 1
 remote="$stage/aii-native-$run_id.sh"
+[ -z "$scripts_only" ] || remote=$dir/aii-native-$rev.sh
 qualify=""
 if [ "$host" = windows ]; then
   if [ -n "${AII_WINDOWS_VOICE_FIXTURE:-}" ] && [ -n "${AII_WINDOWS_VOICE_EVIDENCE:-}" ]; then
@@ -49,7 +65,7 @@ if [ \"\${free:-0}\" -lt $min_free_gib ]; then echo \"NATIVE_NOT_STARTED \${free
 if [ -n \"\$others\" ]; then echo \"NATIVE_NOT_STARTED another suite is running on this machine: \$others\"; echo NATIVE_EXIT=2; exit 0; fi"
 fi
 cat > "$remote" <<EOF
-export GOTOOLCHAIN=local GOFLAGS=-buildvcs=false
+$width
 $ask
 $where
 mkdir -p aii-native && mkdir aii-native/$run_id && tar -C aii-native/$run_id -xzf aii-native-$run_id.tgz && cd aii-native/$run_id && go version && sh test/native-suite.sh $suite_timeout
@@ -57,6 +73,7 @@ $qualify
 echo NATIVE_EXIT=\$?
 EOF
 launcher="$stage/aii-native-$run_id.ps1"
+[ -z "$scripts_only" ] || launcher=$dir/aii-native-$rev.ps1
 cat > "$launcher" <<EOF
 \$ErrorActionPreference = "Stop"
 \$name = "AII-Native-$run_id"
@@ -80,7 +97,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue \$out
 \$principal = New-ScheduledTaskPrincipal -UserId \$env:USERNAME -LogonType Interactive -RunLevel Limited
 # Priority 4 is a normal process's: a task's default, 7, runs it below
 # normal, its disk and memory at background priority too.
-\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 3) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Priority 4
+\$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours $cap_hours) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Priority 4
 Register-ScheduledTask -TaskName \$name -Action \$action -Principal \$principal -Settings \$settings | Out-Null
 Start-ScheduledTask -TaskName \$name
 \$deadline = (Get-Date).AddSeconds(60)
@@ -97,6 +114,7 @@ while ((Get-ScheduledTask -TaskName \$name).State -eq "Running") { Start-Sleep -
 Unregister-ScheduledTask -TaskName \$name -Confirm:\$false
 Write-Output ("NATIVE_TASK_ENDED result=" + \$info.LastTaskResult)
 EOF
+if [ -n "$scripts_only" ]; then echo "NATIVE_SCRIPTS_ONLY remote=$remote launcher=$launcher"; exit 3; fi
 start=$(utc)
 ssho="-o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ControlPath=none"
 case "$host" in
@@ -126,7 +144,11 @@ case "$host" in
     ;;
   *) echo "unknown host $host" >&2; exit 2 ;;
 esac
-rc=$(sed -n 's/^NATIVE_EXIT=//p' "$log" | tr -d '\r' | tail -1); [ -n "$rc" ] || rc=2
+rc=$(native_exit_of "$log") || { echo "native: the log does not give one status from 0 to 255 in one NATIVE_EXIT line: the run could not say how it ended" | tee -a "$dir/native.log" >&2; rc=2; }
+if ! native_width_ok "$host" "$log" "$wjobs" "$wp"; then
+  echo "native: the Windows suite's log does not say, once, that it ran at the width named (jobs=${wjobs:-default}${wp:+, -p=$wp}): it does not count" | tee -a "$dir/native.log" >&2
+  [ "$rc" != 0 ] || rc=1
+fi
 ver=$(grep -m1 '^go version' "$log" | tr -d '\r')
 if [ "$host" = windows ] && [ "$rc" = 0 ] && ! tr -d '\r' < "$log" | grep -qE '^native session=[1-9][0-9]* interactive=True'; then
   echo "native: the Windows suite did not run in the desktop's session ($(tr -d '\r' < "$log" | grep -m1 '^native session=' || echo 'no session line')); a pass there does not count" | tee -a "$dir/native.log" >&2

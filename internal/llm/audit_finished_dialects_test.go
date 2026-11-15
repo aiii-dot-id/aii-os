@@ -77,6 +77,7 @@ func auditFinishedDialect(t *testing.T, anthropic bool) {
 				cfg := &ClientConfig{Endpoint: srv.URL, Model: "synthetic", MaxInputTokens: 100000, MaxOutputTokens: 256}
 				if anthropic {
 					cfg.Provider = "anthropic"
+					cfg.Headers = anthropicHeaders()
 				}
 				client := New(cfg)
 				var got string

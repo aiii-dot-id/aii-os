@@ -2,7 +2,6 @@ import { sec } from '../settings.js';
 import { LIMIT_FIELDS, LIMIT_WORD, limitDrafted } from './parts.js';
 import { configValue, limitDraft } from './save.js';
 import { S } from '../../state.js';
-import { esc } from '../../util.js';
 export function limitSet(block, key, provider, model, value) {
   const section = key.slice(0, key.indexOf('.')), name = key.slice(key.indexOf('.') + 1);
   const p = block[provider] = block[provider] || {};
@@ -35,8 +34,4 @@ export function collectLimits(ch, root = document.getElementById('settings-stack
     ch['overrides_digest'] = S.config.cognition.overrides_digest;
   }
   return bad;
-}
-export function pluginToolNote(t) {
-  return t.plugin ? '<br><span class="store-hint">An operation of plugin ' + esc(t.plugin) + ', shown as the identity is given it. ' +
-    'Its author\'s summary is on that plugin\'s card on the Plugins page, whole.</span>' : '';
 }

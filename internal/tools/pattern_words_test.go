@@ -26,7 +26,7 @@ func TestAPatternIsNotAPathButTheLogDirectoryIs(t *testing.T) {
 		"grep -c log notes.txt", `grep -c "log" notes.txt`, "grep -rn log .", "grep -rn -- log notes.txt",
 		"rg log notes.txt", "cat notes.txt | grep log", "cat notes.txt | grep -i log | wc -l",
 		`grep -r --include="*.log" x .`, "egrep -w log notes.txt", "git log --oneline -3",
-		// a review, 2026-11-06, on e6f4907d: options after the operand that take no word.
+		// Options after the operand that take no word.
 		"grep log notes.txt -n", `grep -r log . --include="*.txt"`, "grep log notes.txt -- -e",
 	} {
 		if why, _ := r.shellWallFrom(policy, home, cmd); why != "" {
@@ -40,9 +40,9 @@ func TestAPatternIsNotAPathButTheLogDirectoryIs(t *testing.T) {
 		"cat lg/aii.log", "ls lg", "grep -r x log", "grep -r x log/", "grep log log", "grep -f log notes.txt",
 		"grep -e x log", "grep -m 1 x log", "grep --file log notes.txt", "cd log && cat aii.log", "echo log | sh",
 		"grep log > log", "sed -n p log", "awk '{print}' log", "cat notes.txt | grep x log",
-		// a review, 2026-11-06: the pattern supplied by an option, and an empty one.
+		// The pattern supplied by an option, and an empty one.
 		"grep -r --regexp=x log", "grep -r --file=notes.txt log", "grep -r '' log", `grep -r "" log`, "grep --max-count=1 x log",
-		// a review, 2026-11-06, on e6f4907d: the pattern supplied after the operand (GNU grep permutes).
+		// The pattern supplied after the operand (GNU grep permutes).
 		"grep -r log -e x", "grep -r log --regexp=x", "grep -r log -f notes.txt", "grep log notes.txt --file=notes.txt", "grep -r log -m 1",
 	} {
 		why, _ := r.shellWallFrom(policy, home, cmd)

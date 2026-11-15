@@ -117,8 +117,7 @@ func TestOnePressStart(t *testing.T) {
   const out = sent(before);
   assert(out.length === 1 && out[0].type === 'config_set' && out[0].config['genesis.agent_memory.off'] === false, 'checking the box again was not saved first: ' + JSON.stringify(out));`,
 
-		// THE ROWS ARE KEPT THROUGH A CHOICE AND A REPLY (a review's read of
-		// step 7). Arrow keys move the choice as they move the focus, so a
+		// THE ROWS ARE KEPT THROUGH A CHOICE AND A REPLY. Arrow keys move the choice as they move the focus, so a
 		// row redrawn on choosing, or on a reply that changes nothing, would
 		// take the keyboard with it: the radio chosen is the same node,
 		// focused, checked and marked, its detail under it; a field typed in
@@ -182,8 +181,7 @@ func TestOnePressStart(t *testing.T) {
   assert(!$('fb-birth').disabled, 'Begin stayed disabled after the connection went');
   assert(!acceptFirstRunConfig(save.request_id), 'the save\'s reply after the connection went was taken');
   assert(!sent(before).some(f => f.type === 'genesis'), 'a save not confirmed went on to a birth');`,
-		// THE NOTES STEP IS THERE ONLY WHERE SUCH NOTES ARE (the first-session
-		// review, change 2): with none on this computer, Begin's list is the
+		// THE NOTES STEP IS THERE ONLY WHERE SUCH NOTES ARE: with none on this computer, Begin's list is the
 		// founding principles, checked, then their first words, and no box; with
 		// some, the step and its box are shown.
 		// BEGIN WAITS FOR A MODEL (the walk's first finding): with nothing
@@ -313,7 +311,7 @@ const drawn = el => !!el && el.getClientRects().length > 0 && getComputedStyle(e
 `)
 }
 
-// SIXTEEN PIXELS ON A PHONE (a review's read of step 7). iOS zooms into a
+// SIXTEEN PIXELS ON A PHONE. iOS zooms into a
 // field under 16 px when it is focused and does not zoom back: at a phone's
 // width every field of the chosen row's detail is 16 px or more, on the
 // real page with every sheet it loads. Chrome and Firefox open no window

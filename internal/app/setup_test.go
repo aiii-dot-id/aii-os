@@ -170,6 +170,8 @@ func TestSetupAppliesAndSwaps(t *testing.T) {
 	if err := app.setProvider(providerEntry{
 		Name: "subscription", APIType: "anthropic", URL: throttled.URL,
 		Credential: "file:" + subscriptionToken, DefaultModel: "claude-opus-5",
+		// The API version is configuration, the credential's own here.
+		CredentialOptions: map[string]string{"header_anthropic-version": configuredHeaders("anthropic")["anthropic-version"]},
 	}, false); err != nil {
 		t.Fatal(err)
 	}

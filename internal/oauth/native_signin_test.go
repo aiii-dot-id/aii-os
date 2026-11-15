@@ -26,6 +26,7 @@ func codexParams() OAuthParams {
 		// contract, so a test of the codex flow supplies it the way the
 		// registry does.
 		ClaimHeaders: map[string][]string{"ChatGPT-Account-ID": codexClaim},
+		TokenHeaders: testTokenHeaders(),
 	}
 }
 

@@ -56,50 +56,51 @@ run(() => {
   const after=frames.length; backup.backupsReconnected();
   assert(frames.length===after+1 && frames.at(-1).backups.action==='status','reconnect must read status, never replay preferences');
   el('bk-pass').value='navigation secret';
-  S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings(); S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
+  S.settingsSection('substrate'); S.requestSettingsSection(); renderSettings(); S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
   assert(el('bk-pass').value==='' && el('bk-keep').value==='33','navigation retained secret or discarded preferences');
 });
 </script>`
 	runPageInEngines(t, page, settingsDraftModules(t))
 }
 
+// The folders' form is on Plugins and permissions (A10).
 func TestSandboxFormReadbackPreservesEdits(t *testing.T) {
-	page := substratePageMarkup + `<script type="module">
+	page := permissionsPageMarkup + `<script type="module">
 import { S } from './state.js';
-import { renderSettings } from './views/settings.js';
+import { renderPlugins } from './views/plugins.js';
 import { frames, setConnected } from './ws.js';
 import * as sandbox from './sandbox.js';
 import { assert, run } from './__harness.js';
 run(() => {
-  S.view='settings'; S.identityExists=true; S.providersLoaded=true; S.config={llm:{}};
+  S.view='plugins'; S.identityExists=true; S.providersLoaded=true; S.config=` + permissionsPageConfigJS + `; S.tools=[];
   S.sandbox={root:'/identity',extra_roots:['/existing']};
-  renderSettings(); S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
+  renderPlugins();
   const input=document.getElementById('sbx-add'); input.value='/my/project'; input.focus(); input.setSelectionRange(3,7);
-  S.sandbox={root:'/identity',extra_roots:['/existing','/another-client']}; renderSettings();
+  S.sandbox={root:'/identity',extra_roots:['/existing','/another-client']}; renderPlugins();
   assert(document.getElementById('sbx-add').value==='/my/project','sandbox readback discarded root draft');
   assert(document.activeElement===input && input.selectionStart===3,'sandbox readback lost focus/caret');
-  assert(document.getElementById('settings-stack').textContent.includes('/another-client'),'draft hid current grants');
+  assert(document.getElementById('plugins-stack').textContent.includes('/another-client'),'draft hid current grants');
   const el=id=>document.getElementById(id);
   el('sbx-grant').click(); const added=frames.at(-1);
   assert(added.type==='sandbox_add' && added.root==='/my/project' && !('roots' in added),'A GRANT SENT THE PAGE\'S OWN LIST: an older page puts back a root another page removed');
   assert(el('sbx-grant').disabled,'pending grant not disabled');
   input.value='/newer/project';
   assert(!sandbox.acceptSandbox('another-client'),'foreign grant reply accepted');
-  S.sandbox.extra_roots=S.sandbox.extra_roots.concat([added.root]); assert(sandbox.acceptSandbox(added.request_id),'grant reply not claimed'); renderSettings();
+  S.sandbox.extra_roots=S.sandbox.extra_roots.concat([added.root]); assert(sandbox.acceptSandbox(added.request_id),'grant reply not claimed'); renderPlugins();
   assert(input.value==='/newer/project','older grant erased newer input');
   el('sbx-grant').click(); const newer=frames.at(-1); S.sandbox.extra_roots=S.sandbox.extra_roots.concat([newer.root]);
-  sandbox.acceptSandbox(newer.request_id); renderSettings();
+  sandbox.acceptSandbox(newer.request_id); renderPlugins();
   assert(input.value==='','confirmed grant input not cleared');
   input.value='/refused'; el('sbx-grant').click(); sandbox.rejectSandbox(frames.at(-1).request_id,'fixture root refusal');
-  assert(input.value==='/refused' && el('settings-stack').textContent.includes('fixture root refusal'),'refusal lost input/reason');
+  assert(input.value==='/refused' && el('plugins-stack').textContent.includes('fixture root refusal'),'refusal lost input/reason');
   el('sbx-grant').click(); const lost=frames.at(-1); sandbox.sandboxConnectionLost();
   assert(!sandbox.acceptSandbox(lost.request_id) && input.value==='/refused','late reply erased lost-socket draft');
-  assert(el('settings-stack').textContent.includes('completion is unknown'),'lost grant hid uncertainty');
+  assert(el('plugins-stack').textContent.includes('completion is unknown'),'lost grant hid uncertainty');
   setConnected(false); const before=frames.length; el('sbx-grant').click();
   assert(frames.length===before && !el('sbx-grant').disabled && input.value==='/refused','offline grant stuck or lost draft');
   setConnected(true); document.querySelector('[data-rmroot]').click(); const removed=frames.at(-1);
   assert(removed.type==='sandbox_remove' && removed.root==='/existing' && !('roots' in removed),'a removal did not name the one root it removes');
-  sandbox.acceptSandbox(removed.request_id); renderSettings();
+  sandbox.acceptSandbox(removed.request_id); renderPlugins();
   assert(input.value==='/refused','removal consumed unrelated add draft');
 });
 </script>`
@@ -131,7 +132,7 @@ run(() => {
  const made=create();
  backup.applyBackups({action:'escrow_create',file_b64:btoa('sealed')},'foreign');
  assert(downloads===0 && backup.backupsHolding().busy==='escrow_create','foreign reply ended create');
- nav('sandbox'); nav('backups');
+ nav('substrate'); nav('backups');
  backup.applyBackups({action:'escrow_create',file_b64:btoa('sealed')},made.request_id);
  assert(downloads===0 && !backup.backupsHolding().holding && !el('bk-pass').value,'abandoned reply revived escrow');
  setConnected(false);create();
@@ -184,11 +185,14 @@ run(() => {
 	runPageInEngines(t, page, settingsDraftModules(t))
 }
 
+// Backups is a page of Settings; the folders' form is on Plugins and
+// permissions (A10).
 func TestBackupAndSandboxFormsUseSocketRepliesAndDisconnect(t *testing.T) {
-	page := substratePageMarkup + `<script type="module">
+	page := permissionsPageMarkup + `<script type="module">
 import { S } from './state.js';
 import { connect } from './ws.js';
 import { renderSettings } from './views/settings.js';
+import { renderPlugins } from './views/plugins.js';
 import { assert, run } from './__harness.js';
 ` + offerSettingsJS + `run(() => {
  const sockets=[];
@@ -198,17 +202,19 @@ import { assert, run } from './__harness.js';
    send(bytes){this.frames.push(JSON.parse(bytes));}
    recv(frame){this.onmessage({data:JSON.stringify(frame)});}
  };
- S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};
+ S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config=` + permissionsPageConfigJS + `;S.tools=[];
  connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
- const el=id=>document.getElementById(id), nav=name => { S.settingsSection(name); S.requestSettingsSection(); renderSettings(); };
+ const el=id=>document.getElementById(id), nav=name => { S.view='settings'; S.settingsSection(name); S.requestSettingsSection(); renderSettings(); };
+ const folders=() => { S.view='plugins'; renderPlugins(); };
  const last=()=>socket.frames.at(-1);
  renderSettings();nav('backups');
  const view={enabled:true,backup_keep:8,secrets_ok:true,export_ok:true,snapshots:[]};
  socket.recv({type:'backups',backups:{action:'status',view}});
  el('bk-keep').value='20';el('bk-save').click();const save=last();
- socket.recv({type:'config',request_id:'foreign',config:{llm:{},maintenance:{enabled:true,backup_keep:20}}});
+ // A configuration the host sends has its plugins: Plugins and permissions draws from it.
+ socket.recv({type:'config',request_id:'foreign',config:{llm:{},plugins:{autoload:'T1',catalog:[],catalog_url:'',auth_profiles:[],providers:[],installed:[]},maintenance:{enabled:true,backup_keep:20}}});
  assert(el('bk-save').disabled,'unrelated config cleared pending preferences');
- socket.recv({type:'config',request_id:save.request_id,config:{llm:{},maintenance:{enabled:true,backup_keep:20}}});
+ socket.recv({type:'config',request_id:save.request_id,config:{llm:{},plugins:{autoload:'T1',catalog:[],catalog_url:'',auth_profiles:[],providers:[],installed:[]},maintenance:{enabled:true,backup_keep:20}}});
  assert(!el('bk-save').disabled && document.querySelector('[data-said="keep"]')?.textContent==='Saved.','socket config reply not routed');
  el('bk-take').click();const take=last();
  socket.recv({type:'backups',request_id:'foreign',backups:{action:'take',view}});
@@ -221,7 +227,7 @@ import { assert, run } from './__harness.js';
  el('bk-keep').value='25';el('bk-save').click();const prefs=last();
  socket.recv({type:'error',request_id:prefs.request_id,message:'fixture config refused'});
  assert(!el('bk-save').disabled && el('bk-keep').value==='25','socket preference refusal not routed');
- nav('sandbox');socket.recv({type:'sandbox',sandbox:{root:'/home',extra_roots:[]}});
+ folders();socket.recv({type:'sandbox',sandbox:{root:'/home',extra_roots:[]}});
  el('sbx-add').value='/project';el('sbx-grant').click();const grant=last();
  socket.recv({type:'sandbox',request_id:'foreign',sandbox:{root:'/home',extra_roots:['/foreign']}});
  assert(el('sbx-grant').disabled && el('sbx-add').value==='/project','foreign sandbox reply consumed grant');
@@ -229,27 +235,15 @@ import { assert, run } from './__harness.js';
  assert(!el('sbx-grant').disabled && el('sbx-add').value==='','socket sandbox receipt not routed');
  el('sbx-add').value='/refused';el('sbx-grant').click();const refuse=last();
  socket.recv({type:'error',request_id:refuse.request_id,message:'fixture grant refused'});
- assert(!el('sbx-grant').disabled && el('settings-stack').textContent.includes('fixture grant refused'),'sandbox error not routed');
+ assert(!el('sbx-grant').disabled && el('plugins-stack').textContent.includes('fixture grant refused'),'sandbox error not routed');
  el('sbx-grant').click();nav('backups');el('bk-save').click();el('bk-pass').value='disconnect secret';
  const before=socket.frames.length;socket.readyState=3;socket.onclose();
  assert(el('bk-pass').value==='' && !el('bk-save').disabled && el('bk-keep').value==='25','socket loss did not retire backups');
- nav('sandbox');assert(!el('sbx-grant').disabled && el('sbx-add').value==='/refused','socket loss did not retire grant');
+ folders();assert(!el('sbx-grant').disabled && el('sbx-add').value==='/refused','socket loss did not retire grant');
  assert(socket.frames.length===before,'socket loss replayed action');
 });
 </script>`
-	ws, err := staticFS.ReadFile("static/ws.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
-	for _, file := range []string{"views/settings.js", "util.js"} {
-		data, err := staticFS.ReadFile("static/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		modules["/"+file] = data
-	}
-	runPageInEngines(t, page, modules)
+	runPageInEngines(t, page, permissionsPageModules(t))
 }
 
 func TestBackupFormsKeepClientLocalDrafts(t *testing.T) {

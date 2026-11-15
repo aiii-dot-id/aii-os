@@ -87,7 +87,7 @@ func TestOpenAIWireOmitsUnsetSampling(t *testing.T) {
 func TestAnthropicWireSamplingNoExtra(t *testing.T) {
 	srv, got := captureServer(t, anthResp)
 	c := New(&ClientConfig{
-		Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
+		Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders(),
 		Temperature: f64(0.3),
 		Extra:       map[string]any{"repetition_penalty": 1.05},
 	})
@@ -128,7 +128,7 @@ func TestUnknownUsageIsNotZeroUsage(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: tc.provider})
+			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: tc.provider, Headers: anthropicHeaders()})
 			resp, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
 			if err != nil {
 				t.Fatal(err)
@@ -150,7 +150,7 @@ func TestAnthropicUsageCountsCachedInput(t *testing.T) {
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":100,"cache_creation_input_tokens":7}}`)
 	}))
 	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	resp, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestEveryDialectSendsTheOutputCeiling(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m",
-				Provider: tc.provider, MaxOutputTokens: 4096})
+				Provider: tc.provider, MaxOutputTokens: 4096, Headers: anthropicHeaders()})
 			if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +216,7 @@ func TestDialectFallbackIsTheSharedConstant(t *testing.T) {
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
 	}))
 	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestFailedCallIsRecorded(t *testing.T) {
 
 	buf := logsink.CaptureForTest(t)
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err == nil {
 		t.Fatal("a 400 must be an error")
 	}
@@ -259,7 +259,7 @@ func TestSuccessfulCallIsSilent(t *testing.T) {
 
 	buf := logsink.CaptureForTest(t)
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestUnattendedCallCostIsRecorded(t *testing.T) {
 
 	buf := logsink.CaptureForTest(t)
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, _, _, err := c.ChatSimple(context.Background(), "system", "user"); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestUnattendedCostSilentWhenUnreported(t *testing.T) {
 
 	buf := logsink.CaptureForTest(t)
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, _, _, err := c.ChatSimple(context.Background(), "system", "user"); err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestChatStructuredAcceptsEitherChannel(t *testing.T) {
 			tool.Function.Name = "emit_consolidation"
 			tool.Function.Parameters = map[string]any{"type": "object"}
 
-			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 			payload, _, viaTool, _, err := c.ChatStructured(context.Background(), "system", "user", tool)
 			if err != nil {
 				t.Fatal(err)
@@ -466,7 +466,7 @@ func TestAnthropicMarksTheConversationTailForCache(t *testing.T) {
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":4}}`)
 	}))
 	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	_, err := c.Chat(context.Background(), []Message{
 		{Role: "system", Content: "stable identity material"},
 		{Role: "user", Content: "first"},
@@ -528,7 +528,7 @@ func TestAnthropicNeverMarksAThinkingBlock(t *testing.T) {
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":4}}`)
 	}))
 	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	_, err := c.Chat(context.Background(), []Message{
 		{Role: "system", Content: "stable"},
 		{Role: "user", Content: "go"},
@@ -577,7 +577,7 @@ func TestAnthropicLiftsTopLevelCombinatorsOutOfToolSchemas(t *testing.T) {
 	tool.Function.Description = "Time-bounded retrieval."
 	tool.Function.Parameters = schema
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	_, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}},
 		ChatOptions{Tools: []ToolDefinition{tool}})
 	if err != nil {
@@ -625,7 +625,7 @@ func TestAnthropicDoesNotMutateTheCallersSchema(t *testing.T) {
 	tool.Function.Name = "t"
 	tool.Function.Parameters = schema
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}},
 		ChatOptions{Tools: []ToolDefinition{tool}}); err != nil {
 		t.Fatal(err)

@@ -38,6 +38,10 @@ func TestCredentialBackedProviderValidates(t *testing.T) {
 		Credential: "file:" + tok, DefaultModel: "m-1", Models: []string{"m-1"}, Default: true,
 		CredentialOptions: map[string]string{
 			"header_X-Client-Name": "claude-code", "billing_text": "billing-marker",
+			// A credential of the file's own carries the API version it
+			// sends: no value is compiled in.
+			"header_anthropic-version": configuredHeaders("anthropic")["anthropic-version"],
+			"header_User-Agent":        "fixture-agent/1",
 		},
 	}
 	writeTestProviders(t, dir, entry)

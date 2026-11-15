@@ -9,6 +9,7 @@ export function route(hash) {
     try { rest = decodeURIComponent(rest); } catch (err) { }
   }
   if (REDIRECTS[head]) return { redirect: REDIRECTS[head] + (m[2] ? '/' + m[2] : '') };
+  if (REDIRECTS[hash.slice(2)]) return { redirect: REDIRECTS[hash.slice(2)] };
   const tabs = TABS[head];
   if (tabs) {
     const [first, ...more] = (rest || '').split('/');

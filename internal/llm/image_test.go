@@ -96,7 +96,7 @@ func TestAnImageRidesAUserMessageInEachDialect(t *testing.T) {
 			}))
 			defer srv.Close()
 			cfg := tc.cfg
-			cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Retries = srv.URL, "key", "model", -1
+			cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Retries, cfg.Headers = srv.URL, "key", "model", -1, anthropicHeaders()
 			_, _ = New(&cfg).Chat(context.Background(), messages, ChatOptions{})
 			var body any
 			if err := json.Unmarshal(raw, &body); err != nil {
@@ -182,7 +182,7 @@ func TestEachKindRidesAUserMessageInTheDialectsThatWriteIt(t *testing.T) {
 			w.WriteHeader(http.StatusTeapot)
 		}))
 		defer srv.Close()
-		cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Retries = srv.URL, "key", "model", -1
+		cfg.Endpoint, cfg.APIKey, cfg.Model, cfg.Retries, cfg.Headers = srv.URL, "key", "model", -1, anthropicHeaders()
 		_, err := New(&cfg).Chat(context.Background(), []Message{{Role: "user", Content: "what is this?", Images: files}}, ChatOptions{})
 		var body map[string]any
 		if asked > 0 {

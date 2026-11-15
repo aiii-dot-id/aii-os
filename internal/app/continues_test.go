@@ -223,8 +223,7 @@ func legsQueued(app *App) int {
 	return app.turn.legsQueued
 }
 
-// EVERY ENDING OF AN ACTIVE SESSION IS ONE DECISION (a review, 2026-11-06,
-// finding 1): a cap with no promise continues under the record's brakes
+// EVERY ENDING OF AN ACTIVE SESSION IS ONE DECISION: a cap with no promise continues under the record's brakes
 // as an ending by itself does, its leg told what keeps the work going and
 // its words passing the floor; the identity's own wait stands at a cap.
 func TestACapIsContinuedByTheRecordsBrakes(t *testing.T) {
@@ -293,8 +292,7 @@ func TestTheHoldBrakesACap(t *testing.T) {
 	}
 }
 
-// A STAGE THE HOST CANNOT READ STOPS THE FRESH TURN WITHOUT A HOLD (a review,
-// 2026-11-06, finding 2): the work is left under its own `now`, no leg is
+// A STAGE THE HOST CANNOT READ STOPS THE FRESH TURN WITHOUT A HOLD: the work is left under its own `now`, no leg is
 // queued, the operator is not told of a hold they did not press, and the
 // next tick reads again.
 func TestAStageReadErrorStopsSchedulingWithoutAHold(t *testing.T) {
@@ -368,8 +366,7 @@ func TestAStageReadErrorStopsSchedulingWithoutAHold(t *testing.T) {
 	}
 }
 
-// THE REFLECTION CADENCE IS THE RESUMED SESSION'S (a review, 2026-11-06,
-// finding 5): a turn carrying an older session on reads that session's
+// THE REFLECTION CADENCE IS THE RESUMED SESSION'S: a turn carrying an older session on reads that session's
 // reflect_every, not the newest active session's.
 func TestTheReflectionCadenceIsTheResumedSessions(t *testing.T) {
 	app, _ := dispatchApp(t)
@@ -468,7 +465,7 @@ func TestAnUnpromisedLegsWordsReachTheOperatorOnlyWhenSomethingMoved(t *testing.
 	}
 }
 
-// THE CARD LINE SAYS WHAT THE HOST WILL DO (a review, 2026-11-06): the
+// THE CARD LINE SAYS WHAT THE HOST WILL DO: the
 // switch, an arrival's turn, an unreadable stage and the hold each stop
 // the fresh turn, and the line under the card says which.
 func TestTheCardLineSaysWhatTheHostWillDo(t *testing.T) {
@@ -541,8 +538,7 @@ func TestTheOperatorsOwnTurnIsNotHeldToTheFreshTurnsProgress(t *testing.T) {
 	}
 }
 
-// AN UNCHANGED REWRITE DOES NOT HIDE A FAILURE PATTERN (a review,
-// 2026-11-06): real progress, then the same call failing four times, then
+// AN UNCHANGED REWRITE DOES NOT HIDE A FAILURE PATTERN: real progress, then the same call failing four times, then
 // the same state written again: the ending is held as stuck, not continued
 // on the strength of the earlier progress.
 func TestAnUnchangedRewriteDoesNotHideStuckWork(t *testing.T) {

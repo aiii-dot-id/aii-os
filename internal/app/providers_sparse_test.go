@@ -194,8 +194,32 @@ func correctedVendorFact(t *testing.T) (path []string, old json.RawMessage) {
 	if err := json.Unmarshal(shippedValuesFile, &h); err != nil {
 		t.Fatal(err)
 	}
+	// What any earlier release shipped at each line: a fact an earlier
+	// release's file can hold is one whose every other line today is also
+	// one some earlier release shipped. A block this release rewrote (the
+	// Claude profile, 2.1.322's values, 2026-11-11) cannot sit in an older
+	// file beside one old line, so it is no test of the strip.
+	ever := map[string]map[string]bool{}
+	for _, p := range h.Providers {
+		ever[pathKey(p.Path)] = map[string]bool{}
+		for _, v := range p.Values {
+			ever[pathKey(p.Path)][string(canonicalJSON(v))] = true
+		}
+	}
+	olderFileCanHold := func(path []string) bool {
+		prefix := pathKey(path[:3])
+		for k, v := range today {
+			if k != pathKey(path) && (k == prefix || strings.HasPrefix(k, prefix+"\x00")) && !ever[k][v] {
+				return false
+			}
+		}
+		return true
+	}
 	for _, p := range h.Providers {
 		if len(p.Path) < 3 || p.Path[0] != "providers" || isChoiceField(p.Path[2]) || p.Path[2] == "api_key_env" {
+			continue
+		}
+		if !olderFileCanHold(p.Path) {
 			continue
 		}
 		if p.Path[1] == "zAI" || p.Path[1] == "ElevenLabs" || entryNamed(embeddedRegistry(), p.Path[1]) == nil {

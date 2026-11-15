@@ -76,7 +76,12 @@ func installed(engine string) []string {
 	return nil
 }
 
+const Elsewhere = "elsewhere"
+
 func Find(engine string) (path string, looked []string) {
+	if os.Getenv("AII_TEST_BROWSERS") == Elsewhere {
+		panic("browsertest: " + engine + " was looked for in a scope where no browser runs (AII_TEST_BROWSERS=" + Elsewhere + "): test/browserscope did not count this test as one that drives a browser, so the runner did not move it to the browser scope")
+	}
 	if engine == WebKit {
 		return findWebKit()
 	}

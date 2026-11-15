@@ -346,8 +346,13 @@ func (a *App) discoverPlugins() pluginfacility.Discovery {
 			out.Ambiguous = append(out.Ambiguous, pdir)
 			continue
 		}
+
 		st, err := os.Stat(pkgs[0])
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
+			out.Found = append(out.Found, pluginfacility.Found{Dir: pdir, Package: pkgs[0], Err: err})
 			continue
 		}
 		out.Found = append(out.Found, pluginfacility.Found{Dir: pdir, Package: pkgs[0], Size: st.Size(), MTime: st.ModTime().UnixNano()})

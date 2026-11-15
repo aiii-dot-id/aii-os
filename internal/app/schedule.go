@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"strings"
@@ -21,6 +22,15 @@ func (a *App) scheduleFirstDelay() time.Duration {
 		return a.scheduleFirst
 	}
 	return defaultScheduleFirst
+}
+
+const scheduleContinueGap = 5 * time.Second
+
+func (a *App) scheduleContinue() time.Duration {
+	if a.scheduleGap > 0 {
+		return a.scheduleGap
+	}
+	return scheduleContinueGap
 }
 
 func (a *App) scheduleWait(d pluginhost.ScheduleDecl) time.Duration {
@@ -84,40 +94,139 @@ func (a *App) runSchedule(ctx context.Context, pluginID string, d pluginhost.Sch
 	}()
 	logsink.Info("schedule.start", "%s: %s every %ds", pluginID, d.Operation, d.EverySeconds)
 	defer logsink.Info("schedule.end", "%s: %s stopped", pluginID, d.Operation)
-	timer := time.NewTimer(a.scheduleFirstDelay())
+
+	first := a.scheduleFirstDelay()
+	hold := a.scheduleHoldFor(pluginID, d.Operation)
+	blocked := hold.load(ctx, time.Now())
+
+	floor := time.Now().Add(first)
+	due := func() time.Time {
+		if want, _ := hold.state(); want.After(floor) {
+			return want
+		}
+		return floor
+	}
+	timer := time.NewTimer(nextWake(hold, due(), time.Now()))
 	defer timer.Stop()
+
+	var last uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
 		}
-		a.scheduledCall(ctx, pluginID, d)
-		timer.Reset(a.scheduleWait(d))
+		now := time.Now()
+		if blocked != nil {
+			if blocked = hold.load(ctx, now); blocked != nil {
+				if ctx.Err() == nil {
+					cause := fmt.Errorf("not called: %w; read again in %s", blocked, first)
+					logsink.Warn("schedule.refusal", "%s: %s %v", pluginID, d.Operation, cause)
+					a.reportScheduleFailure(pluginID, d.Operation, cause)
+				}
+				floor = now.Add(first)
+				timer.Reset(first)
+				continue
+			}
+		}
+		hold.persist(ctx, now)
+		if at := due(); now.Before(at) {
+
+			timer.Reset(nextWake(hold, at, now))
+			continue
+		}
+		interval := a.scheduleWait(d)
+		out, answered := a.scheduledCall(ctx, pluginID, d)
+		now = time.Now()
+		w, err := nextWait(out, answered, last, now, interval, a.scheduleContinue())
+		if err != nil {
+			logsink.Warn("schedule.error", "%s: %s answered a retry time the host cannot read (%v); the next call waits the interval", pluginID, d.Operation, err)
+		}
+		if w.clamped {
+			logsink.Warn("schedule.decision", "%s: %s asked not to be called before %s; the cap is %s from its answer, so it is called after %s", pluginID, d.Operation, out.RetryNotBefore, scheduleRetryCap, w.retryAt.UTC().Format(time.RFC3339))
+		}
+		hold.set(ctx, w.retryAt, now)
+		last = 0
+		if w.continues {
+			last = out.Progress
+		}
+		floor = now.Add(w.wait)
+		timer.Reset(nextWake(hold, due(), now))
 	}
+}
+
+func nextWake(h *scheduleHold, callAt, now time.Time) time.Duration {
+	d := callAt.Sub(now)
+	if d < 0 {
+		d = 0
+	}
+	if _, stored := h.state(); !stored && d > h.a.holdRetry() {
+		d = h.a.holdRetry()
+	}
+	return d
+}
+
+func nextWait(out continuation, answered bool, last uint64, now time.Time, interval, gap time.Duration) (w waitChoice, err error) {
+	w.wait = interval
+	if !answered {
+		return w, nil
+	}
+	w.continues = out.MoreWork && out.Progress > last
+	if w.continues {
+		w.wait = gap
+	}
+	if out.RetryNotBefore != "" {
+		at, perr := time.Parse(time.RFC3339, out.RetryNotBefore)
+		if perr != nil {
+			return waitChoice{wait: interval}, perr
+		}
+		if limit := now.Add(scheduleRetryCap); at.After(limit) {
+			at, w.clamped = limit, true
+		}
+		if at.After(now) {
+			w.retryAt = at
+			if d := at.Sub(now); d > w.wait {
+				w.wait = d
+			}
+		}
+	}
+	return w, nil
+}
+
+type waitChoice struct {
+	wait      time.Duration
+	continues bool
+	retryAt   time.Time
+	clamped   bool
 }
 
 const scheduleUndescribedLog = "%s: %s not called: the plugin is a channel adapter whose channel is not described yet; the next interval asks again"
 
-func (a *App) scheduledCall(ctx context.Context, pluginID string, d pluginhost.ScheduleDecl) {
+type continuation struct {
+	MoreWork       bool   `json:"more_work"`
+	Progress       uint64 `json:"progress"`
+	RetryNotBefore string `json:"retry_not_before"`
+}
+
+func (a *App) scheduledCall(ctx context.Context, pluginID string, d pluginhost.ScheduleDecl) (continuation, bool) {
 	ctx, cancel := context.WithTimeout(ctx, scheduleTimeout)
 	defer cancel()
 	route, routed := a.webhookRoute(ctx, pluginID)
 	if !routed {
 
 		logsink.Warn("schedule.refusal", scheduleUndescribedLog, pluginID, d.Operation)
-		return
+		return continuation{}, false
 	}
 	args := map[string]any{}
 	if route.Acknowledges {
 		args["recorded"] = a.heldFor(pluginID)
 	}
-	res, err := a.toolReg.Execute(ctx, pluginhost.ToolNameFor(pluginID, d.Operation), args)
+	res, err := a.toolReg.Execute(pluginhost.Scheduled(ctx), pluginhost.ToolNameFor(pluginID, d.Operation), args)
 	if ctx.Err() != nil && err == nil && res.Error == "" {
-		return
+		return continuation{}, false
 	}
 	if err == nil && (res.ReasonCode == tools.ReasonSafeSuspended || res.ReasonCode == tools.ReasonOperatorDisabled) {
-		return
+		return continuation{}, false
 	}
 	if err == nil && res.Error != "" {
 		err = fmt.Errorf("%s", res.Error)
@@ -128,7 +237,16 @@ func (a *App) scheduledCall(ctx context.Context, pluginID string, d pluginhost.S
 	if err != nil {
 		logsink.Warn("schedule.error", "%s: %s failed: %v", pluginID, d.Operation, err)
 		a.reportScheduleFailure(pluginID, d.Operation, err)
+		return continuation{}, false
 	}
+	var c continuation
+	if strings.TrimSpace(res.Output) != "" {
+		if err := json.Unmarshal([]byte(res.Output), &c); err != nil {
+			logsink.Warn("schedule.error", "%s: %s answered more work in a shape the host cannot read (%v); the next call waits the interval", pluginID, d.Operation, err)
+			return continuation{}, true
+		}
+	}
+	return c, true
 }
 
 func (a *App) reportScheduleFailure(pluginID, operation string, cause error) {

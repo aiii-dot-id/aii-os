@@ -43,7 +43,7 @@ const (
 	indexStoreLeft      = "Left where they were: %s.\n"
 
 	indexStopped = "\nThe copy stopped looking after %d names, its limit; what it had not looked at was not copied.\n"
-	indexLeft    = "\nWhat was left stays in its own folder, and nothing else of those folders was copied. Which folders your tools may read is your operator's to set, under Settings → Sandbox.\n"
+	indexLeft    = "\nWhat was left stays in its own folder, and nothing else of those folders was copied. Which folders your tools may read is your operator's to set, under Settings → Plugins and permissions.\n"
 
 	atBirth = "at your birth (%s)"
 	asked   = "on %s, when your operator asked for it"

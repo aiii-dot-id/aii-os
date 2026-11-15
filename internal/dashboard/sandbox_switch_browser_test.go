@@ -5,10 +5,10 @@ package dashboard
 import "testing"
 
 func TestTheSandboxSwitchWarnsBeforeItAsksAndShowsOnlyWhatTheHostConfirmed(t *testing.T) {
-	page := substratePageMarkup + `<script type="module">
+	page := permissionsPageMarkup + `<script type="module">
 import { S } from './state.js';
 import { connect } from './ws.js';
-import { renderSettings } from './views/settings.js';
+import { renderPlugins } from './views/plugins.js';
 import { assert, run } from './__harness.js';
 ` + offerSettingsJS + `run(() => {
  const sockets=[];
@@ -18,15 +18,15 @@ import { assert, run } from './__harness.js';
    send(bytes){this.frames.push(JSON.parse(bytes));}
    recv(frame){this.onmessage({data:JSON.stringify(frame)});}
  };
- S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};S.stats={name:'Taylor'};
+ S.view='plugins';S.identityExists=true;S.providersLoaded=true;S.config=` + permissionsPageConfigJS + `;S.tools=[];S.stats={name:'Taylor'};
  connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
  const el=id=>document.getElementById(id), one=sel=>document.querySelector(sel);
- const words=()=>el('settings-stack').textContent;
+ const words=()=>el('plugins-stack').textContent;
  const asked=()=>socket.frames.filter(f=>f.type==='sandbox_switch');
  const box=()=>el('sbx-off');
  const tick=()=>{ assert(!box().disabled,'the box was clicked while disabled'); box().checked=!box().checked; box().dispatchEvent(new Event('change',{bubbles:true})); };
  const host=(off,id)=>socket.recv({type:'sandbox',request_id:id,sandbox:{root:'/home',extra_roots:['/project'],off}});
- renderSettings();S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
+ renderPlugins();
  host(false);
  assert(box() && !box().checked && !box().disabled && !one('[data-sandbox-warning]') && !one('[data-sandbox-off]'),'a sandbox that is on shows an unticked box and no warning');
  const reach=()=>one('[data-folders]').getAttribute('aria-describedby');
@@ -117,17 +117,34 @@ import { assert, run } from './__harness.js';
  assert(socket.frames.length===before && words().includes('Not connected. The sandbox was not changed.') && !box().checked,'Allow while not connected must send nothing and say so');
 });
 </script>`
+	runPageInEngines(t, page, permissionsPageModules(t))
+}
+
+// permissionsPageMarkup is the page the choosers wire, with Plugins and
+// permissions' own stack: the folders and the tools are drawn there.
+const permissionsPageMarkup = substratePageMarkup + `<div id="plugins-stack"></div>
+`
+
+// permissionsPageConfigJS is a configuration Plugins and permissions draws
+// with no plugin installed.
+const permissionsPageConfigJS = `{llm:{},dashboard:{},prompt:{},witness:{},logs:{},agency:{},restart_required:[],plugins:{autoload:'T1',catalog:[],catalog_url:'',auth_profiles:[],providers:[],installed:[]}}`
+
+// permissionsPageModules serves the real ws.js, Settings, Plugins and
+// permissions and util.js over the socket's stubs: a card on the page is
+// driven over the page's own socket.
+func permissionsPageModules(t *testing.T) map[string][]byte {
+	t.Helper()
 	ws, err := staticFS.ReadFile("static/ws.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
-	for _, file := range []string{"views/settings.js", "util.js"} {
+	for _, file := range []string{"views/settings.js", "views/plugins.js", "util.js"} {
 		data, err := staticFS.ReadFile("static/" + file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		modules["/"+file] = data
 	}
-	runPageInEngines(t, page, modules)
+	return modules
 }

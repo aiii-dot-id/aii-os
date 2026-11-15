@@ -21,7 +21,7 @@ import (
 )
 
 func (a *App) modelModalitiesFor(ctx context.Context, entry providerEntry, model, baseURL string) modelModalities {
-	return a.fetchModelModalities(ctx, modelModalitiesURL(entry, model, baseURL), modalityGuard, (*providerRegistry)(nil).capabilityLookup())
+	return a.fetchModelModalities(ctx, modelModalitiesURL(entry, model, baseURL), catalogueHeaders(entry), modalityGuard, (*providerRegistry)(nil).capabilityLookup())
 }
 
 // Wait for an asynchronous cache publication, not for another network request.
@@ -154,7 +154,7 @@ func TestTheProbeKeepsTheModalitiesItLookedUp(t *testing.T) {
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "claude-opus-5", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "claude-opus-5", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	entry := providerEntry{Name: "p", CatalogueAuthor: "anthropic", CapabilityCatalogue: &baseURL}
 	if err := probeAndRun(a, cc, entry, &providerRegistry{}, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
@@ -178,7 +178,7 @@ func TestALookupFailureDoesNotRefuseASubstrate(t *testing.T) {
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	entry := providerEntry{Name: "p", CatalogueAuthor: "anthropic", CapabilityCatalogue: &baseURL}
 	if err := probeAndRun(a, cc, entry, &providerRegistry{}, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("a third party decided a substrate: %v", err)
@@ -345,7 +345,7 @@ func TestModelCatalogueConfigurationReachesTheProbeAndSurvivesEdits(t *testing.T
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "claude-opus-5", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "claude-opus-5", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	path := filepath.Join(t.TempDir(), "providers.json")
 	for _, tc := range []struct{ base, kind string }{
 		{firstURL + "/", "image"}, {secondURL, "audio"}, {"", ""},
@@ -459,7 +459,7 @@ func TestOptionalCatalogueDoesNotDelayProviderAcceptance(t *testing.T) {
 			srv := substrateProbeServer(t, 200, `{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 			a := probeApp(t)
 			a.bgCtx = t.Context()
-			cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "m", Provider: "anthropic"}
+			cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 			entry := providerEntry{Name: "first", CatalogueAuthor: "author", CapabilityCatalogue: &baseURL}
 			done := make(chan error, 1)
 			go func() {
@@ -527,7 +527,7 @@ func TestOptionalCatalogueStopsOnShutdownOrProbeFailure(t *testing.T) {
 			t.Cleanup(srv.Close)
 			a := probeApp(t)
 			a.bgCtx = ctx
-			cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "m", Provider: "anthropic", Retries: -1}
+			cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "fixture", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic"), Retries: -1}
 			err := probeAndRun(a, cc, providerEntry{Name: "p", CatalogueAuthor: "author", CapabilityCatalogue: &baseURL}, &providerRegistry{}, 5)
 			if (err != nil) != fail {
 				t.Fatalf("probe refusal=%v: %v", fail, err)
@@ -1098,12 +1098,12 @@ func TestTheCapabilityLookupsBoundsAreSettings(t *testing.T) {
 	big := `{"data":{"architecture":{"input_modalities":["text","image"]},"x":"` + strings.Repeat("y", 5000) + `"}}`
 	baseURL, asked := modalityServing(t, 200, big)
 	a, entry := new(App), providerEntry{CatalogueAuthor: "anthropic"}
-	if got := a.fetchModelModalities(t.Context(), modelModalitiesURL(entry, "m", baseURL), modalityGuard, lk); got.known() {
+	if got := a.fetchModelModalities(t.Context(), modelModalitiesURL(entry, "m", baseURL), nil, modalityGuard, lk); got.known() {
 		t.Fatal("an answer past the file's catalogue_max_bytes was read")
 	}
 	small, _ := modalityServing(t, 200, opusEndpoints)
 	url := modelModalitiesURL(entry, "m", small)
-	a.fetchModelModalities(t.Context(), url, modalityGuard, lk)
+	a.fetchModelModalities(t.Context(), url, nil, modalityGuard, lk)
 	a.modalities.age(2 * time.Hour)
 	if _, kept := a.modalities.get(url); kept {
 		t.Fatal("an answer was reused past the file's keep_hours")

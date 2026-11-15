@@ -214,13 +214,21 @@ type AuthProfile struct {
 
 const SchemeOAuth2 = "oauth2"
 
+const CustomContract = "custom"
+
 func (p AuthProfile) Contract(catalog ...map[string]oauth.Provider) (oauth.OAuthParams, oauth.Provider, error) {
 	var providers map[string]oauth.Provider
 	if len(catalog) > 0 {
 		providers = catalog[0]
 	}
 	var tpl oauth.Provider
-	if p.Provider != "" && p.Provider != "custom" {
+	custom := p.Provider == "" || p.Provider == CustomContract
+	if custom {
+		if d, ok := oauth.ProviderTemplate(CustomContract, providers); ok {
+			tpl.TokenHeaders = d.TokenHeaders
+		}
+	}
+	if !custom {
 		t, ok := oauth.ProviderTemplate(p.Provider, providers)
 		if !ok {
 			return oauth.OAuthParams{}, oauth.Provider{}, fmt.Errorf("auth profile names provider %q, which this host has no template for (%s, or custom with the endpoints inline)", p.Provider, strings.Join(oauth.ProviderNames(providers), ", "))
@@ -252,6 +260,19 @@ func (p AuthProfile) Contract(catalog ...map[string]oauth.Provider) (oauth.OAuth
 	}
 	if params.TokenURL == "" || params.ClientID == "" || p.TokenFile == "" || len(tpl.Hosts) == 0 {
 		return oauth.OAuthParams{}, oauth.Provider{}, errors.New("an oauth2 auth profile needs a provider (or custom endpoints), a client_id, a token_file and at least one host")
+	}
+	ua := ""
+	for k, v := range params.TokenHeaders {
+		if strings.EqualFold(k, "User-Agent") {
+			ua = v
+		}
+	}
+	if ua == "" {
+		key := fmt.Sprintf(`oauth[%q].token_headers["User-Agent"]`, p.Provider)
+		if custom {
+			key = fmt.Sprintf(`oauth[%q].token_headers["User-Agent"]`, CustomContract)
+		}
+		return oauth.OAuthParams{}, oauth.Provider{}, &oauth.HeaderNotConfiguredError{Header: "User-Agent", Key: key}
 	}
 	return params, tpl, nil
 }

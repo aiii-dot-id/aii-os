@@ -14,10 +14,16 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 )
 
-const (
-	anthropicVersionHeader  = "anthropic-version"
-	DefaultAnthropicVersion = "2023-06-01"
-)
+const anthropicVersionHeader = "anthropic-version"
+
+type HeaderNotConfiguredError struct {
+	Header string
+	Key    string
+}
+
+func (e *HeaderNotConfiguredError) Error() string {
+	return fmt.Sprintf("the %s request header is not configured: set %s in providers.json (no value is compiled in)", e.Header, e.Key)
+}
 
 type anthContent struct {
 	Raw          json.RawMessage `json:"-"`
@@ -349,21 +355,26 @@ func (c *Client) chatAnthropic(ctx context.Context, messages []Message, opts Cha
 		} else {
 			httpReq.Header.Set("x-api-key", cred.Token)
 		}
-		if policy.Diagnostics {
-			httpReq.Header.Set("anthropic-beta", addBeta(httpReq.Header.Get("anthropic-beta"), "cache-diagnosis-2026-04-07"))
-		}
-
-		if httpReq.Header.Get(anthropicVersionHeader) == "" {
-			httpReq.Header.Set(anthropicVersionHeader, DefaultAnthropicVersion)
-		}
-
 		if c.creds != nil && c.claudeCode != nil {
 			for key, value := range c.claudeHeaders(promptID, uuid.New().String(), attempt) {
 				httpReq.Header.Set(key, value)
 			}
 			attempt++
 		}
+		if policy.Diagnostics {
+			if policy.DiagnosticsBeta == "" {
+				return &HeaderNotConfiguredError{Header: "anthropic-beta (cache diagnostics)", Key: "the provider entry's cache.diagnostics_beta"}
+			}
+			httpReq.Header.Set("anthropic-beta", addBeta(httpReq.Header.Get("anthropic-beta"), policy.DiagnosticsBeta))
+		}
 
+		if httpReq.Header.Get(anthropicVersionHeader) == "" {
+			key := `the provider entry's headers["anthropic-version"]`
+			if c.creds != nil {
+				key = `claude_code.headers["anthropic-version"] (or credential_options "header_anthropic-version")`
+			}
+			return &HeaderNotConfiguredError{Header: anthropicVersionHeader, Key: key}
+		}
 		return nil
 	})
 	if err != nil {

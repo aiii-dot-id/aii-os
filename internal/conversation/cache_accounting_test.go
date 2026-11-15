@@ -54,7 +54,7 @@ func TestCacheRetryDoesNotClaimCompleteUsage(t *testing.T) {
 				}
 			}))
 			t.Cleanup(server.Close)
-			c := llm.New(&llm.ClientConfig{Endpoint: server.URL, Provider: provider, Model: "fixture", Retries: 1, RetryBackoffMS: 1, TimeoutSeconds: 2})
+			c := llm.New(&llm.ClientConfig{Endpoint: server.URL, Provider: provider, Headers: configuredHeaders(provider), Model: "fixture", Retries: 1, RetryBackoffMS: 1, TimeoutSeconds: 2})
 			loop := New(c, &fakeTools{}, &fakeDefs{}, nil, nil, testBounds(Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 100000}))
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()

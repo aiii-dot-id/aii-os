@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -432,6 +433,125 @@ func TestAboutRunsAsABuiltInSection(t *testing.T) {
 			}, "/", strings.ReplaceAll(aboutSectionDriverJS, "__TOKEN__", run.token))
 		})
 	}
+}
+
+// BETWEEN YOU NAMES NO ONE BEFORE A STATUS HAS COME (0.2.2, route b 4c). Before
+// any status, whether they have a name is not known: neither the first visit's
+// named sentence nor its unnamed one is said, and the others they work with have
+// no heading. A status whose name is empty is said as having none; then a name
+// names them. Unknown is not "no name".
+func TestBetweenYouNamesNoOneBeforeAStatusHasCome(t *testing.T) {
+	tree, err := builtInAboutTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, modules := sectionAtTopLevel(t, tree, `
+import W from '/strings/identity.js';
+let release, visit = new Promise(ok => { release = ok; });
+host.answers['visit'] = () => visit;
+await import('/main.js');
+const { lastVisit } = await import('/views/home/note.js');
+const first = () => (document.querySelector('#between-stack .between__none') || {}).textContent || '';
+const others = () => document.querySelector('#between-stack .between__others');
+const named = W.betweenFirstVisit.replace('{name}', 'Mira');
+run(async assert => {
+  host.tell('continuity', { mode: 'normal', ledger_seq: 9 });
+  host.tell('identity', { beliefs: [], intentions: [], experiences: [], retired: [], relationships: [{ id: 'r1', name: 'Robin', role: 'peer', record: 3 }] });
+  host.tell('route', { view: 'between', hash: '#/identity/between', base: 'https://page.example/' });
+  release({ at: 0, seq: 0, known: true });
+  await until(() => lastVisit().known);
+  assert(lastVisit().known, 'rig: the visit was not answered');
+  assert(first() === '', 'before any status it said a first visit\'s sentence: ' + first());
+  assert(!others(), 'before any status the others they work with were given a heading');
+  host.tell('status', { name: '' });
+  await until(() => first() === W.betweenFirstVisitUnnamed);
+  assert(first() === W.betweenFirstVisitUnnamed, 'a status with no name does not say they have none: ' + first());
+  assert(others(), 'after a status the others they work with are not shown');
+  host.tell('status', { name: 'Mira' });
+  await until(() => first() === named);
+  assert(first() === named, 'a status with their name does not name them: ' + first());
+});
+`)
+	runPageInEngines(t, page, modules)
+}
+
+// A PAGE HANDS ABOUT THE STATUS IT ALREADY HOLDS (0.2.2, route b 4a). The host
+// sends a status as the page connects, before the page knows its sections; a page
+// that kept only what a listed section reads let it go, and About, opened after,
+// was named only by its own second read of status, drawing "between you" without
+// their name until that answer came (the reload test's lost name, cut 2's
+// qualify, 2026-11-12). Here the host answers that first status alone and every
+// later read of it fails, as the host does when stats cannot be read (it sends
+// nothing): a name in About can only be the one the page held. It must come, and
+// the unnamed sentence must never be said on the way.
+const heldNameDriverJS = `
+const report = text => fetch('/__result', { method: 'POST', body: text, keepalive: true });
+const until = async (ok, ms) => { for (let i = 0; i * 50 < (ms || 10000) && !ok(); i++) await new Promise(r => setTimeout(r, 50)); return ok(); };
+const heard = [];
+window.addEventListener('message', e => { if (e.data && e.data.type === 'section-holds') heard.push(e.data.text); });
+const said = words => heard.some(t => t.includes(words));
+(async () => {
+  const W = (await import('/strings/identity.js')).default;
+  const named = W.betweenFirstVisit.replace('{name}', 'Mira'), unnamed = W.betweenFirstVisitUnnamed;
+  await until(() => document.getElementById('send-btn') && (document.getElementById('p-state') || {}).textContent);
+  location.hash = '#/identity/between';
+  await until(() => said(named), 10000);
+  if (!said(named)) return report('FAIL: About was not named from the status the page held; it last said: ' + (heard[heard.length - 1] || 'nothing'));
+  if (said(unnamed)) return report('FAIL: About said "' + unnamed + '" before it was named');
+  report('OK');
+})();
+`
+
+func TestAPageHandsAboutTheStatusItAlreadyHolds(t *testing.T) {
+	runDashboardInEachEngine(t, func(t *testing.T) *Server {
+		tree, err := builtInAboutTree()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := sections.NewRegistry()
+		built := builtInSection(t, "about")
+		built.FS = reportingTree{tree}
+		if err := reg.Register(built); err != nil {
+			t.Fatal(err)
+		}
+		h := aboutHandler()
+		var reads atomic.Int32
+		h.GetStats = func() (*StatsResponse, error) {
+			if reads.Add(1) == 1 { // the status sent as the page connects
+				return &StatsResponse{Name: "Mira", LifetimeTicks: 24}, nil
+			}
+			return nil, errors.New("the test answers only the status sent as the page connects")
+		}
+		s := New("127.0.0.1", 0, h)
+		s.SetSections(reg)
+		return s
+	}, "/", heldNameDriverJS)
+}
+
+// EXPERIENCES DRAWS WHEN THEIR IDENTITY COMES AFTER THEIR NAME (0.2.2, route b
+// 4a). Drawn empty while no identity has come, the view must draw again when one
+// comes, though its list is empty and the name was already known: with the page
+// handing its kept status, the name now comes first, and the view's key once
+// missed the identity's coming (the reload test: "the section's frame says nothing").
+func TestExperiencesDrawsWhenTheirIdentityComesAfterTheirName(t *testing.T) {
+	tree, err := builtInAboutTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, modules := sectionAtTopLevel(t, tree, `
+import W from '/strings/identity.js';
+await import('/main.js');
+const says = () => (document.getElementById('experiences-stack') || {}).textContent || '';
+run(async assert => {
+  host.tell('status', { name: 'Mira' });
+  host.tell('route', { view: 'experiences', hash: '#/identity/experiences', base: 'https://page.example/' });
+  assert(says() === '', 'before their identity it drew: ' + says());
+  host.tell('identity', { beliefs: [], intentions: [], experiences: [], retired: [] });
+  await until(() => says().includes(W.experiencesNone));
+  assert(says().includes(W.experiencesNone), 'their identity came and Experiences drew nothing: ' + says());
+});
+`)
+	runPageInEngines(t, page, modules)
 }
 
 // THE FRAME GATES WHAT IT DOES FOR A SECTION, in the real page: page.go follows only

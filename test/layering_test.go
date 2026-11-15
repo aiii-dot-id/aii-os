@@ -110,6 +110,7 @@ var layers = map[string]int{
 	"test/promptsuite":        8,
 	"test/decls":              8, // the pure-move proof tool: it reads Go source and imports nothing of the module
 	"test/skipreport":         8, // reads what go test printed (skips, release-critical tests): the standard library only
+	"test/browserscope":       8, // reads which tests reach the browser finder (the race runner's browser scope): the standard library only
 }
 
 var upwardToday = map[[2]string]string{}

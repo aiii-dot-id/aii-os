@@ -33,8 +33,9 @@ run(async () => {
     between: ['q:identity', 'q:continuity', 'renderBetween', 'Between you'],
     experiences: ['q:identity', 'renderExperiences', 'Experiences'],
     status: ['q:status', 'q:continuity', 'q:config', 'q:providers', 'q:tools', 'q:work', 'q:asks', 'q:spend', 'Status'],
-    settings: ['q:config', 'q:tools', 'q:sandbox', 'section', 'renderSettings', 'Settings'],
-    plugins: ['q:config', 'renderPlugins', 'Plugins'],
+    // The folders and the tools are drawn on Plugins and permissions (A10).
+    settings: ['q:config', 'section', 'renderSettings', 'Settings'],
+    plugins: ['q:config', 'q:tools', 'q:sandbox', 'renderPlugins', 'Plugins'],
     record: ['renderRecord', 'Record'],
   };
   for (const v of Object.keys(want)) {

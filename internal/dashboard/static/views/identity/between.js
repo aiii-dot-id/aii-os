@@ -26,20 +26,20 @@ S.renderBetweenAgain = () => { shown = null; renderBetween(); };
 export function renderBetween() {
   const stack = $('between-stack');
   if (!stack || S.view !== 'between') return;
-  const named = (S.stats && S.stats.name) || '', name = named === 'Unnamed' ? '' : named;
+  const told = !!S.stats, named = (S.stats && S.stats.name) || '', name = named === 'Unnamed' ? '' : named;
   const { at, seq, known, before } = lastVisit(), head = Number(S.cont && S.cont.ledger_seq) || 0;
   const others = (S.identity && S.identity.relationships) || [];
-  const key = JSON.stringify([seq, known, before, head, name, others.map(r => r.id + ':' + r.record)]);
+  const key = JSON.stringify([seq, known, before, head, told, name, others.map(r => r.id + ':' + r.record)]);
   if (shown === key) return;
   shown = key;
   const changes = h('section', { class: 'between__changes', 'aria-labelledby': 'between-since' });
   const parts = [changes];
-  if (others.length) parts.push(h('section', { class: 'between__others', 'aria-labelledby': 'between-others' },
+  if (others.length && told) parts.push(h('section', { class: 'between__others', 'aria-labelledby': 'between-others' },
     h('h2', { id: 'between-others', class: 'between__h' }, name ? fill(W.others, { name }) : W.othersUnnamed)));
   stack.replaceChildren(...parts);
-  if (others.length) stack.querySelector('.between__others').insertAdjacentHTML('beforeend', others.map(relationshipHTML).join(''));
+  if (others.length && told) stack.querySelector('.between__others').insertAdjacentHTML('beforeend', others.map(relationshipHTML).join(''));
   if (!known) return;
-  if (!seq && !before) { changes.append(h('p', { class: 'between__none' }, name ? fill(W.betweenFirstVisit, { name }) : W.betweenFirstVisitUnnamed)); return; }
+  if (!seq && !before) { if (told) changes.append(h('p', { class: 'between__none' }, name ? fill(W.betweenFirstVisit, { name }) : W.betweenFirstVisitUnnamed)); return; }
   const days = Math.max(0, Math.floor((Date.now() - at) / DAY));
   changes.append(h('h2', { id: 'between-since', class: 'between__h' }, before ? W.sinceFirstMet : fill(W.sinceVisit, { days })));
   if (!before && head && head <= seq) { changes.append(h('p', { class: 'between__none' }, W.sinceNothing)); return; }

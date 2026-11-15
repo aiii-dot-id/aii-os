@@ -134,7 +134,7 @@ func substrateModules(t *testing.T) map[string][]byte {
 		}
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, identityExists: false, providersLoaded: false };`)
+	modules["/state.js"] = []byte(`export const S = { providers: [], tools: [], config: null, identityExists: false, providersLoaded: false };`)
 	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = value => String(value ?? ''); export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`
 let connected = true, seq = 0;

@@ -365,7 +365,8 @@ func (a oauthAdapter) Credential(ctx context.Context) (llm.Credential, error) {
 func (a oauthAdapter) Stale(ctx context.Context, gen uint64) error { return a.s.Stale(ctx, gen) }
 
 func (a *App) entryTransport(e providerEntry, apiKey string) (llm.ClientConfig, error) {
-	cc := llm.ClientConfig{Endpoint: e.URL, Provider: e.APIType, APIKey: apiKey, ToolRefusals: a.toolRefusals, Entry: e.Name, Sent: a.sentRequests}
+
+	cc := llm.ClientConfig{Endpoint: e.URL, Provider: e.APIType, APIKey: apiKey, ToolRefusals: a.toolRefusals, Entry: e.Name, Sent: a.sentRequests, Headers: entryHeaders(e)}
 	if e.Credential == "" {
 		return cc, nil
 	}
@@ -375,6 +376,9 @@ func (a *App) entryTransport(e providerEntry, apiKey string) (llm.ClientConfig, 
 	src, cerr := a.credentialSource(e.Credential, e.CredentialOptions, e.signIn)
 	if cerr != nil {
 		return llm.ClientConfig{}, fmt.Errorf("provider %q credential: %w", e.Name, cerr)
+	}
+	if err := oauthUserAgentRefusal(e); err != nil {
+		return llm.ClientConfig{}, err
 	}
 	if b := src.BaseURL(); b != "" {
 		cc.Endpoint = b
@@ -397,6 +401,7 @@ func (a *App) entryTransport(e providerEntry, apiKey string) (llm.ClientConfig, 
 	if profile != nil && profile.Enabled {
 		resolved := *profile
 		resolved.Version = e.CredentialOptions["client_version"]
+		resolved.Headers = operatorHeadersOver(resolved.Headers, e.Credential, e.CredentialOptions)
 		if err := resolved.Validate(); err != nil {
 			return llm.ClientConfig{}, fmt.Errorf("provider %q wire profile: %w", e.Name, err)
 		}
@@ -404,6 +409,109 @@ func (a *App) entryTransport(e providerEntry, apiKey string) (llm.ClientConfig, 
 	}
 
 	return cc, nil
+}
+
+func operatorHeadersOver(headers map[string]string, credential string, options map[string]string) map[string]string {
+	shipped := map[string]string{}
+	for _, e := range embeddedRegistry().Providers {
+		if e.Credential == credential && len(e.CredentialOptions) > 0 {
+			shipped = e.CredentialOptions
+			break
+		}
+	}
+	out := maps.Clone(headers)
+	if out == nil {
+		out = map[string]string{}
+	}
+	for k, v := range options {
+		name, ok := strings.CutPrefix(k, "header_")
+		if !ok || name == "" || v == shipped[k] {
+			continue
+		}
+		for have := range out {
+			if strings.EqualFold(have, name) {
+				delete(out, have)
+			}
+		}
+		out[name] = v
+	}
+	return out
+}
+
+func oauthUserAgentRefusal(e providerEntry) error {
+	if e.Credential == "" || e.OAuth == "" {
+		return nil
+	}
+	for k, v := range e.CredentialOptions {
+		if strings.EqualFold(k, "header_User-Agent") && v != "" {
+			return nil
+		}
+	}
+	return &llm.HeaderNotConfiguredError{Header: "User-Agent", Key: `credential_options "header_User-Agent"`}
+}
+
+type HeaderConfigError struct {
+	Entry  string
+	Header string
+	Keys   []string
+}
+
+func (e *HeaderConfigError) Error() string {
+	if len(e.Keys) == 1 {
+		return fmt.Sprintf("provider %q: %s in providers.json is empty; an empty header value is not sent and nothing stands in for it: set a value or remove the key", e.Entry, e.Keys[0])
+	}
+	return fmt.Sprintf("provider %q: the %s request header has two different values in this identity's providers.json, %s and %s, and neither outranks the other: make them equal or remove one", e.Entry, e.Header, e.Keys[0], e.Keys[1])
+}
+
+func entryHeaderRefusal(e providerEntry, lent *lentFacts) error {
+	lentOption := func(k string) bool {
+		_, ok := lent.optionsOrNil()[k]
+		return ok
+	}
+	ownProfile := e.ClaudeCode != nil && !lent.lentFact("claude_code")
+	type setting struct{ key, value string }
+	own := map[string]setting{}
+	var refused error
+	note := func(name, key, value string, isOwn bool) {
+		if refused != nil {
+			return
+		}
+		if value == "" {
+			refused = &HeaderConfigError{Entry: e.Name, Header: name, Keys: []string{key}}
+			return
+		}
+		if !isOwn {
+			return
+		}
+		l := strings.ToLower(name)
+		if prev, ok := own[l]; ok && prev.value != value {
+			refused = &HeaderConfigError{Entry: e.Name, Header: name, Keys: []string{prev.key, key}}
+			return
+		}
+		own[l] = setting{key, value}
+	}
+	for _, k := range slices.Sorted(maps.Keys(e.Headers)) {
+		note(k, fmt.Sprintf("headers[%q]", k), e.Headers[k], true)
+	}
+	for _, k := range slices.Sorted(maps.Keys(e.CredentialOptions)) {
+		if name, ok := strings.CutPrefix(k, "header_"); ok && name != "" {
+			note(name, fmt.Sprintf("credential_options[%q]", k), e.CredentialOptions[k], !lentOption(k))
+		}
+	}
+	if e.ClaudeCode != nil {
+		for _, k := range slices.Sorted(maps.Keys(e.ClaudeCode.Headers)) {
+			note(k, fmt.Sprintf("claude_code.headers[%q]", k), e.ClaudeCode.Headers[k], ownProfile)
+		}
+	}
+	if refused != nil {
+		return refused
+	}
+
+	own = map[string]setting{}
+	for _, k := range slices.Sorted(maps.Keys(e.CapabilityCatalogueHeaders)) {
+		note(k, fmt.Sprintf("capability_catalogue_headers[%q]", k), e.CapabilityCatalogueHeaders[k], true)
+	}
+	return refused
 }
 
 func (a *App) clientConfigForEntry(eff *effectiveCaps, e providerEntry, cfg LLMConfig, model, apiKey string) (llm.ClientConfig, error) {

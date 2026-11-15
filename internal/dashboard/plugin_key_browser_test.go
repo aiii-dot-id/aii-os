@@ -87,7 +87,7 @@ run(() => {
 });
 </script>`
 	modules := map[string][]byte{
-		"/state.js": []byte(`export const S = { stats: { name: 'TestIdentity' }, providers: [], config: null, providersLoaded: false };`),
+		"/state.js": []byte(`export const S = { stats: { name: 'TestIdentity' }, providers: [], tools: [], config: null, providersLoaded: false };`),
 		"/ws.js":    []byte(`export const frames = []; export function send(f) { f.request_id='req-'+(frames.length+1); frames.push(f); return f.request_id; } export function wsReady() { return true; } export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`),
 	}
 	for _, path := range []string{"static/views/plugins.js", "static/views/plugin-setting.js"} {

@@ -108,7 +108,7 @@ func TestCacheWrapUpDisclosesProviderStop(t *testing.T) {
 				}
 			}))
 			t.Cleanup(srv.Close)
-			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: tc.provider, Model: "fixture", Retries: -1, TimeoutSeconds: 2})
+			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: tc.provider, Headers: configuredHeaders(tc.provider), Model: "fixture", Retries: -1, TimeoutSeconds: 2})
 			loop := New(c, &fakeTools{results: map[string]string{"read": "ok"}}, &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "read"}}}}, nil, nil, testBounds(Config{MaxIterations: limits.Of(1), ContextBudgetTokens: 100000}))
 			result, err := loop.Run(t.Context(), "stable", []llm.Message{{Role: "user", Content: "go"}})
 			if err != nil {
@@ -155,7 +155,7 @@ func TestAReplyTheOutputLimitCutInsideItsOnlyCallEndsAsTheDeclaredCut(t *testing
 				}
 			}))
 			t.Cleanup(srv.Close)
-			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Provider: "anthropic", Model: "fixture", Retries: -1, TimeoutSeconds: 2})
+			c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Provider: "anthropic", Headers: configuredHeaders("anthropic"), Model: "fixture", Retries: -1, TimeoutSeconds: 2})
 			ft := &fakeTools{results: map[string]string{"write": "ok"}}
 			defs := &fakeDefs{defs: []llm.ToolDefinition{{Type: "function", Function: llm.ToolFunction{Name: "write"}}}}
 			loop := New(c, ft, defs, nil, nil, testBounds(Config{MaxIterations: limits.Of(4), ContextBudgetTokens: 100000}))

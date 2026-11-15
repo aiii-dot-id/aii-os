@@ -28,7 +28,7 @@ func TestLateRefreshCannotOverwriteLoginOrDisconnect(t *testing.T) {
 				fmt.Fprint(w, `{"access_token":"late","refresh_token":"late-refresh","expires_in":3600}`)
 			}))
 			defer server.Close()
-			src, err := NewProfileSource(path, OAuthParams{ClientID: "client", TokenURL: server.URL}, server.Client())
+			src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "client", TokenURL: server.URL}, server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestOwnedConfiguredIsGenericAndValidatesClaimHeaders(t *testing.T) {
 	if err := WriteTokenFile(path, tok); err != nil {
 		t.Fatal(err)
 	}
-	p := OAuthParams{ClientID: "client", TokenURL: "https://auth.example/token", ResourceHeaders: map[string]string{"X-Client": "configured"}, ClaimHeaders: map[string][]string{"X-Tenant": {"tenant"}}}
+	p := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "client", TokenURL: "https://auth.example/token", ResourceHeaders: map[string]string{"X-Client": "configured"}, ClaimHeaders: map[string][]string{"X-Tenant": {"tenant"}}}
 	src, err := NewOwnedConfigured("new-vendor", path, p)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestARefreshDoesNotStoreItsTokenAfterARefusedDisconnect(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"late","refresh_token":"late-refresh","expires_in":3600}`)
 	}))
 	defer server.Close()
-	src, err := NewProfileSource(path, OAuthParams{ClientID: "client", TokenURL: server.URL}, server.Client())
+	src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "client", TokenURL: server.URL}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -116,6 +116,7 @@ type Facility struct {
 	skips           []Skip
 	loggedAmbiguous map[string]bool
 	loggedUnlisted  string
+	loggedUnread    map[string]bool
 
 	poke chan struct{}
 

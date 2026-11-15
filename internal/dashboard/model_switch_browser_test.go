@@ -13,8 +13,8 @@ const sockets = window.__sockets, sent = window.__sent;
 const say = f => sockets[0].say(f);
 const problems = [];
 const check = (ok, what) => { if (!ok) problems.push(what); };
-const IN_FORCE = 'anthropic/claude-opus-5-5', OTHER = 'deepseek/deepseek-v4.1-lite-preview-long-identifier-2026-10-28', LOCAL = 'DeepSeek-V4.1-Lite-MLX-8bit';
-const stats = { name: 'Quill', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 };
+const IN_FORCE = 'anthropic/claude-opus-5-5', OTHER = 'deepseek/deepseek-v4.1-lite-preview-long-identifier-2026-10-28', LOCAL = 'DeepSeek-V4.1-Lumen-MLX-8bit';
+const stats = { name: 'Ivy', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 };
 const config = { llm: { provider: 'OpenRouter', model: IN_FORCE, resolved_provider: 'OpenRouter', resolved_model: IN_FORCE, timeout_seconds: 120 }, speech: {}, prompt: {}, witness: {}, logs: {}, agency: {}, plugins: {}, cognition: {}, dashboard: { host: '127.0.0.1', port: 1, tls: false }, restart_required: [] };
 const providers = [{ name: 'OpenRouter', default: true, status: 'ok', models: [IN_FORCE, OTHER], default_model: IN_FORCE }, { name: 'A local server', models: [LOCAL], default_model: LOCAL }, { name: 'Speech only', chat: false }, { name: 'A gone service', status: 'unreachable', models: ['gone-1'], default_model: 'gone-1' }];
 const choose = (el, value) => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); };
@@ -98,7 +98,7 @@ async function run() {
   const adopted = { ...config, llm: { ...config.llm, model: OTHER, resolved_model: OTHER, answered: true } };
   say({ type: 'config', request_id: asked.request_id, config: adopted });
   await until(() => said().includes('Active. ' + OTHER));
-  check(said().includes('the model Quill thinks with'), 'the answer is not the Model page\'s: ' + said());
+  check(said().includes('the model Ivy thinks with'), 'the answer is not the Model page\'s: ' + said());
   check(model.value === OTHER && use.disabled && !model.disabled, 'after the answer: ' + model.value + ' use disabled ' + use.disabled);
   location.hash = '#/settings/model';
   await until(() => shown($('cfg-model')));
@@ -143,7 +143,7 @@ const sockets = window.__sockets;
 async function run() {
   await until(() => sockets.length > 0);
   sockets[0].open();
-  sockets[0].say({ type: 'status', stats: { name: 'Quill', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 } });
+  sockets[0].say({ type: 'status', stats: { name: 'Ivy', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 } });
   location.hash = '#/identity/record';
   await until(() => S.view === 'record' && document.querySelector('[data-record-sent] a')?.getClientRects().length);
   const a = document.querySelector('[data-record-sent] a');
@@ -168,7 +168,7 @@ const say = f => sockets[0].say(f);
 const problems = [];
 const check = (ok, what) => { if (!ok) problems.push(what); };
 const beliefs = Array.from({ length: 40 }, (_, i) => ({ id: 'b' + i, statement: 'Belief ' + i + ', held for a reason a person may want to read.', ring: 3, status: 'confirmed', evidence_count: i % 3, confidence: 0.8 }));
-const stats = { name: 'Quill', version: 'test', build: 'test', ledger_seq: 40, lifetime_ticks: 1, belief_count: 40, intention_count: 0, experience_count: 0, reflection_count: 0 };
+const stats = { name: 'Ivy', version: 'test', build: 'test', ledger_seq: 40, lifetime_ticks: 1, belief_count: 40, intention_count: 0, experience_count: 0, reflection_count: 0 };
 const row = id => document.querySelector('#beliefs-view .c-belief[data-belief-id="' + id + '"]');
 const seen = el => { const r = el.getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0 && r.width > 0; };
 async function run() {
@@ -213,7 +213,7 @@ import { report, until } from '/__harness.js';
 import { S } from '/state.js';
 const sockets = window.__sockets;
 const say = f => sockets[0].say(f);
-const stats = extra => ({ name: 'Quill', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, ...extra });
+const stats = extra => ({ name: 'Ivy', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0, ...extra });
 const notices = () => [...document.querySelectorAll('#thread-inner .chat-notice, #chat-notices .chat-notice, #chat-notice')].map(e => e.textContent);
 async function run() {
   await until(() => sockets.length > 0);

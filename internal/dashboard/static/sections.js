@@ -40,7 +40,7 @@ export function publish(msg) {
 }
 
 function told(msg) {
-  if (msg.type !== 'backups' && page.sectionsList.some(function (s) { return (s.topics || []).includes(msg.type); })) page.latest.set(msg.type, msg);
+  if (msg.type !== 'backups' && (msg.type === 'status' || page.sectionsList.some(function (s) { return (s.topics || []).includes(msg.type); }))) page.latest.set(msg.type, msg);
   if (frames) frames.frame(msg);
 }
 

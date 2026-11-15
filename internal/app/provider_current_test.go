@@ -78,7 +78,7 @@ func TestSpawnedChildThinksWithinTheAdoptedBudget(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	a, st, _ := legFixture(t, srv.URL, AgencyConfig{MaxToolRounds: limits.Of(2), SubagentMaxToolRounds: limits.Of(2), SubagentMaxToolCalls: limits.Of(8), SubagentMaxLegs: limits.Of(1), SubagentWallSeconds: 5})
-	a.llmSwap.Swap(llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "anthropic", APIKey: "k", Model: "m",
+	a.llmSwap.Swap(llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Headers: configuredHeaders("anthropic"), APIKey: "k", Model: "m",
 		MaxOutputTokens: 16000, ThinkingMode: "budget", ThinkingBudget: 7000, Retries: -1}))
 	entry := providerEntry{Name: "p", URL: srv.URL, APIType: "anthropic", APIKey: "k", DefaultModel: "m",
 		MaxOutputTokens: 16000, ThinkingMode: "budget", ThinkingBudget: 3000}

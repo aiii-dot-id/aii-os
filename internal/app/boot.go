@@ -774,6 +774,7 @@ func (a *App) startLive() (retErr error) {
 	a.timeFac.RegisterOwner(a.continuity.AlarmOwner())
 	a.timeFac.RegisterOwner(a.pn.AlarmOwner())
 	a.timeFac.RegisterOwner(memoryOwner{a})
+	a.timeFac.RegisterOwner(scheduleOwner{})
 
 	timerOwner := identity.NewTimerDeliveryOwner(a.engine)
 

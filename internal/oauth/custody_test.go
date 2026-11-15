@@ -47,7 +47,7 @@ func TestOnlyAnOwnedConstructorCanRefresh(t *testing.T) {
 	if _, err := testOwned(KindCodex, "relative/codex.json", oauthOpts(srv.URL)); err == nil {
 		t.Fatal("an owned path must be absolute")
 	}
-	if _, err := testOwned(KindCodex, path, map[string]string{"file": path}); err == nil {
+	if _, err := NewOwned(KindCodex, path, testOptions(KindCodex, map[string]string{"file": path})); err == nil {
 		t.Fatal("an owned source without a sign-in contract must be refused")
 	}
 }

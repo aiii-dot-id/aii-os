@@ -63,7 +63,7 @@ run(assert=>{
 	if err != nil {
 		t.Fatal(err)
 	}
-	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
+	modules := wsPageModules(ws, []byte(`export const S={providers:[],tools:[]};`))
 	for _, file := range []string{"views/plugins.js", "views/settings.js", "util.js"} {
 		data, err := staticFS.ReadFile("static/" + file)
 		if err != nil {

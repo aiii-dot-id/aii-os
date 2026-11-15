@@ -53,7 +53,7 @@ func TestAClaudeProfileAdmitsAnAccountUUIDInTheseFormsOnly(t *testing.T) {
 		"an upper-case urn prefix alone": "URN:UUID:",
 	}
 	for name, value := range admitted {
-		p := capturedClaudeProfile()
+		p := shippedClaudeProfile()
 		p.AccountUUID = value
 		if err := p.Validate(); err != nil {
 			t.Errorf("%s (%q) is an account_uuid a profile admits, yet: %v", name, value, err)
@@ -62,11 +62,11 @@ func TestAClaudeProfileAdmitsAnAccountUUIDInTheseFormsOnly(t *testing.T) {
 			t.Errorf("%s: validation rewrote account_uuid to %q", name, p.AccountUUID)
 		}
 	}
-	// The profile is the captured one with this one field changed, and the
+	// The profile is the shipped one with this one field changed, and the
 	// "absent" row above shows it valid without it: a refusal here is the
 	// field's.
 	for name, value := range refused {
-		p := capturedClaudeProfile()
+		p := shippedClaudeProfile()
 		p.AccountUUID = value
 		if err := p.Validate(); err == nil {
 			t.Errorf("%s (%q) was admitted as an account_uuid", name, value)
@@ -90,7 +90,7 @@ func TestAClaudeAccountUUIDKeepsItsConfiguredSpellingOnTheWire(t *testing.T) {
 		{"urn:uu\u0130d:" + id, false},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
-			p := capturedClaudeProfile()
+			p := shippedClaudeProfile()
 			raw, err := json.Marshal(map[string]string{"account_uuid": tc.value})
 			if err != nil {
 				t.Fatal(err)

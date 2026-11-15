@@ -58,7 +58,9 @@ func TestARestartBetweenTheWakeThatSetTheMomentAndAnOperatorsTurnDoesNotIdleTheW
 	defer srv.Close()
 	app, _ := liveIdentity(t, t.TempDir(), srv.URL)
 	pressStage(t, app, store.StageTrusted)
-	a := time.Now().UTC().Add(400 * time.Millisecond).UnixMilli()
+	// Two seconds of room, not 400 ms: under the race detector a moment set that close
+	// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+	a := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 	ws := sessionUnder(t, app, "time:"+strconv.FormatInt(a, 10))
 	// A's own wake runs in the identity's own time and sets T.
 	waitUntil(t, func() bool {

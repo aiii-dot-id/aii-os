@@ -367,7 +367,7 @@ func selectProvider(cfg LLMConfig, reg *providerRegistry) (*providerEntry, error
 		}
 		if entry == nil {
 			if b := brokenNamed(reg, name); b != nil {
-				return nil, fmt.Errorf("llm.provider %q is a broken entry in providers.json (%s); repair or remove it in Settings → Providers", name, b.reason)
+				return nil, fmt.Errorf("llm.provider %q is a broken entry in providers.json (%w); repair or remove it in Settings → Providers", name, brokenCause(b))
 			}
 			return nil, fmt.Errorf("llm.provider %q is not in providers.json (%d providers)", name, len(reg.Providers))
 		}

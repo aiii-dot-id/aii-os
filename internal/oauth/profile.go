@@ -25,6 +25,34 @@ type Tokens struct {
 
 var ErrGrantInvalid = errors.New("the authority no longer accepts this credential (invalid_grant)")
 
+type HeaderNotConfiguredError struct {
+	Header string
+	Key    string
+}
+
+func (e *HeaderNotConfiguredError) Error() string {
+	return fmt.Sprintf("the %s request header is not configured: set %s in providers.json (no value is compiled in)", e.Header, e.Key)
+}
+
+func applyTokenHeaders(req *http.Request, headers map[string]string) error {
+	for name, value := range headers {
+		if strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Content-Length") {
+			return fmt.Errorf("invalid configured token header %q (token_encoding controls Content-Type)", name)
+		}
+		if value == "" {
+			return fmt.Errorf("invalid configured token header %q: an empty value is not a value (oauth contract token_headers in providers.json)", name)
+		}
+		if !validHeader(name, value) {
+			return fmt.Errorf("invalid configured token header %q", name)
+		}
+		req.Header.Set(name, value)
+	}
+	if req.Header.Get("User-Agent") == "" {
+		return &HeaderNotConfiguredError{Header: "User-Agent", Key: `the oauth contract's token_headers["User-Agent"]`}
+	}
+	return nil
+}
+
 func exchange(ctx context.Context, client *http.Client, p OAuthParams, fields map[string]any) (*Tokens, error) {
 	if p.TokenURL == "" {
 		return nil, errors.New("no token endpoint configured")
@@ -52,11 +80,8 @@ func exchange(ctx context.Context, client *http.Client, p OAuthParams, fields ma
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
-	for name, value := range p.TokenHeaders {
-		if !validHeader(name, value) || strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Content-Length") {
-			return nil, fmt.Errorf("invalid configured token header %q (token_encoding controls Content-Type)", name)
-		}
-		req.Header.Set(name, value)
+	if err := applyTokenHeaders(req, p.TokenHeaders); err != nil {
+		return nil, err
 	}
 	if client == nil {
 		client = signInHTTP

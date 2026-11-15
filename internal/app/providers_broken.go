@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -19,6 +20,7 @@ type brokenEntry struct {
 	name      string
 	isDefault bool
 	reason    string
+	cause     error
 	repair    *entryRepair
 }
 
@@ -41,7 +43,7 @@ func admitEntries(top providerRegistry, raws []json.RawMessage) (*providerRegist
 	for i, raw := range entries {
 		trial := append(slices.Clone(admitted), raw)
 		if _, err := prepareRegistry(top, trial); err != nil {
-			broken = append(broken, brokenEntry{raw: raw, position: i, after: len(admitted), reason: err.Error()})
+			broken = append(broken, brokenEntry{raw: raw, position: i, after: len(admitted), reason: err.Error(), cause: err})
 			continue
 		}
 		admitted = trial
@@ -221,6 +223,13 @@ func brokenIndex(reg *providerRegistry, position int, digest string) (int, error
 		}
 	}
 	return -1, fmt.Errorf("providers.json no longer holds that broken entry at position %d; the list shown was out of date and has been refreshed", position)
+}
+
+func brokenCause(b *brokenEntry) error {
+	if b.cause != nil {
+		return b.cause
+	}
+	return errors.New(b.reason)
 }
 
 func brokenNamed(reg *providerRegistry, name string) *brokenEntry {

@@ -58,7 +58,7 @@ func TestClaudeOAuthBillingBlockCountsTowardAdmission(t *testing.T) {
 	}
 	client := New(&ClientConfig{
 		Endpoint: "http://unused.invalid", Model: "claude-opus-5", Provider: "anthropic",
-		Credential: fixedCredential{token: "token"}, AnthropicOAuthBillingText: strings.Repeat("billing ", 100),
+		Credential: fixedCredential{token: "token", headers: anthropicHeaders()}, AnthropicOAuthBillingText: strings.Repeat("billing ", 100),
 		MaxInputTokens: without,
 	})
 	_, err = client.Chat(context.Background(), messages, ChatOptions{})

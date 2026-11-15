@@ -539,7 +539,7 @@ func TestCIRunsEveryScopeTheRunnerPartitions(t *testing.T) {
 	for _, pkg := range shardedPackages(t) {
 		scopes = append(scopes, filepath.Base(pkg))
 	}
-	want := strings.Join(append(scopes, "rest"), ", ")
+	want := strings.Join(append(scopes, "rest", "browser"), ", ")
 	if row != want {
 		t.Errorf("CI's race scopes are [%s]; the runner's are [%s]", row, want)
 	}
@@ -705,7 +705,7 @@ printf 'PASS\nok  \tfake\t1.000s\n'
 }
 
 // The race build is defined once, in race_args, and the discovery list, every
-// shard and the rest scope all take it from there. A run that spelled -race
+// shard, the rest scope and the browser scope all take it from there. A run that spelled -race
 // itself would build the package a second way, and a discovery built unlike its
 // shards compiles everything twice. Full mode keeps -race alone; normal mode
 // adds only the four documented third-party exclusions. The real-driver test
@@ -749,8 +749,8 @@ func TestTheRunnerBuildsEveryRaceScopeTheSameWay(t *testing.T) {
 			}
 		}
 	}
-	if definitions != 1 || exclusions != 1 || uses != 3 {
-		t.Errorf("race_args has %d definitions, %d normal exclusion lists and %d uses (want one, one and three: discovery, shard, rest)", definitions, exclusions, uses)
+	if definitions != 1 || exclusions != 1 || uses != 4 {
+		t.Errorf("race_args has %d definitions, %d normal exclusion lists and %d uses (want one, one and four: discovery, shard, rest, browser)", definitions, exclusions, uses)
 	}
 	if references != 1 {
 		t.Errorf("want one fully instrumented unsharded reference, got %d", references)

@@ -31,12 +31,12 @@ type SpendLine struct {
 
 func (s *Server) querySpend(ctx context.Context, conn carrier, h *WSHandler, msg ClientMessage) {
 	if h.GetSpend == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, msg.RequestID, "not available")
 		return
 	}
 	view, err := h.GetSpend(max(msg.Days, 1))
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, msg.RequestID, err.Error())
 		return
 	}
 	s.sendMsg(ctx, conn, ServerMessage{Type: "spend", RequestID: msg.RequestID, Spend: view})

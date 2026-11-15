@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -48,10 +49,19 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	out := FamilyRecord{Family: family}
-	rows, err := s.db.Query(`SELECT id, description, COALESCE(result,''), tool_calls, COALESCE(started_at,0), COALESCE(delivered_at,0)
+	ctx := context.Background()
+	err := s.ReadWith(ctx, func(r Reader) error {
+		var err error
+		out, err = familyAttempts(boundReader{ctx: ctx, s: r}, family, limit)
+		return err
+	})
+	return out, err
+}
+
+func familyAttempts(q boundReader, family string, limit int) (FamilyRecord, error) {
+	out := FamilyRecord{Family: family}
+	rows, err := q.Query(`SELECT id, description, COALESCE(result,''), tool_calls, COALESCE(started_at,0), COALESCE(delivered_at,0)
 		FROM work_sessions WHERE family = ? AND status = 'delivered' ORDER BY rowid DESC LIMIT ?`, family, limit)
 	if err != nil {
 		return out, err
@@ -73,13 +83,13 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 	}
 	for i := range out.Attempts {
 		a := &out.Attempts[i]
-		err := s.db.QueryRow(`SELECT COALESCE(json_extract(details,'$.grade.grade'),'') FROM conversations
+		err := q.QueryRow(`SELECT COALESCE(json_extract(details,'$.grade.grade'),'') FROM conversations
 			WHERE json_extract(details,'$.grade.session') = ? ORDER BY rowid DESC LIMIT 1`, a.ID).Scan(&a.Grade)
 		if err != nil && err != sql.ErrNoRows {
 			return out, err
 		}
 		var exit sql.NullInt64
-		err = s.db.QueryRow(`SELECT json_extract(details,'$.exit_status') FROM conversations
+		err = q.QueryRow(`SELECT json_extract(details,'$.exit_status') FROM conversations
 			WHERE source_kind='tool' AND source_id=? AND kind='tool_result'`, checkExecution(a.ID)).Scan(&exit)
 		if err != nil && err != sql.ErrNoRows {
 			return out, err
@@ -107,7 +117,7 @@ func (s *Store) FamilyAttempts(family string, limit int) (FamilyRecord, error) {
 	if out.Shortest == nil {
 		return out, nil
 	}
-	steps, err := s.db.Query(`SELECT COALESCE(json_extract(details,'$.tool'),'') FROM conversations
+	steps, err := q.Query(`SELECT COALESCE(json_extract(details,'$.tool'),'') FROM conversations
 		WHERE kind = 'tool_call' AND json_extract(details,'$.work_session_id') = ? AND COALESCE(json_extract(details,'$.actor'),'') != ? ORDER BY rowid`, out.Shortest.ID, CheckActor)
 	if err != nil {
 		return out, err
@@ -269,10 +279,11 @@ func checkFact(a FamilyAttempt) string {
 }
 
 func (s *Store) SessionToolCalls(id string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM conversations WHERE kind = 'tool_call' AND json_extract(details,'$.work_session_id') = ?`, id).Scan(&n)
+	ctx := context.Background()
+	err := s.ReadWith(ctx, func(r Reader) error {
+		return r.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations WHERE kind = 'tool_call' AND json_extract(details,'$.work_session_id') = ?`, id).Scan(&n)
+	})
 	return n, err
 }
 

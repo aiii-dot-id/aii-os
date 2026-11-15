@@ -2,6 +2,8 @@ package pluginfacility
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"sort"
 )
@@ -9,6 +11,8 @@ import (
 type Found struct {
 	Dir, Package string
 	Size, MTime  int64
+
+	Err error
 }
 
 type Discovery struct {
@@ -104,16 +108,37 @@ func (f *Facility) Rescan(pol Policy) {
 	seen := map[string]bool{}
 	var set []Observed
 	byID := map[string]string{}
+	nextUnread := map[string]bool{}
 	for _, fd := range disc.Found {
 		seen[fd.Package] = true
 		memo, ok := f.verified[fd.Package]
-		if !ok || memo.size != fd.Size || memo.mtime != fd.MTime || memo.trustGen != pol.TrustGen {
+		unread := fd.Err
+		if unread == nil && (!ok || memo.size != fd.Size || memo.mtime != fd.MTime || memo.trustGen != pol.TrustGen) {
 			ev, err := f.cfg.Runtime.Verify(f.ctxOrBackground(), fd.Package)
-			memo = verifyMemo{size: fd.Size, mtime: fd.MTime, trustGen: pol.TrustGen, ev: ev, err: err}
-			f.verified[fd.Package] = memo
-			if err != nil {
-				f.cfg.Log("plugin %s: verification FAILED, package skipped (identity unaffected; this is not T0 — invalid evidence refuses at every autoload level): %v", fd.Package, err)
+			if unreadable(err) {
+				unread = err
+			} else {
+				memo = verifyMemo{size: fd.Size, mtime: fd.MTime, trustGen: pol.TrustGen, ev: ev, err: err}
+				f.verified[fd.Package] = memo
+				if err != nil {
+					f.cfg.Log("plugin %s: verification FAILED, package skipped (identity unaffected; this is not T0 — invalid evidence refuses at every autoload level): %v", fd.Package, err)
+				}
 			}
+		}
+		if unread != nil {
+
+			nextUnread[fd.Package] = true
+			if !f.loggedUnread[fd.Package] {
+				f.cfg.Log("plugin %s could not be read (%v) — not taken as invalid; whatever it serves stands, and it is read again at the next look", fd.Package, unread)
+			}
+			for _, o := range f.standingIn(fd.Dir) {
+				if _, dup := byID[o.ID]; dup {
+					continue
+				}
+				byID[o.ID] = fd.Dir
+				set = append(set, o)
+			}
+			continue
 		}
 		if memo.err != nil {
 
@@ -140,6 +165,7 @@ func (f *Facility) Rescan(pol Policy) {
 		}
 		set = append(set, Observed{ID: id, Dir: fd.Dir, Package: fd.Package, Hash: memo.ev.PackageHash, ManifestHash: memo.ev.ManifestHash, Family: memo.ev.Family})
 	}
+	f.loggedUnread = nextUnread
 
 	for pkg := range f.verified {
 		if !seen[pkg] {
@@ -152,15 +178,29 @@ func (f *Facility) Rescan(pol Policy) {
 }
 
 func (f *Facility) observeAgain(pol Policy) {
+	f.Observe(f.standing(func(*Instance) bool { return true }), pol)
+}
+
+func (f *Facility) standingIn(dir string) []Observed {
+	return f.standing(func(inst *Instance) bool { return inst.Dir == dir })
+}
+
+func (f *Facility) standing(in func(*Instance) bool) []Observed {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	set := make([]Observed, 0, len(f.instances))
 	for _, inst := range f.instances {
-		if inst.Desired.Active || inst.Package != "" {
+		if in(inst) && (inst.Desired.Active || inst.Package != "") {
 			set = append(set, Observed{ID: inst.ID, Dir: inst.Dir, Package: inst.Package, Hash: inst.PackageHash, ManifestHash: inst.ManifestHash, Family: inst.Family})
 		}
 	}
-	f.mu.Unlock()
-	f.Observe(set, pol)
+	sort.Slice(set, func(i, j int) bool { return set[i].ID < set[j].ID })
+	return set
+}
+
+func unreadable(err error) bool {
+	var pathErr *fs.PathError
+	return errors.As(err, &pathErr)
 }
 
 func (f *Facility) Skips() []Skip {

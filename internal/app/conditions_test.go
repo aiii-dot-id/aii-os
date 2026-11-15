@@ -106,9 +106,11 @@ func TestTheHostMeetsEachCondition(t *testing.T) {
 		pressStage(t, app, store.StageTrusted)
 		obs := fixtureModel(t, app, func(n int, w http.ResponseWriter) { _, _ = io.WriteString(w, textReply("noted")) })
 		app.executor.Stop()
-		// A moment just ahead: the verb refuses one already past
-		// (85842ca0), and the firing below is driven by hand.
-		at := time.Now().UTC().Add(700 * time.Millisecond).UnixMilli()
+		// A moment just ahead: the verb refuses one already past,
+		// and the firing below is driven by hand.
+		// Two seconds of room, not 700 ms: under the race detector a moment set that close
+		// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+		at := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 		ws := sessionUnder(t, app, "time:"+strconv.FormatInt(at, 10))
 		time.Sleep(time.Until(time.UnixMilli(at)) + 100*time.Millisecond) // the moment comes
 		alarm, found, err := app.store.AlarmByID(identity.PromiseAlarmID(ws.ID))
@@ -158,8 +160,8 @@ func TestTheHostMeetsEachCondition(t *testing.T) {
 			t.Fatalf("the delivery did not meet the condition: %q", on)
 		}
 	})
-	// A FAILED RUN THAT DELIVERED ITS REPORT KEEPS THE WAIT (a review,
-	// 2026-11-08): the report is a delivery still to be taken in, so the
+	// A FAILED RUN THAT DELIVERED ITS REPORT KEEPS THE WAIT:
+	// the report is a delivery still to be taken in, so the
 	// harvest meets the wait under the operator's hold. Under supervision
 	// the harvest asks the model nothing, and the report stays to be read.
 	// Only a delivery that can never come clears the wait, with the reason.
@@ -212,7 +214,7 @@ func TestTheHostMeetsEachCondition(t *testing.T) {
 		app.childEndedUnfinished("ws_other", "x") // no condition on it: nothing written
 	})
 	// A DELIVERY MADE BEFORE A RESTART AND NOT YET TAKEN IN SURVIVES IT
-	// (a review, 2026-11-08): the boot clears a wait only when its delivery can
+	// the boot clears a wait only when its delivery can
 	// never come, the rule a new wait is kept by. Once taken in, it is gone.
 	t.Run("boot keeps a wait whose delivery is still to be taken in", func(t *testing.T) {
 		app, _ := dispatchApp(t)
@@ -294,8 +296,8 @@ func noticeSays(t *testing.T, a *App, words string) bool {
 	return n > 0
 }
 
-// A WAIT THAT COMES DUE DURING ITS SETTING TURN IS MET BY ITS WAKE (a review,
-// 2026-11-06): the moment comes while the turn that set it still holds the
+// A WAIT THAT COMES DUE DURING ITS SETTING TURN IS MET BY ITS WAKE:
+// the moment comes while the turn that set it still holds the
 // gate, the firing is queued and the alarm row gone; that turn's end leaves
 // the condition standing, and the wake's turn meets it.
 func TestAWaitThatComesDueDuringItsSettingTurnIsMetByItsWake(t *testing.T) {
@@ -304,7 +306,9 @@ func TestAWaitThatComesDueDuringItsSettingTurnIsMetByItsWake(t *testing.T) {
 	pressStage(t, app, store.StageTrusted)
 	obs := fixtureModel(t, app, func(n int, w http.ResponseWriter) { _, _ = io.WriteString(w, textReply("noted")) })
 	app.executor.Stop()
-	at := time.Now().UTC().Add(700 * time.Millisecond).UnixMilli()
+	// Two seconds of room, not 700 ms: under the race detector a moment set that close
+	// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+	at := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 	ws := sessionUnder(t, app, "time:"+strconv.FormatInt(at, 10))     // set in the operator's turn, turn_c
 	time.Sleep(time.Until(time.UnixMilli(at)) + 100*time.Millisecond) // the moment comes while that turn runs
 	alarm, found, err := app.store.AlarmByID(identity.PromiseAlarmID(ws.ID))
@@ -351,8 +355,8 @@ func fireAlarm(app *App, ctx context.Context, sessionID string) error {
 	return err
 }
 
-// A WAKE LEAVES THE WAIT IT SET FOR THAT WAIT'S OWN WAKE (a review,
-// 2026-11-06, on e6f4907d): the wake for moment A names moment B, and B
+// A WAKE LEAVES THE WAIT IT SET FOR THAT WAIT'S OWN WAKE:
+// the wake for moment A names moment B, and B
 // comes while A's turn still holds the gate, its wake queued and its alarm
 // row gone; A's turn end used to read "timer turn, due, no alarm" as "met
 // here" and clear B, and B's queued wake then woke nothing. The opening
@@ -372,7 +376,9 @@ func TestAWakeLeavesTheWaitItSetForThatWaitsOwnWake(t *testing.T) {
 		defer mu.Unlock()
 		switch n {
 		case 1: // A's wake names B, due while this turn runs
-			b = time.Now().UTC().Add(700 * time.Millisecond).UnixMilli()
+			// Two seconds of room, not 700 ms: under the race detector a moment set that close
+			// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+			b = time.Now().UTC().Add(2 * time.Second).UnixMilli()
 			_, _ = io.WriteString(w, callReply("", toolCall("w1", "work", `{"action":"update","resumes_on":"time:`+strconv.FormatInt(b, 10)+`"}`)))
 		case 2: // B comes: its alarm fires and queues B's wake, before A's turn ends
 			time.Sleep(time.Until(time.UnixMilli(b)) + 100*time.Millisecond)
@@ -384,7 +390,9 @@ func TestAWakeLeavesTheWaitItSetForThatWaitsOwnWake(t *testing.T) {
 			_, _ = io.WriteString(w, textReply("noted"))
 		}
 	})
-	a := time.Now().UTC().Add(300 * time.Millisecond).UnixMilli()
+	// Two seconds of room, not 300 ms: under the race detector a moment set that close
+	// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+	a := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 	ws := sessionUnder(t, app, "time:"+strconv.FormatInt(a, 10))
 	mu.Lock()
 	sessionID = ws.ID

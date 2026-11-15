@@ -869,7 +869,7 @@ probe_tool_call | whole request, without the live parts [linux] | 270 | 91
 probe_tool_call | tools (the set probe_report_ready) [windows] | 212 | 71
 probe_tool_call | whole request, without the live parts [windows] | 270 | 91
 
-claude_subscription_operator | system block 1 › (opening) | 136 | 46
+claude_subscription_operator | system block 1 › (opening) | 74 | 25
 claude_subscription_operator | system block 2 › (opening) | 1089 | 364
 claude_subscription_operator | system block 2 › Ring 0 | live, not pinned | -
 claude_subscription_operator | system block 2 › Ring 5 | live, not pinned | -
@@ -885,14 +885,14 @@ claude_subscription_operator | message 3 (user) › words | 33 | 11
 claude_subscription_operator | message 3 (user) › block › the block's frame | 24 | 9
 claude_subscription_operator | message 3 (user) › block › # What Is Right in Front of You | 222 | 75
 claude_subscription_operator | message 3 (user) › block › ## Pending delivery updates | 1097 | 366
-claude_subscription_operator | system, without the live parts | 5475 | 1839
+claude_subscription_operator | system, without the live parts | 5413 | 1819
 claude_subscription_operator | messages | 1458 | 488
 claude_subscription_operator | tools (the set resident) [darwin] | 30840 | 10290
-claude_subscription_operator | whole request, without the live parts [darwin] | 37773 | 12617
+claude_subscription_operator | whole request, without the live parts [darwin] | 37711 | 12596
 claude_subscription_operator | tools (the set resident) [linux] | 30933 | 10321
-claude_subscription_operator | whole request, without the live parts [linux] | 37866 | 12648
+claude_subscription_operator | whole request, without the live parts [linux] | 37804 | 12627
 claude_subscription_operator | tools (the set resident) [windows] | 30899 | 10310
-claude_subscription_operator | whole request, without the live parts [windows] | 37832 | 12637
+claude_subscription_operator | whole request, without the live parts [windows] | 37770 | 12616
 
 tools resident | edit [darwin] | 337 | 113 | description 29 / 10 | parameters 231 / 77
 tools resident | grep [darwin] | 667 | 223 | description 103 / 35 | parameters 487 / 163

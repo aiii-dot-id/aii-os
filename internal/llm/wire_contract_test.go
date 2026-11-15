@@ -80,7 +80,7 @@ func TestConfiguredThinkingAppliesWithoutTheLoop(t *testing.T) {
 	c := New(&ClientConfig{
 		Endpoint: srv.URL, APIKey: "k", Model: "claude-x",
 		Provider: "anthropic", MaxOutputTokens: 20000, ThinkingBudget: 8192,
-		ThinkingMode: "budget",
+		ThinkingMode: "budget", Headers: anthropicHeaders(),
 	})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 		t.Fatal(err)

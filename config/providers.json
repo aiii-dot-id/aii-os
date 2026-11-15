@@ -21,9 +21,10 @@
       "credential": "claude-code",
       "oauth": "anthropic-claude",
       "credential_options": {
-        "client_version": "2.1.283",
+        "client_version": "2.1.322",
         "keychain_service": "Claude Code-credentials",
-        "header_anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,mid-conversation-system-clear-at-2026-08-21,effort-2025-11-24,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
+        "header_anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,thinking-token-count-2026-05-13,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
+        "header_anthropic-version": "2023-06-01",
         "header_x-app": "cli",
         "default_file": "~/.claude/.credentials.json",
         "required_scope": "user:inference",
@@ -35,7 +36,8 @@
       "cache": {
         "mode": "auto",
         "ttl": "1h",
-        "tail_ttl": "5m"
+        "tail_ttl": "5m",
+        "diagnostics_beta": "cache-diagnosis-2026-04-07"
       },
       "models": [
         "claude-opus-5-5",
@@ -53,22 +55,19 @@
         "request_path": "/v1/messages?beta=true",
         "stream": true,
         "entrypoint": "sdk-cli",
-        "billing_template": "x-anthropic-billing-header: cc_version={client_version}.{fingerprint}; cc_entrypoint={entrypoint}; cch={checksum}; cc_prompt_id={prompt_id}; cc_turn_origin=sdk;",
+        "billing_template": "x-anthropic-billing-header: cc_version={client_version}.{fingerprint}; cc_entrypoint={entrypoint};",
         "headers": {
-          "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,mid-conversation-system-clear-at-2026-08-21,effort-2025-11-24,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
+          "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,thinking-token-count-2026-05-13,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
           "x-app": "cli",
           "x-stainless-lang": "js",
-          "x-stainless-package-version": "0.112.1",
+          "x-stainless-package-version": "0.128.0",
           "x-stainless-runtime": "node",
-          "x-stainless-runtime-version": "v26.3.0",
+          "x-stainless-runtime-version": "v26.12.1",
           "anthropic-dangerous-direct-browser-access": "true",
-          "x-claude-code-request-class": "main",
           "accept": "application/json",
           "user-agent": "claude-cli/{client_version} (external, {entrypoint})",
           "anthropic-version": "2023-06-01",
           "x-claude-code-session-id": "{session_id}",
-          "x-claude-code-prompt-id": "{prompt_id}",
-          "x-client-request-id": "{request_id}",
           "x-stainless-retry-count": "{retry_count}",
           "x-stainless-timeout": "{timeout_seconds}",
           "x-stainless-os": "{os}",
@@ -111,7 +110,7 @@
         "account_uuid": "",
         "device_id": "",
         "metadata": true,
-        "diagnostics": true,
+        "diagnostics": false,
         "empty_tools": true,
         "thinking_display": "omitted",
         "context_management": {
@@ -147,7 +146,8 @@
         "default_file": "~/.codex/auth.json",
         "base_url": "https://chatgpt.com/backend-api/codex",
         "dialect": "chatgpt",
-        "account_header": "ChatGPT-Account-ID"
+        "account_header": "ChatGPT-Account-ID",
+        "header_User-Agent": "Go-http-client/2.0"
       },
       "default_model": "gpt-5.6-sol",
       "context_length": 1000000,
@@ -234,6 +234,9 @@
       "vendor_key_env": "ANTHROPIC_API_KEY",
       "catalogue_author": "anthropic",
       "api_type": "anthropic",
+      "headers": {
+        "anthropic-version": "2023-06-01"
+      },
       "effort_levels": [
         "low",
         "medium",
@@ -456,6 +459,9 @@
     {
       "name": "OpenRouter",
       "vendor_key_env": "OPENROUTER_API_KEY",
+      "capability_catalogue_headers": {
+        "User-Agent": "AII-OS/1.0 (model capability)"
+      },
       "api_type": "openai",
       "effort_levels": [
         "none",
@@ -1674,7 +1680,15 @@
     ]
   },
   "oauth": {
+    "custom": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      }
+    },
     "anthropic-claude": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "Claude",
       "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
       "authorize_url": "https://claude.com/cai/oauth/authorize",
@@ -1701,6 +1715,9 @@
       ]
     },
     "github": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "github",
       "authorize_url": "https://github.com/login/oauth/authorize",
       "token_url": "https://github.com/login/oauth/access_token",
@@ -1728,6 +1745,9 @@
       }
     },
     "google": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "google",
       "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
       "token_url": "https://oauth2.googleapis.com/token",
@@ -1802,6 +1822,9 @@
       ]
     },
     "microsoft": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "microsoft",
       "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
@@ -1852,6 +1875,9 @@
       }
     },
     "slack": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "slack",
       "authorize_url": "https://slack.com/oauth/v2/authorize",
       "token_url": "https://slack.com/api/oauth.v2.access",
@@ -1871,6 +1897,9 @@
       }
     },
     "openai-chatgpt": {
+      "token_headers": {
+        "User-Agent": "Go-http-client/2.0"
+      },
       "name": "ChatGPT",
       "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
       "authorize_url": "https://auth.openai.com/oauth/authorize",

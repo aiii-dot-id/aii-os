@@ -13,6 +13,7 @@ if [ "$VERSION" != "$authored" ]; then
   echo "build-deb: VERSION=$VERSION is set, but the VERSION file says $authored — the binaries report the file's version (it is compiled in); unset VERSION or bump the file" >&2
   exit 1
 fi
+DEB_VERSION=$(printf '%s\n' "$VERSION" | sed 's/-/~/')
 
 case "$ARCH" in
   amd64) goarch=amd64 ;;
@@ -58,7 +59,7 @@ install -m 0644 packaging/deb/aii-units.sh "$stage/usr/share/aii-os/aii-units.sh
 gzip -9nc packaging/deb/aii.1 > "$stage/usr/share/man/man1/aii.1.gz"
 
 {
-  printf 'aii-os (%s) unstable; urgency=medium\n\n' "$VERSION"
+  printf 'aii-os (%s) unstable; urgency=medium\n\n' "$DEB_VERSION"
   printf '  * Release %s.\n\n' "$VERSION"
   printf ' -- AI Identity Incorporated <james@aiii.id>  %s\n' "$(date -R)"
 } | gzip -9nc > "$stage/usr/share/doc/aii-os/changelog.gz"
@@ -79,7 +80,7 @@ installed=$(du -ks "$stage/usr" | cut -f1)
 
 cat > "$stage/DEBIAN/control" <<CTRL
 Package: aii-os
-Version: $VERSION
+Version: $DEB_VERSION
 Section: misc
 Priority: optional
 Architecture: $ARCH

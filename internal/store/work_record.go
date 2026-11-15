@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -155,10 +156,14 @@ func (s *Store) WorkCalls(session string, terms []string, beforeSeq uint64, limi
 func (s *Store) workCalls(q string, args ...any) ([]WorkCall, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.workCallsRead(s.db, q, args...)
+}
+
+func (s *Store) workCallsRead(r standingReader, q string, args ...any) ([]WorkCall, error) {
 	if s.historicalInteractions {
 		return nil, errHistoricalWork
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := r.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -244,9 +249,19 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 	if err != nil {
 		return nil, err
 	}
-	calls, err := s.workCalls(workCallSelect+` AND `+workCallSession+` IN (SELECT value FROM json_each(?)) ORDER BY c.turn_seq`, wholeRow, string(ids))
-	if err != nil {
+	ctx := context.Background()
+	if err := s.ReadWith(ctx, func(r Reader) error {
+		return s.workRecordRead(boundReader{ctx: ctx, s: r}, out, string(ids))
+	}); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) workRecordRead(q boundReader, out map[string]*WorkRecordParts, ids string) error {
+	calls, err := s.workCallsRead(q, workCallSelect+` AND `+workCallSession+` IN (SELECT value FROM json_each(?)) ORDER BY c.turn_seq`, wholeRow, ids)
+	if err != nil {
+		return err
 	}
 	turnsOf := map[string]map[string]bool{}
 	name := func(session, turn string) {
@@ -272,55 +287,53 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 			}
 		}
 	}
-	checks, err := s.WorkChecksOf(sessions)
+	checks, err := workChecksRead(q, ids)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for id, c := range checks {
 		out[id].Check = c
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.historicalTurnMetrics {
-		return nil, errors.New("this database's turn usage predates the work record: its turn_metrics names no turn")
+		return errors.New("this database's turn usage predates the work record: its turn_metrics names no turn")
 	}
-	if err := s.markSharedRequests(out, requests); err != nil {
-		return nil, err
+	if err := markSharedRequests(q, out, requests); err != nil {
+		return err
 	}
-	rows, err := s.db.Query(`SELECT json_extract(details,'$.work_session_id'), turn_id FROM conversations
-		WHERE kind='notice' AND turn_id != '' AND json_extract(details,'$.work_session_id') IN (SELECT value FROM json_each(?))`, string(ids))
+	rows, err := q.Query(`SELECT json_extract(details,'$.work_session_id'), turn_id FROM conversations
+		WHERE kind='notice' AND turn_id != '' AND json_extract(details,'$.work_session_id') IN (SELECT value FROM json_each(?))`, ids)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for rows.Next() {
 		var session, turn string
 		if err := rows.Scan(&session, &turn); err != nil {
 			rows.Close()
-			return nil, err
+			return err
 		}
 		name(session, turn)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	rows, err = s.db.Query(`SELECT json_extract(details,'$.grade.session'), turn_seq, COALESCE(recorded_at,''), content, COALESCE(json_extract(details,'$.grade.grade'),''), COALESCE(json_extract(details,'$.grade.item'),'')
-		FROM conversations WHERE kind='message' AND role='operator' AND json_extract(details,'$.grade.session') IN (SELECT value FROM json_each(?)) ORDER BY turn_seq`, string(ids))
+	rows, err = q.Query(`SELECT json_extract(details,'$.grade.session'), turn_seq, COALESCE(recorded_at,''), content, COALESCE(json_extract(details,'$.grade.grade'),''), COALESCE(json_extract(details,'$.grade.item'),'')
+		FROM conversations WHERE kind='message' AND role='operator' AND json_extract(details,'$.grade.session') IN (SELECT value FROM json_each(?)) ORDER BY turn_seq`, ids)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for rows.Next() {
 		var session string
 		var g WorkGrade
 		if err := rows.Scan(&session, &g.Turn, &g.RecordedAt, &g.Text, &g.Grade, &g.Item); err != nil {
 			rows.Close()
-			return nil, err
+			return err
 		}
 		out[session].Grades = append(out[session].Grades, g)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	var turns []string
 	for _, set := range turnsOf {
@@ -329,20 +342,20 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 		}
 	}
 	if len(turns) == 0 {
-		return out, nil
+		return nil
 	}
 	list, err := json.Marshal(turns)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	rows, err = s.db.Query(`SELECT ts_ms, turn_id, COALESCE(source,''), COALESCE(provider,''), COALESCE(model,''), rounds, calls,
+	rows, err = q.Query(`SELECT ts_ms, turn_id, COALESCE(source,''), COALESCE(provider,''), COALESCE(model,''), rounds, calls,
 		prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cache_write_tokens, unknown_attempts, silent_calls,
 		emitted_calls, emission_coverage_complete
 		FROM turn_metrics
 		WHERE turn_id IN (SELECT value FROM json_each(?)) AND (source IS NULL OR source NOT LIKE 'facility:%')
 		ORDER BY ts_ms`, string(list))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -351,7 +364,7 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 		var complete sql.NullBool
 		if err := rows.Scan(&u.EndedMS, &u.TurnID, &u.Source, &u.Provider, &u.Model, &u.Rounds, &u.Calls,
 			&counts[0], &counts[1], &counts[2], &counts[3], &counts[4], &counts[5], &counts[6], &counts[7], &complete); err != nil {
-			return nil, err
+			return err
 		}
 		for i, dst := range []**int64{&u.PromptTokens, &u.CompletionTokens, &u.TotalTokens, &u.CachedPromptTokens, &u.CacheWriteTokens, &u.UnknownAttempts, &u.SilentCalls, &u.EmittedCalls} {
 			if counts[i].Valid {
@@ -369,10 +382,10 @@ func (s *Store) WorkRecordOf(sessions []string) (map[string]*WorkRecordParts, er
 			}
 		}
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
-func (s *Store) markSharedRequests(out map[string]*WorkRecordParts, keys map[string]bool) error {
+func markSharedRequests(q boundReader, out map[string]*WorkRecordParts, keys map[string]bool) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -380,7 +393,7 @@ func (s *Store) markSharedRequests(out map[string]*WorkRecordParts, keys map[str
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(requestSessionsSQL, string(list))
+	rows, err := q.Query(requestSessionsSQL, string(list))
 	if err != nil {
 		return err
 	}

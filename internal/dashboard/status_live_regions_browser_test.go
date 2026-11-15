@@ -466,10 +466,13 @@ async function run() {
   await probe('the notice route switch is refused', { at: '[data-notice-said]', msg: 'mark a contact line as you first', want: 'polite', voice: 'announce',
     act: () => { click('[data-notice-route-switch]'); say({ type: 'error', request_id: idOf('config_set'), message: 'dashboard.notices_off_dashboard: mark a contact line as you first' }); } });
   status({ notices: { on: false, lines: [] } });
+  // The folders are on Plugins and permissions (A10).
+  location.hash = '#/settings/permissions';
+  await until(() => S.view === 'plugins' && document.querySelector('#plugins-stack [data-tools]'), 5000);
   say({ type: 'sandbox', sandbox: { root: '/home/example', extra_roots: [] } });
-  section('sandbox');
+  await until(() => document.getElementById('sbx-add'), 5000);
   $('sbx-add').value = '/work/project'; click('#sbx-grant');
-  await probe('sandbox roots are saved', { at: '#settings-stack [role="status"], #settings-stack [data-announce]', msg: 'Sandbox roots saved.', want: 'polite', voice: 'announce',
+  await probe('sandbox roots are saved', { at: '#plugins-stack [data-folders] [role="status"], #plugins-stack [data-folders] [data-announce]', msg: 'Sandbox roots saved.', want: 'polite', voice: 'announce',
     act: () => say({ type: 'sandbox', request_id: idOf('sandbox_add'), sandbox: { root: '/home/example', extra_roots: ['/work/project'] } }) });
   location.hash = '#/settings/technical/storage';
   await until(() => document.getElementById('cfg-db-format'), 5000);

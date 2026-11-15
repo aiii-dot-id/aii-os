@@ -175,7 +175,11 @@ func (t *operationTool) execute(ctx context.Context, args map[string]any, checki
 	}
 
 	if t.inFlight != nil {
-		if err := t.inFlight.acquire(ctx); err != nil {
+		acquire := t.inFlight.acquire
+		if isScheduled(ctx) {
+			acquire = t.inFlight.acquireAfterOthers
+		}
+		if err := acquire(ctx); err != nil {
 			return tools.Result{Error: "the call was cancelled while waiting for this plugin's turn; nothing ran", ReasonCode: ReasonCancelledBeforeDispatch}, nil
 		}
 		defer t.inFlight.release()

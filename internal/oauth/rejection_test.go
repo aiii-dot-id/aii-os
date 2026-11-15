@@ -24,7 +24,7 @@ func TestRejectedGenerationReloadsANewerOriginalBeforeRefreshing(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := 0
-			src, err := NewProfileSource(path, OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(*http.Request) (*http.Response, error) {
+			src, err := NewProfileSource(path, OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}, &http.Client{Transport: refreshTransport(func(*http.Request) (*http.Response, error) {
 				calls++
 				return nil, errors.New("must reuse the owner's new original")
 			})})
@@ -75,7 +75,7 @@ func TestStaleOwnedRefreshRetainsCancellationCustody(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"renewed","refresh_token":"rotated"}`))}, nil
 	})}
-	params := OAuthParams{ClientID: "fixture", TokenURL: "https://authority.invalid/token"}
+	params := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "fixture", TokenURL: "https://authority.invalid/token"}
 	src, err := NewProfileSource(path, params, client)
 	if err != nil {
 		t.Fatal(err)

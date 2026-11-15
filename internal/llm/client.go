@@ -11,6 +11,7 @@ import (
 	"github.com/aiii-dot-id/aii-os/internal/llm/wire"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -39,6 +40,7 @@ type Client struct {
 
 	entry            string
 	sent             *SentRequests
+	headers          map[string]string
 	oauthBillingText string
 	thinkingBudget   int
 	thinkingMode     string
@@ -153,6 +155,13 @@ func (c *Client) post(ctx context.Context, url string, body []byte, headers func
 			return nil, fmt.Errorf("credential: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+
+		for key, value := range c.headers {
+			if authOwnsHeader(key) {
+				continue
+			}
+			req.Header.Set(key, value)
+		}
 		if err := headers(req, cred); err != nil {
 			return nil, err
 		}
@@ -276,7 +285,9 @@ type ClientConfig struct {
 
 	AnthropicOAuthBillingText string
 
-	ClaudeCode  *ClaudeCodeProfile
+	ClaudeCode *ClaudeCodeProfile
+
+	Headers     map[string]string
 	Temperature *float64
 	TopP        *float64
 
@@ -435,6 +446,7 @@ func New(cfg *ClientConfig) *Client {
 		dialect:          DialectFor(cfg.Provider),
 		subscription:     cfg.Provider == "chatgpt",
 		oauthBillingText: cfg.AnthropicOAuthBillingText,
+		headers:          maps.Clone(cfg.Headers),
 		claudeCode:       cloneClaudeProfile(cfg.ClaudeCode),
 		thinkingBudget:   cfg.ThinkingBudget,
 		thinkingMode:     cfg.ThinkingMode,

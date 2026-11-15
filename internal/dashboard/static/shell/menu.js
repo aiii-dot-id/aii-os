@@ -19,8 +19,6 @@ const SYNONYMS = {
   speech: 'voice microphone speaking listening transcription',
   dashboard: 'port https access public name relay route address',
   backups: 'backup snapshot restore escrow keys',
-  sandbox: 'folders files allowed',
-  tools: 'tool shell browser',
   messages: 'channels email telegram contacts notices unsent held mail',
   updates: 'app theme dark light notifications version update install uninstall',
 };
@@ -78,7 +76,7 @@ function places() {
     { label: about + ' · ' + WI.tabs.record, href: '#/identity/record', words: 'ledger entries' },
     ...sections.map(([id, label]) => ({ label: W.settings + ' · ' + label, href: '#/settings/' + id, words: SYNONYMS[id] || '' })),
     { label: W.settings + ' · ' + W.phoneAndDevices, href: '#/settings/phone', words: 'phone mobile device link scan code qr another sign out lost' },
-    { label: W.settings + ' · ' + W.pluginsAndPermissions, href: '#/settings/permissions', words: 'plugins permissions' },
+    { label: W.settings + ' · ' + W.pluginsAndPermissions, href: '#/settings/permissions', words: 'plugins permissions sandbox folders files allowed tools tool shell browser' },
     ...TECHNICAL.filter(([id]) => id !== 'helpers' || S.config?.agency?.roles?.length).map(([id, label, words]) => ({ label: W.settings + ' · ' + WT.title + ' · ' + label, href: '#/settings/technical/' + id, words })),
     ...((S.projects || []).map(p => ({ label: W.projects + ' · ' + (p.name || p.id), href: '#/projects/' + encodeURIComponent(p.id) }))),
   ];

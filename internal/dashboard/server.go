@@ -708,21 +708,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			case "projects":
 				s.sendProjects(ctx, conn, h, msg.RequestID)
 			case "workspace":
-				s.sendWorkspace(ctx, conn, h, msg.Name)
+				s.sendWorkspace(ctx, conn, h, msg.Name, msg.RequestID)
 			case "sandbox":
 				s.sendSandbox(ctx, conn, h, msg.RequestID)
 			case "work":
-				s.queryWork(ctx, conn, h)
+				s.queryWork(ctx, conn, h, msg.RequestID)
 			case "tools":
-				s.queryTools(ctx, conn, h)
+				s.queryTools(ctx, conn, h, msg.RequestID)
 			case "recall":
 				s.queryRecall(ctx, conn, h, msg)
 			case "belief_trail":
 				s.queryBeliefTrail(ctx, conn, h, msg)
 			case "identity":
-				s.queryIdentity(ctx, conn, h)
+				s.queryIdentity(ctx, conn, h, msg.RequestID)
 			case "config":
-				s.queryConfig(ctx, conn, h)
+				s.queryConfig(ctx, conn, h, msg.RequestID)
 			case "asks":
 				s.queryAsks(ctx, conn, h)
 			case "providers":
@@ -732,7 +732,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			case "speech_lists":
 				s.querySpeechLists(ctx, conn, h, msg)
 			case "continuity":
-				s.queryContinuity(ctx, conn, h)
+				s.queryContinuity(ctx, conn, h, msg.RequestID)
 			case "logs":
 				s.queryLogs(ctx, conn, h, msg)
 			case "spend":

@@ -1,7 +1,7 @@
 # claude_subscription_operator: turn_operator's request on the Claude subscription: the Anthropic dialect's encoding, its billing block first in the system
 
 === system block 1 ===
-x-anthropic-billing-header: cc_version=2.1.283.7a3; cc_entrypoint=sdk-cli; cch=<checksum>; cc_prompt_id=<prompt id>; cc_turn_origin=sdk;
+x-anthropic-billing-header: cc_version=2.1.322.ea3; cc_entrypoint=sdk-cli;
 === system block 2 ===
 You are SeamTest.
 

@@ -212,6 +212,10 @@ type App struct {
 	scheduleFirst time.Duration
 	scheduleEvery func(pluginhost.ScheduleDecl) time.Duration
 
+	scheduleGap time.Duration
+
+	scheduleRows scheduleRows
+
 	wakeParticipantFn func(ctx context.Context, fact string) (string, error)
 
 	recordInboundFn func(rowID, channel, from, body string) (bool, error)

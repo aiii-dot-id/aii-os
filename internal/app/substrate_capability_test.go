@@ -35,6 +35,14 @@ func substrateProbeServer(t *testing.T, toolStatus int, toolBody string) *httpte
 	return srv
 }
 
+// configuredHeaders is what an API-key entry of the dialect sends when the
+// identity's file names no headers of its own: the shipped registry's
+// (entryHeaders). No vendor header value is compiled in, so a fixture
+// client is given the configured ones, as entryTransport gives a real one.
+func configuredHeaders(apiType string) map[string]string {
+	return entryHeaders(providerEntry{APIType: apiType})
+}
+
 func probeApp(t *testing.T) *App {
 	t.Helper()
 	a := New(&Config{SourcePath: filepath.Join(t.TempDir(), "config.json")})
@@ -50,7 +58,7 @@ func TestAProvedCapabilityIsKeptForTheSubstrateItWasMeasuredOn(t *testing.T) {
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -69,7 +77,7 @@ func TestACapabilityIsNotReadForAnotherSubstrate(t *testing.T) {
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -90,7 +98,7 @@ func TestAModelThatWillNotCallATooIsRecordedAsNo(t *testing.T) {
 	srv := substrateProbeServer(t, 200,
 		`{"content":[{"type":"text","text":"I am ready."}],"stop_reason":"end_turn"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("the tool probe must not refuse a substrate: %v", err)
 	}
@@ -110,7 +118,7 @@ func TestARefusedSwitchDoesNotDisturbWhatWasProvedBefore(t *testing.T) {
 	good := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -120,7 +128,7 @@ func TestARefusedSwitchDoesNotDisturbWhatWasProvedBefore(t *testing.T) {
 		io.WriteString(w, `{"error":{"message":"slow down"}}`)
 	}))
 	defer dead.Close()
-	bad := llm.ClientConfig{Endpoint: dead.URL, APIKey: "k", Model: "m2", Provider: "anthropic"}
+	bad := llm.ClientConfig{Endpoint: dead.URL, APIKey: "k", Model: "m2", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, bad, providerEntry{Name: "p2"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err == nil {
 		t.Fatal("a substrate that cannot answer must be refused")
 	}
@@ -185,7 +193,7 @@ func TestADeadlineRefusalNamesTheBound(t *testing.T) {
 
 	a := probeApp(t)
 	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m",
-		Provider: "anthropic", TimeoutSeconds: 1}
+		Provider: "anthropic", Headers: configuredHeaders("anthropic"), TimeoutSeconds: 1}
 	// No catalogue author: this test is about the bound, and asks
 	// nothing of anyone else's service to make its point.
 	err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds)
@@ -324,7 +332,7 @@ func TestAProbeAloneRecordsNothing(t *testing.T) {
 	good := substrateProbeServer(t, 200,
 		`{"content":[{"type":"tool_use","id":"t1","name":"report_ready","input":{"ready":true}}],"stop_reason":"tool_use"}`)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m", Provider: "anthropic"}
+	cc := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	if err := probeAndRun(a, cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -332,7 +340,7 @@ func TestAProbeAloneRecordsNothing(t *testing.T) {
 	if running.provider != "p" || running.toolCalls != capYes {
 		t.Fatalf("the first substrate was not recorded: %+v", running)
 	}
-	c2 := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m2", Provider: "anthropic"}
+	c2 := llm.ClientConfig{Endpoint: good.URL, APIKey: "k", Model: "m2", Provider: "anthropic", Headers: configuredHeaders("anthropic")}
 	measured, err := a.probeSubstrate(llm.New(&c2), c2, providerEntry{Name: "p2"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds)
 	if err != nil || measured.provider != "p2" || measured.model != "m2" || measured.toolCalls != capYes {
 		t.Fatalf("the candidate was not measured: %+v %v", measured, err)
@@ -354,7 +362,7 @@ func TestAProbeSaysTheModelThatAnswered(t *testing.T) {
 	defer srv.Close()
 	logs := logsink.CaptureForTest(t)
 	a := probeApp(t)
-	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "probe-alias", Provider: "anthropic", Retries: -1}
+	cc := llm.ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "probe-alias", Provider: "anthropic", Headers: configuredHeaders("anthropic"), Retries: -1}
 	if _, err := a.probeSubstrate(llm.New(&cc), cc, providerEntry{Name: "p"}, nil, a.configSnapshot().LLM.ProbeTimeoutSeconds); err != nil {
 		t.Fatalf("probe: %v", err)
 	}

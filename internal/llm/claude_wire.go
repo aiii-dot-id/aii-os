@@ -61,14 +61,23 @@ func (p *ClaudeCodeProfile) Validate() error {
 	if err != nil || !strings.HasPrefix(p.RequestPath, "/") || strings.HasPrefix(p.RequestPath, "//") || u.Host != "" || u.Fragment != "" {
 		return fmt.Errorf("Claude request_path must be an absolute path on the configured provider")
 	}
-	if _, err := strconv.ParseUint(p.Checksum.Seed, 0, 64); err != nil {
-		return fmt.Errorf("Claude checksum seed: %w", err)
+	if p.FingerprintLength < 1 || p.FingerprintLength > 64 {
+		return fmt.Errorf("Claude fingerprint length outside supported range")
 	}
-	if p.Checksum.HexLength < 1 || p.Checksum.HexLength > 16 || p.FingerprintLength < 1 || p.FingerprintLength > 64 {
-		return fmt.Errorf("Claude hash lengths outside supported range")
+	if p.Version == "" {
+		return fmt.Errorf("Claude profile requires a version (credential_options client_version)")
 	}
-	if p.Checksum.Marker == "" || p.Version == "" || !strings.Contains(p.BillingTemplate, "{checksum}") {
-		return fmt.Errorf("Claude profile requires version, checksum marker and billing checksum placeholder")
+
+	if p.signsBody() {
+		if _, err := strconv.ParseUint(p.Checksum.Seed, 0, 64); err != nil {
+			return fmt.Errorf("Claude checksum seed: %w", err)
+		}
+		if p.Checksum.HexLength < 1 || p.Checksum.HexLength > 16 {
+			return fmt.Errorf("Claude checksum length outside supported range")
+		}
+		if p.Checksum.Marker == "" {
+			return fmt.Errorf("Claude billing template asks for a checksum and the profile names no checksum marker")
+		}
 	}
 	for _, i := range p.FingerprintPositions {
 		if i < 0 {
@@ -105,6 +114,10 @@ func (p *ClaudeCodeProfile) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (p *ClaudeCodeProfile) signsBody() bool {
+	return strings.Contains(p.BillingTemplate, "{checksum}")
 }
 
 func cloneClaudeProfile(p *ClaudeCodeProfile) *ClaudeCodeProfile {
@@ -249,6 +262,9 @@ func marshalAnthropic(req anthRequest, profile *ClaudeCodeProfile, credential bo
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !profile.signsBody() {
+		return body, nil
 	}
 	return signClaudeBody(body, profile.Checksum)
 }

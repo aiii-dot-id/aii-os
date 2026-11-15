@@ -30,7 +30,7 @@ func TestCacheInconsistentUsageIsNotTrusted(t *testing.T) {
 		{"negative Anthropic cache writes", "anthropic", `{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":-200}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: tc.provider, Model: "fixture", Retries: -1})
+			c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: tc.provider, Model: "fixture", Retries: -1, Headers: anthropicHeaders()})
 			c.httpClient = &http.Client{Transport: pass4Transport(func(r *http.Request) (*http.Response, error) {
 				body := `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":` + tc.usage + `}`
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
@@ -55,7 +55,7 @@ func TestAnInconsistentCountIsWarnedOncePerModel(t *testing.T) {
 	const bad = `,"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":420}}`
 	ask := func(provider, model string, entry ...string) {
 		t.Helper()
-		cc := &ClientConfig{Endpoint: "https://review.invalid", Provider: provider, Model: model, Retries: -1}
+		cc := &ClientConfig{Endpoint: "https://review.invalid", Provider: provider, Model: model, Retries: -1, Headers: anthropicHeaders()}
 		if len(entry) > 0 {
 			cc.Entry, cc.Endpoint = entry[0], "https://"+entry[0]+".invalid"
 		}
@@ -107,7 +107,7 @@ func TestARefusedCountIsNotTheFloorOfItsReplysEstimate(t *testing.T) {
 		"refused": {`{"input_tokens":100,"cache_read_input_tokens":-200,"output_tokens":900000}`, 0},
 		"kept":    {`{"input_tokens":100,"output_tokens":900000}`, 900_000},
 	} {
-		c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "fixture", Retries: -1})
+		c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "fixture", Retries: -1, Headers: anthropicHeaders()})
 		c.httpClient = &http.Client{Transport: pass4Transport(func(r *http.Request) (*http.Response, error) {
 			body := `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":` + tc.usage + `}`
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil

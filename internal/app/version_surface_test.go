@@ -33,6 +33,6 @@ func TestUninjectedBuildReportsTheAuthoredVersion(t *testing.T) {
 		t.Fatalf("uninjected build reported %q, want the authored VERSION %q", got, version.Authored())
 	}
 	if !version.Valid(got) {
-		t.Fatalf("uninjected build reported %q, which version.Valid rejects — updates.go would refuse to check", got)
+		t.Fatalf("uninjected build reported %q, which version.Valid rejects — internal/updates/checker.go would refuse to check", got)
 	}
 }

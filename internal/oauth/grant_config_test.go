@@ -24,13 +24,13 @@ func TestConfiguredJSONExchangeAndRefresh(t *testing.T) {
 	contract.AuthorizeURL = "https://consent.example/new-authorize"
 	contract.RedirectURI = "https://consent.example/new-return"
 	contract.BaseScopes = []string{"fixture:inference", "fixture:profile"}
-	contract.TokenHeaders = map[string]string{"X-Token-Revision": "future"}
+	contract.TokenHeaders["X-Token-Revision"] = "future" // beside the shipped User-Agent
 	contract.ResourceHeaders = map[string]string{"X-Resource-Only": "resource"}
 	contract.TokenParams = map[string]any{"future_state": "{state}", "enabled": true, "lifetime": 1234, "metadata": map[string]any{"revision": "future"}}
 	contract.RefreshParams = map[string]any{"future_scope": "{scope}", "extension": []any{"one", "two"}}
 	requests := make(chan map[string]any, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("X-Token-Revision") != "future" || r.Header.Get("X-Resource-Only") != "" {
+		if r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" || r.Header.Get("X-Token-Revision") != "future" || r.Header.Get("X-Resource-Only") != "" || r.Header.Get("User-Agent") != testTokenHeaders()["User-Agent"] {
 			t.Error("configured token encoding/headers were not used")
 		}
 		var fields map[string]any
@@ -90,7 +90,7 @@ func TestConfiguredJSONExchangeAndRefresh(t *testing.T) {
 }
 
 func TestGrantConfigurationCannotReplaceProtocolAuthority(t *testing.T) {
-	base := OAuthParams{ClientID: "configured", TokenURL: "https://authority.example/token", RedirectURI: "https://authority.example/return"}
+	base := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "configured", TokenURL: "https://authority.example/token", RedirectURI: "https://authority.example/return"}
 	for _, key := range []string{"grant_type", "client_id", "client_secret", "code", "code_verifier", "redirect_uri", "refresh_token", "device_code"} {
 		t.Run(key, func(t *testing.T) {
 			p := base

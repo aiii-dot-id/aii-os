@@ -78,7 +78,7 @@ export function renderExperiences() {
   if (!stack || S.view !== 'experiences') return;
   const named = (S.stats && S.stats.name) || '', name = named === 'Unnamed' ? '' : named;
   const all = (S.identity && S.identity.experiences) || [];
-  const key = JSON.stringify([all, name, filters, opened]);
+  const key = JSON.stringify([!!S.identity, all, name, filters, opened]);
   if (key === drawn) return;
   drawn = key;
   if (!S.identity) { stack.replaceChildren(); return; }

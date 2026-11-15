@@ -125,7 +125,12 @@ func (s *Store) WorkChecksOf(sessions []string) (map[string]WorkCheck, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows, err := s.db.Query(`SELECT key, payload FROM turn_annotations WHERE kind=? AND key IN (SELECT value FROM json_each(?)) ORDER BY turn_seq`, AnnotationCheck, string(ids))
+	return workChecksRead(s.db, string(ids))
+}
+
+func workChecksRead(q standingReader, ids string) (map[string]WorkCheck, error) {
+	out := map[string]WorkCheck{}
+	rows, err := q.Query(`SELECT key, payload FROM turn_annotations WHERE kind=? AND key IN (SELECT value FROM json_each(?)) ORDER BY turn_seq`, AnnotationCheck, ids)
 	if err != nil {
 		return nil, err
 	}

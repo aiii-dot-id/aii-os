@@ -476,8 +476,8 @@ function onMessage(e) {
     case 'asks': S.asks = msg.asks || []; renderAsks(S.asks); statusOpen(); acceptAsks(S.asks); break;
     case 'identity': S.identity = msg.identity || null; if (S.view === 'memory') renderMemory(); if (S.view === 'identity') renderIdentity(); if (S.view === 'between') renderBetween(); if (S.view === 'experiences') S.renderExperiences?.(); if (S.view === 'chat') renderHome(); break;
     case 'recall': S.recall = { query: msg.query || '', text: msg.message || '' }; if (S.view === 'memory') renderMemory(); break;
-    case 'tools': S.tools = msg.tools || []; acceptTools(msg.request_id); statusOpen(); if (settingsOpen()) renderSettings(); break;
-    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id, msg.message); if (settingsOpen()) renderSettings(); break;
+    case 'tools': S.tools = msg.tools || []; acceptTools(msg.request_id); statusOpen(); if (S.view === 'plugins') renderPlugins(); break;
+    case 'sandbox': S.sandbox = msg.sandbox || null; acceptSandbox(msg.request_id, msg.message); if (S.view === 'plugins') renderPlugins(); break;
     case 'work': S.gradeAnswered?.(msg.request_id, null); S.work = msg.work || null; S.gradesRead?.(S.work); statusOpen(); if (S.view === 'chat') renderHome(); if (S.view === 'identity') renderIdentity(); if (S.view === 'projects') renderProjects(); S.renderComposer?.(); break;
 
     case 'workspace': S.workspace = msg.workspace || null; S.workspaceFor = (S.workspace && S.workspace.project) ? S.workspace.project.id : ''; if (S.view === 'projects') renderProjects(); break;
@@ -582,7 +582,7 @@ function onStats(stats) {
   if (!born) fetchFirstRun();
   if (born && !was) { query('continuity'); query('projects'); query('work'); query('providers'); query('config'); query('asks'); query('work'); query('identity'); }
   renderPresence(); renderFirstbootVisibility(); renderComposer(); S.recordNamed?.();
-  if (S.view === 'chat') renderHome();
+  if (S.view === 'chat') renderHome(); if (S.view === 'between') renderBetween();
 }
 function turnFailureWords(text, failure, reason) {
   const llm = (S.config && S.config.llm) || {};

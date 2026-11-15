@@ -135,7 +135,7 @@ func schemaLoop(t *testing.T, p *schemaProvider, tools ToolExecutor, defs *fakeD
 	p.t = t
 	srv := httptest.NewServer(p)
 	t.Cleanup(srv.Close)
-	client := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: p.dialect, Model: "fixture", Retries: -1, TimeoutSeconds: 5, NoStream: true})
+	client := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: p.dialect, Headers: configuredHeaders(p.dialect), Model: "fixture", Retries: -1, TimeoutSeconds: 5, NoStream: true})
 	if cfg.ContextBudgetTokens == 0 {
 		cfg.ContextBudgetTokens = 100000
 	}

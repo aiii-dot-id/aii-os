@@ -51,6 +51,50 @@ func TestAVisitBeforeTheirBirthIsNoVisitToThem(t *testing.T) {
 		map[string][]byte{"/record": []byte(record), "/record?before=2": []byte(first)})
 }
 
+// THE PAGE'S OWN BETWEEN YOU HEARS A STATUS (0.2.2, route b 4c). Where About's
+// section is not running the page draws Between you itself. Before any status it names no one and withholds the others they work
+// with (4c); when a status comes with their name after the identity and
+// continuity frames, the page must draw again, naming them and showing the
+// others, though no further frame follows.
+const pageBetweenHearsStatusJS = `import { report, until } from '/__harness.js';
+import { S } from '/state.js';
+const W = (await import('/strings/identity.js')).default;
+const { lastVisit } = await import('/views/home/note.js');
+const sockets = window.__sockets;
+const problems = [];
+const check = (ok, what) => { if (!ok) problems.push(what); };
+const tick = () => new Promise(r => setTimeout(r, 40));
+const first = () => (document.querySelector('#between-stack .between__none') || {}).textContent || '';
+const others = () => document.querySelector('#between-stack .between__others');
+const named = W.betweenFirstVisit.replace('{name}', 'Mira');
+async function run() {
+  await until(() => sockets.length > 0);
+  sockets[0].open(); await tick();
+  sockets[0].say({ type: 'continuity', continuity: { mode: 'normal', ledger_seq: 1 } });
+  sockets[0].say({ type: 'identity', identity: { beliefs: [], intentions: [], experiences: [], relationships: [{ id: 'r1', name: 'Robin', role: 'peer', record: 3 }] } });
+  S.go('between');
+  await until(() => lastVisit().known && document.getElementById('between-stack'), 5000);
+  check(lastVisit().known, 'rig: the visit is not known');
+  check(first() === '', 'before any status the page said a first visit\'s sentence: ' + first());
+  check(!others(), 'before any status the page showed the others they work with');
+  // waits by design: the page's own redraws for this place (the hash's, the visit's) are over
+  // before the status comes, so only the status can make it draw again.
+  await new Promise(r => setTimeout(r, 500));
+  sockets[0].say({ type: 'status', stats: { name: 'Mira', version: 'test', build: 'test', ledger_seq: 1, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 } });
+  await until(() => first() === named, 5000);
+  check(first() === named, 'a status with their name came and the page\'s Between you did not name them: ' + first());
+  check(others(), 'a status came and the page\'s Between you still withholds the others they work with');
+  report(problems.length ? 'FAIL: ' + problems.join('\n  - ') : 'OK');
+}
+run().catch(e => report('FAIL: the run stopped: ' + ((e && e.message) || e)));
+`
+
+func TestThePagesOwnBetweenYouHearsAStatus(t *testing.T) {
+	first := fmt.Sprintf(`{"version":1,"rows":[{"seq":"1","time":%q,"type":"ring0.genesis","ring":0,"bytes":2,"head":"{}"}],"first_view_bytes":0,"range_bytes":0}`, time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano))
+	runRealPageServing(t, statusFakeSocketJS, pageBetweenHearsStatusJS, append([]string{"views/identity/who.css", "components/tabs/tabs.css"}, homeStyles...),
+		map[string][]byte{"/record": []byte(first)})
+}
+
 // ABOUT'S TABS SAY THEY SCROLL ON A PHONE (step 11; the stack's shots). At
 // 390 by 844 the five tabs are wider than the screen: the row fades the side
 // that has more (data-more), and the tab selected is brought into view, so

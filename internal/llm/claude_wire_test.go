@@ -17,7 +17,9 @@ import (
 	config "github.com/aiii-dot-id/aii-os/config"
 )
 
-func capturedClaudeProfile() *ClaudeCodeProfile {
+// shippedClaudeProfile is the Claude profile config/providers.json ships,
+// with its version from credential_options as the host reads it.
+func shippedClaudeProfile() *ClaudeCodeProfile {
 	var reg struct {
 		Providers []struct {
 			CredentialOptions map[string]string  `json:"credential_options"`
@@ -36,9 +38,39 @@ func capturedClaudeProfile() *ClaudeCodeProfile {
 	panic("shipped Claude profile absent")
 }
 
+// claude2283Profile is the profile of Claude Code 2.1.283 as it was shipped
+// before 2026-11-11, held here so the body checksum and the prompt-id and
+// request-id correlation that client sent stay proven whatever the shipped
+// profile now names. 2.1.322 sends neither (captured 2026-11-11), so the
+// shipped profile no longer exercises them.
+func claude2283Profile() *ClaudeCodeProfile {
+	const profile = `{"enabled":true,"request_path":"/v1/messages?beta=true","stream":true,"entrypoint":"sdk-cli",
+"billing_template":"x-anthropic-billing-header: cc_version={client_version}.{fingerprint}; cc_entrypoint={entrypoint}; cch={checksum}; cc_prompt_id={prompt_id}; cc_turn_origin=sdk;",
+"headers":{"anthropic-beta":"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,mid-conversation-system-clear-at-2026-08-21,effort-2025-11-24,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
+"x-app":"cli","x-stainless-lang":"js","x-stainless-package-version":"0.112.1","x-stainless-runtime":"node","x-stainless-runtime-version":"v26.3.0",
+"anthropic-dangerous-direct-browser-access":"true","x-claude-code-request-class":"main","accept":"application/json",
+"user-agent":"claude-cli/{client_version} (external, {entrypoint})","anthropic-version":"2023-06-01",
+"x-claude-code-session-id":"{session_id}","x-claude-code-prompt-id":"{prompt_id}","x-client-request-id":"{request_id}",
+"x-stainless-retry-count":"{retry_count}","x-stainless-timeout":"{timeout_seconds}","x-stainless-os":"{os}","x-stainless-arch":"{arch}"},
+"os_names":{"linux":"Linux","darwin":"MacOS","ios":"iOS","windows":"Windows","android":"Android"},
+"arch_names":{"amd64":"x64","386":"x32","arm64":"arm64","arm":"arm"},
+"fingerprint_salt":"59cf53e54c78","fingerprint_positions":[4,7,20],"fingerprint_length":3,
+"checksum":{"seed":"0x4D659218E32A3268","marker":"cch=","hex_length":5,"empty_string_keys":["model"],"omit_keys":["max_tokens","fallbacks","fallback_credit_token"],"trailing_group_comma":true},
+"account_uuid":"","device_id":"","metadata":true,"diagnostics":true,"empty_tools":true,"thinking_display":"omitted",
+"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"output_config":{"effort":"medium"}}`
+	var p ClaudeCodeProfile
+	if err := json.Unmarshal([]byte(profile), &p); err != nil {
+		panic(err)
+	}
+	p.Version = "2.1.283"
+	return &p
+}
+
 // This synthetic request has fixed IDs and no captured environment or user data.
 // Its checksum was computed independently with libxxhash XXH64 and the public
 // normalization rules; the expected signed bytes are frozen in the fixture.
+// The fingerprint is unchanged in 2.1.322: for "hi" the shipped profile
+// gives "aaf", the value a real 2.1.322 request carried (2026-11-11).
 func TestClaudeCodeSyntheticChecksum(t *testing.T) {
 	captured, err := os.ReadFile("testdata/claude-code-2.1.283-request.json")
 	if err != nil {
@@ -46,15 +78,20 @@ func TestClaudeCodeSyntheticChecksum(t *testing.T) {
 	}
 	captured = bytes.TrimSpace(captured)
 	unsigned := bytes.Replace(captured, []byte("cch=8ac5e;"), []byte("cch=00000;"), 1)
-	got, err := signClaudeBody(unsigned, capturedClaudeProfile().Checksum)
+	got, err := signClaudeBody(unsigned, claude2283Profile().Checksum)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, captured) {
 		t.Fatal("checksum does not reproduce the frozen synthetic vector")
 	}
-	if got := claudeFingerprint("Reply with the single word: alive", capturedClaudeProfile()); got != "aba" {
-		t.Fatalf("fixed fingerprint: %s", got)
+	if got := claudeFingerprint("Reply with the single word: alive", claude2283Profile()); got != "aba" {
+		t.Fatalf("fixed 2.1.283 fingerprint: %s", got)
+	}
+	if p := shippedClaudeProfile(); p.Version != "2.1.322" {
+		t.Fatalf("setup: the shipped profile is version %q; the 2.1.322 capture below is not its own", p.Version)
+	} else if got := claudeFingerprint("hi", p); got != "aaf" {
+		t.Fatalf("captured 2.1.322 fingerprint: %s, want aaf", got)
 	}
 	for _, tc := range []struct{ in, want string }{
 		{`{"model":"opus","max_tokens":12,"messages":[{"content":"model cch=00000;"}]}`, `{"model":"","messages":[{"content":"model cch=00000;"}]}`},
@@ -63,113 +100,190 @@ func TestClaudeCodeSyntheticChecksum(t *testing.T) {
 		{`{"max_tokens":2,"fallbacks":[]}`, `{}`},
 		{`{"a":1,"max_tokens":2}`, `{"a":1}`},
 	} {
-		got, err := normalizeClaudeHash([]byte(tc.in), capturedClaudeProfile().Checksum)
+		got, err := normalizeClaudeHash([]byte(tc.in), claude2283Profile().Checksum)
 		if err != nil || string(got) != tc.want {
 			t.Errorf("%s: %s, %v; want %s", tc.in, got, err, tc.want)
 		}
 	}
 }
 
+// A profile is refused for what it gets wrong. The checksum's own settings
+// are held only by a profile whose billing template asks for a checksum:
+// the shipped 2.1.322 profile signs nothing, so the same settings there are
+// not read, and a template that asks for one without a marker is refused.
 func TestClaudeProfileRejectsInvalidOptions(t *testing.T) {
-	for _, mutate := range []func(*ClaudeCodeProfile){func(p *ClaudeCodeProfile) { p.Checksum.Seed = "bad" }, func(p *ClaudeCodeProfile) { p.RequestPath = "//other.example/messages" }, func(p *ClaudeCodeProfile) { p.Headers["Authorization"] = "injected" }, func(p *ClaudeCodeProfile) { p.FingerprintPositions = []int{-1} }, func(p *ClaudeCodeProfile) { p.AccountUUID = "bad" }, func(p *ClaudeCodeProfile) { p.Checksum.HexLength = 17 }} {
-		p := capturedClaudeProfile()
-		mutate(p)
-		if err := p.Validate(); err == nil {
-			t.Fatal("invalid profile accepted")
+	for _, profile := range []func() *ClaudeCodeProfile{shippedClaudeProfile, claude2283Profile} {
+		for _, mutate := range []func(*ClaudeCodeProfile){func(p *ClaudeCodeProfile) { p.RequestPath = "//other.example/messages" }, func(p *ClaudeCodeProfile) { p.Headers["Authorization"] = "injected" }, func(p *ClaudeCodeProfile) { p.FingerprintPositions = []int{-1} }, func(p *ClaudeCodeProfile) { p.AccountUUID = "bad" }, func(p *ClaudeCodeProfile) { p.FingerprintLength = 65 }, func(p *ClaudeCodeProfile) { p.Version = "" }} {
+			p := profile()
+			mutate(p)
+			if err := p.Validate(); err == nil {
+				t.Fatalf("invalid %s profile accepted", p.Version)
+			}
+		}
+		if err := profile().Validate(); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if err := capturedClaudeProfile().Validate(); err != nil {
-		t.Fatal(err)
+	for _, mutate := range []func(*ClaudeCodeProfile){func(p *ClaudeCodeProfile) { p.Checksum.Seed = "bad" }, func(p *ClaudeCodeProfile) { p.Checksum.HexLength = 17 }, func(p *ClaudeCodeProfile) { p.Checksum.HexLength = 0 }, func(p *ClaudeCodeProfile) { p.Checksum.Marker = "" }} {
+		p := claude2283Profile()
+		mutate(p)
+		if err := p.Validate(); err == nil {
+			t.Fatal("a signing profile with an invalid checksum was accepted")
+		}
+		q := shippedClaudeProfile()
+		q.Checksum = p.Checksum
+		if q.signsBody() {
+			t.Fatal("the shipped profile signs the body; 2.1.322 sends no checksum")
+		}
+		if err := q.Validate(); err != nil {
+			t.Fatalf("a profile that signs nothing was refused for its unread checksum settings: %v", err)
+		}
+		q.BillingTemplate += " cch={checksum};"
+		if err := q.Validate(); err == nil {
+			t.Fatal("a template that asks for a checksum was accepted with invalid checksum settings")
+		}
 	}
 }
 
+// One client keeps one session across concurrent calls. The shipped 2.1.322
+// profile sends what that client sends: no per-call ids, an unsigned body,
+// and the billing line its template names. The 2.1.283 profile still
+// correlates each call's prompt id between header and body, gives every
+// call fresh ids, and signs the body.
 func TestClaudeProfileRequestIsolation(t *testing.T) {
-	var mu sync.Mutex
-	var requests []map[string]any
-	var sessions, prompts, requestIDs []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		var req map[string]any
-		if err := json.Unmarshal(b, &req); err != nil {
-			t.Error(err)
-		}
-		if r.URL.RequestURI() != "/v1/messages?beta=true" {
-			t.Errorf("path %s", r.URL)
-		}
-		if r.Header.Get("Authorization") != "Bearer fixture" || r.Header.Get("x-api-key") != "" {
-			t.Error("credential routing changed")
-		}
-		if r.Header.Get("User-Agent") != "claude-cli/2.1.283 (external, sdk-cli)" {
-			t.Error("wrong client profile")
-		}
-		sid, pid, rid := r.Header.Get("X-Claude-Code-Session-Id"), r.Header.Get("x-claude-code-prompt-id"), r.Header.Get("x-client-request-id")
-		for _, v := range []string{sid, pid, rid} {
-			if _, err := uuid.Parse(v); err != nil {
-				t.Error(err)
+	for _, tc := range []struct {
+		profile *ClaudeCodeProfile
+		signed  bool
+	}{{shippedClaudeProfile(), false}, {claude2283Profile(), true}} {
+		t.Run(tc.profile.Version, func(t *testing.T) {
+			var mu sync.Mutex
+			var requests []map[string]any
+			var sessions, prompts, requestIDs []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				var req map[string]any
+				if err := json.Unmarshal(b, &req); err != nil {
+					t.Error(err)
+				}
+				if r.URL.RequestURI() != "/v1/messages?beta=true" {
+					t.Errorf("path %s", r.URL)
+				}
+				if r.Header.Get("Authorization") != "Bearer fixture" || r.Header.Get("x-api-key") != "" {
+					t.Error("credential routing changed")
+				}
+				if r.Header.Get("User-Agent") != "claude-cli/"+tc.profile.Version+" (external, sdk-cli)" || r.Header.Get("anthropic-version") != "2023-06-01" {
+					t.Error("wrong client profile")
+				}
+				sid, pid, rid := r.Header.Get("X-Claude-Code-Session-Id"), r.Header.Get("x-claude-code-prompt-id"), r.Header.Get("x-client-request-id")
+				if _, err := uuid.Parse(sid); err != nil {
+					t.Error(err)
+				}
+				billing := req["system"].([]any)[0].(map[string]any)["text"].(string)
+				if tc.signed {
+					for _, v := range []string{pid, rid} {
+						if _, err := uuid.Parse(v); err != nil {
+							t.Error(err)
+						}
+					}
+					if r.Header.Get("x-claude-code-request-class") != "main" {
+						t.Error("2.1.283 request class missing")
+					}
+					if !strings.Contains(billing, "cc_prompt_id="+pid+";") {
+						t.Error("header/body prompt id mismatch")
+					}
+					start := strings.Index(billing, "cch=") + 4
+					unsigned := bytes.Replace(b, []byte("cch="+billing[start:start+5]+";"), []byte("cch=00000;"), 1)
+					signed, err := signClaudeBody(unsigned, tc.profile.Checksum)
+					if err != nil || !bytes.Equal(signed, b) {
+						t.Errorf("bad request checksum: %v", err)
+					}
+				} else {
+					for _, name := range []string{"x-claude-code-prompt-id", "x-client-request-id", "x-claude-code-request-class"} {
+						if v, sent := r.Header[http.CanonicalHeaderKey(name)]; sent {
+							t.Errorf("2.1.322 sends no %s; this request sent %q", name, v)
+						}
+					}
+					for name, want := range map[string]string{
+						"anthropic-beta":              "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,thinking-token-count-2026-05-13,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
+						"x-stainless-package-version": "0.128.0",
+						"x-stainless-runtime-version": "v26.12.1",
+					} {
+						if got := r.Header.Get(name); got != want {
+							t.Errorf("%s = %q, want %q", name, got, want)
+						}
+					}
+					// The fingerprint of the first user text with this client's
+					// salt and version: an unsigned line, no checksum, no prompt id.
+					want := "x-anthropic-billing-header: cc_version=2.1.322." + claudeFingerprint("keep cch=00000; literally", tc.profile) + "; cc_entrypoint=sdk-cli;"
+					if billing != want {
+						t.Errorf("billing line = %q, want %q", billing, want)
+					}
+					if !bytes.Contains(b, []byte("keep cch=00000; literally")) {
+						t.Error("an unsigned body changed the user's words")
+					}
+				}
+				var metadata map[string]string
+				if err := json.Unmarshal([]byte(req["metadata"].(map[string]any)["user_id"].(string)), &metadata); err != nil {
+					t.Error(err)
+				}
+				if metadata["session_id"] != sid || len(metadata["device_id"]) != 64 || metadata["account_uuid"] != "" {
+					t.Error("metadata mismatch")
+				}
+				if req["stream"] != true || req["tools"] == nil {
+					t.Error("profile envelope missing")
+				}
+				// The diagnostics field is the profile's to ask for: 2.1.283's
+				// did, 2.1.322's request carries none (captured 2026-11-11).
+				if (req["diagnostics"] != nil) != tc.profile.Diagnostics {
+					t.Errorf("diagnostics field present=%v, the profile says %v", req["diagnostics"] != nil, tc.profile.Diagnostics)
+				}
+				if req["system"].([]any)[1].(map[string]any)["text"] != "resident identity" {
+					t.Error("identity changed")
+				}
+				mu.Lock()
+				requests = append(requests, req)
+				sessions = append(sessions, sid)
+				prompts = append(prompts, pid)
+				requestIDs = append(requestIDs, rid)
+				mu.Unlock()
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, anthropicFixtureStream("end_turn", `null`))
+			}))
+			defer srv.Close()
+			c := New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Credential: fixedCredential{token: "fixture"}, ClaudeCode: tc.profile})
+			var wg sync.WaitGroup
+			for range 4 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					resp, err := c.Chat(context.Background(), []Message{{Role: "system", Content: "resident identity"}, {Role: "user", Content: "keep cch=00000; literally"}}, ChatOptions{})
+					if err != nil {
+						t.Error(err)
+					} else if resp.Choices[0].Message.Content != "alive" {
+						t.Error("stream text lost")
+					}
+				}()
 			}
-		}
-		billing := req["system"].([]any)[0].(map[string]any)["text"].(string)
-		if !strings.Contains(billing, "cc_prompt_id="+pid+";") {
-			t.Error("header/body prompt id mismatch")
-		}
-		start := strings.Index(billing, "cch=") + 4
-		unsigned := bytes.Replace(b, []byte("cch="+billing[start:start+5]+";"), []byte("cch=00000;"), 1)
-		signed, err := signClaudeBody(unsigned, capturedClaudeProfile().Checksum)
-		if err != nil || !bytes.Equal(signed, b) {
-			t.Errorf("bad request checksum: %v", err)
-		}
-		var metadata map[string]string
-		if err := json.Unmarshal([]byte(req["metadata"].(map[string]any)["user_id"].(string)), &metadata); err != nil {
-			t.Error(err)
-		}
-		if metadata["session_id"] != sid || len(metadata["device_id"]) != 64 || metadata["account_uuid"] != "" {
-			t.Error("metadata mismatch")
-		}
-		if req["stream"] != true || req["diagnostics"] == nil || req["tools"] == nil {
-			t.Error("profile envelope missing")
-		}
-		if req["system"].([]any)[1].(map[string]any)["text"] != "resident identity" {
-			t.Error("identity changed")
-		}
-		mu.Lock()
-		requests = append(requests, req)
-		sessions = append(sessions, sid)
-		prompts = append(prompts, pid)
-		requestIDs = append(requestIDs, rid)
-		mu.Unlock()
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, anthropicFixtureStream("end_turn", `null`))
-	}))
-	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Credential: fixedCredential{token: "fixture"}, ClaudeCode: capturedClaudeProfile()})
-	var wg sync.WaitGroup
-	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			resp, err := c.Chat(context.Background(), []Message{{Role: "system", Content: "resident identity"}, {Role: "user", Content: "keep cch=00000; literally"}}, ChatOptions{})
-			if err != nil {
-				t.Error(err)
-			} else if resp.Choices[0].Message.Content != "alive" {
-				t.Error("stream text lost")
+			wg.Wait()
+			if len(requests) != 4 {
+				t.Fatalf("requests %d", len(requests))
 			}
-		}()
-	}
-	wg.Wait()
-	if len(requests) != 4 {
-		t.Fatalf("requests %d", len(requests))
-	}
-	seen := map[string]bool{}
-	for i := range sessions {
-		if sessions[i] != sessions[0] {
-			t.Error("session changed on one client")
-		}
-		for _, id := range []string{prompts[i], requestIDs[i]} {
-			if seen[id] {
-				t.Error("correlation id reused across calls")
+			seen := map[string]bool{}
+			for i := range sessions {
+				if sessions[i] != sessions[0] {
+					t.Error("session changed on one client")
+				}
+				if !tc.signed {
+					continue
+				}
+				for _, id := range []string{prompts[i], requestIDs[i]} {
+					if seen[id] {
+						t.Error("correlation id reused across calls")
+					}
+					seen[id] = true
+				}
 			}
-			seen[id] = true
-		}
+		})
 	}
 }
 
@@ -277,7 +391,7 @@ func TestAnOutputLimitInsideStreamedToolArgumentsIsACutReplyAndNotADecodeFailure
 			io.WriteString(w, stream(stop))
 		}))
 		defer srv.Close()
-		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 		return c.Chat(context.Background(), []Message{{Role: "user", Content: "write the file"}}, ChatOptions{})
 	}
 
@@ -371,13 +485,14 @@ data: {"type":"message_stop"}
 }
 
 func TestClaudeProfileJSONOverridesReachWire(t *testing.T) {
-	p := capturedClaudeProfile()
+	p := shippedClaudeProfile()
+	p.Version = "9.9.9" // credential_options client_version: the profile JSON does not carry it
 	// This exercises the public JSON names rather than assigning Go fields.
 	if err := json.Unmarshal([]byte(`{"request_path":"/configured?beta=custom","stream":false,"metadata":false,"diagnostics":false,"empty_tools":false,"billing_template":"configured {client_version}.{fingerprint}; cch={checksum}; id={prompt_id}","headers":{"user-agent":"configured/{client_version}","x-fixture":"{entrypoint}"},"entrypoint":"configured","thinking_display":"summarized","context_management":{"edits":[]},"output_config":{"effort":"high"},"fingerprint_salt":"configured","fingerprint_positions":[0,2],"fingerprint_length":4,"checksum":{"seed":"0x1234","marker":"cch=","hex_length":6,"empty_string_keys":[],"omit_keys":[],"trailing_group_comma":false}}`), p); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RequestURI() != p.RequestPath || r.Header.Get("User-Agent") != "configured/2.1.283" || r.Header.Get("x-fixture") != "configured" {
+		if r.URL.RequestURI() != p.RequestPath || r.Header.Get("User-Agent") != "configured/9.9.9" || r.Header.Get("x-fixture") != "configured" {
 			t.Error("configured route/headers ignored")
 		}
 		var body map[string]any
@@ -395,7 +510,7 @@ func TestClaudeProfileJSONOverridesReachWire(t *testing.T) {
 		if len(body["context_management"].(map[string]any)["edits"].([]any)) != 0 {
 			t.Error("context policy ignored")
 		}
-		if !strings.HasPrefix(body["system"].([]any)[0].(map[string]any)["text"].(string), "configured 2.1.283.") {
+		if !strings.HasPrefix(body["system"].([]any)[0].(map[string]any)["text"].(string), "configured 9.9.9.") {
 			t.Error("billing template ignored")
 		}
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
@@ -408,7 +523,7 @@ func TestClaudeProfileJSONOverridesReachWire(t *testing.T) {
 }
 
 func TestClaudeChecksumChangesOnlyFirstSystemBlock(t *testing.T) {
-	p := capturedClaudeProfile()
+	p := claude2283Profile()
 	billing := "x-anthropic-billing-header: cch=00000;"
 	raw, err := json.Marshal(map[string]any{"context_management": map[string]string{"text": billing}, "system": []map[string]string{{"type": "text", "text": billing}}, "messages": []map[string]string{{"role": "user", "content": billing}}})
 	if err != nil {
@@ -443,7 +558,7 @@ func TestClaudeProfileDefaultsDoNotReplaceUnsupportedExplicitRequests(t *testing
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
 	}))
 	defer srv.Close()
-	c := New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Credential: fixedCredential{token: "fixture"}, ClaudeCode: capturedClaudeProfile(), ThinkingMode: "adaptive", ThinkingDisplay: "unsupported", ReasoningEffort: "unsupported", EffortLevels: []string{"medium"}})
+	c := New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Credential: fixedCredential{token: "fixture"}, ClaudeCode: shippedClaudeProfile(), ThinkingMode: "adaptive", ThinkingDisplay: "unsupported", ReasoningEffort: "unsupported", EffortLevels: []string{"medium"}})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, ChatOptions{}); err != nil {
 		t.Fatal(err)
 	}

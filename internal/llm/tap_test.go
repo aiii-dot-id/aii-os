@@ -273,7 +273,7 @@ func TestTheAnthropicDialectIsCapturedToo(t *testing.T) {
 	defer srv.Close()
 	dir := tapDir(t)
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "a-model", Provider: "anthropic", MaxOutputTokens: 512})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "a-model", Provider: "anthropic", Headers: anthropicHeaders(), MaxOutputTokens: 512})
 	resp, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "ANTHROPIC-QUESTION"}}, ChatOptions{})
 	if err != nil {
 		t.Fatal(err)

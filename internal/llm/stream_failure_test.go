@@ -69,7 +69,7 @@ func TestAStreamThatFailedBeforeAnyReplyIsAskedOnceMore(t *testing.T) {
 			io.WriteString(w, answers[min(n, len(answers))-1])
 		}))
 		t.Cleanup(srv.Close)
-		return New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", RetryBackoffMS: 1}), &calls
+		return New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", RetryBackoffMS: 1, Headers: anthropicHeaders()}), &calls
 	}
 	ask := func(c *Client) (*Response, error) {
 		return c.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, ChatOptions{})

@@ -315,6 +315,15 @@ window.fetch = (url, init) => {
   return realFetch(url, init);
 };
 const cited = () => [...document.querySelectorAll('[aria-labelledby="who-portrait"] a')].map(a => a.getAttribute('href'));
+const portrait = () => ((document.querySelector('.who__portrait') || {}).textContent || '').trim();
+// shownAndRead waits, bounded, for these words to be the portrait shown and for the
+// record to have been read for them; a check after it says if either did not happen,
+// so "nothing dates it" is never read off a page that had not yet looked.
+const shownAndRead = async (words, readsBefore) => {
+  await until(() => portrait() === words && reads > readsBefore, 5000);
+  await tick(); await tick(); // as before the read was waited on: two ticks after it, never fewer
+  check(portrait() === words && reads > readsBefore, 'the portrait "' + words + '" was not shown and looked up: ' + portrait() + ', ' + (reads - readsBefore) + ' reads');
+};
 const identity = synthesis => sockets[0].say({ type: 'identity', identity: { synthesis, beliefs: [], intentions: [], experiences: [], brief: '', charter: '', trust_level: '', autonomy_level: '' } });
 async function run() {
   await until(() => sockets.length > 0);
@@ -325,14 +334,17 @@ async function run() {
   await until(() => cited().length > 0, 5000);
   check(cited().join() === '#/identity/record/7', 'the portrait is not cited by the entry that wrote it: ' + cited().join());
   // Rewritten, but the record still answers with the old entry: no date is lent.
-  identity('I work on writing and on the build.'); await tick(); await tick();
+  let was = reads;
+  identity('I work on writing and on the build.'); await shownAndRead('I work on writing and on the build.', was);
   check(cited().length === 0, 'an entry that did not write the portrait shown dates it: ' + cited().join());
   // An older entry whose words begin the new portrait is not its writer.
-  identity('I work on writing. I also build tools.'); await tick(); await tick();
+  was = reads;
+  identity('I work on writing. I also build tools.'); await shownAndRead('I work on writing. I also build tools.', was);
   check(cited().length === 0, 'an older entry that is a prefix of the portrait dates it: ' + cited().join());
   // The record answers with the new entry: the date is read with it.
   entry = { seq: '9', text: 'I work on writing and on the build.' };
-  identity('I work on writing and on the build. '); identity('I work on writing and on the build.'); await tick(); await tick();
+  identity('I work on writing and on the build. '); identity('I work on writing and on the build.');
+  await until(() => cited().join() === '#/identity/record/9', 5000);
   check(cited().join() === '#/identity/record/9', 'the rewritten portrait is not cited by its own entry: ' + cited().join());
   // A head the record cut: read whole, then it dates the portrait it wrote.
   entry = { seq: '11', text: 'I work on writing, on the build, and on the long tail of the release notes. 😀' }; cut = 40;

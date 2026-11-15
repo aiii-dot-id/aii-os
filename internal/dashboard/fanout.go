@@ -172,23 +172,23 @@ func (s *Server) broadcastSandbox(ctx context.Context, skip carrier) {
 	s.fanOut(ctx, s.conns(func(c carrier, _ *wsClient) bool { return c != skip }), ServerMessage{Type: "sandbox", Sandbox: sb})
 }
 
-func (s *Server) sendWorkspace(ctx context.Context, conn carrier, h *WSHandler, id string) {
+func (s *Server) sendWorkspace(ctx context.Context, conn carrier, h *WSHandler, id, requestID string) {
 	if h.GetWorkspace == nil {
-		s.sendError(ctx, conn, "not available")
+		s.sendErrorFor(ctx, conn, requestID, "not available")
 		return
 	}
 	if id == "" {
-		s.sendError(ctx, conn, "workspace query requires a project id")
+		s.sendErrorFor(ctx, conn, requestID, "workspace query requires a project id")
 		return
 	}
 	ws, err := h.GetWorkspace(id)
 	if err != nil {
-		s.sendError(ctx, conn, err.Error())
+		s.sendErrorFor(ctx, conn, requestID, err.Error())
 		return
 	}
 	if ws == nil {
 
-		s.sendError(ctx, conn, "project not found: "+id)
+		s.sendErrorFor(ctx, conn, requestID, "project not found: "+id)
 		return
 	}
 

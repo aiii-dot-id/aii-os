@@ -25,7 +25,7 @@ func answering(t *testing.T, provider, model, body string) *Client {
 		io.WriteString(w, body)
 	}))
 	t.Cleanup(srv.Close)
-	return New(&ClientConfig{Endpoint: srv.URL, Provider: provider, APIKey: "fixture-key", Model: model, Retries: -1})
+	return New(&ClientConfig{Endpoint: srv.URL, Provider: provider, APIKey: "fixture-key", Model: model, Retries: -1, Headers: anthropicHeaders()})
 }
 
 const (

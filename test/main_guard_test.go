@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -164,6 +165,13 @@ type guardedRepo struct {
 
 func newGuardedRepo(t *testing.T) *guardedRepo {
 	t.Helper()
+	return newGuardedRepoFrom(t, filepath.Join(repoRoot(t), "test", "support", "landing"))
+}
+
+// newGuardedRepoFrom is newGuardedRepo with the guard installed from another
+// landing folder: a changed copy of the shipped guard, for a control.
+func newGuardedRepoFrom(t *testing.T, landing string) *guardedRepo {
+	t.Helper()
 	guardRig(t)
 	base := t.TempDir()
 	r := &guardedRepo{t: t, dir: filepath.Join(base, "repo"), lock: filepath.Join(base, "gate.lock"), evidence: filepath.Join(base, "records")}
@@ -174,21 +182,30 @@ func newGuardedRepo(t *testing.T) *guardedRepo {
 	}
 	r.git("init", "-q", "-b", "main")
 	r.commit("the first commit")
-	install := exec.Command("sh", filepath.Join(repoRoot(t), "test", "support", "landing", "install-main-guard.sh"), r.dir)
+	install := exec.Command("sh", filepath.Join(landing, "install-main-guard.sh"), r.dir)
 	if out, err := install.CombinedOutput(); err != nil || !strings.Contains(string(out), "main guard in force") {
 		t.Fatalf("installing the guard: %v\n%s", err, out)
 	}
 	return r
 }
 
-func (r *guardedRepo) run(args ...string) (string, error) {
+// guardOperator stands in for the operator's address in every rig command
+// (AII_OPERATOR_ADDRESS): the guard's own default names the real one, which
+// no file under test/ may hold.
+const guardOperator = "operator@example.invalid"
+
+func (r *guardedRepo) run(args ...string) (string, error) { return r.runWith(nil, args...) }
+
+// runWith is run with more environment: a commit's author and committer.
+func (r *guardedRepo) runWith(extra []string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-c", "user.name=rig", "-c", "user.email=rig@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = r.dir
-	env := cleanEnv("AII_GATE_LOCK="+r.lock, "AII_GATE_EVIDENCE="+filepath.Join(r.evidence, "*-evidence.*"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	env := cleanEnv("AII_GATE_LOCK="+r.lock, "AII_GATE_EVIDENCE="+filepath.Join(r.evidence, "*-evidence.*"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"AII_OPERATOR_ADDRESS="+guardOperator)
 	if r.token != "" {
 		env = append(env, "AII_GATE_LOCK_TOKEN="+r.token)
 	}
-	cmd.Env = env
+	cmd.Env = append(env, extra...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -480,4 +497,277 @@ func TestMainMovesOnlyToACommitThatContainsIt(t *testing.T) {
 		t.Fatalf("THE SAME WORK, REBASED AND GATED, DID NOT LAND: %v\n%s", err, out)
 	}
 	r.mainIs(rebased, "after the rebased landing")
+}
+
+// A COMMIT CARRYING THE OPERATOR'S ADDRESS DOES NOT REACH MAIN, BY ANY
+// ROUTE IT WAS MADE (2026-11-14). That night the address was on eight
+// admitted commits and four on main, made by commit, commit-tree,
+// cherry-pick and rebase; no commit hook sees the last three, and every
+// one reaches main through the guard. Each route here makes a commit whose
+// author or committer is the address, written in any case, and gives it a
+// sealed full-scope PASS record, so the address is all that stops it; the
+// same route under an agent's own name then lands. What main already holds
+// is not read again: a commit carrying the address that reached main
+// without the guard does not stop the next landing.
+func TestMainTakesNoCommitCarryingTheOperatorsAddressByAnyRoute(t *testing.T) {
+	r := newGuardedRepo(t)
+	do := func(env []string, args ...string) string {
+		t.Helper()
+		out, err := r.runWith(env, args...)
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	as := func(author, committer string) []string {
+		return []string{"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=" + author, "GIT_COMMITTER_NAME=c", "GIT_COMMITTER_EMAIL=" + committer}
+	}
+	const agent = "agent@example.invalid"
+	work := func(branch string, env []string) {
+		t.Helper()
+		guardCommits++
+		name := fmt.Sprintf("file-%d.txt", guardCommits)
+		write(t, r.dir, name, branch+"\n")
+		do(nil, "add", name)
+		do(env, "commit", "-q", "-m", branch)
+	}
+	// Each route makes one commit from main, as the identity given, and
+	// says how main is moved to it.
+	routes := []struct {
+		route, field      string
+		author, committer string // of the refused commit
+		make              func(branch string, env []string) (tip string, move []string)
+	}{
+		{"commit", "author", strings.ToUpper(guardOperator), agent, func(branch string, env []string) (string, []string) {
+			do(nil, "checkout", "-q", "-b", branch, "main")
+			work(branch, env)
+			do(nil, "checkout", "-q", "main")
+			return do(nil, "rev-parse", branch), []string{"merge", "-q", "--ff-only", branch}
+		}},
+		{"commit-tree", "committer", agent, guardOperator, func(branch string, env []string) (string, []string) {
+			tip := do(env, "commit-tree", "-p", "main", "-m", branch, "main^{tree}")
+			return tip, []string{"update-ref", "refs/heads/main", tip}
+		}},
+		{"cherry-pick", "committer", agent, guardOperator, func(branch string, env []string) (string, []string) {
+			do(nil, "checkout", "-q", "-b", branch+"-source", "main")
+			work(branch, as(agent, agent))
+			do(nil, "checkout", "-q", "-b", branch, "main")
+			do(env, "cherry-pick", branch+"-source")
+			do(nil, "checkout", "-q", "main")
+			return do(nil, "rev-parse", branch), []string{"merge", "-q", "--ff-only", branch}
+		}},
+		{"rebase", "committer", agent, guardOperator, func(branch string, env []string) (string, []string) {
+			do(nil, "checkout", "-q", "-b", branch, "main")
+			work(branch, as(agent, agent))
+			do(env, "rebase", "-q", "--force-rebase", "main")
+			do(nil, "checkout", "-q", "main")
+			return do(nil, "rev-parse", branch), []string{"merge", "-q", "--ff-only", branch}
+		}},
+	}
+	for _, c := range routes {
+		before := r.git("rev-parse", "main")
+		tip, move := c.make(c.route+"-carrying", as(c.author, c.committer))
+		if who := do(nil, "log", "-1", "--format=%ae %ce", tip); who != c.author+" "+c.committer {
+			t.Fatalf("rig: the %s route made a commit by %q, want %q", c.route, who, c.author+" "+c.committer)
+		}
+		r.record(c.route+"-carrying", tip, nil)
+		out := r.refused(move...)
+		if !strings.Contains(out, "whose author or committer is the operator's address") || !strings.Contains(out, " "+do(nil, "rev-parse", "--short", tip)+" "+c.field) {
+			t.Fatalf("A COMMIT MADE BY %s WITH THE OPERATOR'S ADDRESS AS ITS %s WAS NOT REFUSED FOR IT (git %s):\n%s", strings.ToUpper(c.route), strings.ToUpper(c.field), strings.Join(move, " "), out)
+		}
+		if strings.Contains(strings.ToLower(out), guardOperator) {
+			t.Errorf("the refusal printed the address it refuses:\n%s", out)
+		}
+		r.mainIs(before, "after the refused "+c.route)
+
+		tip, move = c.make(c.route+"-own", as(agent, agent))
+		r.record(c.route+"-own", tip, nil)
+		if out, err := r.run(move...); err != nil {
+			t.Fatalf("A COMMIT MADE BY %s UNDER AN AGENT'S OWN NAME DID NOT LAND: %v\n%s", strings.ToUpper(c.route), err, out)
+		}
+		r.mainIs(tip, "after the "+c.route+" made under an agent's own name")
+	}
+
+	// A commit carrying the address that is on main already (put there here
+	// with the hooks turned off, as the four of 2026-11-14 got there before
+	// this check) does not stop the next landing.
+	do(nil, "checkout", "-q", "-b", "already", "main")
+	work("already", as(guardOperator, guardOperator))
+	do(nil, "checkout", "-q", "main")
+	do(nil, "-c", "core.hooksPath="+t.TempDir(), "merge", "-q", "--ff-only", "already")
+	next := r.candidate("after-already")
+	r.record("after-already", next, nil)
+	if out, err := r.run("merge", "-q", "--ff-only", "after-already"); err != nil {
+		t.Fatalf("A COMMIT MAIN ALREADY HOLDS WAS READ AGAIN, AND STOPPED THE NEXT LANDING: %v\n%s", err, out)
+	}
+	r.mainIs(next, "after landing on top of what main already held")
+}
+
+// THE GUARD GOES WHERE GIT RUNS HOOKS (2026-11-14). The shared checkout sets
+// core.hooksPath, and the installer wrote into .git/hooks whatever it said:
+// a reinstall there would have left the old guard in force and said the new
+// one was. Here the repository sets core.hooksPath; the installer puts the
+// guard there, says so, and an ungated move of main is refused by it.
+func TestTheGuardIsInstalledWhereGitRunsHooks(t *testing.T) {
+	guardRig(t)
+	base := t.TempDir()
+	r := &guardedRepo{t: t, dir: filepath.Join(base, "repo"), lock: filepath.Join(base, "gate.lock"), evidence: filepath.Join(base, "records")}
+	for _, d := range []string{r.dir, r.evidence} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.git("init", "-q", "-b", "main")
+	first := r.commit("the first commit")
+	hooks := filepath.Join(base, "hooks-in-force")
+	r.git("config", "core.hooksPath", hooks)
+	install := exec.Command("sh", filepath.Join(repoRoot(t), "test", "support", "landing", "install-main-guard.sh"), r.dir)
+	out, err := install.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "main guard in force: "+filepath.Join(hooks, "reference-transaction")) {
+		t.Fatalf("THE GUARD WAS NOT PUT WHERE core.hooksPath SAYS GIT RUNS HOOKS: %v\n%s", err, out)
+	}
+	c := r.candidate("ungated")
+	if out := r.refused("merge", "-q", "--ff-only", "ungated"); !strings.Contains(out, c+" has no sealed, full-scope PASS record") {
+		t.Fatalf("an ungated move of main was refused for another reason:\n%s", out)
+	}
+	r.mainIs(first, "after the refused move under core.hooksPath")
+}
+
+// "NONE" IS TRUE ONLY WHEN EVERY COMMIT WAS COMPARED, WITH THE OPERATOR'S
+// OWN ADDRESS. Each case is a fresh rig with a sealed full-scope PASS record for
+// the commit it would land, so only check 4 can stop it.
+func TestTheGuardsAuthorshipCheckComparesEveryCommitWithTheOperatorsOwnAddress(t *testing.T) {
+	landing := filepath.Join(repoRoot(t), "test", "support", "landing")
+	raw, err := os.ReadFile(filepath.Join(landing, "main-guard.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The guard's own address, read from the guard so that no file under
+	// test/ names it. Only the cases that need it ask for it, so every other
+	// case runs against a guard without such a line.
+	own := ""
+	if m := regexp.MustCompile(`(?m)^operator=(\S+@\S+)$`).FindSubmatch(raw); m != nil {
+		own = string(m[1])
+	}
+	needOwn := func(t *testing.T) {
+		t.Helper()
+		if own == "" {
+			t.Fatal("main-guard.sh does not set operator= to an address on a line of its own; this case cannot read it")
+		}
+	}
+	path := func(shim string) string { return "PATH=" + shim + string(os.PathListSeparator) + os.Getenv("PATH") }
+	// landed makes one commit from main on a branch of its own as env, gives
+	// it a record, and returns it.
+	landed := func(t *testing.T, r *guardedRepo, branch string, env []string) string {
+		t.Helper()
+		r.git("checkout", "-q", "-b", branch, "main")
+		write(t, r.dir, branch+".txt", branch+"\n")
+		r.git("add", branch+".txt")
+		if out, err := r.runWith(env, "commit", "-q", "-m", branch); err != nil {
+			t.Fatalf("commit: %v\n%s", err, out)
+		}
+		tip := r.git("rev-parse", "HEAD")
+		r.git("checkout", "-q", "main")
+		r.record(branch, tip, nil)
+		return tip
+	}
+	refusedWith := func(t *testing.T, r *guardedRepo, env []string, branch, want string) {
+		t.Helper()
+		before := r.git("rev-parse", "main")
+		out, err := r.runWith(env, "merge", "-q", "--ff-only", branch)
+		if err == nil || !strings.Contains(out, "main-guard: REFUSED: ") || !strings.Contains(out, want) {
+			t.Fatalf("MAIN MOVED, OR WAS REFUSED FOR ANOTHER REASON THAN %q: %v\n%s", want, err, out)
+		}
+		if (own != "" && strings.Contains(strings.ToLower(out), strings.ToLower(own))) || strings.Contains(strings.ToLower(out), guardOperator) {
+			t.Errorf("the refusal printed an address it refuses:\n%s", out)
+		}
+		r.git("reset", "-q", "--hard", "HEAD")
+		r.mainIs(before, "after the refusal")
+	}
+	short := func(r *guardedRepo, c string) string { return r.git("rev-parse", "--short", c) }
+
+	t.Run("(a) the operator's own address is refused while a stand-in is set", func(t *testing.T) {
+		needOwn(t)
+		r := newGuardedRepo(t)
+		c := landed(t, r, "own", []string{"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=" + strings.ToUpper(own)})
+		refusedWith(t, r, nil, "own", " "+short(r, c)+" author")
+	})
+	t.Run("(b) a comparison that fails refuses", func(t *testing.T) {
+		r := newGuardedRepo(t)
+		landed(t, r, "clean", nil)
+		refusedWith(t, r, []string{path(failingTool(t, "awk", "tolower", 2))}, "clean", "could not be compared")
+		if out, err := r.run("merge", "-q", "--ff-only", "clean"); err != nil {
+			t.Fatalf("the same commit, compared, did not land: %v\n%s", err, out)
+		}
+	})
+	t.Run("(b) a comparison that compares nothing refuses", func(t *testing.T) {
+		r := newGuardedRepo(t)
+		landed(t, r, "clean", nil)
+		refusedWith(t, r, []string{path(failingTool(t, "awk", "tolower", 0))}, "clean", "but the comparison of their authors read none")
+	})
+	t.Run("(c) a case fold that fails does not empty the address", func(t *testing.T) {
+		r := newGuardedRepo(t)
+		c := landed(t, r, "folded", []string{"GIT_COMMITTER_NAME=c", "GIT_COMMITTER_EMAIL=" + guardOperator})
+		refusedWith(t, r, []string{path(failingTool(t, "tr", "", 2))}, "folded", " "+short(r, c)+" committer")
+	})
+	t.Run("(c) an empty address refuses", func(t *testing.T) {
+		needOwn(t)
+		mutant := t.TempDir()
+		line := regexp.MustCompile(`(?m)^operator=\S+$`)
+		if !line.Match(raw) {
+			t.Fatal("the control could not be made: main-guard.sh has no operator= line to empty")
+		}
+		write(t, mutant, "main-guard.sh", string(line.ReplaceAll(raw, []byte("operator="))))
+		installer, err := os.ReadFile(filepath.Join(landing, "install-main-guard.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, mutant, "install-main-guard.sh", string(installer))
+		r := newGuardedRepoFrom(t, mutant)
+		landed(t, r, "clean", nil)
+		refusedWith(t, r, nil, "clean", "holds no operator's address to compare with")
+	})
+	t.Run("(d) an address with a space does not hide the other field", func(t *testing.T) {
+		r := newGuardedRepo(t)
+		c := landed(t, r, "spaced", []string{"GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=x y@example.invalid", "GIT_COMMITTER_NAME=c", "GIT_COMMITTER_EMAIL=" + guardOperator})
+		if kept := r.git("log", "-1", "--format=%ae", c); kept != "x y@example.invalid" {
+			t.Fatalf("rig: this git did not keep the space in the author's address (%q)", kept)
+		}
+		refusedWith(t, r, nil, "spaced", " "+short(r, c)+" committer")
+	})
+}
+
+// A COPY THAT FAILS IS NOT AN INSTALL. The
+// installer chained its copy, mode and rename with && under set -e, which
+// does not stop at a failed step inside such a list, and then said "in
+// force" whatever had happened. Here the copy cannot be made (a directory
+// stands where the copy's file would go): the installer must fail, must not
+// say the guard is in force, and git must still run no guard.
+func TestTheGuardsInstallerSaysInForceOnlyOfWhatItInstalled(t *testing.T) {
+	guardRig(t)
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	hooks := strings.TrimSpace(func() string {
+		out, err := exec.Command("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}())
+	if err := os.MkdirAll(filepath.Join(hooks, "reference-transaction.new", "main-guard.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	install := exec.Command("sh", filepath.Join(repoRoot(t), "test", "support", "landing", "install-main-guard.sh"), repo)
+	out, err := install.CombinedOutput()
+	if err == nil || strings.Contains(string(out), "main guard in force") {
+		t.Fatalf("A COPY THAT FAILED WAS REPORTED AS AN INSTALL: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(hooks, "reference-transaction")); err == nil {
+		t.Errorf("a hook stands after an install that failed")
+	}
 }

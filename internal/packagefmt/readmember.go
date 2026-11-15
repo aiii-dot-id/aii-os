@@ -3,8 +3,9 @@ package packagefmt
 import (
 	"bytes"
 	"io"
-	"os"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 )
 
 const maxMemberReadBytes = 64 << 20
@@ -24,9 +25,10 @@ func ReadMembers(pkgPath string, installRelPaths []string, fn func(installRelPat
 	if len(installRelPaths) == 0 {
 		return nil
 	}
-	f, err := os.Open(pkgPath)
+
+	f, err := atomicfile.Open(pkgPath)
 	if err != nil {
-		return fail(ReasonEnvelopeMalformed, "open", "%v", err)
+		return fail(ReasonEnvelopeMalformed, "open", "%w", err)
 	}
 	defer f.Close()
 	return readMembers(f, installRelPaths, fn)

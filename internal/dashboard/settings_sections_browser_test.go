@@ -26,8 +26,7 @@ run(() => {
   };
   const marks = {
     substrate: '#cfg-provider', providers: '#pv-open-new', speech: '#speech-form', dashboard: '#cfg-dtls',
-    backups: 'text:loading backups', sandbox: 'text:loading sandbox', tools: 'text:Tools · ',
-    messages: '#contact-channels', updates: '[data-app]',
+    backups: 'text:loading backups', messages: '#contact-channels', updates: '[data-app]',
   };
   // The page each section is drawn on, named by its first section.
   const pageOf = id => id === 'providers' ? 'substrate' : id;
@@ -40,6 +39,8 @@ run(() => {
   for (const id of ids) {
     S.settingsSection(id); S.requestSettingsSection(); renderSettings();
     assert(!st().querySelector('[data-sec]'), id + ': the page draws a row of section buttons');
+    // The folders and the tools are drawn on Plugins and permissions (A10), on no page of Settings.
+    assert(!st().querySelector('[data-folders], [data-tools]'), id + ': a Settings page draws the folders or the tools');
     assert(st().dataset.section === pageOf(id), id + ' opened the page ' + st().dataset.section + ', not ' + pageOf(id));
     for (const other of ids) {
       const block = st().querySelector('[data-section="' + other + '"]');

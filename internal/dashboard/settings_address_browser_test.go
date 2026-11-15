@@ -26,10 +26,14 @@ run(async (assert) => {
   renderSettings();
   assert(location.hash === '#/settings/model', 'the address does not name the group shown: ' + location.hash);
   const entries = history.length;
-  S.settingsSection('sandbox'); S.requestSettingsSection(); renderSettings();
-  assert(location.hash === '#/settings/sandbox', 'a section switch did not reach the address: ' + location.hash);
+  S.settingsSection('backups'); S.requestSettingsSection(); renderSettings();
+  assert(location.hash === '#/settings/backups', 'a section switch did not reach the address: ' + location.hash);
   assert(history.length === entries, 'switching sections added history entries');
-  assert(S.settingsSection('nonsense') === false && location.hash === '#/settings/sandbox', 'a name that is not a section moved the page');
+  assert(S.settingsSection('nonsense') === false && location.hash === '#/settings/backups', 'a name that is not a section moved the page');
+  // The folders and the tools are drawn on Plugins and permissions (A10):
+  // they are no longer sections of this page, and the router sends their
+  // old addresses there (TestAReloadLandsOnTheSettingsSectionItLeft).
+  assert(S.settingsSection('sandbox') === false && S.settingsSection('tools') === false && location.hash === '#/settings/backups', 'the folders or the tools are still a section of Settings');
   assert(S.settingsSection('providers') === true, 'a real section was refused');
   renderSettings();
   const shown = document.querySelector('#settings-stack [data-section="providers"]'), named = document.querySelector('#settings-stack [data-settings-page-name]');
@@ -62,19 +66,21 @@ run(async (assert) => {
 	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, providersLoaded: false };`)
 	modules["/ws.js"] = []byte(`export function send() { return 'req-1'; } export function query() { return 'req-1'; }`)
 	modules["/pending.js"] = []byte(`export function pendingSlot() { return { arm(){}, claim(){ return false; }, drop(){}, waiting(){ return false; } }; } export function anyPending() { return false; }`)
-	modules["/sandbox.js"] = []byte(`export function sandboxCardHTML() { return ''; } export function wireSandboxCard() {}`)
 	runPageInEngines(t, page, modules)
 }
 
 // A RELOAD LANDS WHERE IT LEFT, AND THE ROUTER KNOWS SECTIONS. The real
 // app.js restores #/settings/speech, and Settings, fetched when it is first
 // drawn on connection (step 21), is told the section once it is in; a later
-// #/settings/sandbox moves the section without leaving the page; the
-// destination in view is aria-current in the navigation.
+// #/settings/backups moves the section without leaving the page; the old
+// addresses of the folders and the tools (#/settings/sandbox,
+// #/settings/tools) go to Plugins and permissions, where they are drawn
+// (A10), in place of the old address; the destination in view is
+// aria-current in the navigation.
 func TestAReloadLandsOnTheSettingsSectionItLeft(t *testing.T) {
 	page := `<!doctype html>
 <nav id="nav"><button type="button" class="nav-item active" data-view="chat" aria-current="page"></button><button type="button" class="nav-item" data-view="settings"></button></nav>
-<div id="views"></div><div id="view-chat" class="view on"></div><div id="view-settings" class="view"></div>
+<div id="views"></div><div id="view-chat" class="view on"></div><div id="view-settings" class="view"></div><div id="view-plugins" class="view"></div>
 <div id="crumb"></div><div id="toast"></div><div id="firstboot"></div>
 <div id="composer-wrap"></div><div id="proj-space"></div><div id="dock"></div>
 <span id="pill-proj"></span><div id="view-projects" class="view"></div>
@@ -97,13 +103,20 @@ try {
   assert(S.view === 'settings' && (window.__sec || [])[0] === 'speech', 'the reload did not land on the section: view=' + S.view + ' sections=' + JSON.stringify(window.__sec));
   assert(window.__sectionRequests === 1, 'connection did not request the selected section');
   assert(history.length === entriesBeforeRestore, 'connected Settings entry added a spurious history entry');
-  location.hash = '#/settings/sandbox';
-  setTimeout(() => {
-    try {
-      assert(S.view === 'settings' && window.__sec.at(-1) === 'sandbox' && window.__renders > 0, 'the router did not move the section: ' + JSON.stringify(window.__sec) + ' renders ' + window.__renders);
-      report('OK');
-    } catch (e) { report('FAIL: ' + ((e && e.message) || String(e))); }
-  }, 80);
+  location.hash = '#/settings/backups';
+  await until(() => window.__sec.at(-1) === 'backups' && window.__renders > 0, 3000).catch(() => {});
+  assert(S.view === 'settings' && window.__sec.at(-1) === 'backups' && window.__renders > 0, 'the router did not move the section: ' + JSON.stringify(window.__sec) + ' renders ' + window.__renders);
+  for (const old of ['#/settings/sandbox', '#/settings/tools']) {
+    location.hash = '#/settings/backups';
+    await until(() => S.view === 'settings' && location.hash === '#/settings/backups', 3000).catch(() => {});
+    const entries = history.length, told = window.__sec.length;
+    location.hash = old;
+    await until(() => S.view === 'plugins', 3000).catch(() => {});
+    assert(S.view === 'plugins' && location.hash === '#/settings/permissions', old + ' did not go to Plugins and permissions: view=' + S.view + ' at ' + location.hash);
+    assert(history.length === entries + 1, old + ' left its own entry in the history beside Plugins and permissions\' (' + (history.length - entries) + ' entries)');
+    assert(window.__sec.length === told, old + ' was told to Settings as a section: ' + JSON.stringify(window.__sec));
+  }
+  report('OK');
 } catch (e) { report('FAIL: ' + ((e && e.message) || String(e))); }
 </script>`
 	appJS, err := staticFS.ReadFile("static/app.js")

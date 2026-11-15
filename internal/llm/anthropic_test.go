@@ -3,9 +3,11 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +21,16 @@ func (c fixedCredential) Credential(context.Context) (Credential, error) {
 }
 
 func (fixedCredential) Stale(context.Context, uint64) error { return nil }
+
+// anthropicHeaders are the headers an operator's providers.json gives an
+// Anthropic entry: no vendor header value is compiled in (the operator,
+// 2026-11-11), so a test client that talks to an Anthropic server is
+// configured with its version as a real entry is. Only the Anthropic dialect
+// reads ClientConfig.Headers, so a table that serves every dialect may pass
+// it to all of them.
+func anthropicHeaders() map[string]string {
+	return map[string]string{"anthropic-version": "2023-06-01"}
+}
 
 // The Anthropic dialect is a wire transform: internal OpenAI-shaped
 // conversation in, Messages-API request out, response mapped back.
@@ -51,7 +63,7 @@ func TestAnthropicDialect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "sk-test", Model: "claude-fable-5", Provider: "anthropic", MaxOutputTokens: 4096})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "sk-test", Model: "claude-fable-5", Provider: "anthropic", Headers: anthropicHeaders(), MaxOutputTokens: 4096})
 
 	system := Message{Role: "system", Content: "STABLE-IDENTITY-PREFIX volatile working truth"}
 	system.StableLen = len("STABLE-IDENTITY-PREFIX")
@@ -164,7 +176,7 @@ func TestAnthropicCacheSeamPreservesPromptBytes(t *testing.T) {
 	defer srv.Close()
 
 	const content = "stable\n\nchanging"
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "key", Model: "model", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "key", Model: "model", Provider: "anthropic", Headers: anthropicHeaders()})
 	if _, err := c.Chat(t.Context(), []Message{
 		{Role: "system", Content: content, StableLen: len("stable")},
 		{Role: "user", Content: "hello"},
@@ -207,7 +219,7 @@ func TestClaudeCodeOAuthWireContract(t *testing.T) {
 	c := New(&ClientConfig{
 		Endpoint: srv.URL, Model: "claude-opus-5", Provider: "anthropic",
 		Credential: fixedCredential{token: "oauth-token", headers: map[string]string{
-			"anthropic-beta": "oauth-test", "user-agent": "claude-cli/test", "x-app": "cli",
+			"anthropic-version": "2023-06-01", "anthropic-beta": "oauth-test", "user-agent": "claude-cli/test", "x-app": "cli",
 			"Authorization": "Bearer attacker", "x-api-key": "attacker", "Content-Type": "text/plain",
 		}},
 		AnthropicOAuthBillingText: billing,
@@ -282,31 +294,32 @@ func TestOpenAIPathUnchangedBySeam(t *testing.T) {
 	}
 }
 
-// The operator owns the vendor API version.
-//
-// providerEntry.credential_options documents header_<Name> as the way
-// to "correct a vendor request fact without a release", oauth.go
-// forwards any header_* verbatim, and applyAuth applies them. But
-// anthropic.go then Set() the version UNCONDITIONALLY, after applyAuth
-// — so an operator who set header_anthropic-version had it silently
-// discarded and the config parameter existed on paper only. Live and
-// configured state must not diverge silently.
-func TestAnthropicVersionIsOperatorSettable(t *testing.T) {
+// The vendor API version is configuration only (the operator, 2026-11-11:
+// "ALL OAuth headers are config file only"). What config names reaches the
+// wire, by either route; with nothing configured the request is refused
+// before it is sent, naming where to set it, and no compiled value stands in.
+func TestAnthropicVersionIsConfigurationOnly(t *testing.T) {
 	reply := `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
 
 	cases := []struct {
-		name     string
-		override string
-		want     string
+		name    string
+		key     map[string]string // the entry's headers, for an API key
+		cred    map[string]string // the credential's headers, for a credential
+		useCred bool
+		want    string // "" = refused, nothing sent
 	}{
-		{"default applies when the operator sets nothing", "", DefaultAnthropicVersion},
-		{"operator override survives applyAuth", "2026-01-01", "2026-01-01"},
+		{"an API key sends the entry's configured version", map[string]string{"anthropic-version": "2023-06-01"}, nil, false, "2023-06-01"},
+		{"a changed configured version is the one sent", map[string]string{"anthropic-version": "2031-02-03"}, nil, false, "2031-02-03"},
+		{"an API key with no configured version is refused", nil, nil, false, ""},
+		{"a credential sends its configured version", nil, map[string]string{"anthropic-version": "2026-01-01"}, true, "2026-01-01"},
+		{"a credential with no configured version is refused", nil, map[string]string{}, true, ""},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var got string
+			got, reached := "", 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached++
 				got = r.Header.Get("anthropic-version")
 				w.Header().Set("Content-Type", "application/json")
 				io.WriteString(w, reply)
@@ -315,24 +328,30 @@ func TestAnthropicVersionIsOperatorSettable(t *testing.T) {
 
 			cfg := &ClientConfig{
 				Endpoint: srv.URL, Model: "claude-fable-5",
-				Provider: "anthropic", MaxOutputTokens: 128,
+				Provider: "anthropic", MaxOutputTokens: 128, Headers: tc.key,
 			}
-			if tc.override == "" {
-				cfg.APIKey = "sk-test"
+			if tc.useCred {
+				cfg.Credential = fixedCredential{token: "tok", headers: tc.cred}
 			} else {
-				cfg.Credential = fixedCredential{
-					token:   "tok",
-					headers: map[string]string{"anthropic-version": tc.override},
-				}
+				cfg.APIKey = "sk-test"
 			}
 
-			c := New(cfg)
-			if _, err := c.Chat(context.Background(),
-				[]Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
+			_, err := New(cfg).Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
+			if tc.want == "" {
+				var unset *HeaderNotConfiguredError
+				if !errors.As(err, &unset) || unset.Header != "anthropic-version" || !strings.Contains(unset.Error(), "providers.json") {
+					t.Fatalf("err = %v, want a HeaderNotConfiguredError for anthropic-version naming providers.json", err)
+				}
+				if reached != 0 {
+					t.Fatalf("the server was reached %d times; a request without its configured version must not be sent", reached)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("chat: %v", err)
 			}
 			if got != tc.want {
-				t.Fatalf("anthropic-version = %q, want %q — the operator's configured value must reach the wire", got, tc.want)
+				t.Fatalf("anthropic-version = %q, want %q: the configured value must reach the wire", got, tc.want)
 			}
 		})
 	}
@@ -372,7 +391,7 @@ func TestAnthropicThinkingModeShapes(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
+			c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders(),
 				ThinkingMode: tc.mode, ThinkingBudget: tc.budget})
 			if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 				t.Fatal(err)
@@ -417,7 +436,7 @@ func TestThinkingBlocksRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	resp, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +484,7 @@ func TestThinkingDisplayAndEffortReachTheWire(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders(),
 		ThinkingMode: "adaptive", ThinkingDisplay: "summarized", ReasoningEffort: "xhigh"})
 	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 		t.Fatal(err)
@@ -488,7 +507,7 @@ func TestEmptyThinkingStillSendsTheField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	prior := Message{Role: "assistant", Content: "an answer",
 		Thinking: []ThinkingBlock{{Kind: "thinking", Text: "", Signature: "sig-1"}}}
 	if _, err := c.Chat(context.Background(), []Message{
@@ -531,7 +550,7 @@ func TestRedactedThinkingReplaysAsItself(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+	c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 	prior := Message{Role: "assistant", Content: "an answer",
 		Thinking: []ThinkingBlock{{Kind: "redacted_thinking", Data: "opaque"}}}
 	if _, err := c.Chat(context.Background(), []Message{

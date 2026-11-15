@@ -306,6 +306,8 @@ func recallMark(h memory.Hit) string {
 
 const recallMarksLegend = "Marks — exact_words: every word of the cue is in the text. fuzzy: near-spellings of its words are. meaning: the text is near the cue in the model's sense, at or above the floor, whatever its words. both: more than one of these found it, named in brackets, meaning with its similarity; only a mark that names meaning says the meaning layer found it. A similarity close to the floor is a weak match."
 
+const recallReinforcedNothing = "This search reinforced nothing: only the identity's own recall does."
+
 func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, limit int, decay string, within string, limitNote string) (string, error) {
 
 	q := memory.Query{Text: query, Exact: exact, Limit: limit, Decay: decay}
@@ -408,6 +410,11 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 			recallRankedCoverage(res.Sources) + meaningLine + unavailable + warningsOf(warnings), nil
 	}
 
+	reinforcement := "This recall reinforced what it returned."
+	if !askedByTheResident(ctx) {
+		reinforcement = recallReinforcedNothing
+	}
+
 	render := func(shown, bound int, warnings []string) string {
 		sources := sourcesShown(res.Sources, res.Hits[:shown])
 		out := []string{head}
@@ -431,7 +438,7 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 		if unavailable != "" {
 			out = append(out, strings.TrimPrefix(unavailable, "\n"))
 		}
-		out = append(out, fmt.Sprintf("Fused is the sum of 1/(%g + its rank) over each pool that ranked a hit; strength reflects each memory's age, its durability class and how often it was consciously recalled; graph is what the record's edges among these hits lend it, 1 where none do. This recall reinforced what it returned. Sources with no matches are omitted.\n", fuse.K)+recallMarksLegend+
+		out = append(out, fmt.Sprintf("Fused is the sum of 1/(%g + its rank) over each pool that ranked a hit; strength reflects each memory's age, its durability class and how often it was consciously recalled; graph is what the record's edges among these hits lend it, 1 where none do. %s Sources with no matches are omitted.\n", fuse.K, reinforcement)+recallMarksLegend+
 			recallRankedCoverage(sources)+meaningLine+warningsOf(warnings))
 		return strings.Join(out, "\n")
 	}
@@ -447,6 +454,10 @@ func (e *Engine) recallRanked(ctx context.Context, query string, exact bool, lim
 		return answer
 	}
 	answer := fit(warnings)
+
+	if !askedByTheResident(ctx) {
+		return answer, nil
+	}
 
 	if err := e.instruments.Reinforce(time.Now(), res.Hits[:shown]); err != nil {
 		answer = fit(append(warnings[:len(warnings):len(warnings)], "reinforcement not recorded: "+err.Error()))

@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
+
+	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
 )
 
 type Result struct {
@@ -75,12 +76,41 @@ func (r *Result) MemberDigest(rel string, raw []byte) (want, got string, ok bool
 }
 
 func VerifyFile(path string, roots TrustRoots) (*Result, error) {
-	f, err := os.Open(path)
+	f, err := atomicfile.Open(path)
 	if err != nil {
-		return nil, fail(ReasonEnvelopeMalformed, "open", "%v", err)
+		return nil, err
 	}
 	defer f.Close()
-	return Verify(f, roots)
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fail(ReasonEnvelopeMalformed, "open", "%s is not a regular file (%s)", path, st.Mode().Type())
+	}
+	return verifyRead(f, roots)
+}
+
+func verifyRead(r io.Reader, roots TrustRoots) (*Result, error) {
+	rr := &readFailure{r: r}
+	res, err := Verify(rr, roots)
+	if rr.err != nil {
+		return nil, rr.err
+	}
+	return res, err
+}
+
+type readFailure struct {
+	r   io.Reader
+	err error
+}
+
+func (f *readFailure) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	if err != nil && err != io.EOF && f.err == nil {
+		f.err = err
+	}
+	return n, err
 }
 
 type bundleContents struct {

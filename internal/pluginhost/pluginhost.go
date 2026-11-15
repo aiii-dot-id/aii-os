@@ -202,6 +202,10 @@ type Options struct {
 type opGate struct {
 	once sync.Once
 	ch   chan struct{}
+
+	mu      sync.Mutex
+	waiting int
+	clear   chan struct{}
 }
 
 func (g *opGate) slot() chan struct{} {
@@ -210,12 +214,68 @@ func (g *opGate) slot() chan struct{} {
 }
 
 func (g *opGate) acquire(ctx context.Context) error {
+	g.mu.Lock()
+	g.waiting++
+	if g.waiting == 1 {
+		g.clear = make(chan struct{})
+	}
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.waiting--
+		if g.waiting == 0 {
+			close(g.clear)
+		}
+		g.mu.Unlock()
+	}()
 	select {
 	case g.slot() <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (g *opGate) acquireAfterOthers(ctx context.Context) error {
+	for {
+		g.mu.Lock()
+		var wait chan struct{}
+		if g.waiting > 0 {
+			wait = g.clear
+		}
+		g.mu.Unlock()
+		if wait != nil {
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
+		}
+		select {
+		case g.slot() <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		g.mu.Lock()
+		others := g.waiting > 0
+		g.mu.Unlock()
+		if !others {
+			return nil
+		}
+		g.release()
+	}
+}
+
+func Scheduled(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scheduledCallKey{}, true)
+}
+
+type scheduledCallKey struct{}
+
+func isScheduled(ctx context.Context) bool {
+	v, _ := ctx.Value(scheduledCallKey{}).(bool)
+	return v
 }
 
 func (g *opGate) release() { <-g.slot() }

@@ -7,8 +7,8 @@ import (
 )
 
 // A CONTRADICTION IS RESOLVED WHEN THE BELIEF IT CAME FROM IS RETIRED, for
-// standing as for the tensions item (a review, 2026-11-08, D1: the tension
-// disappeared, but the belief stayed suspect and promotion refused it).
+// standing as for the tensions item (the tension had disappeared, but the
+// belief stayed suspect and promotion refused it).
 // Real archive and supersede events; the edge and the record are kept.
 // One that comes from a current belief, or from an experience, still holds.
 func TestAContradictionFromARetiredBeliefNoLongerMakesItsTargetSuspect(t *testing.T) {
@@ -61,8 +61,7 @@ func TestAContradictionFromARetiredBeliefNoLongerMakesItsTargetSuspect(t *testin
 	verdict("suspect", false, 1, "an experience contradicts it")
 }
 
-// A SUSPECT BELIEF IS TOLD APART FROM AN UNCONFIRMED ONE (a review and the identity,
-// 2026-11-08, P2): three distinct origins and a live contradiction is
+// A SUSPECT BELIEF IS TOLD APART FROM AN UNCONFIRMED ONE: three distinct origins and a live contradiction is
 // suspect, not "short of origins". Through the event path: the footing says
 // suspect and does not stand, promotion's report is not eligible, and the
 // contradiction is an open tension.

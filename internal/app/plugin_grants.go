@@ -62,7 +62,7 @@ func applyPluginGrant(cfg *Config, key string, v any) error {
 		return fmt.Errorf("%s: want a boolean", key)
 	}
 	if !setGrantField(&g, field, on) {
-		return fmt.Errorf("%s: %q is not a grant the page sets (%s); hosts and credential_handles are granted by a key pasted on the plugin's card or an account chosen on it, or in the config file, and local in the config file; folders are the identity's sandbox (tools.extra_roots, Settings → Sandbox)", key, field, strings.Join(grantFields, ", "))
+		return fmt.Errorf("%s: %q is not a grant the page sets (%s); hosts and credential_handles are granted by a key pasted on the plugin's card or an account chosen on it, or in the config file, and local in the config file; folders are the identity's sandbox (tools.extra_roots, Settings → Plugins and permissions)", key, field, strings.Join(grantFields, ", "))
 	}
 	if grantEmpty(g) {
 		delete(next, id)

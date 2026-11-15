@@ -87,6 +87,9 @@ func TestTheTreeGuardsCarryTheirMarker(t *testing.T) {
 		// A ruling's cited proof is a test in the tree, or listed with where
 		// it is kept (the ruling-proof audit of e60bb9ec, 2026-11-06).
 		"test/ruling_proofs_test.go": {"TestEveryTestARulingCitesIsInTheTree", "TestTheRulingProofGuardRefusesWhatItIsFor", "TestTheRulingProofGuardReadsOnlyThisTreesDeclarations"},
+		// Every test's browser comes through browsertest.Find, which the race
+		// runner refuses outside its browser scope (2026-11-13).
+		"test/browser_scope_test.go": {"TestOnlyTheFinderNamesABrowserToStart", "TestTheBrowserNameGuardRefusesWhatItIsFor"},
 	} {
 		src, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {

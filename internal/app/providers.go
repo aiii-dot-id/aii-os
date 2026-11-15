@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aiii-dot-id/aii-os/internal/atomicfile"
+	"github.com/aiii-dot-id/aii-os/internal/broker"
 	"github.com/aiii-dot-id/aii-os/internal/dashboard"
 	"github.com/aiii-dot-id/aii-os/internal/llm"
 	"github.com/aiii-dot-id/aii-os/internal/logsink"
@@ -62,6 +63,10 @@ type providerEntry struct {
 	typedOnly bool
 
 	CredentialOptions map[string]string `json:"credential_options,omitempty"`
+
+	Headers map[string]string `json:"headers,omitempty"`
+
+	CapabilityCatalogueHeaders map[string]string `json:"capability_catalogue_headers,omitempty"`
 
 	ClaudeCode   *llm.ClaudeCodeProfile `json:"claude_code,omitempty"`
 	DefaultModel string                 `json:"default_model,omitempty"`
@@ -188,7 +193,14 @@ func requiredCredentialOptions(credential string) []string {
 func missingCredentialOptions(credential string, opts map[string]string) []string {
 	var missing []string
 	for _, name := range requiredCredentialOptions(credential) {
-		if strings.TrimSpace(opts[name]) == "" {
+		set := strings.TrimSpace(opts[name]) != ""
+		if !set && strings.HasPrefix(strings.ToLower(name), "header_") {
+
+			for k, v := range opts {
+				set = set || strings.EqualFold(k, name) && strings.TrimSpace(v) != ""
+			}
+		}
+		if !set {
 			missing = append(missing, name)
 		}
 	}
@@ -380,7 +392,7 @@ func fillEmbeddedCredentialOptions(reg *providerRegistry) {
 			e.CredentialOptions = make(map[string]string, len(defaults))
 		}
 		for k, v := range defaults {
-			if _, set := e.CredentialOptions[k]; !set {
+			if !setsOption(e.CredentialOptions, reg.lentTo(e.Name).options, k) {
 				e.CredentialOptions[k] = v
 
 				reg.lentTo(e.Name).option(k, v)
@@ -410,6 +422,14 @@ func fillEmbeddedCredentialOptions(reg *providerRegistry) {
 				formats = e.CredentialOptionFormats
 			}
 			for key, format := range formats {
+
+				if strings.HasPrefix(strings.ToLower(key), "header_") {
+					for k := range e.CredentialOptions {
+						if k != key && strings.EqualFold(k, key) {
+							delete(e.CredentialOptions, k)
+						}
+					}
+				}
 				value := strings.ReplaceAll(format, "{client_version}", ver)
 				e.CredentialOptions[key] = value
 				reg.lentTo(e.Name).option(key, value)
@@ -442,6 +462,34 @@ func (r *providerRegistry) lentTo(name string) *lentFacts {
 		r.lent[name] = &lentFacts{}
 	}
 	return r.lent[name]
+}
+
+func setsOption(opts, lent map[string]string, key string) bool {
+	header := strings.HasPrefix(strings.ToLower(key), "header_")
+	for k := range opts {
+		if _, wasLent := lent[k]; wasLent {
+			continue
+		}
+		if k == key || header && strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *lentFacts) optionsOrNil() map[string]string {
+	if l == nil {
+		return nil
+	}
+	return l.options
+}
+
+func (l *lentFacts) lentFact(name string) bool {
+	if l == nil {
+		return false
+	}
+	_, ok := l.facts[name]
+	return ok
 }
 
 func (l *lentFacts) option(key, value string) {
@@ -669,6 +717,9 @@ func validateEntries(reg *providerRegistry) error {
 			return err
 		}
 		if err := validateCapabilitySources(*e); err != nil {
+			return err
+		}
+		if err := entryHeaderRefusal(*e, reg.lent[e.Name]); err != nil {
 			return err
 		}
 	}
@@ -1170,6 +1221,65 @@ var (
 	embedReg  providerRegistry
 )
 
+func entryHeaders(e providerEntry) map[string]string {
+	out := map[string]string{}
+	shipped := embeddedRegistry().Providers
+	named := false
+	for _, s := range shipped {
+		if s.Name == e.Name && s.Credential == "" {
+			maps.Copy(out, s.Headers)
+			named = true
+			break
+		}
+	}
+	if !named {
+		first := true
+		for _, s := range shipped {
+			if s.Credential != "" || s.APIType != e.APIType {
+				continue
+			}
+			if first {
+				maps.Copy(out, s.Headers)
+				first = false
+				continue
+			}
+			for k, v := range out {
+				if s.Headers[k] != v {
+					delete(out, k)
+				}
+			}
+		}
+	}
+	for k, v := range e.Headers {
+		for have := range out {
+			if strings.EqualFold(have, k) {
+				delete(out, have)
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func catalogueHeaders(e providerEntry) map[string]string {
+	out := map[string]string{}
+	for _, s := range embeddedRegistry().Providers {
+		if s.Name == e.Name && s.Credential == "" {
+			maps.Copy(out, s.CapabilityCatalogueHeaders)
+			break
+		}
+	}
+	for k, v := range e.CapabilityCatalogueHeaders {
+		for have := range out {
+			if strings.EqualFold(have, k) {
+				delete(out, have)
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func embeddedRegistry() *providerRegistry {
 	embedOnce.Do(func() {
 		if err := json.Unmarshal(embeddedProviders, &embedReg); err != nil {
@@ -1413,8 +1523,36 @@ func (r *providerRegistry) oauthContracts() map[string]oauth.Provider {
 		out = map[string]oauth.Provider{}
 	}
 	if r != nil {
+		lend := func(own *oauth.Provider, from map[string]string) {
+			for k, v := range from {
+				named := false
+				for have := range own.TokenHeaders {
+					named = named || strings.EqualFold(have, k)
+				}
+				if !named {
+					if own.TokenHeaders == nil {
+						own.TokenHeaders = map[string]string{}
+					}
+					own.TokenHeaders[k] = v
+				}
+			}
+		}
+
+		var added []string
 		for name := range r.OAuth {
-			out[name], _ = oauth.ProviderTemplate(name, r.OAuth)
+			own, _ := oauth.ProviderTemplate(name, r.OAuth)
+			if shipped, ok := embeddedRegistry().OAuth[name]; ok {
+				lend(&own, shipped.TokenHeaders)
+			} else {
+				added = append(added, name)
+			}
+			out[name] = own
+		}
+
+		for _, name := range added {
+			own := out[name]
+			lend(&own, out[broker.CustomContract].TokenHeaders)
+			out[name] = own
 		}
 	}
 	return out

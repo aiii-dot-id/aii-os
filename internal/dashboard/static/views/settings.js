@@ -3,7 +3,6 @@ import { dashboardHTML, dashboardWarnHTML, wirePublicName } from './settings/acc
 import { NEW_PROVIDER, SPEND_WORDS, chooseEffort, effortAnswered, effortForgotten, forgetSpeechLists, providersHTML, readySpeechService, setAboutOpen, setMoreOpen, setSpendByDayOpen, spendAsked, spendInSpan, spendSectionHTML, submittedEditor, substrateHTML, syncEffort } from './settings/model.js';
 import { setRenderSettings, wireProviderSignIn } from './settings/parts.js';
 import { contactLine, peopleHTML, wireContacts } from './settings/people.js';
-import { pluginToolNote } from './settings/permissions.js';
 import { HEARD_FIELDS, alike, asking, captureEdits, configFeedbackHTML, controlName, editorFields, fieldKey, finishEditor, focusOf, prov, provBroken, restoreEditors, saveSettings, sendConfigChanges, setConfigResult, speechAdd, wireLimits } from './settings/save.js';
 import { modelSays } from './settings/modelwords.js';
 import { asked, config, draft, edits } from './settings/state.js';
@@ -11,7 +10,6 @@ import { BY_ID, heardShown, retentionSaid, speechHTML, wireSpeech } from './sett
 import { renderKeeping } from './settings/keep.js';
 import { localConnectionLost } from './settings/local.js';
 import { holdReloadWhile } from '../overlay.js';
-import { sandboxCardHTML, wireSandboxCard } from '../sandbox.js';
 import { spokenAudio } from '../say.js';
 import { wireScriptsCard } from '../scripts.js';
 import { route } from '../shell/router.js';
@@ -21,8 +19,7 @@ import WVOICE from '../strings/settings-voice.js';
 import WBK from '../strings/settings-backups.js';
 import WACCESS from '../strings/settings-access.js';
 import WPEOPLE from '../strings/settings-people.js';
-import { toolsCardHTML, wireToolsCard } from '../tools.js';
-import { $, esc, fill, loadingCard } from '../util.js';
+import { $, esc, fill } from '../util.js';
 import WSHELL from '../strings/shell.js';
 import WMODEL from '../strings/settings-model.js';
 import { query, send } from '../ws.js';
@@ -47,8 +44,6 @@ export const SECTIONS = [
   ['speech', WVOICE.title, c => speechHTML(c)],
   ['dashboard', WACCESS.title, c => dashboardHTML(c)],
   ['backups', WBK.title, () => backupsHTML()],
-  ['sandbox', 'Sandbox', () => sandboxCardHTML() || loadingCard('sandbox')],
-  ['tools', 'Tools', () => toolsCardHTML(pluginToolNote)],
   ['messages', WPEOPLE.title, c => { drawnRoute = noticeRouteState(); return peopleHTML(c); }],
   ['updates', WAPP.title, c => appHTML(c)]];
 const MOVED_TO_TECHNICAL = { witness: 'verification', prompt: 'limits', agency: 'helpers', identity: 'reflection', logs: 'logs', storage: 'storage', limits: 'limits' };
@@ -180,8 +175,6 @@ S.openSettings = (section, focusID) => {
 };
 S.renderUpdate = () => { if (S.view === 'settings' && shown('updates')) renderSettings(); };
 S.renderBackups = () => { if (S.view === 'settings' && shown('backups')) renderSettings(); };
-S.renderSandbox = () => { if (S.view === 'settings' && shown('sandbox')) renderSettings(); };
-S.renderTools = () => { if (S.view === 'settings' && shown('tools')) renderSettings(); };
 let drawnRoute = null;
 S.renderNoticeRoute = () => { if (S.view === 'settings' && shown('messages') && drawnRoute !== noticeRouteState()) renderSettings(); };
 S.renderMailRepair = () => { if (S.view === 'settings' && shown('messages')) renderSettings(); };
@@ -191,10 +184,8 @@ const GROUPS = { model: ['substrate', 'providers'], voice: ['speech'], people: [
 const groupOf = id => Object.keys(GROUPS).find(g => GROUPS[g].includes(id));
 const pageOf = id => (GROUPS[groupOf(id)] || [id])[0];
 const shown = id => (GROUPS[groupOf(sec)] || [sec]).includes(id);
-const PAGE_NAMES = { permissions: WSHELL.pluginsAndPermissions };
 function pageNameHTML(body) {
-  const g = S.settingsGroup();
-  const name = PAGE_NAMES[g] || WSHELL[g];
+  const name = WSHELL[S.settingsGroup()];
   return !name || /<h2[\s>]/.test(body) ? '' : '<h2 class="settings-access__title" data-settings-page-name>' + esc(name) + '</h2>';
 }
 function enter(id) {
@@ -213,7 +204,7 @@ S.settingsSection = name => {
   enter(want);
   return true;
 };
-S.settingsGroup = () => groupOf(sec) || (sec === 'sandbox' || sec === 'tools' ? 'permissions' : 'technical');
+S.settingsGroup = () => groupOf(sec) || 'technical';
 S.requestSettingsSection = () => {
   if (!S.connected) return;
   if (shown('backups')) requestBackups();
@@ -503,9 +494,7 @@ export function renderSettings() {
     provEl.onchange = () => syncModel(true);
     syncModel(false);
   }
-  if (shown('sandbox')) wireSandboxCard(st);
   if (shown('backups')) wireBackups(st);
-  if (shown('tools')) wireToolsCard(st);
   showDraftNotice(st);
   focusAfter(st, had);
   addressSection();

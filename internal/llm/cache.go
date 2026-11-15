@@ -13,6 +13,8 @@ type CachePolicy struct {
 	TailTTL     string    `json:"tail_ttl,omitempty"`
 	Key         string    `json:"key,omitempty"`
 	Diagnostics bool      `json:"diagnostics,omitempty"`
+
+	DiagnosticsBeta string `json:"diagnostics_beta,omitempty"`
 }
 
 type CacheMode string

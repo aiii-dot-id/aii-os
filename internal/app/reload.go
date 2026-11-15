@@ -580,7 +580,7 @@ func (a *App) reload(asked bool) {
 		logsink.Info("config.decision", "memory.meaning_source applied live -> %q (the source is chosen again at its next use)", fresh.Memory.MeaningSource)
 	}
 	if !reflect.DeepEqual(fresh.Genesis.AgentMemory, current.Genesis.AgentMemory) {
-		logsink.Info("config.decision", "genesis.agent_memory changed: a birth reads it, and Copy notes in Settings → Sandbox reads it when pressed; nothing else reads it, and it waits for no boot")
+		logsink.Info("config.decision", "genesis.agent_memory changed: a birth reads it, and Copy notes in Settings → Plugins and permissions reads it when pressed; nothing else reads it, and it waits for no boot")
 	}
 	if !reflect.DeepEqual(fresh.Logs.Group, current.Logs.Group) || !reflect.DeepEqual(fresh.Logs.Taps, current.Logs.Taps) {
 		logsink.Info("config.decision", "logs.group and logs.taps applied live")

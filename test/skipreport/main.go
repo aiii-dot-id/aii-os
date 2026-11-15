@@ -21,6 +21,8 @@ type results struct {
 	passed   map[test]bool
 	skipped  map[test]string // the reason the test gave, "" when it gave none
 	packages map[string]bool
+	fails    int // fail events: a test's or a package's, -json or -v
+	damaged  int // lines shaped as an event that do not decode as one
 }
 
 func newResults() *results {
@@ -46,10 +48,15 @@ func (r *results) read(in io.Reader) error {
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, `{"`) {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t\r"), "{") {
 			var e event
-			if json.Unmarshal([]byte(line), &e) == nil && e.Action != "" {
+			if json.Unmarshal([]byte(line), &e) != nil || e.Action == "" {
+				r.damaged++
+			} else {
 				t := test{e.Package, e.Test}
+				if e.Action == "fail" {
+					r.fails++
+				}
 				switch {
 				case e.Test == "":
 					if e.Action == "pass" || e.Action == "fail" || e.Action == "skip" {
@@ -73,11 +80,16 @@ func (r *results) read(in io.Reader) error {
 			open = test{name: fields[2]}
 		case len(fields) >= 3 && fields[0] == "---" && fields[1] == "PASS:":
 			pendingPass = append(pendingPass, fields[2])
+		case len(fields) >= 3 && fields[0] == "---" && fields[1] == "FAIL:":
+			r.fails++
 		case len(fields) >= 3 && fields[0] == "---" && fields[1] == "SKIP:":
 			pendingSkip = append(pendingSkip, fields[2])
 			pendingWhy[fields[2]] = textSaid[fields[2]]
 		case len(fields) >= 2 && (strings.HasPrefix(line, "ok ") || strings.HasPrefix(line, "FAIL\t")) && strings.Contains(fields[1], "/"):
 			pkg := fields[1]
+			if strings.HasPrefix(line, "FAIL\t") {
+				r.fails++
+			}
 			r.packages[pkg] = true
 			for _, name := range pendingPass {
 				r.passed[test{pkg, name}] = true
@@ -179,12 +191,37 @@ func (r *results) in(short string) (string, bool) {
 	return "", false
 }
 
+// readElsewhere reads the tests given to another run: "<package>
+// <TopLevelTest>" a line, the package as the critical list names it.
+func readElsewhere(path string) (map[test]bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	given := map[test]bool{}
+	for n, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) == 0:
+		case len(f) != 2 || strings.Contains(f[1], "/"):
+			return nil, fmt.Errorf("%s:%d: want a package and a top-level test", path, n+1)
+		default:
+			given[test{f[0], f[1]}] = true
+		}
+	}
+	return given, nil
+}
+
 // judge is every listed test this platform needs that the run did not
-// run and pass, one line each, naming which of the two it was.
-func judge(r *results, list []critical, platform string, whole bool) []string {
+// run and pass, one line each, naming which of the two it was, leaving out
+// those whose top-level test was given elsewhere.
+func judge(r *results, list []critical, platform string, whole bool, elsewhere map[test]bool) []string {
 	var wrong []string
 	for _, c := range list {
 		if !contains(c.platforms, platform) {
+			continue
+		}
+		if top, _, _ := strings.Cut(c.name, "/"); elsewhere[test{c.pkg, top}] {
 			continue
 		}
 		pkg, ran := r.in(c.pkg)
@@ -214,9 +251,11 @@ func main() {
 	platform := flag.String("platform", "", "the platform the run was made on: "+strings.Join(platforms, ", "))
 	list := flag.String("critical", "", "the list of release-critical tests")
 	whole := flag.Bool("whole", false, "the logs are a run of every package")
+	given := flag.String("elsewhere", "", "the top-level tests given to another run, a package and a test a line")
+	noFail := flag.Bool("no-fail", false, "the run said it passed: a fail event in the logs refuses it")
 	flag.Parse()
-	if !contains(platforms, *platform) || flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "usage: skipreport -platform linux|darwin|windows [-critical FILE] [-whole] LOG...")
+	if !contains(platforms, *platform) || flag.NArg() == 0 || (*whole && *given != "") {
+		fmt.Fprintln(os.Stderr, "usage: skipreport -platform linux|darwin|windows [-critical FILE] [-whole] [-no-fail] [-elsewhere FILE] LOG...")
 		os.Exit(2)
 	}
 	r := newResults()
@@ -242,7 +281,20 @@ func main() {
 	for _, l := range lines {
 		fmt.Println(l)
 	}
+	failed := *noFail && (r.fails > 0 || r.damaged > 0)
+	if *noFail {
+		fmt.Printf("fail events: %d; damaged events: %d\n", r.fails, r.damaged)
+	}
+	if *noFail && r.fails > 0 {
+		fmt.Printf("the run said it passed, and its logs hold %d fail event(s)\n", r.fails)
+	}
+	if *noFail && r.damaged > 0 {
+		fmt.Printf("the run said it passed, and its logs hold %d line(s) shaped as events that do not decode, so its events cannot all be read\n", r.damaged)
+	}
 	if *list == "" {
+		if failed {
+			os.Exit(1)
+		}
 		return
 	}
 	entries, err := readCritical(*list)
@@ -250,7 +302,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "skipreport:", err)
 		os.Exit(2)
 	}
-	wrong := judge(r, entries, *platform, *whole)
+	var elsewhere map[test]bool
+	if *given != "" {
+		if elsewhere, err = readElsewhere(*given); err != nil {
+			fmt.Fprintln(os.Stderr, "skipreport:", err)
+			os.Exit(2)
+		}
+	}
+	wrong := judge(r, entries, *platform, *whole, elsewhere)
 	for _, w := range wrong {
 		fmt.Println(w)
 	}
@@ -259,4 +318,7 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("release-critical tests: every one required on %s ran and passed\n", *platform)
+	if failed {
+		os.Exit(1)
+	}
 }

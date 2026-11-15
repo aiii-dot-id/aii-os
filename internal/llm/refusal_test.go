@@ -23,7 +23,7 @@ func TestEveryDialectReturnsATypedRefusal(t *testing.T) {
 	}{
 		{"openai-compatible streamed", ClientConfig{}, chatOnce},
 		{"openai-compatible whole", ClientConfig{NoStream: true}, chatOnce},
-		{"anthropic", ClientConfig{Provider: "anthropic"}, chatOnce},
+		{"anthropic", ClientConfig{Provider: "anthropic", Headers: anthropicHeaders()}, chatOnce},
 		{"chatgpt responses", ClientConfig{Provider: "chatgpt"}, chatOnce},
 		{"gemini streamed", ClientConfig{Provider: "gemini"}, chatOnce},
 		{"gemini whole", ClientConfig{Provider: "gemini", NoStream: true}, chatOnce},

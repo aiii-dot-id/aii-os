@@ -23,7 +23,7 @@ func TestEachCacheModeMarksWhatItNames(t *testing.T) {
 		mode CacheMode
 		want int
 	}{{CacheOff, 0}, {CacheExplicit, 2}, {CacheAuto, 3}, {"", 3}} {
-		got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5", Cache: &CachePolicy{Mode: tc.mode}}, msgs, tools)
+		got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5", Cache: &CachePolicy{Mode: tc.mode}}, msgs, tools)
 		if n := cacheReviewCount(got, "cache_control"); n != tc.want {
 			t.Errorf("anthropic mode %q sent %d breakpoints, want %d", tc.mode, n, tc.want)
 		}

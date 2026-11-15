@@ -74,7 +74,7 @@ const identity = {
 ['Two deploys went wrong without staging.', 'A deploy can go straight to production.', 'I learned the grant letter wants a summary first.'].forEach(T);
 
 const words = (n, role, content) => ({ id: 'w' + n, sequence: String(n), kind: 'message', role, content, turn_id: 't' + n, recorded_at: now, details: {} });
-const held = [words(1, 'operator', 'Hello there, this is Avery.'), words(2, 'resident', T('Good morning. The draft is **done**.')),
+const held = [words(1, 'operator', 'Hello there, this is Alder.'), words(2, 'resident', T('Good morning. The draft is **done**.')),
   words(3, 'operator', 'Thanks, send it on.'), words(4, 'resident', T('You are welcome.'))];
 const answered = new Set();
 function readBack() {

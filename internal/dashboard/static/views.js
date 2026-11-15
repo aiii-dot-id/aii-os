@@ -52,7 +52,7 @@ const bundle = (offering, css, redraws, ...loads) => {
   return once(() => Promise.all([...loads.map(holding), ...css.map(sheet)])
     .then(all => { ready = true; const mods = all.slice(0, loads.length); if (offering) mods.forEach(offer); return mods; }));
 };
-const plugins = bundle(true, ['views/settings/permissions.css'], ['framePagesChanged'], () => settings().then(() => import('./views/plugins.js')));
+const plugins = bundle(true, ['views/settings/permissions.css'], ['framePagesChanged', 'renderSandbox', 'renderTools'], () => settings().then(() => import('./views/plugins.js')));
 const record = bundle(false, ['views/identity/record.css', 'components/filter/filter.css'], [], () => import('./views/identity/record.js'));
 const about = bundle(true, ['views/identity/who.css', 'components/filter/filter.css', 'views/identity/experiences.css',
   'components/belief-row/belief-row.css', 'components/why-trail/why-trail.css', 'views/identity/beliefs.css'],
@@ -96,8 +96,9 @@ function requestView(v, read = query) {
   if (v === 'between') { read('identity'); read('continuity'); }
   if (v === 'experiences') read('identity');
   if (v === 'status') whenIn(status, () => later('readStatus')(read));
-  if (v === 'settings') { read('config'); read('tools'); read('sandbox'); S.requestSettingsSection?.(); }
-  if (v === 'plugins' || v === 'phone') read('config');
+  if (v === 'settings') { read('config'); S.requestSettingsSection?.(); }
+  if (v === 'plugins') { read('config'); read('tools'); read('sandbox'); }
+  if (v === 'phone') read('config');
   if (v === 'technical') whenIn(technical, ([m]) => m.readTechnical());
 }
 function renderView(v) {

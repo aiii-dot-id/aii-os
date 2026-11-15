@@ -35,7 +35,7 @@ func TestCacheThinkingAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5", MaxInputTokens: ordinary})
+	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5", MaxInputTokens: ordinary, Headers: anthropicHeaders()})
 	wireBytes := 0
 	c.httpClient = &http.Client{Transport: iterateTransport(func(r *http.Request) (*http.Response, error) {
 		b, err := io.ReadAll(r.Body)
@@ -57,7 +57,7 @@ func TestCacheThinkingAdmission(t *testing.T) {
 }
 func TestCacheAnthropicReplayPreservesBlockOrder(t *testing.T) {
 	const fixture = `{"content":[{"type":"thinking","thinking":"","signature":"sig-A"},{"type":"text","text":"Checking."},{"type":"thinking","thinking":"","signature":"sig-B"},{"type":"tool_use","id":"c1","name":"read","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":10}}`
-	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-fable-5-1"})
+	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-fable-5-1", Headers: anthropicHeaders()})
 	var requests []anthRequest
 	c.httpClient = &http.Client{Transport: iterateTransport(func(r *http.Request) (*http.Response, error) {
 		var req anthRequest
@@ -107,7 +107,7 @@ func TestCacheNullUsageStaysUnknown(t *testing.T) {
 	}
 }
 func TestCacheEmptySystemIsNotCacheMarked(t *testing.T) {
-	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5"})
+	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5", Headers: anthropicHeaders()})
 	var req anthRequest
 	c.httpClient = &http.Client{Transport: iterateTransport(func(r *http.Request) (*http.Response, error) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -125,7 +125,7 @@ func TestCacheEmptySystemIsNotCacheMarked(t *testing.T) {
 	}
 }
 func TestCacheConcurrentAnthropicPrefixesAreIndependent(t *testing.T) {
-	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5"})
+	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5", Headers: anthropicHeaders()})
 	stable := strings.Repeat("stable identity ", 1000)
 	c.httpClient = &http.Client{Transport: iterateTransport(func(r *http.Request) (*http.Response, error) {
 		var req anthRequest
@@ -173,7 +173,7 @@ func TestCacheParallelToolBatchKeepsConsecutiveBlocks(t *testing.T) {
 	for _, c := range calls {
 		msgs = append(msgs, Message{Role: "tool", ToolCallID: c.ID, Content: "ok"})
 	}
-	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5"})
+	c := New(&ClientConfig{Endpoint: "https://review.invalid", Provider: "anthropic", Model: "claude-opus-5", Headers: anthropicHeaders()})
 	var req anthRequest
 	c.httpClient = &http.Client{Transport: iterateTransport(func(r *http.Request) (*http.Response, error) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -155,8 +155,8 @@ func TestABeliefPropUpByDreamsOfOneExperienceIsStillAnAlert(t *testing.T) {
 	t.Fatalf("a belief propped up by dreams of one experience is not an alert: %+v", items)
 }
 
-// ONE CLASS AND ONE STRENGTH FOR EVERY READER (a review, 2026-11-08, D5; the identity,
-// as arbiter: the footing decides Core). Ranked recall and BeliefRecall,
+// ONE CLASS AND ONE STRENGTH FOR EVERY READER (the footing decides Core).
+// Ranked recall and BeliefRecall,
 // which the alert, the listing and the trail call, give the same class and
 // strength for the same belief: zero and some evidence, cited by a belief
 // that stands, by one that does not, by an adopted value, by a retired

@@ -90,13 +90,12 @@ func listModelsAt(ctx context.Context, dialect, path, show, token string, bearer
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 	}
-	if anthropic {
-		if req.Header.Get("anthropic-version") == "" {
-			req.Header.Set("anthropic-version", llm.DefaultAnthropicVersion)
-		}
-	}
 	for k, v := range extra {
 		req.Header.Set(k, v)
+	}
+
+	if anthropic && req.Header.Get("anthropic-version") == "" {
+		return nil, nil, &llm.HeaderNotConfiguredError{Header: "anthropic-version", Key: `the provider entry's headers["anthropic-version"] (or credential_options "header_anthropic-version")`}
 	}
 
 	resp, err := httpDiscoveryClient.Do(req)
@@ -402,7 +401,8 @@ func (a *App) discoverMetaAt(ctx context.Context, e providerEntry, apiKey, list,
 	}
 	apiKey = providerAPIKey(e, apiKey, a.llmBlockEnvFor(e))
 	dialect, base, bearer := e.APIType, e.URL, false
-	var extra, query map[string]string
+	var query map[string]string
+	extra := entryHeaders(e)
 	if e.Credential != "" {
 
 		if err := credentialAddressRefusal(e); err != nil {
@@ -416,7 +416,11 @@ func (a *App) discoverMetaAt(ctx context.Context, e providerEntry, apiKey, list,
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, notSignedIn(err))
 		}
-		apiKey, bearer, extra, query = cr.Token, true, cr.Headers, src.DiscoveryQuery()
+		if err := oauthUserAgentRefusal(e); err != nil {
+			return nil, nil, err
+		}
+		apiKey, bearer, query = cr.Token, true, src.DiscoveryQuery()
+		extra = overHeaders(extra, cr.Headers)
 		if b := src.BaseURL(); b != "" {
 			base = b
 		}
@@ -443,7 +447,7 @@ func (a *App) discoverMetaAt(ctx context.Context, e providerEntry, apiKey, list,
 			if ferr != nil {
 				return nil, nil, fmt.Errorf("%w: %w", errCredentialUnavailable, ferr)
 			}
-			return list(fresh.Token, fresh.Headers)
+			return list(fresh.Token, overHeaders(entryHeaders(e), fresh.Headers))
 		}
 		return models, meta, err
 	}
@@ -522,4 +526,20 @@ func notSignedIn(err error) error {
 		return fmt.Errorf("%w: %w", errNotSignedIn, err)
 	}
 	return err
+}
+
+func overHeaders(base, over map[string]string) map[string]string {
+	out := maps.Clone(base)
+	if out == nil {
+		out = map[string]string{}
+	}
+	for k, v := range over {
+		for have := range out {
+			if strings.EqualFold(have, k) {
+				delete(out, have)
+			}
+		}
+		out[k] = v
+	}
+	return out
 }

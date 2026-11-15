@@ -44,7 +44,7 @@ run(() => {
 		}
 		modules["/"+strings.TrimPrefix(path, "static/")] = data
 	}
-	modules["/state.js"] = []byte(`export const S = { providers: [], config: null, providersLoaded: false };`)
+	modules["/state.js"] = []byte(`export const S = { providers: [], tools: [], config: null, providersLoaded: false };`)
 	modules["/util.js"] = utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0; export const copyText = async () => true;`)
 	modules["/ws.js"] = []byte(`export const frames = [];
 export function send(f) { frames.push(f); return 'req-1'; }

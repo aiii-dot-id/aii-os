@@ -255,7 +255,9 @@ func TestATimerWakeWhoseSessionCannotBeReadIsRetried(t *testing.T) {
 	pressStage(t, app, store.StageTrusted)
 	obs := fixtureModel(t, app, func(n int, w http.ResponseWriter) { _, _ = io.WriteString(w, textReply("noted")) })
 	app.executor.Stop()
-	at := time.Now().UTC().Add(700 * time.Millisecond).UnixMilli()
+	// Two seconds of room, not 700 ms: under the race detector a moment set that close
+	// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+	at := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 	ws := sessionUnder(t, app, "time:"+strconv.FormatInt(at, 10))
 	time.Sleep(time.Until(time.UnixMilli(at)) + 100*time.Millisecond)
 	alarm, found, err := app.store.AlarmByID(identity.PromiseAlarmID(ws.ID))

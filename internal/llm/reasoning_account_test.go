@@ -147,7 +147,7 @@ func TestAnthropicThinkingTextIsTheProvidersAccount(t *testing.T) {
 			_, _ = io.ReadAll(r.Body)
 			_, _ = io.WriteString(w, tc.body)
 		}))
-		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic"})
+		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders()})
 		resp, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
 		srv.Close()
 		if err != nil {

@@ -251,7 +251,7 @@ function operationsHTML(p) {
   const ops = p.operations || [];
   if (!ops.length) return '';
   return '<div class="plugin-ops"><label class="f">OPERATIONS, IN THE AUTHOR\'S WORDS</label>' +
-    '<div class="store-hint">Each summary below is what this plugin\'s author wrote, whole. The identity is given one quoted line of it, cut when it is long (Settings, Tools shows that line).</div>' +
+    '<div class="store-hint">Each summary below is what this plugin\'s author wrote, whole. The identity is given one quoted line of it, cut when it is long (Tools, on this page, shows that line).</div>' +
     ops.map(o => '<div class="plugin-op"><b>' + esc(o.operation || o.tool) + '</b> <span class="store-hint">' + esc(o.tool) + '</span>' +
       (o.summary ? '<div class="pkg-desc author-words">' + esc(o.summary) + '</div>'
         : '<div class="store-hint">' + (o.published ? 'the plugin gave no summary for it' : 'the package declared no summary for it') + '</div>') +

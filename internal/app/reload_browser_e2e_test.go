@@ -79,6 +79,9 @@ const reloadSettled = `
   const place = location.hash.replace(/^#\/+/, '');
   if ((place === 'settings' || (place.startsWith('identity') && !place.startsWith('identity/record'))) &&
       ![...document.querySelectorAll('.section-frame')].some(f => f.getBoundingClientRect().height > 0 && f.style.visibility !== 'hidden')) return null;
+  // A card still loading is not the page drawn: under load "loading spend…" and "loading
+  // sandbox…" held still for half a second and were read as the page (0.2.2, route b 4b).
+  if ([...document.querySelectorAll('.empty')].some(e => e.getClientRects().length && /^loading .+…$/.test(e.textContent.trim()))) return null;
   const now = (document.querySelector('.app') || document.body).innerText;
   if (now !== window.__seen) { window.__seen = now; window.__since = Date.now(); return null; }
   return Date.now() - window.__since < 500 ? null : 'ok';`
@@ -265,6 +268,7 @@ func TestAReloadIsFastCompleteAndIdentical(t *testing.T) {
 		Scroll int64  `json:"scroll"`
 		Max    int64  `json:"max"`
 	}
+	plantedLoading := false
 	for _, size := range []struct {
 		w, h   int
 		places []string
@@ -279,6 +283,21 @@ func TestAReloadIsFastCompleteAndIdentical(t *testing.T) {
 			command("Page.navigate", map[string]any{"url": a.dashboard.Origin() + "/#/" + place})
 			reload() // a fresh document at this address, so the first draw is measured
 			first := settle(name)
+			// The settle refuses a card still loading: one planted here, that never
+			// goes, must not be taken as settled (0.2.2, route b 4b).
+			if !plantedLoading {
+				plantedLoading = true
+				act(`(() => { const d = document.createElement('div'); d.className = 'card'; d.id = '__plantedLoading'; d.innerHTML = '<div class="empty">loading a planted card…</div>'; (document.querySelector('.stage') || document.body).append(d); return 'ok'; })()`)
+				got, err := page.eval(awaitJS(reloadSettled, 1500), true, 10*time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got == "ok" {
+					t.Fatalf("rig: the settle took a page still showing a loading card as settled")
+				}
+				act(`(() => { document.getElementById('__plantedLoading').remove(); return 'ok'; })()`)
+				settle(name + ", the planted card gone")
+			}
 			// A person's own: the wheel over what scrolls, a disclosure, a draft.
 			over := act(`(() => {
   const s = [...document.querySelectorAll('.stage, .stage *')].filter(e => e.getClientRects().length && e.scrollHeight > e.clientHeight + 40 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).sort((p, q) => q.scrollHeight - p.scrollHeight)[0];

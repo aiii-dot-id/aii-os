@@ -64,7 +64,7 @@ func anthropicBody(t *testing.T, cfg ClientConfig, opts ChatOptions) map[string]
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	defer srv.Close()
-	cfg.Endpoint, cfg.Provider = srv.URL, "anthropic"
+	cfg.Endpoint, cfg.Provider, cfg.Headers = srv.URL, "anthropic", anthropicHeaders()
 	if cfg.Model == "" {
 		cfg.Model = "m"
 	}
@@ -134,13 +134,13 @@ func TestTheSubscriptionRequestAsksByDefaultAndSaysOmittedWhenToldTo(t *testing.
 		}))
 		defer srv.Close()
 		c := New(&ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Credential: fixedCredential{token: "fixture"},
-			ClaudeCode: capturedClaudeProfile(), ThinkingMode: "adaptive", ThinkingDisplay: displaySetting})
+			ClaudeCode: shippedClaudeProfile(), ThinkingMode: "adaptive", ThinkingDisplay: displaySetting})
 		if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hello"}}, ChatOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		return body
 	}
-	if profile := capturedClaudeProfile().ThinkingDisplay; profile != SummaryOmitted {
+	if profile := shippedClaudeProfile().ThinkingDisplay; profile != SummaryOmitted {
 		t.Fatalf("setup: the shipped profile's own display is %q; this test reads it as the client's word for none", profile)
 	}
 	for setting, want := range map[string]string{"": "summarized", SummaryOmitted: "omitted", "summarized": "summarized"} {

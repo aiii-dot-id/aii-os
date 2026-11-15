@@ -104,7 +104,7 @@ func TestTheNotesAreCopiedAndNothingElse(t *testing.T) {
 		"under claude-code/",
 		"Left where they were: 1 not .md or .txt.",
 		"## codex\n\nNot on this machine (looked for ",
-		"Settings → Sandbox",
+		"Settings → Plugins and permissions",
 	} {
 		if !strings.Contains(string(index), say) {
 			t.Errorf("the index does not say %q:\n%s", say, index)

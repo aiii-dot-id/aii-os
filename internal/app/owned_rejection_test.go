@@ -82,7 +82,7 @@ func TestRejectedProviderRecoveryKeepsItsBoundaries(t *testing.T) {
 				switch mode {
 				case "borrowed":
 					f.entry.Credential = oauth.KindFilePrefix + f.path
-					f.entry.CredentialOptions = map[string]string{"file": f.path}
+					f.entry.CredentialOptions = map[string]string{"file": f.path, "header_User-Agent": "fixture-agent/1"}
 					want, wantRefresh = oauth.ErrOwnerRefreshRequired, 0
 				case "invalid grant":
 					f.invalidGrant.Store(true)
@@ -243,8 +243,12 @@ func newRejectedProvider(t *testing.T, expires bool) *rejectedProvider {
 	f.app.cfg.Identity.LedgerPath = filepath.Join(dir, "data", "ledger.jsonl")
 	f.app.oauthTransport = authority.Client().Transport
 	f.app.oauthGuard = func(context.Context, string) error { return nil } // isolated authority only
+	// The User-Agent each request carries is configured, as providers.json
+	// configures a real credential's: one for the authority (token_headers)
+	// and one for the provider (header_User-Agent).
 	f.entry = providerEntry{Name: "fixture", URL: resource.URL + "/v1", APIType: "openai", Credential: "fixture", DefaultModel: "fixture-model",
-		signIn: oauth.Provider{ClientID: "fixture", TokenURL: authority.URL, CredentialFile: "fixture.json"}}
+		CredentialOptions: map[string]string{"header_User-Agent": "fixture-agent/1"},
+		signIn:            oauth.Provider{ClientID: "fixture", TokenURL: authority.URL, CredentialFile: "fixture.json", TokenHeaders: map[string]string{"User-Agent": "fixture-agent/1"}}}
 	var err error
 	f.path, err = f.app.ownedCredentialPath(f.entry.Credential, f.entry.signIn.CredentialFile)
 	if err != nil {

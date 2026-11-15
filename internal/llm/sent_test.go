@@ -23,7 +23,7 @@ const sentinelKey = "sentinel-key-0b7c1d-never-in-a-body"
 type sentinelCredential struct{}
 
 func (sentinelCredential) Credential(context.Context) (Credential, error) {
-	return Credential{Token: sentinelKey, Headers: map[string]string{"X-Account": sentinelKey}}, nil
+	return Credential{Token: sentinelKey, Headers: map[string]string{"X-Account": sentinelKey, "anthropic-version": "2023-06-01"}}, nil
 }
 func (sentinelCredential) Stale(context.Context, uint64) error { return nil }
 

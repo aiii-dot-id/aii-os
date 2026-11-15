@@ -732,6 +732,9 @@ func (a *App) providerViews() []dashboard.ProviderView {
 	}
 	var out []dashboard.ProviderView
 	for _, name := range oauth.ProviderNames(catalog) {
+		if name == broker.CustomContract {
+			continue
+		}
 		tpl, _ := oauth.ProviderTemplate(name, catalog)
 		pv := dashboard.ProviderView{Name: name, SignIn: tpl.SignIn, RedirectURI: tpl.RedirectURI, Hosts: tpl.Hosts, Device: tpl.DeviceURL != "", DeviceExcludes: tpl.DeviceScopesUnsupported}
 		svcs := make([]string, 0, len(tpl.Scopes))

@@ -535,7 +535,19 @@ const report = text => fetch('/__result', { method: 'POST', body: text, keepaliv
 const until = async (ok, ms) => { for (let i = 0; i * 50 < (ms || 10000) && !ok(); i++) await new Promise(r => setTimeout(r, 50)); return ok(); };
 let held = null;
 const heard = [];
-window.addEventListener('message', e => { if (e.data && e.data.type === 'section-holds') { held = e.data; heard.push(e.data.text); } });
+// DIAGNOSTICS for the page's turn (0.2.2 route b item 3): what the section said, when the
+// page's turn flag changed, the page's probes and their answers, and every refusal the
+// page heard (a refusal that names no request ends the page's turn), on one clock, read
+// only when the turn is not said. They change no wait and no check.
+const timeline = [], t0 = Date.now(), at = () => Date.now() - t0;
+window.addEventListener('message', e => { if (e.data && e.data.type === 'section-holds') { held = e.data; heard.push(e.data.text); timeline.push({ t: at(), section: e.data.text.slice(0, 80) }); } });
+const realSend = WebSocket.prototype.send;
+let watched = null;
+WebSocket.prototype.send = function (data) {
+  try { const m = JSON.parse(data); if (m.type === 'probe') timeline.push({ t: at(), sent: 'probe', id: m.request_id }); } catch (_) {}
+  if (watched !== this) { watched = this; this.addEventListener('message', ev => { try { const m = JSON.parse(ev.data); if (m.type === 'probe' || m.type === 'turn' || m.type === 'error') timeline.push({ t: at(), heard: m.type, id: m.request_id, active: m.turn_active, thinking: m.thinking, message: m.message }); } catch (_) {} }); }
+  return realSend.call(this, data);
+};
 const frame = () => document.querySelector('iframe.section-frame[title="Status"]');
 (async () => {
   await until(() => document.getElementById('send-btn') && (document.getElementById('p-state') || {}).textContent);
@@ -548,9 +560,13 @@ const frame = () => document.querySelector('iframe.section-frame[title="Status"]
   const says = text => text.toLowerCase().includes(W.stateAnswering.toLowerCase());
   const answering = () => held && says(held.text);
   heard.length = 0;
+  const { S } = await import('/state.js');
+  let thinking = S.thinking;
+  Object.defineProperty(S, 'thinking', { configurable: true, enumerable: true, get: () => thinking, set: v => { timeline.push({ t: at(), thinking: v }); thinking = v; } });
+  timeline.push({ t: at(), turn: 'the page\'s turn is set' });
   (await import('/presence.js')).setThinking(true);
   await until(() => heard.some(says));
-  if (!heard.some(says)) return report('FAIL: the page\'s turn was not said in the section: ' + held.text);
+  if (!heard.some(says)) return report('FAIL: the page\'s turn was not said in the section: ' + held.text + '\n  timeline: ' + JSON.stringify(timeline));
   (await import('/presence.js')).setThinking(false);
   await until(() => !answering());
   if (answering()) return report('FAIL: the page\'s turn stayed said in the section');

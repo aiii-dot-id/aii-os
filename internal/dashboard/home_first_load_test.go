@@ -17,7 +17,7 @@ const homeFirstLoadLine = 250_000
 
 // homeFirstLoadSentCeiling holds the same count at what was measured, below
 // the line, so the transfer cannot grow back.
-const homeFirstLoadSentCeiling = 177_089
+const homeFirstLoadSentCeiling = 177_037
 
 // homeFirstLoadCeiling is the most the same load may weigh uncompressed. It
 // is logged beside the line and held at what was measured, and it only lowers:
@@ -53,8 +53,12 @@ const homeFirstLoadSentCeiling = 177_089
 // 177,089 when the line under the reply box came to say what their work waits
 // for, and the note came to say its day and that more did not go through than
 // its read took, each paid for within its own modules (their comments said
-// in fewer words).
-const homeFirstLoadCeiling = 495_091
+// in fewer words); then to 495,083 / 177,054 when the page came to keep the
+// status the host sends before the sections list (0.2.2 route b 4a), paid for
+// within sections.js (its comments said in fewer words); then to 495,082 /
+// 177,037 when a status came to redraw the page's own Between you, paid for
+// within ws.js (its comments said in fewer words).
+const homeFirstLoadCeiling = 495_082
 
 // staticRef is what a module loads before it runs: static imports and
 // re-exports, and bare imports. A dynamic import() is fetched when it is

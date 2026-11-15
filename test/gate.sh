@@ -90,7 +90,8 @@ run_packaging() {
   OUT="$out" GO=$GO sh packaging/build-all.sh || { tail -20 "$out/build.log" 2>/dev/null; return 1; }
   [ -n "$EVIDENCE_DIR" ] || rm -rf "$out"
 }
-run_scope() { AII_GO=$GO ./test/run_race_scope.sh all; }
+run_scope() { AII_GO=$GO ./test/run_race_scope.sh parallel; }
+run_browser() { AII_GO=$GO ./test/run_race_scope.sh browser; }
 stop_reference() {
   reference_status=$1
   trap '' HUP INT TERM
@@ -195,6 +196,52 @@ selftest-lock)
   ;;
 esac
 
+check_authorship() {
+  if [ -z "${AII_OPERATOR_ADDRESS:-}" ]; then
+    echo "authorship: AII_OPERATOR_ADDRESS is unset, so nothing was checked"
+    return 0
+  fi
+  if ! git rev-parse --verify --quiet refs/heads/main >/dev/null; then
+    echo "authorship: this repository has no main to measure from, so nothing was checked"
+    return 0
+  fi
+  if ! base=$(git merge-base HEAD refs/heads/main); then
+    echo "authorship: HEAD shares no history with main, so what main would take cannot be read"
+    return 1
+  fi
+  if ! count=$(git rev-list --count "$base..HEAD"); then
+    echo "authorship: the commits since main $base could not be counted"
+    return 1
+  fi
+  found=
+  for field in author committer; do
+    case $field in author) format='%h %ae' ;; *) format='%h %ce' ;; esac
+    if ! list=$(git log --format="$format" "$base..HEAD"); then
+      echo "authorship: the commits since main $base could not be read"
+      return 1
+    fi
+    if ! got=$(printf '%s\n' "$list" | awk -v a="$AII_OPERATOR_ADDRESS" -v f="$field" '
+      BEGIN { a = tolower(a) }
+      NF { n++; if (tolower(substr($0, index($0, " ") + 1)) == a) w = w "\n" $1 " " f }
+      END { printf "%d%s", n, w }'); then
+      echo "authorship: who made the commits since main $base could not be compared"
+      return 1
+    fi
+    compared=${got%%[!0-9]*}
+    if [ "$compared" != "$count" ]; then
+      echo "authorship: $count commits since main $base, but the comparison of their ${field}s read ${compared:-none}"
+      return 1
+    fi
+    found=$found${got#"$compared"}
+  done
+  if [ -n "$found" ]; then
+    echo "commits whose author or committer is the operator's address, which no commit of this tree carries:"
+    printf '%s\n' "${found#?}"
+    return 1
+  fi
+  echo "authorship: $count commits since main $(git rev-parse --short "$base"), none with the operator's address"
+}
+stage authorship check_authorship
 stage fmt gofmt_clean
 stage diffcheck git diff --check
 stage revertcheck ./test/no_silent_revert.sh
@@ -219,6 +266,7 @@ if [ -n "$EVIDENCE_DIR" ] && [ -f "$EVIDENCE_DIR/scope.log" ]; then
     { echo "the scope passed but its log yields no shard weights" >&2; fail; }
 fi
 [ -n "$ONLY" ] || together_settle || fail
+stage browser run_browser
 stage packaging run_packaging
 
 [ "$stages_run" -gt 0 ] || { echo "unknown GATE_ONLY stage: $ONLY" >&2; fail; }

@@ -43,6 +43,9 @@ func StartDevice(ctx context.Context, client *http.Client, deviceURL string, p O
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if err := applyTokenHeaders(req, p.TokenHeaders); err != nil {
+		return nil, err
+	}
 	if client == nil {
 		client = signInHTTP
 	}
@@ -151,6 +154,9 @@ func Revoke(ctx context.Context, client *http.Client, revokeURL, token string, p
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := applyTokenHeaders(req, p.TokenHeaders); err != nil {
+		return err
+	}
 	if client == nil {
 		client = signInHTTP
 	}

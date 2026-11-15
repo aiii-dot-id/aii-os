@@ -29,17 +29,17 @@ func TestBuildIdentityHonest(t *testing.T) {
 
 // A plain `go build` — which is what this test binary is, and what every
 // build site does — must carry a version the updater will accept. This is
-// the whole point of embedding VERSION: updates.go turns checking off for
+// the whole point of embedding VERSION: internal/updates/checker.go turns checking off for
 // the life of any process whose version fails version.Valid, so a
 // versionless dev build left the checker dark everywhere except CI-built
 // releases.
 func TestUninjectedBuildCarriesAnUpdaterAcceptableVersion(t *testing.T) {
 	got := Current()
 	if got == "" {
-		t.Fatal("uninjected build reports an empty version — updates.go will refuse to check")
+		t.Fatal("uninjected build reports an empty version — internal/updates/checker.go will refuse to check")
 	}
 	if !version.Valid(got) {
-		t.Errorf("Current() = %q, which version.Valid rejects — updates.go turns checking off for such a build", got)
+		t.Errorf("Current() = %q, which version.Valid rejects — internal/updates/checker.go turns checking off for such a build", got)
 	}
 	if got == "dev" {
 		t.Error(`Current() still reports the old "dev" sentinel; that string is not a version and disables update checking`)

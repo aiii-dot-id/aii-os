@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -68,10 +69,10 @@ func TestEveryDoorSendsItsPinnedHeaders(t *testing.T) {
 			_, err := c.Embed(context.Background(), "embed-model", []string{"a"})
 			return err
 		}, "/embeddings", map[string]string{"Content-Type": "application/json", "Authorization": "Bearer key"}},
-		{"anthropic, key", ClientConfig{Provider: "anthropic"}, anthropicOK, "application/json", chatOnce, "/v1/messages",
-			map[string]string{"Content-Type": "application/json", "X-Api-Key": "key", "Anthropic-Version": DefaultAnthropicVersion}},
-		{"anthropic, key, cache diagnostics", ClientConfig{Provider: "anthropic", Cache: &CachePolicy{Diagnostics: true}}, anthropicOK, "application/json", chatOnce, "/v1/messages",
-			map[string]string{"Content-Type": "application/json", "X-Api-Key": "key", "Anthropic-Version": DefaultAnthropicVersion, "Anthropic-Beta": "cache-diagnosis-2026-04-07"}},
+		{"anthropic, key", ClientConfig{Provider: "anthropic", Headers: map[string]string{"anthropic-version": "2023-06-01"}}, anthropicOK, "application/json", chatOnce, "/v1/messages",
+			map[string]string{"Content-Type": "application/json", "X-Api-Key": "key", "Anthropic-Version": "2023-06-01"}},
+		{"anthropic, key, cache diagnostics", ClientConfig{Provider: "anthropic", Headers: map[string]string{"anthropic-version": "2023-06-01"}, Cache: &CachePolicy{Diagnostics: true, DiagnosticsBeta: "cache-diagnosis-2026-04-07"}}, anthropicOK, "application/json", chatOnce, "/v1/messages",
+			map[string]string{"Content-Type": "application/json", "X-Api-Key": "key", "Anthropic-Version": "2023-06-01", "Anthropic-Beta": "cache-diagnosis-2026-04-07"}},
 		{"anthropic, credential", ClientConfig{Provider: "anthropic", Credential: headerCredential{"tok", credHeaders}}, anthropicOK, "application/json", chatOnce, "/v1/messages",
 			map[string]string{"Content-Type": "application/json", "Authorization": "Bearer tok", "X-Account-Id": "acct-1", "Accept": "application/x-credential", "Anthropic-Version": "2099-01-01"}},
 		{"gemini streamed, key", ClientConfig{Provider: "gemini"}, "data: " + geminiOK + "\n\n", "text/event-stream", chatOnce, "/models/model:streamGenerateContent",
@@ -115,6 +116,43 @@ func TestEveryDoorSendsItsPinnedHeaders(t *testing.T) {
 			}
 			if !maps.Equal(got, tc.want) {
 				t.Fatalf("headers:\n got %v\nwant %v", sorted(got), sorted(tc.want))
+			}
+		})
+	}
+}
+
+// Cache diagnostics are asked for by a beta the vendor names, and that name
+// is configuration (the operator, 2026-11-11). A policy that turns
+// diagnostics on without naming it is refused before anything is sent,
+// naming the setting, and no compiled name stands in.
+func TestCacheDiagnosticsWithoutTheirBetaAreRefusedUnsent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  ClientConfig
+	}{
+		{"key", ClientConfig{Headers: anthropicHeaders()}},
+		{"credential", ClientConfig{Credential: headerCredential{"tok", anthropicHeaders()}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached++
+				io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
+			}))
+			defer srv.Close()
+			cfg := tc.cfg
+			cfg.Endpoint, cfg.Model, cfg.Provider, cfg.Retries = srv.URL, "model", "anthropic", -1
+			cfg.Cache = &CachePolicy{Diagnostics: true}
+			if cfg.Credential == nil {
+				cfg.APIKey = "key"
+			}
+			err := chatOnce(New(&cfg))
+			var unset *HeaderNotConfiguredError
+			if !errors.As(err, &unset) || !strings.Contains(unset.Key, "cache.diagnostics_beta") {
+				t.Fatalf("err = %v, want a HeaderNotConfiguredError naming cache.diagnostics_beta", err)
+			}
+			if reached != 0 {
+				t.Fatalf("the server was reached %d times; a request whose diagnostics beta is not configured must not be sent", reached)
 			}
 		})
 	}

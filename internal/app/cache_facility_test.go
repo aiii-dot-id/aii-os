@@ -33,7 +33,7 @@ func TestCacheFacilityPreservesStableBoundary(t *testing.T) {
 		io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	t.Cleanup(srv.Close)
-	c := llm.New(&llm.ClientConfig{Provider: "anthropic", Model: "claude-opus-5", Endpoint: srv.URL})
+	c := llm.New(&llm.ClientConfig{Provider: "anthropic", Headers: configuredHeaders("anthropic"), Model: "claude-opus-5", Endpoint: srv.URL})
 	for _, working := range []string{"working truth one", "working truth two"} {
 		rm.SetSection(ring.Ring3, "working_truth", working)
 		pre, seam, err := authority.AuthorityPrefix()

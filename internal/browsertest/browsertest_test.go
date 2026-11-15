@@ -8,6 +8,33 @@ import (
 	"testing"
 )
 
+// IN A SCOPE WHERE NO BROWSER RUNS, THE FINDER REFUSES, LOUDLY. The runner
+// sets AII_TEST_BROWSERS=elsewhere in every scope but the browser scope; a
+// test that reaches Find there is one the selector missed, and it must fail
+// where it runs, not find a browser and drive it beside the load. Any other
+// value, or none, finds as before.
+func TestTheFinderRefusesWhereNoBrowserRuns(t *testing.T) {
+	refused := func() (msg string) {
+		defer func() {
+			if r := recover(); r != nil {
+				msg, _ = r.(string)
+			}
+		}()
+		Find(Chrome)
+		return ""
+	}
+	t.Setenv("AII_TEST_BROWSERS", Elsewhere)
+	if msg := refused(); !strings.Contains(msg, "AII_TEST_BROWSERS=elsewhere") || !strings.Contains(msg, Chrome) {
+		t.Fatalf("Find did not refuse where no browser runs: %q", msg)
+	}
+	for _, other := range []string{"", "here", "Elsewhere"} {
+		t.Setenv("AII_TEST_BROWSERS", other)
+		if msg := refused(); msg != "" {
+			t.Errorf("AII_TEST_BROWSERS=%q: Find refused: %q", other, msg)
+		}
+	}
+}
+
 // A BROWSER IS FOUND WHERE THE SYSTEM PUTS IT, AND A SEARCH THAT FINDS
 // NOTHING SAYS WHERE IT LOOKED. On PATH first, by each name the engine goes
 // by; then where this system's installers put it — a macOS application

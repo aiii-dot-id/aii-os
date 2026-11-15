@@ -6,6 +6,7 @@ if [ -z "$lock" ]; then
   if [ -d /run/lock ] && [ -w /run/lock ]; then lock=/run/lock/aii-os-gate.lock; else lock=/tmp/aii-os-gate.lock; fi
 fi
 evidence=${AII_GATE_EVIDENCE:?AII_GATE_EVIDENCE must name the test evidence glob}
+operator=james@aiii.id
 refuse() {
   echo "main-guard: REFUSED: $1" >&2
   echo "main-guard: if a merge or a reset was refused here, this checkout's files and index may now be ahead of its HEAD (git status shows it); 'git reset --hard HEAD' in this checkout puts them back, and discards its uncommitted changes with them" >&2
@@ -32,6 +33,23 @@ while read -r _ new ref; do
   if [ -n "$cur" ] && ! git merge-base --is-ancestor "$cur" "$new" 2>/dev/null; then
     refuse "$new does not contain main ($cur). Main moves forward only: a commit gated on an earlier main would take what has landed since off it. Rebase onto main, gate that commit, and land it"
   fi
+  if [ -n "$cur" ]; then range="$cur..$new"; else range=$new; fi
+  [ -n "$operator" ] || refuse "this guard holds no operator's address to compare with, so who made the commits main would take is not known"
+  count=$(git rev-list --count "$range") || refuse "the commits main would take ($range) cannot be counted, so who made them is not known"
+  wrong=
+  for field in author committer; do
+    case $field in author) format='%h %ae' ;; *) format='%h %ce' ;; esac
+    list=$(git log --format="$format" "$range") || refuse "the commits main would take ($range) cannot be read, so who made them is not known"
+    got=$(printf '%s\n' "$list" | awk -v a="$operator" -v b="${AII_OPERATOR_ADDRESS:-}" -v f="$field" '
+      BEGIN { a = tolower(a); b = tolower(b) }
+      NF { n++; e = tolower(substr($0, index($0, " ") + 1)); if (e == a || (b != "" && e == b)) w = w " " $1 " " f }
+      END { printf "%d%s", n, w }') ||
+      refuse "who made the commits main would take ($range) could not be compared, so it is not known"
+    compared=${got%%[!0-9]*}
+    [ "$compared" = "$count" ] || refuse "main would take $count commits ($range), but the comparison of their ${field}s read ${compared:-none}, so who made them is not known"
+    wrong=$wrong${got#"$compared"}
+  done
+  [ -z "$wrong" ] || refuse "main would take commits whose author or committer is the operator's address, which no commit of this tree carries:$wrong. Re-commit them under their makers' own identity, gate that, and land it"
   found=
   for d in $evidence; do
     [ -f "$d/gate.log" ] && [ -f "$d/SHA256SUMS" ] || continue

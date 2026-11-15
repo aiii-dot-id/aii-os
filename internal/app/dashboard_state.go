@@ -230,11 +230,8 @@ func sandboxSwitchLine(off bool, how string) string {
 func (a *App) setToolEnabled(name string, enabled bool) error {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
-	found := false
-	for _, state := range a.toolReg.ToolStates() {
-		found = found || state.Name == name
-	}
-	if !found {
+
+	if !slices.Contains(a.toolReg.Names(), name) {
 		return fmt.Errorf("unknown tool: %s", name)
 	}
 
@@ -679,7 +676,7 @@ func (a *App) recallForDashboard(query string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(a.lifetime(), 15*time.Second)
 	defer cancel()
-	return a.engine.ExecuteAction(ctx, "verb", "recall", map[string]any{"query": query})
+	return a.engine.ExecuteAction(identity.NotTheResident(ctx), "verb", "recall", map[string]any{"query": query})
 }
 
 func (a *App) wireIdentityViewHooks(h *dashboard.WSHandler) {

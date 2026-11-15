@@ -166,7 +166,7 @@ func meteredApp(t *testing.T, answer http.HandlerFunc) *App {
 	a.composer = prompt.New(rm, 32000)
 	a.promptGate = prompt.NewGate(appRingSource{rm: rm}, 32000)
 	a.engine = identity.NewEngine(st, nil, rm, toolDiscovererAdapter{a.toolReg}, identity.Ports{})
-	c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Model: "fixture", Retries: -1, TimeoutSeconds: 2})
+	c := llm.New(&llm.ClientConfig{Endpoint: srv.URL, Provider: "anthropic", Headers: configuredHeaders("anthropic"), Model: "fixture", Retries: -1, TimeoutSeconds: 2})
 	a.conv = conversation.New(c, pass4Executor{}, pass4Defs{}, nil, nil, testLoop(conversation.Config{MaxIterations: limits.Of(3), ContextBudgetTokens: 32000}))
 	a.adoptProvider(providerEntry{Name: "fixture-provider"})
 	return a

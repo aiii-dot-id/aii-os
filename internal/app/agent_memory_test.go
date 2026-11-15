@@ -324,7 +324,7 @@ func TestAReloadSaysWhoReadsTheCopysSetting(t *testing.T) {
 	if strings.Contains(out, "SAVED FOR NEXT BOOT") {
 		t.Fatalf("the reload said the copy's setting waits for a boot:\n%s", out)
 	}
-	if !strings.Contains(out, "genesis.agent_memory changed: a birth reads it, and Copy notes in Settings → Sandbox reads it when pressed") {
+	if !strings.Contains(out, "genesis.agent_memory changed: a birth reads it, and Copy notes in Settings → Plugins and permissions reads it when pressed") {
 		t.Fatalf("the reload did not say what the copy's setting changes:\n%s", out)
 	}
 }

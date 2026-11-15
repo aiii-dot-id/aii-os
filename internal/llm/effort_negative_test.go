@@ -24,7 +24,7 @@ func TestUnsetEffortAndDanglingDisplaySendNothing(t *testing.T) {
 			io.WriteString(w, `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`)
 		}))
 		defer srv.Close()
-		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
+		c := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: anthropicHeaders(),
 			ThinkingMode: mode, ThinkingDisplay: display, ReasoningEffort: effort})
 		if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{}); err != nil {
 			t.Fatal(err)

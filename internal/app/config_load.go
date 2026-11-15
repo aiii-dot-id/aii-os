@@ -427,9 +427,10 @@ func applyDisabledTools(reg *tools.Registry, entries []string) error {
 		reg.SetToolEnabled(name, false)
 		logsink.Debug("ring.decision", "tool %q disabled by operator config", name)
 	}
-	for _, state := range reg.ToolStates() {
-		if !off[state.Name] {
-			reg.SetToolEnabled(state.Name, true)
+
+	for _, name := range reg.Names() {
+		if !off[name] {
+			reg.SetToolEnabled(name, true)
 		}
 	}
 	return nil
@@ -475,7 +476,7 @@ func (c *PluginsConfig) UnmarshalJSON(data []byte) error {
 		for _, r := range roots {
 			named = append(named, r.Path)
 		}
-		notes = append(notes, fmt.Sprintf("plugins.grants.%s.roots is retired and not applied (%s): a plugin's files are the identity's sandbox — tick files on the plugin's card, and add any of these folders outside the identity's home in Settings → Sandbox; the next save removes it from the file",
+		notes = append(notes, fmt.Sprintf("plugins.grants.%s.roots is retired and not applied (%s): a plugin's files are the identity's sandbox — tick files on the plugin's card, and add any of these folders outside the identity's home in Settings → Plugins and permissions; the next save removes it from the file",
 			id, strings.Join(named, ", ")))
 	}
 	sort.Strings(notes)

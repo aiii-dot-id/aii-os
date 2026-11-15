@@ -37,7 +37,7 @@ func TestARetiredFolderGrantDoesNotStopTheBoot(t *testing.T) {
 		t.Fatalf("every other value loads as written: %+v %+v", cfg.Plugins.Runtime, cfg.Tools)
 	}
 	if strings.Count(logs.String(), "plugins.grants.id.aiii.codequality.roots") != 1 ||
-		!logs.Contains("/srv/example/identity/example/work") || !logs.Contains("Settings → Sandbox") || !logs.Contains("tick files") {
+		!logs.Contains("/srv/example/identity/example/work") || !logs.Contains("Settings → Plugins and permissions") || !logs.Contains("tick files") {
 		t.Fatalf("the drop is named, with the folders and where they belong now: %s", logs.String())
 	}
 	if _, err := saveConfig(cfg); err != nil {

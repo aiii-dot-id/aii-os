@@ -1057,11 +1057,12 @@ func (s *Store) RecentWorkSessions(limit int) ([]WorkSession, error) {
 }
 
 func (s *Store) WorkSessionLastActivity(sessionID string) (time.Time, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	var created sql.NullString
 
-	if err := s.db.QueryRow(`SELECT MAX(created_at) FROM conversations WHERE json_extract(details,'$.work.session') = ? OR json_extract(details,'$.work_session_id') = ?`, sessionID, sessionID).Scan(&created); err != nil {
+	ctx := context.Background()
+	if err := s.ReadWith(ctx, func(r Reader) error {
+		return r.QueryRowContext(ctx, `SELECT MAX(created_at) FROM conversations WHERE json_extract(details,'$.work.session') = ? OR json_extract(details,'$.work_session_id') = ?`, sessionID, sessionID).Scan(&created)
+	}); err != nil {
 		return time.Time{}, false, err
 	}
 	if !created.Valid || created.String == "" {

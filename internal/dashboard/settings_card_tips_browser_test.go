@@ -8,10 +8,11 @@ package dashboard
 import "testing"
 
 func TestEverySettingsCardSaysWhatItDoes(t *testing.T) {
-	page := `<!doctype html><html><body><div id="settings-stack"></div>
+	page := `<!doctype html><html><body><div id="settings-stack"></div><div id="plugins-stack"></div>
 <script type="module">
 import { S } from '/state.js';
 import { renderSettings } from '/views/settings.js';
+import { renderPlugins } from '/views/plugins.js';
 import { acceptMessages } from '/views/messages.js';
 import { frames } from '/ws.js';
 import { run } from '/__harness.js';
@@ -37,16 +38,9 @@ run(async (assert) => {
   };
   const st = document.getElementById('settings-stack');
   renderSettings();
-  const ids = ['substrate', 'providers', 'speech', 'dashboard', 'backups', 'sandbox', 'tools', 'messages', 'updates'];
+  const ids = ['substrate', 'providers', 'speech', 'dashboard', 'backups', 'messages', 'updates'];
   const seen = new Map();
-  for (const id of ids) {
-    S.settingsSection(id); S.requestSettingsSection(); renderSettings();
-    if (id === 'messages') {
-      const asked = frames.filter(f => f.query === 'messages').at(-1);
-      assert(asked, 'opening Messages did not ask for them');
-      acceptMessages({ request_id: asked.request_id, messages: { arrivals: [], open: [], delivered: [], notices: [], read_ms: 1, limit: 10, max_limit: 100 } });
-    }
-    const heads = [...st.querySelectorAll('h3')];
+  const read = (id, heads) => {
     assert(heads.length > 0, id + ' draws no card');
     for (const h of heads) {
       // A card says it in its heading's title; a part drawn from a board (App,
@@ -59,7 +53,21 @@ run(async (assert) => {
       assert(!seen.has(tip) || seen.get(tip) === label, id + ': the cards ' + label + ' and ' + seen.get(tip) + ' share one sentence: "' + tip + '"');
       seen.set(tip, label);
     }
+  };
+  for (const id of ids) {
+    S.settingsSection(id); S.requestSettingsSection(); renderSettings();
+    if (id === 'messages') {
+      const asked = frames.filter(f => f.query === 'messages').at(-1);
+      assert(asked, 'opening Messages did not ask for them');
+      acceptMessages({ request_id: asked.request_id, messages: { arrivals: [], open: [], delivered: [], notices: [], read_ms: 1, limit: 10, max_limit: 100 } });
+    }
+    read(id, [...st.querySelectorAll('h3')]);
   }
+  S.view = 'plugins';
+  S.config = Object.assign({}, S.config, { restart_required: [], plugins: { autoload: 'T1', catalog: [], catalog_url: '', auth_profiles: [], providers: [], installed: [] } });
+  renderPlugins();
+  const pst = document.getElementById('plugins-stack');
+  for (const id of ['folders', 'tools']) read(id, [...pst.querySelectorAll('[data-' + id + '] h3')]);
   const labels = new Set(seen.values());
   for (const drawn of ['The model', 'Talk', 'Hearing you', "your identity's voice", 'Who can open this page', 'Address for other devices', 'Appearance', 'Notifications', 'Updates', 'What is kept', 'Your way back · the escrow file', 'What a restore does', 'Folders their tools may reach', 'Your contacts', 'Your notices', 'Messages', 'Remove AII OS from this computer']) {
     assert(labels.has(drawn), 'the card ' + drawn + ' was not drawn, so its sentence was not read');

@@ -32,6 +32,8 @@ export const REDIRECTS = Object.freeze({
   memory: '#/identity/beliefs',
   record: '#/identity/record',
   plugins: '#/settings/permissions',
+  'settings/sandbox': '#/settings/permissions',
+  'settings/tools': '#/settings/permissions',
 });
 
 const STATUS = '#/settings, Status';

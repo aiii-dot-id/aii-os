@@ -54,7 +54,7 @@ func TestProvidersFileScaffoldedBesideConfig(t *testing.T) {
 }
 
 func TestEmbeddedClaudeOAuthContractIsProviderOwned(t *testing.T) {
-	const beta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,mid-conversation-system-clear-at-2026-08-21,effort-2025-11-24,thinking-binding-controls-2026-08-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07"
+	const beta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,thinking-token-count-2026-05-13,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11"
 	var reg providerRegistry
 	if err := json.Unmarshal(embeddedProviders, &reg); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestEmbeddedClaudeOAuthContractIsProviderOwned(t *testing.T) {
 		if entry.APIType != "anthropic" || entry.Credential != "claude-code" {
 			t.Fatalf("Claude OAuth route = %q/%q", entry.APIType, entry.Credential)
 		}
-		want := map[string]string{"header_anthropic-beta": beta, "header_x-app": "cli"}
+		want := map[string]string{"header_anthropic-beta": beta, "header_anthropic-version": "2023-06-01", "header_x-app": "cli"}
 		for name, value := range want {
 			if got := entry.CredentialOptions[name]; got != value {
 				t.Fatalf("Claude OAuth %s = %q, want working C contract %q", name, got, value)
@@ -82,8 +82,8 @@ func TestEmbeddedClaudeOAuthContractIsProviderOwned(t *testing.T) {
 			t.Fatal("the embed still carries a literal header_user-agent — the version must live in client_version alone")
 		}
 		version := entry.CredentialOptions["client_version"]
-		if version != "2.1.283" {
-			t.Fatalf("Claude OAuth shipped client version = %q, want 2.1.283", version)
+		if version != "2.1.322" {
+			t.Fatalf("Claude OAuth shipped client version = %q, want 2.1.322", version)
 		}
 		if thinkingShapeFor(reg.effective(), entry, "claude-opus-5-5") != "adaptive" {
 			t.Fatal("Opus 5.5 lacks its captured adaptive-thinking request shape")
@@ -117,7 +117,7 @@ func TestAStaleClaudeClientVersionHealsOnLoadAndIsNotPersisted(t *testing.T) {
 	}
 	co := reg.Providers[0].CredentialOptions
 	ver := co["client_version"]
-	if ver != "2.1.283" {
+	if ver != "2.1.322" {
 		t.Fatalf("missing client_version did not inherit shipped default: %q", ver)
 	}
 	if co["billing_text"] != "x-anthropic-billing-header: cc_version="+ver+"; cc_entrypoint=cli; cch=00000;" {
@@ -965,7 +965,7 @@ func TestToolSelectionProbe(t *testing.T) {
 
 			app := New(&Config{SourcePath: filepath.Join(t.TempDir(), "config.json")})
 			client := llm.New(&llm.ClientConfig{
-				Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic",
+				Endpoint: srv.URL, APIKey: "k", Model: "m", Provider: "anthropic", Headers: configuredHeaders("anthropic"),
 			})
 			state, got := app.probeToolSelection(context.Background(), client,
 				providerEntry{Name: "p"}, "m")

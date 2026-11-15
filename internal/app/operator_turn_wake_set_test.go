@@ -55,7 +55,9 @@ func TestAnOperatorsTurnDuringAMomentSetByAWakeDoesNotIdleTheWork(t *testing.T) 
 			_, _ = io.WriteString(w, textReply("noted"))
 		}
 	})
-	a := time.Now().UTC().Add(300 * time.Millisecond).UnixMilli()
+	// Two seconds of room, not 300 ms: under the race detector a moment set that close
+	// can pass before it is admitted (the public tree's gate refused one set 300 ms ahead, 2026-11-12).
+	a := time.Now().UTC().Add(2 * time.Second).UnixMilli()
 	ws := sessionUnder(t, app, "time:"+strconv.FormatInt(a, 10))
 	mu.Lock()
 	sessionID = ws.ID

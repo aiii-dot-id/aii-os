@@ -1,4 +1,5 @@
 import { S } from '../state.js';
+import { renderInto } from '../announce.js';
 import { $, esc, fill, loadingCard } from '../util.js';
 import W from '../strings/settings-permissions.js';
 import { send } from '../ws.js';
@@ -8,6 +9,8 @@ import { storeHTML, pendingHTML, wireStore, catalogNote, tierWords } from './plu
 import { installedHTML, assetCardHTML, framePagesHTML, wireCard } from './plugins/card.js';
 import { storedHTML, wireStored } from './plugins/stored.js';
 import { profilesHTML, wireProfiles, dropRetiredProfileForm, takeConnectRequest } from './plugins/accounts.js';
+import { sandboxCardHTML, wireSandboxCard } from '../sandbox.js';
+import { toolsCardHTML, wireToolsCard } from '../tools.js';
 export { rejectPluginAction } from './plugins/catalog.js';
 export { applyPluginStored } from './plugins/stored.js';
 export { connectPrefill } from './plugins/accounts.js';
@@ -124,6 +127,14 @@ function pluginsPartHTML(pl) {
     (rows ? '<ul class="permissions__rows permissions__rows--plugins">' + rows + '</ul>' : '<p class="permissions__line">' + esc(W.noPlugins) + '</p>') + '</section>';
 }
 
+function pluginToolNote(t) {
+  return t.plugin ? '<br><span class="store-hint">An operation of plugin ' + esc(t.plugin) + ', shown as the identity is given it. ' +
+    'Its author\'s summary is on that plugin\'s card on the Plugins page, whole.</span>' : '';
+}
+const redrawn = () => { if (S.view === 'plugins') renderPlugins(); };
+S.renderSandbox = redrawn;
+S.renderTools = redrawn;
+
 export function renderPlugins() {
   const st = $('plugins-stack');
   if (st.formComposing) { st.formRefreshDue = true; return; }
@@ -133,7 +144,9 @@ export function renderPlugins() {
   takeConnectRequest(c);
   const typing = keyTyping();
   const pl = c && c.plugins;
-  st.innerHTML = configFeedbackHTML() + pluginsPartHTML(pl) + pendingHTML(pl && pl.pending) + storeHTML(pl) + machineHTML(pl && pl.machine) + storedHTML(pl) + profilesHTML(pl) + settingsHTML(c);
+  renderInto(st, configFeedbackHTML() + pluginsPartHTML(pl) + pendingHTML(pl && pl.pending) + storeHTML(pl) +
+    (sandboxCardHTML() || loadingCard('sandbox')) + toolsCardHTML(pluginToolNote) +
+    machineHTML(pl && pl.machine) + storedHTML(pl) + profilesHTML(pl) + settingsHTML(c), !st.firstChild);
   restoreForm(st, activeForm);
   if (!st.composeHeard) {
     st.composeHeard = true;
@@ -158,6 +171,8 @@ export function renderPlugins() {
   });
   st.querySelectorAll('[data-open-frame]').forEach(b => { b.onclick = () => S.go('section:' + b.dataset.openFrame); });
   wireCard(st);
+  wireSandboxCard(st);
+  wireToolsCard(st);
   wireStore(st);
   wireMachine(st);
   wireStored(st);

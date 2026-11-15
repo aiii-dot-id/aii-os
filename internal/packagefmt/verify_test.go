@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -493,18 +494,26 @@ func TestVerifyRejectsAssetMissingAssetType(t *testing.T) {
 	expectReason(t, verifyBytes(t, pkg), ReasonManifestInvalid)
 }
 
+// A path with no file at it was not judged: the open's own typed error,
+// never a verdict (A5, unreadable_test.go).
 func TestVerifyFileMissingPath(t *testing.T) {
 	_, err := VerifyFile(filepath.Join(t.TempDir(), "nope.aiiospkg"), TrustRoots{})
-	expectReason(t, err, ReasonEnvelopeMalformed)
+	var verdict *Error
+	if !errors.Is(err, fs.ErrNotExist) || errors.As(err, &verdict) {
+		t.Fatalf("a missing package is the open's error, not a verdict: %v", err)
+	}
 }
 
 func TestVerifyFileDirectoryPath(t *testing.T) {
-	// A directory opens fine; the failure must still surface as a
-	// typed *Error from the envelope layer, never a raw os error.
+	// A directory opens, and is no package however often it is read: a
+	// verdict at the open, ENVELOPE_MALFORMED, and not the read's failure
+	// (an *fs.PathError), which A5 says was not judged and reads again.
 	_, err := VerifyFile(t.TempDir(), TrustRoots{})
+	expectReason(t, err, ReasonEnvelopeMalformed)
 	var perr *Error
-	if err == nil || !errors.As(err, &perr) {
-		t.Fatalf("want a typed *Error for a directory path, got %v", err)
+	var pathErr *fs.PathError
+	if errors.As(err, &perr); perr.Step != "open" || errors.As(err, &pathErr) {
+		t.Fatalf("a directory is refused at the open, as no regular file, not as a read that failed: %v", err)
 	}
 }
 

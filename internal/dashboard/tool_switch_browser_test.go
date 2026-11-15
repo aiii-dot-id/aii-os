@@ -7,10 +7,10 @@ package dashboard
 
 import "testing"
 
-const toolSwitchPage = substratePageMarkup + `<script type="module">
+const toolSwitchPage = permissionsPageMarkup + `<script type="module">
 import { S } from './state.js';
 import { connect } from './ws.js';
-import { renderSettings } from './views/settings.js';
+import { renderPlugins } from './views/plugins.js';
 import { assert, run } from './__harness.js';
 ` + offerSettingsJS + `run(() => {
  const sockets=[];
@@ -20,13 +20,13 @@ import { assert, run } from './__harness.js';
    send(bytes){this.frames.push(JSON.parse(bytes));}
    recv(frame){this.onmessage({data:JSON.stringify(frame)});}
  };
- S.view='settings';S.identityExists=true;S.providersLoaded=true;S.config={llm:{}};S.tools=[];
+ S.view='plugins';S.identityExists=true;S.providersLoaded=true;S.config=` + permissionsPageConfigJS + `;S.tools=[];
  connect();const socket=sockets.at(-1);socket.readyState=1;socket.onopen();
  const sw=name=>document.querySelector('[data-tool="'+name+'"]');
- const said=()=>document.getElementById('settings-stack').textContent;
+ const said=()=>document.getElementById('plugins-stack').textContent;
  const press=name=>{const s=sw(name);s.checked=!s.checked;s.dispatchEvent(new Event('change',{bubbles:true}));return socket.frames.at(-1);};
  const list=shell=>[{name:'shell',description:'run a command',enabled:shell},{name:'web_fetch',description:'read a page',enabled:true}];
- renderSettings();S.settingsSection('tools'); S.requestSettingsSection(); renderSettings();
+ renderPlugins();
  socket.recv({type:'tools',tools:list(true)});
  assert(sw('shell') && sw('shell').checked && !sw('shell').disabled,'rig: the tools card did not draw the host\'s list');
 
@@ -60,17 +60,5 @@ import { assert, run } from './__harness.js';
 </script>`
 
 func TestAToolSwitchWaitsForTheHostAndGoesBackOnARefusal(t *testing.T) {
-	ws, err := staticFS.ReadFile("static/ws.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
-	for _, file := range []string{"views/settings.js", "util.js"} {
-		data, err := staticFS.ReadFile("static/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		modules["/"+file] = data
-	}
-	runPageInEngines(t, toolSwitchPage, modules)
+	runPageInEngines(t, toolSwitchPage, permissionsPageModules(t))
 }

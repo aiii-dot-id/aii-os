@@ -11,7 +11,7 @@ import (
 
 var choiceFields = []string{"name", "api_type", "url", "credential", "local", "chat", "default", "default_model", "api_key"}
 
-var lentByRule = []string{"catalogue_author", "effort_levels", "capability_list", "capability_catalogue", "vendor_key_env", "formerly", "credential_options", "oauth", "speech"}
+var lentByRule = []string{"catalogue_author", "effort_levels", "capability_list", "capability_catalogue", "vendor_key_env", "formerly", "credential_options", "oauth", "speech", "headers", "capability_catalogue_headers"}
 
 var lentFactFields = []string{
 	"subscribe_url", "context_length", "max_output_tokens", "models", "cache", "claude_code",

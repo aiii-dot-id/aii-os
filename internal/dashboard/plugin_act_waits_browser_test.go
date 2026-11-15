@@ -7,7 +7,7 @@ package dashboard
 
 import "testing"
 
-const pluginActWaitsPage = substratePageMarkup + `<div class="app"><div class="stack" id="plugins-stack"></div></div>
+const pluginActWaitsPage = substratePageMarkup + `<div class="app"><div class="stack" id="plugins-stack"></div></div><div class="sr-only" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
 <script type="module">
 import { S } from './state.js';
 import { connect } from './ws.js';
@@ -30,12 +30,17 @@ import { assert, run } from './__harness.js';
  const btn=d=>st.querySelector('[data-act-id="act-9"][data-act-decision="'+d+'"]');
  const said=()=>{const el=st.querySelector('[data-act-card="act-9"] [data-act-said]');return el?el.textContent:'';};
  assert(btn('confirm') && !btn('confirm').disabled,'rig: the act card did not draw');
+ const voice=document.getElementById('announce'), heard=()=>voice.textContent, hush=()=>{voice.textContent='';};
+ assert(heard()==='','the page\'s first drawing was announced: '+heard());
 
  socket.readyState=3;const before=socket.frames.length;
  btn('confirm').click();
  assert(socket.frames.length===before,'rig: a decision was sent with no connection');
  assert(!btn('confirm').disabled && said()==='Not connected — your answer was not sent.',
    'A DECISION PRESSED WITH NO CONNECTION SAID NOTHING, or left the card dead: '+said());
+ assert(heard().includes('Not connected — your answer was not sent.'),'the unsent decision was not announced: '+heard());
+ hush();socket.recv({type:'config',config});
+ assert(said()==='Not connected — your answer was not sent.' && heard()==='','a drawing that says nothing new announced it again: '+heard());
  socket.readyState=1;
 
  btn('confirm').click();
@@ -47,12 +52,15 @@ import { assert, run } from './__harness.js';
  window.__think='untouched';
  socket.recv({type:'error',request_id:asked.request_id,message:'fixture: the act expired'});
  assert(!btn('confirm').disabled && said()==='Not taken: fixture: the act expired','A REFUSED DECISION WAS ONLY A TOAST: the card says nothing of it: '+said());
+ assert(heard().includes('Not taken: fixture: the act expired'),'the refusal was not announced: '+heard());
+ hush();
  assert(window.__think==='untouched','a refused decision was read as a turn\'s error');
 
  btn('deny').click();
  assert(btn('deny').textContent==='Dropping…' && btn('deny').disabled && said()==='','rig: a deny did not wait');
  socket.readyState=3;socket.onclose();
  assert(!btn('deny').disabled && btn('deny').textContent==='Deny' && said().includes('Connection lost'),'a connection lost under a decision left the card waiting');
+ assert(heard().includes('Connection lost'),'the lost connection was not announced: '+heard());
 });
 </script>`
 
@@ -61,7 +69,7 @@ func TestAPluginsActCardWaitsForTheHostAsTheThreadsCardDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modules := wsPageModules(ws, []byte(`export const S={providers:[]};`))
+	modules := wsPageModules(ws, []byte(`export const S={providers:[],tools:[]};`))
 	for _, file := range []string{"views/plugins.js", "views/settings.js", "util.js"} {
 		data, err := staticFS.ReadFile("static/" + file)
 		if err != nil {

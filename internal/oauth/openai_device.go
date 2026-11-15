@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func deviceJSON(ctx context.Context, client *http.Client, endpoint string, body any, out any) (int, error) {
+func deviceJSON(ctx context.Context, client *http.Client, endpoint string, headers map[string]string, body any, out any) (int, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return 0, err
@@ -25,6 +25,9 @@ func deviceJSON(ctx context.Context, client *http.Client, endpoint string, body 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if err := applyTokenHeaders(req, headers); err != nil {
+		return 0, err
+	}
 	if client == nil {
 		client = signInHTTP
 	}
@@ -56,7 +59,7 @@ func StartOpenAIDevice(ctx context.Context, client *http.Client, p Provider) (*D
 		Alias    string `json:"usercode"`
 		Interval string `json:"interval"`
 	}
-	if _, err := deviceJSON(ctx, client, p.DeviceURL, map[string]string{"client_id": p.ClientID}, &j); err != nil {
+	if _, err := deviceJSON(ctx, client, p.DeviceURL, p.TokenHeaders, map[string]string{"client_id": p.ClientID}, &j); err != nil {
 		return nil, err
 	}
 	if j.Code == "" {
@@ -88,7 +91,7 @@ func PollOpenAIDevice(ctx context.Context, pollClient, tokenClient *http.Client,
 			Verifier  string `json:"code_verifier"`
 			Challenge string `json:"code_challenge"`
 		}
-		status, err := deviceJSON(ctx, pollClient, p.DevicePollURL, map[string]string{"device_auth_id": d.DeviceCode, "user_code": d.UserCode}, &j)
+		status, err := deviceJSON(ctx, pollClient, p.DevicePollURL, p.TokenHeaders, map[string]string{"device_auth_id": d.DeviceCode, "user_code": d.UserCode}, &j)
 		if err == nil {
 			sum := sha256.Sum256([]byte(j.Verifier))
 			if j.Challenge == "" || base64.RawURLEncoding.EncodeToString(sum[:]) != j.Challenge {

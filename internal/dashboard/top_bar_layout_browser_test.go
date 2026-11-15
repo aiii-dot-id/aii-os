@@ -28,7 +28,7 @@ const sockets = window.__sockets, sent = window.__sent;
 const say = f => sockets[0].say(f);
 const problems = [];
 const check = (ok, what) => { if (!ok) problems.push(what); };
-const stats = { name: 'Quill', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 };
+const stats = { name: 'Ivy', version: 'test', build: 'test', ledger_seq: 7, lifetime_ticks: 1, belief_count: 0, intention_count: 0, experience_count: 0, reflection_count: 0 };
 const config = { llm: { provider: 'P', model: 'm', resolved_provider: 'P', resolved_model: 'm', timeout_seconds: 120 }, speech: {}, prompt: {}, witness: {}, logs: {}, agency: {}, plugins: {}, updates: {}, restart_required: [], dashboard: {} };
 
 function barHolds(when) {
@@ -88,7 +88,7 @@ async function run() {
   await until(() => sockets.length > 0);
   sockets[0].open();
   say({ type: 'status', stats }); say({ type: 'continuity', continuity: { mode: 'normal', ledger_seq: 7 } }); say({ type: 'config', config });
-  await until(() => S.stats && S.stats.name === 'Quill');
+  await until(() => S.stats && S.stats.name === 'Ivy');
   S.go('chat');
   await until(() => S.view === 'chat' && shown(document.getElementById('msg-input')));
   const line = () => document.getElementById('reply-project');
@@ -127,8 +127,8 @@ async function run() {
   check(getComputedStyle(mic).boxShadow === 'none' && getComputedStyle(mic).transform === 'none', 'recording draws a ring or a scale round one half of Talk');
   mic.classList.remove('live');
   // A long name is cut at its end; it pushes nothing out of the bar.
-  say({ type: 'status', stats: { ...stats, name: 'Quill of the Long Unbroken Record and the Second Reading' } });
-  await until(() => S.stats.name !== 'Quill' && document.querySelector('.c-top-bar__name').textContent !== 'Quill');
+  say({ type: 'status', stats: { ...stats, name: 'Ivy of the Long Unbroken Record and the Second Reading' } });
+  await until(() => S.stats.name !== 'Ivy' && document.querySelector('.c-top-bar__name').textContent !== 'Ivy');
   barHolds('a long name');
   const named = document.querySelector('.c-top-bar__name');
   check(getComputedStyle(named).textOverflow === 'ellipsis', 'a long name is not cut with an ellipsis');

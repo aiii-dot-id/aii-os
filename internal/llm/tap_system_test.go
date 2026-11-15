@@ -77,7 +77,7 @@ func TestAPromptTapNeverWritesTheSystemText(t *testing.T) {
 			logsink.SetCaptureDir(dir)
 			logsink.SetTaps(map[string]time.Time{"llm.prompt": {}, "llm.return": {}})
 			t.Cleanup(func() { logsink.CloseCaptures(); logsink.SetCaptureDir(""); logsink.SetTaps(nil) })
-			c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true})
+			c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true, Headers: anthropicHeaders()})
 			ctx := context.Background()
 			if _, err := c.Chat(ctx, []Message{{Role: "system", Content: system, StableLen: len(ring0Sentinel)}, {Role: "user", Content: "THE-QUESTION"}}, ChatOptions{}); err != nil {
 				t.Fatal(err)
@@ -170,7 +170,7 @@ func TestSystemTextsJoinedByADialectAreNotWritten(t *testing.T) {
 			logsink.SetCaptureDir(dir)
 			logsink.SetTaps(map[string]time.Time{"llm.prompt": {}})
 			t.Cleanup(func() { logsink.CloseCaptures(); logsink.SetCaptureDir(""); logsink.SetTaps(nil) })
-			c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true})
+			c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true, Headers: anthropicHeaders()})
 			if _, err := c.Chat(context.Background(), []Message{{Role: "system", Content: first}, {Role: "system", Content: second}}, ChatOptions{}); err != nil {
 				t.Fatal(err)
 			}
@@ -227,7 +227,7 @@ func TestASystemTextWithAnInvalidByteIsStillKnown(t *testing.T) {
 				logsink.SetCaptureDir(dir)
 				logsink.SetTaps(map[string]time.Time{"llm.prompt": {}})
 				t.Cleanup(func() { logsink.CloseCaptures(); logsink.SetCaptureDir(""); logsink.SetTaps(nil) })
-				c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true})
+				c := New(&ClientConfig{Endpoint: srv.URL, Model: "a-model", Provider: provider, APIKey: "k", NoStream: true, Headers: anthropicHeaders()})
 				if _, err := c.Chat(context.Background(), messages, ChatOptions{}); err != nil {
 					t.Fatal(err)
 				}

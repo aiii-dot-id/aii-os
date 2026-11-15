@@ -90,7 +90,7 @@ func TestPrimaryPluginSchemasReachEveryProviderDialect(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			client := llm.New(&llm.ClientConfig{Endpoint: server.URL, Provider: provider, APIKey: "synthetic", Model: "fixture", NoStream: true, Retries: -1})
+			client := llm.New(&llm.ClientConfig{Endpoint: server.URL, Provider: provider, Headers: configuredHeaders(provider), APIKey: "synthetic", Model: "fixture", NoStream: true, Retries: -1})
 			if _, err := client.Chat(t.Context(), []llm.Message{{Role: "user", Content: "synthetic"}}, llm.ChatOptions{Tools: defs, ExactTools: true}); err != nil {
 				t.Fatal(err)
 			}

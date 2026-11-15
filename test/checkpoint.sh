@@ -29,6 +29,7 @@ grep -q '^verdict=PASS' "$log" && ! grep -q '^verdict=FAIL' "$log" || refuse "th
 failed=$(grep '^stage=' "$log" | grep -v ' exit=0 ' | head -n 1 | cut -d' ' -f1)
 [ -z "$failed" ] || refuse "the gate's $failed did not exit 0"
 grep -q '^stage=scope .* exit=0 ' "$log" || refuse "the gate's race scopes (stage=scope) did not run"
+grep -q '^stage=browser .* exit=0 ' "$log" || refuse "the gate's browser scope (stage=browser), the tests that drive a browser, did not run"
 grep -q '^stage=sdkcompat .* exit=0 log=sdkcompat.log$' "$log" || refuse "the gate's sdkcompat did not exit 0"
 (cd "$evd" && sums -c SHA256SUMS >/dev/null 2>&1) || refuse "the evidence in $evd does not verify against its SHA256SUMS"
 

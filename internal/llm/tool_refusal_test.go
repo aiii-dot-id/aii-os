@@ -30,7 +30,7 @@ func TestAProvidersRefusalOfOneToolsDefinitionNamesTheTool(t *testing.T) {
 				_, _ = w.Write([]byte(c.body))
 			}))
 			t.Cleanup(srv.Close)
-			client := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "fixture", Provider: c.provider, Retries: -1, TimeoutSeconds: 5})
+			client := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "fixture", Provider: c.provider, Retries: -1, TimeoutSeconds: 5, Headers: anthropicHeaders()})
 			_, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "go"}}, ChatOptions{Tools: tools})
 			// ONE REQUEST LEARNS IT. The chat-completions dialect asks a
 			// refused request again without the fields a stream adds, twice;
@@ -55,7 +55,7 @@ func TestAProvidersRefusalOfOneToolsDefinitionNamesTheTool(t *testing.T) {
 				t.Fatalf("a changed definition is offered again: offered %d, withheld %v", len(offered), withheld)
 			}
 			// And another client, which is another provider entry or model, knows nothing of it.
-			other := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "another", Provider: c.provider, Retries: -1})
+			other := New(&ClientConfig{Endpoint: srv.URL, APIKey: "k", Model: "another", Provider: c.provider, Retries: -1, Headers: anthropicHeaders()})
 			if offered, withheld := other.WithheldTools(tools); len(offered) != 6 || len(withheld) != 0 {
 				t.Fatalf("a refusal by one provider's model was held against another's: withheld %v", withheld)
 			}

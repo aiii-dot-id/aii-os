@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,9 +131,11 @@ func TestChoicesFromMustNameADeclaredOperation(t *testing.T) {
 // context ends.
 type heldRead struct {
 	name    string
+	owner   *pluginhost.ActivePlugin
 	entered chan struct{}
 }
 
+func (h *heldRead) DispatchOwner() any  { return h.owner }
 func (h *heldRead) Name() string        { return h.name }
 func (h *heldRead) Description() string { return "a read that waits for its context" }
 func (h *heldRead) Parameters() map[string]any {
@@ -151,11 +155,12 @@ func (h *heldRead) Execute(ctx context.Context, _ map[string]any) (tools.Result,
 func TestAChoicesLookupInFlightEndsWhenTheIdentityStops(t *testing.T) {
 	a := liveApp(t)
 	const id = "org.example.held"
-	read := &heldRead{name: pluginhost.ToolNameFor(id, "models"), entered: make(chan struct{})}
+	ap := &pluginhost.ActivePlugin{ID: id, Settings: []pluginhost.SettingDecl{{Key: "model", Type: "string", Title: "Model", ChoicesFrom: "models"}}}
+	read := &heldRead{name: pluginhost.ToolNameFor(id, "models"), owner: ap, entered: make(chan struct{})}
 	if err := a.toolReg.RegisterHostOp(read, id); err != nil {
 		t.Fatal(err)
 	}
-	addPlugin(a, &pluginhost.ActivePlugin{ID: id, Settings: []pluginhost.SettingDecl{{Key: "model", Type: "string", Title: "Model", ChoicesFrom: "models"}}})
+	addPlugin(a, ap)
 	done := make(chan error, 1)
 	go func() { _, err := a.PluginSettingChoices(id, "model"); done <- err }()
 	select {
@@ -171,5 +176,144 @@ func TestAChoicesLookupInFlightEndsWhenTheIdentityStops(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the lookup outlived the identity's stop: it waits out its own bound")
+	}
+}
+
+// ownedOp is one activation's operation: a read whose check can be held
+// open (ReplaySafe waits for release once checked is closed), or a write.
+// Each counts its calls.
+type ownedOp struct {
+	name    string
+	owner   *pluginhost.ActivePlugin
+	read    bool
+	checked chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func (o *ownedOp) DispatchOwner() any  { return o.owner }
+func (o *ownedOp) Name() string        { return o.name }
+func (o *ownedOp) Description() string { return "one activation's operation" }
+func (o *ownedOp) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (o *ownedOp) ReplaySafe() bool {
+	if o.checked != nil {
+		o.once.Do(func() { close(o.checked) })
+		<-o.release
+	}
+	return o.read
+}
+func (o *ownedOp) Execute(context.Context, map[string]any) (tools.Result, error) {
+	o.calls.Add(1)
+	return tools.Result{Output: `{"choices":[{"value":"a"}]}`}, nil
+}
+
+// swapDuringCheck runs one choices lookup of id's "model" setting whose read
+// check (read.ReplaySafe) is held open while replacement takes the read's
+// name for a new activation of id, and returns the lookup's error.
+func swapDuringCheck(t *testing.T, a *App, id string, read *ownedOp, replacement tools.Tool, next *pluginhost.ActivePlugin) error {
+	t.Helper()
+	read.checked, read.release = make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() { _, err := a.PluginSettingChoices(id, "model"); done <- err }()
+	select {
+	case <-read.checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lookup never asked whether the operation is a read")
+	}
+	if err := a.toolReg.SupersedeOrigin(id, []tools.Tool{replacement}, map[string]bool{replacement.Name(): true}); err != nil {
+		t.Fatal(err)
+	}
+	setPlugins(a, []*pluginhost.ActivePlugin{next})
+	close(read.release)
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lookup did not end")
+	}
+	return nil
+}
+
+// choicesSwapApp is a live identity with one plugin whose "models" read
+// answers the "model" setting's choices.
+func choicesSwapApp(t *testing.T, id string) (*App, []pluginhost.SettingDecl, *ownedOp) {
+	t.Helper()
+	a := liveApp(t)
+	settings := []pluginhost.SettingDecl{{Key: "model", Type: "string", Title: "Model", ChoicesFrom: "models"}}
+	old := &pluginhost.ActivePlugin{ID: id, Settings: settings}
+	read := &ownedOp{name: pluginhost.ToolNameFor(id, "models"), owner: old, read: true}
+	if err := a.toolReg.RegisterHostOp(read, id); err != nil {
+		t.Fatal(err)
+	}
+	addPlugin(a, old)
+	return a, settings, read
+}
+
+// THE READ A LOOKUP CHECKED IS THE READ IT CALLS. The lookup asks whether the operation is a read, and only then calls
+// it by name. A plugin replaced in between, its new release offering a
+// write under the same name, must not have that write run because a page
+// opened: the call is bound to the activation whose setting and read were
+// checked, and the replacement is refused with no call made. With nothing
+// replaced, the same read is called once and its choices come back.
+func TestTheReadAChoicesLookupCheckedIsTheReadItCalls(t *testing.T) {
+	const id = "org.example.swapped"
+	a, settings, read := choicesSwapApp(t, id)
+
+	// Unchanged: the read is called once and answers.
+	choices, err := a.PluginSettingChoices(id, "model")
+	if err != nil || len(choices) != 1 || choices[0].Value != "a" || read.calls.Load() != 1 {
+		t.Fatalf("an unchanged read is called once and answers: %v %+v, %d calls", err, choices, read.calls.Load())
+	}
+
+	// Replaced between the check and the call.
+	next := &pluginhost.ActivePlugin{ID: id, Settings: settings}
+	write := &ownedOp{name: read.name, owner: next, read: false}
+	err = swapDuringCheck(t, a, id, read, write, next)
+	if err == nil || write.calls.Load() != 0 {
+		t.Fatalf("a write that replaced the checked read was called by a page's lookup: err %v, %d calls", err, write.calls.Load())
+	}
+	if read.calls.Load() != 1 {
+		t.Fatalf("the replaced read was called again: %d calls", read.calls.Load())
+	}
+}
+
+// confirmOp is an activation's operation declared operator_confirms. As the
+// plugin host's does (internal/pluginhost/optool.go, t.acts.Propose), a call
+// it is given proposes it for the operator's confirmation through the
+// host's proposer, and runs nothing.
+type confirmOp struct {
+	ownedOp
+	a *App
+}
+
+func (o *confirmOp) Execute(ctx context.Context, args map[string]any) (tools.Result, error) {
+	o.calls.Add(1)
+	id, err := actProposer{o.a}.Propose(ctx, pluginhost.ActProposal{Plugin: o.owner.ID, Tool: o.name, Operation: "models",
+		Summary: "a write that needs the operator", Effects: "write.external", Args: args})
+	if err != nil {
+		return tools.Result{Error: err.Error()}, nil
+	}
+	return tools.Result{Output: `{"proposed":true,"act":"` + id + `"}`}, nil
+}
+
+// A PAGE'S LOOKUP PROPOSES NOTHING FOR THE OPERATOR EITHER. Where the name
+// the lookup checked as a read resolves, by the time it is called, to another
+// activation's operation that needs the operator's confirmation, calling it
+// would put a pending act on the Plugins page that no one asked for. The
+// call is refused before the operation is given it: no act is pending.
+func TestAChoicesLookupProposesNothingForWhatReplacedItsRead(t *testing.T) {
+	const id = "org.example.proposes"
+	a, settings, read := choicesSwapApp(t, id)
+	next := &pluginhost.ActivePlugin{ID: id, Settings: settings}
+	confirm := &confirmOp{ownedOp: ownedOp{name: read.name, owner: next, read: false}, a: a}
+	err := swapDuringCheck(t, a, id, read, confirm, next)
+	a.acts.mu.Lock()
+	pending := len(a.acts.acts)
+	a.acts.mu.Unlock()
+	if err == nil || confirm.calls.Load() != 0 || pending != 0 {
+		t.Fatalf("a page's lookup proposed an act for the operator: err %v, %d calls, %d acts pending", err, confirm.calls.Load(), pending)
 	}
 }

@@ -72,6 +72,7 @@ func newCheckpointFixture(t *testing.T) checkpointFixture {
 	write(t, f.evidence, "gate.log", "gate commit="+f.head+" tree="+tree+" dirty=no go=\""+strings.TrimSpace(string(goVersion))+"\" toolchain="+goBin+" asked="+goBin+" host=fixture scope=full started=2026-10-01T00:00:00Z\n"+
 		"stage=scope start=2026-10-01T00:00:01Z end=2026-10-01T00:10:00Z exit=0 log=scope.log\n"+
 		"stage=sdkcompat start=2026-10-01T00:10:00Z end=2026-10-01T00:12:00Z exit=0 log=sdkcompat.log\n"+
+		"stage=browser start=2026-10-01T00:12:00Z end=2026-10-01T00:18:00Z exit=0 log=browser.log\n"+
 		"verdict=PASS ended=2026-10-01T00:20:00Z\n")
 	write(t, f.evidence, "scope.log", "ok\n")
 	write(t, f.evidence, "sdkcompat.log", "sdk revision="+strings.Repeat("2", 40)+" checkout=/sdk\n"+
@@ -192,6 +193,9 @@ func TestTheCheckpointWritesNothingUnlessEveryConditionHolds(t *testing.T) {
 		}},
 		{"a missing stage", "race scopes", func(t *testing.T, f checkpointFixture) {
 			f.rewrite(t, "gate.log", "stage=scope start=2026-10-01T00:00:01Z end=2026-10-01T00:10:00Z exit=0 log=scope.log\n", "")
+		}},
+		{"no browser scope", "browser scope", func(t *testing.T, f checkpointFixture) {
+			f.rewrite(t, "gate.log", "stage=browser start=2026-10-01T00:12:00Z end=2026-10-01T00:18:00Z exit=0 log=browser.log\n", "")
 		}},
 		{"dirty", "dirty tree", func(t *testing.T, f checkpointFixture) {
 			f.rewrite(t, "gate.log", " dirty=no ", " dirty=yes ")

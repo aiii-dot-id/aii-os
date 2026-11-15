@@ -110,13 +110,13 @@ func TestCacheAnthropicBreakpointLimit(t *testing.T) {
 		msgs = append(msgs, Message{Role: "system", Content: "system instruction"})
 	}
 	msgs = append(msgs, Message{Role: "user", Content: "go"})
-	got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5"}, msgs, ChatOptions{Tools: []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "inspect"}}}})
+	got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5"}, msgs, ChatOptions{Tools: []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "inspect"}}}})
 	if n := cacheReviewCount(got, "cache_control"); n > 4 {
 		t.Fatalf("sent %d cache breakpoints for four system messages + one tool + user tail; maximum 4", n)
 	}
 }
 func TestCacheAnthropicConfiguredTTLReachesWire(t *testing.T) {
-	got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5", Cache: &CachePolicy{TTL: "1h"}}, []Message{{Role: "system", Content: "stable"}, {Role: "user", Content: "go"}}, ChatOptions{})
+	got := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5", Cache: &CachePolicy{TTL: "1h"}}, []Message{{Role: "system", Content: "stable"}, {Role: "user", Content: "go"}}, ChatOptions{})
 	if n := cacheReviewCount(got, "ttl"); n == 0 {
 		t.Fatalf("configured 1h TTL did not reach wire; all %d cache markers use vendor default", cacheReviewCount(got, "cache_control"))
 	}
@@ -145,7 +145,7 @@ func TestCacheAnthropicHistoryBoundaryIsMarked(t *testing.T) {
 		return cacheReviewCount(m, "cache_control") > 0
 	}
 
-	auto := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5"}, conversation(), tools)
+	auto := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5"}, conversation(), tools)
 	if !marked(auto, 1) {
 		t.Fatalf("auto mode left the end of the history unmarked: the next turn cannot reuse it\n%v", auto["messages"])
 	}
@@ -159,7 +159,7 @@ func TestCacheAnthropicHistoryBoundaryIsMarked(t *testing.T) {
 		t.Fatalf("auto mode with tools sends %d breakpoints, want 4: tools, stable system, history boundary, tail", n)
 	}
 
-	explicit := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5", Cache: &CachePolicy{Mode: "explicit"}}, conversation(), tools)
+	explicit := cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5", Cache: &CachePolicy{Mode: "explicit"}}, conversation(), tools)
 	if marked(explicit, 1) {
 		t.Fatal("explicit mode writes only the stable boundary, yet the history boundary was marked")
 	}
@@ -169,7 +169,7 @@ func TestCacheAnthropicHistoryBoundaryIsMarked(t *testing.T) {
 		stacked = append(stacked, Message{Role: "system", Content: "system instruction"})
 	}
 	stacked = append(stacked, Message{Role: "user", Content: "q"}, Message{Role: "assistant", Content: "a"}, Message{Role: "user", Content: "go", CacheBefore: true})
-	if n := cacheReviewCount(cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Model: "claude-opus-5"}, stacked, tools), "cache_control"); n > 4 {
+	if n := cacheReviewCount(cacheReviewCapture(t, ClientConfig{Provider: "anthropic", Headers: anthropicHeaders(), Model: "claude-opus-5"}, stacked, tools), "cache_control"); n > 4 {
 		t.Fatalf("sent %d cache breakpoints with a history boundary among four system messages; maximum 4", n)
 	}
 }

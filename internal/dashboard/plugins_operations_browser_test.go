@@ -79,12 +79,13 @@ export function configFeedbackHTML() { return ''; }`),
 }
 
 // THE SETTINGS TOOL LIST SAYS WHERE THE OPERATOR READS THE REST. A
-// plugin's operation is listed there as the identity is given it, cut
-// line and all; the row names the plugin and the page that holds the
-// author's summary whole. A builtin's row says nothing of the kind.
-const settingsPluginToolPage = substratePageMarkup + `<script type="module">
+// plugin's operation is listed there (Settings → Plugins and permissions,
+// A10) as the identity is given it, cut line and all; the row names the
+// plugin and the page that holds the author's summary whole. A builtin's
+// row says nothing of the kind.
+const settingsPluginToolPage = permissionsPageMarkup + `<script type="module">
 import { S } from './state.js';
-import { renderSettings } from './views/settings.js';
+import { renderPlugins } from './views/plugins.js';
 import { assert, run } from './__harness.js';
 run(() => {
   S.identityExists = true; S.providersLoaded = true; S.providers = [];
@@ -100,11 +101,12 @@ run(() => {
     dashboard: { host: '127.0.0.1', port: 8181, tls: false },
     witness: { url: '', interval_events: 0 }, prompt: { max_tokens: 0, recent_turns: 0 },
     agency: {}, logs: { dir: '', max_backups: 0, compress_days: 0 }, identity: {}, public_name: {},
-    contacts: [], channels: [],
+    contacts: [], channels: [], restart_required: [],
+    plugins: { autoload: 'T1', catalog: [], catalog_url: '', auth_profiles: [], providers: [], installed: [] },
   };
-  renderSettings();
-  S.settingsSection('tools'); S.requestSettingsSection(); renderSettings();
-  const rows = Array.from(document.querySelectorAll('#settings-stack [data-tools] li'));
+  S.view = 'plugins';
+  renderPlugins();
+  const rows = Array.from(document.querySelectorAll('#plugins-stack [data-tools] li'));
   assert(rows.length === 2, 'two tools listed: ' + rows.length);
   const row = name => rows.find(r => r.querySelector('[data-tool]').dataset.tool === name).textContent;
   assert(row('pl_org_example_judge_query').includes('An operation of plugin org.example.judge, shown as the identity is given it. Its author\'s summary is on that plugin\'s card on the Plugins page, whole.'),

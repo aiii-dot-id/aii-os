@@ -53,7 +53,7 @@ func TestTheDeviceCodeGrantPollsUntilTheOperatorConsents(t *testing.T) {
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
-	p := OAuthParams{ClientID: "cid", TokenURL: ts.URL + "/token", Scope: "repo"}
+	p := OAuthParams{TokenHeaders: testTokenHeaders(), ClientID: "cid", TokenURL: ts.URL + "/token", Scope: "repo"}
 	d, err := StartDevice(context.Background(), ts.Client(), ts.URL+"/device", p)
 	if err != nil || d.UserCode != "ABCD-EFGH" || d.VerificationURI == "" {
 		t.Fatalf("start: %+v %v", d, err)

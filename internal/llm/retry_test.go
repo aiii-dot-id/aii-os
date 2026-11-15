@@ -97,7 +97,7 @@ func TestInferenceDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer redirect.Close()
 
-	client := New(&ClientConfig{Endpoint: redirect.URL, Provider: "anthropic", APIKey: "secret", Model: "model"})
+	client := New(&ClientConfig{Endpoint: redirect.URL, Provider: "anthropic", APIKey: "secret", Model: "model", Headers: anthropicHeaders()})
 	_, err := client.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, ChatOptions{})
 	if err == nil || !strings.Contains(err.Error(), "API returned 307") {
 		t.Fatalf("redirect was not refused at the configured endpoint: %v", err)

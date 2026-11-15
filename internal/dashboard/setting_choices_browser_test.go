@@ -51,7 +51,7 @@ run(() => {
 });
 </script>`
 	modules := map[string][]byte{
-		"/state.js": []byte(`export const S = { stats: { name: 'TestIdentity' }, providers: [], config: null, providersLoaded: false };`),
+		"/state.js": []byte(`export const S = { stats: { name: 'TestIdentity' }, providers: [], tools: [], config: null, providersLoaded: false };`),
 		"/util.js":  utilStub(`export const $ = id => document.getElementById(id); export const esc = v => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); export const hueOf = () => 0;`),
 		"/ws.js":    []byte(`export const frames = []; export function send(f) { frames.push(f); return 'req-1'; } export function wsReady() { return true; } export function query(n, e) { return send(Object.assign({ type: 'query', query: n }, e || {})); }`),
 		"/views/settings.js": []byte(`export const saved = []; export function captureForm(){} export function restoreForm(){} export function forgetForm(){} export function saveConfigSection(section) { saved.push(section); }
